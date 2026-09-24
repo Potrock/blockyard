@@ -1,45 +1,21 @@
-import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type {
+  AudioApi,
   DamageOptions,
   Entity,
   EntityApi,
   EntityDefinition,
+  FxApi,
   GameContext,
   GameEvents,
+  HudApi,
   Player,
   ProjectileSpec,
+  SpriteRef,
   Vec3,
 } from '../api/types';
+import type { Content } from '../content';
 import { wasmMemory } from '../engine/wasm';
-import type { EntityGraphics, AnimState, ModelInstance } from '../render/entities';
-import type { Sfx } from '../audio/sfx';
-import type { Effects } from '../fx/effects';
-import type { GameHud } from '../ui/hudkit';
-import { Shaders } from '../render/shaders';
-
-let boltGeo: THREE.BufferGeometry[] | null = null;
-
-/** Two crossed quads, 0.8 long along +X and 0.22 wide, with the bolt shader's UVs (v along the length). */
-function boltGeometry(): THREE.BufferGeometry[] {
-  if (!boltGeo) {
-    const a = new THREE.PlaneGeometry(0.22, 0.8).rotateZ(-Math.PI / 2);
-    boltGeo = [a, a.clone().rotateX(Math.PI / 2)];
-  }
-  return boltGeo;
-}
-
-function boltMaterial(color: string): THREE.RawShaderMaterial {
-  return new THREE.RawShaderMaterial({
-    vertexShader: Shaders.fx.vertex,
-    fragmentShader: Shaders.fx.fragment,
-    glslVersion: THREE.GLSL3,
-    uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 4 }, uTime: { value: 0 }, uMode: { value: 3 } },
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-}
 
 // Mirrors engine/src/entities.rs.
 const B = {
@@ -60,21 +36,56 @@ const PF_STUCK = 8;
 
 export interface EntityServices {
   world: VoxelWorld;
-  graphics: EntityGraphics;
-  scene: THREE.Scene;
-  sfx: Sfx;
-  fx: Effects;
-  hud: GameHud;
+  /** Entity types go here too, for the client to build their models. */
+  content: Content;
+  /** Everyone's effects, sound and HUD (presentation calls). */
+  fx: FxApi;
+  audio: AudioApi;
+  hud: HudApi;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   dropItem(item: string, at: Vec3, count: number): void;
-  damagePlayer(amount: number, opts: DamageOptions): boolean;
-  playerEye(): Vec3;
-  playerPos(): Vec3;
-  playerVel(): Vec3;
-  /** The player on this machine (the engine's path-finding and line-of-sight track them). */
+  /** The player the engine's path-finding and line-of-sight track (and entity projectiles hit). */
   localPlayer(): Player;
   players(): readonly Player[];
+}
+
+/** One entity as the client needs to draw it. */
+export interface EntityFrame {
+  id: number;
+  type: string;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vz: number;
+  /** Facing when spawned. */
+  yaw: number;
+  /** Where it's looking (null: it faces where it walks). */
+  look: Vec3 | null;
+  /** Attack swings so far (a change starts the swing animation). */
+  attacks: number;
+  raised: boolean;
+  casting: boolean;
+  glow: string | null;
+  /** Hurt flash, 1 when just hit, fading to 0. */
+  hurt: number;
+  /** Seconds since it died, or -1 while alive. */
+  dying: number;
+}
+
+/** One projectile in flight (or stuck in a wall). */
+export interface ProjectileFrame {
+  id: number;
+  sprite?: SpriteRef;
+  glow?: string;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  stuck: boolean;
 }
 
 type Target = Player | Entity | Vec3;
@@ -84,15 +95,12 @@ const isEntity = (t: unknown): t is Entity => typeof t === 'object' && t !== nul
 type Internal = ProjectileSpec & { crit?: boolean };
 
 interface Projectile {
+  id: number;
   slot: number;
   spec: Internal;
   owner: EntityImpl | Player | null;
-  group: THREE.Group;
   stuckAt: number;
-  material: THREE.RawShaderMaterial;
 }
-
-const tmpColor = new THREE.Color();
 
 class EntityImpl implements Entity {
   readonly kind = 'entity' as const;
@@ -104,18 +112,19 @@ class EntityImpl implements Entity {
   dyingTime = -1;
   age = 0;
   removed = false;
-  readonly model: ModelInstance;
-  readonly anim: AnimState = { walkPhase: 0, walkAmount: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0 };
   lookTarget: Target | null = null;
   yaw = 0;
   hurt = 0;
-  glowColor: THREE.Color | null = null;
-  probeTimer = Math.random() * 0.2;
+  /** Presentation state the client animates from. */
+  attacks = 0;
+  raised = false;
+  casting = false;
+  glowColor: string | null = null;
   ambientTimer = 2 + Math.random() * 6;
   speedMul = 1;
 
   constructor(
-    private m: EntityManager,
+    private m: EntitySim,
     readonly id: number,
     readonly type: string,
     readonly def: EntityDefinition,
@@ -123,7 +132,6 @@ class EntityImpl implements Entity {
   ) {
     this.health = def.health;
     this.maxHealth = def.health;
-    this.model = m.s.graphics.buildModel(def.model);
   }
 
   private get o(): number {
@@ -167,7 +175,7 @@ class EntityImpl implements Entity {
     const top = { x: pos.x, y: pos.y + this.height * this.def.model.scale * 0.55 + 0.4, z: pos.z };
     this.m.s.fx.damageNumber({ x: top.x, y: top.y + 0.4, z: top.z }, amount, { crit: opts.crit });
     this.m.s.fx.burst({ x: pos.x, y: pos.y + this.height * 0.6, z: pos.z }, { color: this.def.bloodColor ?? '#b3261e', count: opts.crit ? 22 : 12, speed: 3.5, size: 0.08 });
-    this.m.s.sfx.play(this.def.sounds?.hurt ?? 'mob_hurt', { at: pos, pitch: 0.9 + Math.random() * 0.2 });
+    this.m.s.audio.play(this.def.sounds?.hurt ?? 'mob_hurt', { at: pos, pitch: 0.9 + Math.random() * 0.2 });
     this.m.s.emit('entityDamage', { entity: this, amount, source: opts.source });
     if (this.health <= 0) this.die(opts.source);
   }
@@ -190,10 +198,10 @@ class EntityImpl implements Entity {
     const o = this.o;
     b[o + B.FLAGS] = FLAG_ACTIVE | FLAG_GHOST;
     b[o + B.MODE] = 3;
-    this.anim.raised = false;
-    this.anim.casting = false;
+    this.raised = false;
+    this.casting = false;
     const pos = this.position;
-    this.m.s.sfx.play(this.def.sounds?.death ?? 'mob_death', { at: pos });
+    this.m.s.audio.play(this.def.sounds?.death ?? 'mob_death', { at: pos });
     const ctx = this.m.s.ctx();
     for (const d of this.def.drops ?? []) {
       if (ctx.rng.chance(d.chance)) this.m.s.dropItem(d.item, { x: pos.x, y: pos.y + 0.6, z: pos.z }, d.count ?? 1);
@@ -284,9 +292,9 @@ class EntityImpl implements Entity {
   }
 
   animate(name: 'attack' | 'raise' | 'cast' | 'none') {
-    this.anim.raised = name === 'raise';
-    this.anim.casting = name === 'cast';
-    if (name === 'attack') this.anim.attackT = 0;
+    this.raised = name === 'raise';
+    this.casting = name === 'cast';
+    if (name === 'attack') this.attacks++;
   }
 
   setSpeed(multiplier: number) {
@@ -295,7 +303,7 @@ class EntityImpl implements Entity {
   }
 
   glow(color: string | null) {
-    this.glowColor = color ? new THREE.Color(color) : null;
+    this.glowColor = color;
   }
 
   shoot(spec: ProjectileSpec, target: Target, opts: { spread?: number; lead?: boolean } = {}) {
@@ -327,7 +335,11 @@ class EntityImpl implements Entity {
   }
 }
 
-export class EntityManager implements EntityApi {
+/**
+ * Entities on the simulation side: types, bodies (physics and path-finding in WebAssembly), AI,
+ * projectiles, damage and death. The client draws them from `frame()`.
+ */
+export class EntitySim implements EntityApi {
   readonly s: EntityServices;
   private _bodies: Float64Array = new Float64Array(0);
   private _projectiles: Float64Array = new Float64Array(0);
@@ -342,10 +354,10 @@ export class EntityManager implements EntityApi {
   private shots: (Projectile | null)[];
   private freeShots: number[] = [];
   private nextId = 1;
-  private bossShown = false;
+  private nextShot = 1;
+  /** The boss bar as last sent (only changes go out). */
+  private bossShown = '';
   private time = 0;
-  private tmpV = new THREE.Vector3();
-  private xAxis = new THREE.Vector3(1, 0, 0);
 
   constructor(services: EntityServices) {
     this.s = services;
@@ -390,6 +402,7 @@ export class EntityManager implements EntityApi {
 
   define(type: string, def: EntityDefinition) {
     this.types.set(type, def);
+    this.s.content.defineEntity(type, def);
   }
 
   spawn(type: string, at: Vec3, opts: { yaw?: number; data?: Record<string, unknown> } = {}): Entity {
@@ -418,8 +431,6 @@ export class EntityManager implements EntityApi {
     if (opts.data) Object.assign(e.data, opts.data);
     this.bySlot[slot] = e;
     this.list.push(e);
-    e.model.root.position.set(at.x, at.y, at.z);
-    this.s.scene.add(e.model.root);
     return e;
   }
 
@@ -429,8 +440,6 @@ export class EntityManager implements EntityApi {
     this.bySlot[e.slot] = null;
     this.freeBodies.push(e.slot);
     this.list.splice(this.list.indexOf(e), 1);
-    e.model.root.removeFromParent();
-    e.model.dispose();
   }
 
   all(type?: string): Entity[] {
@@ -474,7 +483,7 @@ export class EntityManager implements EntityApi {
     for (const p of this.shots) if (p) this.removeProjectile(p);
     if (this.bossShown) {
       this.s.hud.hideBossBar();
-      this.bossShown = false;
+      this.bossShown = '';
     }
   }
 
@@ -511,53 +520,16 @@ export class EntityManager implements EntityApi {
     p[o + P.RADIUS] = 0.12;
     p[o + P.OWNER] = owner === null || isPlayer(owner) ? -1 : owner.slot;
     p[o + P.FLAGS] = PF_ACTIVE | (isPlayer(owner) ? PF_HITS_BODIES : PF_HITS_PLAYER);
-    const group = new THREE.Group();
-    if (!spec.sprite) {
-      // No sprite: a glowing bolt along +X (the direction of travel).
-      const material = boltMaterial(spec.glow ?? '#ffffff');
-      for (const g of boltGeometry()) {
-        const mesh = new THREE.Mesh(g, material);
-        mesh.frustumCulled = false;
-        group.add(mesh);
-      }
-      group.position.set(from.x, from.y, from.z);
-      this.s.scene.add(group);
-      this.shots[slot] = { slot, spec, owner, group, stuckAt: -1, material };
-      return;
-    }
-    const { geometry, atlas } = this.s.graphics.spriteGeometry(spec.sprite);
-    const material = this.s.graphics.material(atlas);
-    if (spec.glow) {
-      tmpColor.set(spec.glow);
-      (material.uniforms.uTint.value as THREE.Vector4).set(tmpColor.r * 4, tmpColor.g * 4, tmpColor.b * 4, 0.7);
-    }
-    const shadow = this.s.graphics.shadowMaterial(atlas);
-    for (let k = 0; k < 2; k++) {
-      const mesh = new THREE.Mesh(geometry, material);
-      // Sprites are drawn diagonally (tip top-right): align the diagonal with +X.
-      mesh.rotation.set(k * Math.PI * 0.5, 0, -Math.PI / 4);
-      mesh.scale.setScalar(0.85);
-      mesh.customDepthMaterial = shadow;
-      const pivot = new THREE.Group();
-      pivot.rotation.x = k * Math.PI * 0.5;
-      pivot.add(mesh);
-      mesh.rotation.x = 0;
-      group.add(pivot);
-    }
-    group.position.set(from.x, from.y, from.z);
-    this.s.scene.add(group);
-    this.shots[slot] = { slot, spec, owner, group, stuckAt: -1, material };
+    this.shots[slot] = { id: this.nextShot++, slot, spec, owner, stuckAt: -1 };
   }
 
   private removeProjectile(p: Projectile) {
     this.projectiles[p.slot * this.projStride + P.FLAGS] = 0;
     this.shots[p.slot] = null;
     this.freeShots.push(p.slot);
-    p.group.removeFromParent();
-    p.material.dispose();
   }
 
-  /** AI, then physics in wasm, then hits, deaths and rendering sync. */
+  /** AI, then physics in wasm, then hits, hurt flashes, deaths and the boss bar. */
   update(dt: number, running: boolean) {
     this.refreshViews();
     this.time += dt;
@@ -572,14 +544,14 @@ export class EntityManager implements EntityApi {
         e.ambientTimer -= dt;
         if (e.ambientTimer <= 0 && e.def.sounds?.ambient) {
           e.ambientTimer = 4 + Math.random() * 6;
-          this.s.sfx.play(e.def.sounds.ambient, { at: e.position, volume: 0.6, pitch: 0.9 + Math.random() * 0.2 });
+          this.s.audio.play(e.def.sounds.ambient, { at: e.position, volume: 0.6, pitch: 0.9 + Math.random() * 0.2 });
         }
       }
       this.s.world.step_entities(dt);
       this.refreshViews();
       this.processProjectiles();
+      this.afterStep(dt);
     }
-    this.syncVisuals(dt, running);
   }
 
   private processProjectiles() {
@@ -594,7 +566,7 @@ export class EntityManager implements EntityApi {
         p[o + P.HIT_KIND] = 0;
         const src = shot.owner ?? 'world';
         if (kind === 1) {
-          this.s.sfx.play('arrow_hit', { at: pos, volume: 0.6 });
+          this.s.audio.play('arrow_hit', { at: pos, volume: 0.6 });
           if (shot.spec.sticky) {
             shot.stuckAt = this.time;
             p[o + P.FLAGS] = PF_ACTIVE | PF_STUCK;
@@ -604,14 +576,14 @@ export class EntityManager implements EntityApi {
             continue;
           }
         } else if (kind === 2) {
-          this.s.damagePlayer(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5 });
+          this.s.localPlayer().damage(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5 });
           this.removeProjectile(shot);
           continue;
         } else if (kind === 3) {
           const target = this.byBody(p[o + P.HIT_INDEX]);
           if (target && target.alive) {
             target.damage(shot.spec.damage, { source: src, from: { x: pos.x - p[o + P.VX] * 0.05, y: pos.y, z: pos.z - p[o + P.VZ] * 0.05 }, knockback: shot.spec.knockback ?? 0.4, crit: shot.spec.crit });
-            this.s.sfx.play('hit', { at: pos, pitch: 1.2 });
+            this.s.audio.play('hit', { at: pos, pitch: 1.2 });
           }
           this.removeProjectile(shot);
           continue;
@@ -621,91 +593,77 @@ export class EntityManager implements EntityApi {
         this.removeProjectile(shot);
         continue;
       }
-      shot.group.position.set(pos.x, pos.y, pos.z);
-      if (shot.stuckAt < 0) {
-        this.tmpV.set(p[o + P.VX], p[o + P.VY], p[o + P.VZ]);
-        if (this.tmpV.lengthSq() > 1e-6) shot.group.quaternion.setFromUnitVectors(this.xAxis, this.tmpV.normalize());
-      }
     }
   }
 
-  private syncVisuals(dt: number, running: boolean) {
-    const b = this.bodies;
-    const S = this.bodyStride;
+  /** Hurt flashes fade, the dead fall and fade out, and the boss bar follows the weakest boss. */
+  private afterStep(dt: number) {
     let boss: EntityImpl | null = null;
     for (const e of [...this.list]) {
-      const o = e.slot * S;
-      const pos = { x: b[o + B.X], y: b[o + B.Y], z: b[o + B.Z] };
-      const root = e.model.root;
-      root.position.set(pos.x, pos.y, pos.z);
-      const vx = b[o + B.VX];
-      const vz = b[o + B.VZ];
-      const hs = Math.hypot(vx, vz);
-      // Facing: look target, else movement heading.
-      let target = e.yaw;
-      const look = e.alive && e.lookTarget ? this.aimPoint(e.lookTarget) : null;
-      if (look) {
-        target = Math.atan2(look.x - pos.x, look.z - pos.z);
-      } else if (hs > 0.4) {
-        target = Math.atan2(vx, vz);
-      }
-      let d = target - e.yaw;
-      d = Math.atan2(Math.sin(d), Math.cos(d));
-      e.yaw += d * Math.min(1, dt * 9);
-      root.rotation.y = e.yaw;
-      const a = e.anim;
-      if (running) {
-        a.time += dt;
-        a.attackT += dt;
-        a.walkPhase += hs * dt * (4.2 / Math.max(0.6, e.def.model.scale));
-      }
-      a.walkAmount += (Math.min(1, hs / Math.max(1.2, e.def.speed * 0.7)) - a.walkAmount) * Math.min(1, dt * 8);
-      if (look && (isPlayer(e.lookTarget) || isEntity(e.lookTarget))) {
-        const eyeY = pos.y + e.height * 0.85;
-        const dist = Math.hypot(look.x - pos.x, look.z - pos.z) || 1;
-        a.headPitch = Math.max(-0.6, Math.min(0.6, -Math.atan2(look.y - eyeY, dist)));
-      } else {
-        a.headPitch *= 0.9;
-      }
-      e.model.animate(a);
-
-      // Lighting probe (staggered), hurt flash, glow and death fade.
-      e.probeTimer -= dt;
-      const u = e.model.material.uniforms;
-      if (e.probeTimer <= 0) {
-        e.probeTimer = 0.15;
-        const l = this.s.world.light_probe(Math.floor(pos.x), Math.floor(pos.y + e.height * 0.6), Math.floor(pos.z));
-        (u.uProbe.value as THREE.Vector2).set(l[0], l[1]);
-      }
-      if (running) e.hurt = Math.max(0, e.hurt - dt * 4);
-      const tint = u.uTint.value as THREE.Vector4;
-      if (e.hurt > 0 || !e.alive) {
-        tint.set(1.0, 0.12, 0.08, e.alive ? e.hurt * 0.7 : 0.55);
-      } else if (e.glowColor) {
-        const pulse = 0.35 + 0.2 * Math.sin(this.time * 18);
-        tint.set(e.glowColor.r * 3, e.glowColor.g * 3, e.glowColor.b * 3, pulse);
-      } else {
-        tint.w = 0;
-      }
+      e.hurt = Math.max(0, e.hurt - dt * 4);
       if (!e.alive) {
-        if (running) e.dyingTime += dt;
-        a.dying = Math.min(1, e.dyingTime / 0.35);
-        (u.uOpacity as { value: number }).value = Math.max(0, 1 - Math.max(0, e.dyingTime - 0.7) / 0.35);
+        e.dyingTime += dt;
         if (e.dyingTime > 1.05) {
+          const pos = e.position;
           this.s.fx.burst({ x: pos.x, y: pos.y + 0.5, z: pos.z }, { color: '#dddddd', count: 20, speed: 1.6, size: 0.14, gravity: -2 });
           e.remove();
-          continue;
         }
       } else if (e.def.boss && (!boss || e.health / e.maxHealth < boss.health / boss.maxHealth)) {
         boss = e;
       }
     }
-    if (boss) {
-      this.s.hud.bossBar(boss.def.name, boss.health / boss.maxHealth, 'linear-gradient(90deg, #7a1fd6, #d21f5c)');
-      this.bossShown = true;
-    } else if (this.bossShown) {
-      this.s.hud.hideBossBar();
-      this.bossShown = false;
+    const bar = boss ? `${boss.def.name}|${(boss.health / boss.maxHealth).toFixed(3)}` : '';
+    if (bar === this.bossShown) return;
+    this.bossShown = bar;
+    if (boss) this.s.hud.bossBar(boss.def.name, boss.health / boss.maxHealth, 'linear-gradient(90deg, #7a1fd6, #d21f5c)');
+    else this.s.hud.hideBossBar();
+  }
+
+  /** What the client needs to draw every entity and projectile this frame. */
+  frame(): { entities: EntityFrame[]; projectiles: ProjectileFrame[] } {
+    const b = this.bodies;
+    const S = this.bodyStride;
+    const entities: EntityFrame[] = [];
+    for (const e of this.list) {
+      const o = e.slot * S;
+      const look = e.alive && e.lookTarget ? this.aimPoint(e.lookTarget) : null;
+      entities.push({
+        id: e.id,
+        type: e.type,
+        x: b[o + B.X],
+        y: b[o + B.Y],
+        z: b[o + B.Z],
+        vx: b[o + B.VX],
+        vz: b[o + B.VZ],
+        yaw: e.yaw,
+        look: look && { x: look.x, y: look.y, z: look.z },
+        attacks: e.attacks,
+        raised: e.raised,
+        casting: e.casting,
+        glow: e.glowColor,
+        hurt: e.hurt,
+        dying: e.alive ? -1 : e.dyingTime,
+      });
     }
+    const p = this.projectiles;
+    const PS = this.projStride;
+    const projectiles: ProjectileFrame[] = [];
+    for (const shot of this.shots) {
+      if (!shot) continue;
+      const o = shot.slot * PS;
+      projectiles.push({
+        id: shot.id,
+        sprite: shot.spec.sprite,
+        glow: shot.spec.glow,
+        x: p[o + P.X],
+        y: p[o + P.Y],
+        z: p[o + P.Z],
+        vx: p[o + P.VX],
+        vy: p[o + P.VY],
+        vz: p[o + P.VZ],
+        stuck: shot.stuckAt >= 0,
+      });
+    }
+    return { entities, projectiles };
   }
 }

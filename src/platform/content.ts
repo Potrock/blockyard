@@ -1,4 +1,4 @@
-import type { AtlasPixels, SynthVoice, ViewAnimation } from './api/types';
+import type { AtlasPixels, EntityDefinition, SynthVoice, ViewAnimation } from './api/types';
 
 type Listener<T> = (name: string, value: T) => void;
 
@@ -13,6 +13,8 @@ export class Content {
   readonly sounds = new Map<string, SynthVoice>();
   readonly atlases = new Map<string, HTMLCanvasElement | OffscreenCanvas | AtlasPixels>();
   readonly animations = new Map<string, ViewAnimation>();
+  /** Entity types: their models, for the client to draw. */
+  readonly entities = new Map<string, EntityDefinition>();
   private soundListeners: Listener<SynthVoice>[] = [];
   private atlasListeners: Listener<HTMLCanvasElement | OffscreenCanvas | AtlasPixels>[] = [];
   private animationListeners: Listener<ViewAnimation>[] = [];
@@ -26,6 +28,10 @@ export class Content {
   defineAtlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels) {
     this.atlases.set(name, source);
     for (const l of this.atlasListeners) l(name, source);
+  }
+
+  defineEntity(type: string, def: EntityDefinition) {
+    this.entities.set(type, def);
   }
 
   defineAnimation(name: string, anim: ViewAnimation) {

@@ -18,7 +18,8 @@ import { PlayerController } from './player/controller';
 import { Interaction } from './player/interaction';
 import { PlayerHealth } from './player/health';
 import { Combat } from './player/combat';
-import { EntityManager } from './entities/manager';
+import { EntitySim } from './sim/entities';
+import { EntityView } from './client/entities';
 import { ItemSystem } from './items/items';
 import { Effects } from './fx/effects';
 import { Sfx } from './audio/sfx';
@@ -109,7 +110,8 @@ export class Runtime {
   private hooks!: FrameHooks;
   private held!: ViewModel;
   private graphics!: EntityGraphics;
-  private entities!: EntityManager;
+  private entities!: EntitySim;
+  private entityView!: EntityView;
   private items!: ItemSystem;
   private combat!: Combat;
   private health!: PlayerHealth;
@@ -308,25 +310,21 @@ export class Runtime {
     this.health = new PlayerHealth(world, this.sfx, this.fx, this.gameHud, healthEmit, () => this.playerPos(), () => this.ctx.player);
     this.health.configure(def.player ?? {});
 
-    this.entities = new EntityManager({
+    this.entities = new EntitySim({
       world,
-      graphics: this.graphics,
-      scene: this.renderer.entityScene,
-      sfx: this.sfx,
-      fx: this.fx,
-      hud: this.gameHud,
+      content: this.content,
+      fx: this.presentation.fx(null),
+      audio: this.presentation.audio(null),
+      hud: this.presentation.hud(null),
       ctx: () => this.ctx,
       emit,
       dropItem: (item, at, count) => {
         if (this.items.get(item)) this.items.spawnPickup(item, at, { count, velocity: { x: this.rng.range(-2, 2), y: 4, z: this.rng.range(-2, 2) } });
       },
-      damagePlayer: (amount, opts) => this.health.damage(amount, opts),
-      playerEye: () => ({ x: this.camera.position.x, y: this.controller.state.y + 1.62, z: this.camera.position.z }),
-      playerPos: () => this.playerPos(),
-      playerVel: () => ({ x: this.controller.state.vx, y: this.controller.state.vy, z: this.controller.state.vz }),
       localPlayer: () => this.ctx.player,
       players: () => this.ctx.players,
     });
+    this.entityView = new EntityView(this.graphics, this.renderer.entityScene, world, this.content);
     this.items = new ItemSystem({
       world,
       graphics: this.graphics,
@@ -790,6 +788,7 @@ export class Runtime {
   /** Reset game state and call `start` again. */
   restart() {
     this.entities.clear();
+    this.entityView.clear();
     this.props.clear();
     // Put the world back the way it was generated (craters, broken blocks), unless the game
     // saves the world (Sandbox keeps your builds).
@@ -1268,6 +1267,8 @@ export class Runtime {
       this.camera.updateMatrixWorld();
     }
     this.entities.update(dt, running);
+    const ef = this.entities.frame();
+    this.entityView.sync(ef.entities, ef.projectiles, dt, running);
     this.items.update(dt, running);
     this.props.update(dt);
     if (this.itemMode) this.updateHands(dt, active);

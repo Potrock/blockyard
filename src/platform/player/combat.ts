@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { BowItem, GameContext, IconRef, MeleeItem, SpriteRef } from '../api/types';
-import type { EntityManager } from '../entities/manager';
+import type { EntitySim } from '../sim/entities';
 import type { ItemSystem } from '../items/items';
 import type { Input } from './input';
 import type { Sfx } from '../audio/sfx';
@@ -24,7 +24,7 @@ export class Combat {
 
   constructor(
     private world: VoxelWorld,
-    private entities: EntityManager,
+    private entities: EntitySim,
     private items: ItemSystem,
     private camera: THREE.PerspectiveCamera,
     private sfx: Sfx,
