@@ -1,4 +1,4 @@
-import type { Entity, GameContext, Pickup, Vec3 } from '@platform';
+import type { Actor, Entity, GameContext, Pickup, Vec3 } from '@platform';
 import type { BedwarsMap, TeamBase, TeamColor } from './map';
 
 export const TEAM_STYLE: Record<TeamColor, { name: string; css: string; wool: string }> = {
@@ -193,10 +193,11 @@ export class Match {
     }
   }
 
-  teamOf(by: Entity | 'player' | 'world' | undefined | null): Team | null {
-    if (by === 'player') return this.player;
-    if (by && typeof by === 'object') return this.teams.find((t) => t.color === by.data.team) ?? null;
-    return null;
+  /** The team of whoever did something: the human player's team (red), or a bot's. */
+  teamOf(by: Actor | undefined | null): Team | null {
+    if (!by || by === 'world') return null;
+    if (by.kind === 'player') return this.player;
+    return this.teams.find((t) => t.color === (by as Entity).data.team) ?? null;
   }
 
   /** The team whose bed occupies this block, if any. */
@@ -213,7 +214,7 @@ export class Match {
     else this.placed.delete(key(x, y, z));
   }
 
-  canBreak(at: Vec3, block: string, by: Entity | 'player' | 'world'): boolean {
+  canBreak(at: Vec3, block: string, by: Actor): boolean {
     if (block.endsWith('_bed')) {
       const owner = this.bedAt(at);
       if (!owner) return false;
@@ -226,7 +227,7 @@ export class Match {
     return true;
   }
 
-  canPlace(at: Vec3, _block: string, _by: Entity | 'player' | 'world'): boolean {
+  canPlace(at: Vec3, _block: string, _by: Actor): boolean {
     const m = this.map;
     if (at.y > m.center.y + 24 || at.y < m.voidY + 6) return false;
     // Keep shopkeepers and generators clear.

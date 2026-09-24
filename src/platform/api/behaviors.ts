@@ -10,42 +10,48 @@ interface MeleeState {
  * as examples: copy one into your game and tweak it.
  */
 export const Behaviors = {
-  /** Path-find to the player and hit them when in reach, with an optional wind-up. */
+  /** Path-find to the nearest player and hit them when in reach, with an optional wind-up. */
   melee(opts: { damage: number; reach?: number; cooldown?: number; windup?: number; knockback?: number }): Behavior {
     const reach = opts.reach ?? 1.8;
     const cooldown = opts.cooldown ?? 1;
     const windup = opts.windup ?? 0.2;
-    return (self: Entity, game: GameContext, dt: number) => {
+    return (self: Entity, _game: GameContext, dt: number) => {
       const s = self.data as MeleeState;
       s._cd = Math.max(0, (s._cd ?? 0) - dt);
-      const d = self.distanceToPlayer();
+      const target = self.nearestPlayer();
+      if (!target) {
+        self.stop();
+        self.lookAt(null);
+        return;
+      }
+      const d = self.distanceTo(target);
       if (s._wind !== undefined) {
         self.stop();
-        self.lookAt('player');
+        self.lookAt(target);
         s._wind -= dt;
         if (s._wind <= 0) {
           s._wind = undefined;
           self.animate('attack');
-          if (d <= reach + 0.6 && self.canSeePlayer()) game.player.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
+          if (d <= reach + 0.6 && self.canSee(target)) target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
         }
         return;
       }
-      self.moveTo('player');
-      self.lookAt(d < 10 ? 'player' : null);
-      if (d <= reach && s._cd <= 0 && self.canSeePlayer()) {
+      self.moveTo(target);
+      self.lookAt(d < 10 ? target : null);
+      if (d <= reach && s._cd <= 0 && self.canSee(target)) {
         s._cd = cooldown;
         if (windup > 0) {
           s._wind = windup;
           self.animate('raise');
         } else {
           self.animate('attack');
-          game.player.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
+          target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
         }
       }
     };
   },
 
-  /** Keep a preferred distance, strafe, and shoot projectiles when the player is visible. */
+  /** Keep a preferred distance from the nearest player, strafe, and shoot when they're visible. */
   ranged(opts: { projectile: ProjectileSpec; range?: number; preferred?: number; cooldown?: number }): Behavior {
     const range = opts.range ?? 18;
     const preferred = opts.preferred ?? 9;
@@ -58,14 +64,20 @@ export const Behaviors = {
         s._strafe = game.rng.chance(0.5) ? 1 : -1;
         s._flip = game.rng.range(1.5, 3.5);
       }
-      const d = self.distanceToPlayer();
-      if (!self.canSeePlayer() || d > range) {
-        self.moveTo('player');
+      const target = self.nearestPlayer();
+      if (!target) {
+        self.stop();
         self.lookAt(null);
         return;
       }
-      self.lookAt('player');
-      const p = game.player.position;
+      const d = self.distanceTo(target);
+      if (!self.canSee(target) || d > range) {
+        self.moveTo(target);
+        self.lookAt(null);
+        return;
+      }
+      self.lookAt(target);
+      const p = target.position;
       const e = self.position;
       const dx = e.x - p.x;
       const dz = e.z - p.z;
@@ -78,24 +90,30 @@ export const Behaviors = {
       if (s._cd <= 0) {
         s._cd = cooldown * game.rng.range(0.8, 1.2);
         self.animate('attack');
-        self.shoot(opts.projectile, 'player', { lead: true, spread: 0.035 });
+        self.shoot(opts.projectile, target, { lead: true, spread: 0.035 });
       }
     };
   },
 
-  /** Chase, then pounce from mid range; hurts on contact. */
+  /** Chase the nearest player, then pounce from mid range; hurts on contact. */
   leaper(opts: { damage: number; range?: [number, number]; cooldown?: number; speed?: number; height?: number }): Behavior {
     const [near, far] = opts.range ?? [2.5, 7];
     const cooldown = opts.cooldown ?? 2.5;
-    return (self: Entity, game: GameContext, dt: number) => {
+    return (self: Entity, _game: GameContext, dt: number) => {
       const s = self.data as { _cd?: number; _hit?: number };
       s._cd = Math.max(0, (s._cd ?? 1) - dt);
       s._hit = Math.max(0, (s._hit ?? 0) - dt);
-      const d = self.distanceToPlayer();
-      self.moveTo('player');
-      self.lookAt(d < 12 ? 'player' : null);
-      if (self.onGround && d > near && d < far && s._cd <= 0 && self.canSeePlayer()) {
-        const p = game.player.position;
+      const target = self.nearestPlayer();
+      if (!target) {
+        self.stop();
+        self.lookAt(null);
+        return;
+      }
+      const d = self.distanceTo(target);
+      self.moveTo(target);
+      self.lookAt(d < 12 ? target : null);
+      if (self.onGround && d > near && d < far && s._cd <= 0 && self.canSee(target)) {
+        const p = target.position;
         const e = self.position;
         const dx = p.x - e.x;
         const dz = p.z - e.z;
@@ -107,7 +125,7 @@ export const Behaviors = {
       if (d < 1.3 && s._hit <= 0) {
         s._hit = 0.9;
         self.animate('attack');
-        game.player.damage(opts.damage, { source: self, knockback: 0.8 });
+        target.damage(opts.damage, { source: self, knockback: 0.8 });
       }
     };
   },

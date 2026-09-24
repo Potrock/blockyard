@@ -75,7 +75,7 @@ export class Combat {
       }
     }
     if (def?.kind === 'consumable' && input.buttonPressed(2)) {
-      if (def.use(this.ctx())) {
+      if (def.use(this.ctx(), this.ctx().player)) {
         inv.take(stack!.item, 1);
         this.held.use();
         if (def.sounds?.use) this.sfx.play(def.sounds.use);
@@ -96,7 +96,7 @@ export class Combat {
     if (!target || !target.alive) return;
     const crit = this.falling();
     const dmg = def.damage * (crit ? 1.5 : 1);
-    target.damage(dmg, { source: 'player', knockback: def.knockback ?? 1, crit });
+    target.damage(dmg, { source: this.ctx().player, knockback: def.knockback ?? 1, crit });
     this.hits++;
     const hitSound = def.sounds?.hit;
     this.sfx.play(hitSound ?? (crit ? 'crit' : 'hit'), { at: target.position, pitch: hitSound && crit ? 1.25 : 1 });
@@ -108,7 +108,7 @@ export class Combat {
         if (e === target) continue;
         const p = e.position;
         if (Math.hypot(p.x - cam.x, p.z - cam.z) > (def.reach ?? 3.3) + 1) continue;
-        e.damage(dmg * 0.5, { source: 'player', knockback: 0.6 });
+        e.damage(dmg * 0.5, { source: this.ctx().player, knockback: 0.6 });
       }
       this.fx.burst({ x: tp.x, y: tp.y + 1, z: tp.z }, { color: '#e8f4ff', count: 14, speed: 4, gravity: 2 });
     }
@@ -147,7 +147,7 @@ export class Combat {
           },
           { x: cam.x + dir.x * 0.4, y: cam.y - 0.1 + dir.y * 0.4, z: cam.z + dir.z * 0.4 },
           dir,
-          'player',
+          this.ctx().player,
         );
         this.shots++;
         this.sfx.play(def.sounds?.use ?? 'bow_shoot', { pitch: 0.9 + c * 0.2 });

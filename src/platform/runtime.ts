@@ -32,7 +32,7 @@ import { Blueprint } from './api/blueprint';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
-import type { BlockRef, Entity, GameContext, GameDefinition, GameEvents, ItemDefinition, PropModel, Rng, Vec3 } from './api/types';
+import type { Actor, BlockRef, CameraApi, GameContext, GameDefinition, GameEvents, InputApi, ItemDefinition, Player, PropModel, Rng, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -92,7 +92,7 @@ export class Runtime {
   private input: Input;
   private controller!: PlayerController;
   private interaction: Interaction | null = null;
-  /** `world.highlight`: the outline and break cracks on one block. */
+  /** `hud.highlight`: the outline and break cracks on one block. */
   private highlight = new BlockHighlight();
   private blockIcons = new Map<number, string>();
   private blockModels = new Map<string, PropModel>();
@@ -254,6 +254,7 @@ export class Runtime {
     this.blockIcons = icons;
     this.hud = new Hud(this.ui, this.registry, icons);
     this.gameHud = new GameHud(this.ui, (ref) => (typeof ref === 'object' && 'block' in ref ? this.blockIcons.get(this.blockId(ref.block)) ?? '' : this.graphics.spriteIcon(ref, 96)));
+    this.gameHud.onHighlight = (at, progress) => this.setHighlight(at, progress);
     this.gameHud.onScreen = (open) => {
       if (open) this.input.unlock();
       // Closed by a button click: grab the mouse again (needs a user gesture).
@@ -284,7 +285,7 @@ export class Runtime {
       if (k === 'playerDamage') this.held.kick(0.6);
       this.emit(k, e);
     };
-    this.health = new PlayerHealth(world, this.sfx, this.fx, this.gameHud, healthEmit, () => this.playerPos());
+    this.health = new PlayerHealth(world, this.sfx, this.fx, this.gameHud, healthEmit, () => this.playerPos(), () => this.ctx.player);
     this.health.configure(def.player ?? {});
 
     this.entities = new EntityManager({
@@ -303,6 +304,8 @@ export class Runtime {
       playerEye: () => ({ x: this.camera.position.x, y: this.controller.state.y + 1.62, z: this.camera.position.z }),
       playerPos: () => this.playerPos(),
       playerVel: () => ({ x: this.controller.state.vx, y: this.controller.state.vy, z: this.controller.state.vz }),
+      localPlayer: () => this.ctx.player,
+      players: () => this.ctx.players,
     });
     this.items = new ItemSystem({
       world,
@@ -454,6 +457,119 @@ export class Runtime {
     const rt = this;
     const world = this.chunks.world;
     const reg = this.registry;
+    const camera: CameraApi = {
+      get position() {
+        const p = rt.camera.position;
+        return { x: p.x, y: p.y, z: p.z };
+      },
+      get forward() {
+        const d = rt.camera.getWorldDirection(new THREE.Vector3());
+        return { x: d.x, y: d.y, z: d.z };
+      },
+      set(pos, target, up) {
+        const c = rt.gameCam;
+        c.pos.set(pos.x, pos.y, pos.z);
+        const m = new THREE.Matrix4().lookAt(c.pos, new THREE.Vector3(target.x, target.y, target.z), new THREE.Vector3(up?.x ?? 0, up?.y ?? 1, up?.z ?? 0));
+        c.quat.setFromRotationMatrix(m);
+      },
+      setPose(pos, q) {
+        rt.gameCam.pos.set(pos.x, pos.y, pos.z);
+        rt.gameCam.quat.set(q.x, q.y, q.z, q.w).normalize();
+      },
+      get fov() {
+        return rt.walker ? rt.camera.fov : rt.gameCam.fov;
+      },
+      set fov(v: number) {
+        rt.gameCam.fov = Math.max(10, Math.min(150, v));
+      },
+    };
+    const input: InputApi = {
+      isDown: (c) => rt.active && rt.input.isDown(c),
+      pressed: (c) => rt.active && rt.input.pressed(c),
+      button: (b) => rt.active && rt.input.button(b),
+      buttonPressed: (b) => rt.active && rt.input.buttonPressed(b),
+      consume: (what) => rt.input.consume(what),
+      get mouseX() {
+        return rt.active ? rt.input.mouseDX : 0;
+      },
+      get mouseY() {
+        return rt.active ? rt.input.mouseDY : 0;
+      },
+      get wheel() {
+        return rt.active ? rt.input.wheel : 0;
+      },
+    };
+    // The player on this machine. A server keeps one of these per connected player.
+    const player: Player = {
+      kind: 'player',
+      id: 'local',
+      name: 'Player',
+      hud: this.gameHud,
+      input,
+      camera,
+      get position() {
+        return rt.playerPos();
+      },
+      get eye() {
+        const s = rt.controller.state;
+        return { x: s.x, y: s.y + 1.62, z: s.z };
+      },
+      get velocity() {
+        const s = rt.controller.state;
+        return { x: s.vx, y: s.vy, z: s.vz };
+      },
+      get look() {
+        const d = rt.camera.getWorldDirection(new THREE.Vector3());
+        return { x: d.x, y: d.y, z: d.z };
+      },
+      get yaw() {
+        return rt.controller.yaw;
+      },
+      get pitch() {
+        return rt.controller.pitch;
+      },
+      get onGround() {
+        return rt.controller.state.onGround;
+      },
+      get health() {
+        return rt.health.health;
+      },
+      set health(v: number) {
+        rt.health.health = Math.max(0, Math.min(rt.health.max, v));
+        rt.health.refresh();
+      },
+      get maxHealth() {
+        return rt.health.max;
+      },
+      set maxHealth(v: number) {
+        rt.health.max = v;
+        rt.health.health = Math.min(rt.health.health, v);
+        rt.health.refresh();
+      },
+      get alive() {
+        return !rt.health.dead;
+      },
+      inventory: this.items.inventory,
+      teleport: (pos, yaw, pitch) => {
+        world.player_reset(pos.x, pos.y, pos.z);
+        if (yaw !== undefined) rt.controller.yaw = yaw;
+        if (pitch !== undefined) rt.controller.pitch = pitch;
+      },
+      damage: (amount, opts) => rt.health.damage(amount, opts),
+      heal: (amount) => rt.health.heal(amount),
+      revive: () => rt.health.revive(),
+      impulse: (x, y, z) => world.player_impulse(x, y, z),
+      freeze: (f) => world.set_frozen(f),
+      get viewModel() {
+        return rt.held;
+      },
+      get armor() {
+        return rt.health.armor;
+      },
+      set armor(v: number) {
+        rt.health.armor = v;
+      },
+    };
     const ctx: GameContext = {
       world: {
         getBlock: (x, y, z) => {
@@ -471,7 +587,6 @@ export class Runtime {
         surfaceY: (x, z) => rt.surfaceY(Math.floor(x), Math.floor(z)),
         explode: (c, r, opts) => rt.explode(c, r, opts),
         breakBlock: (x, y, z, opts) => rt.breakBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), opts?.by ?? 'world'),
-        highlight: (at, opts) => rt.setHighlight(at, opts?.progress),
         blockInfo: (block) => {
           const d = rt.registry.blocks[typeof block === 'number' ? block : rt.registry.byName.get(block)?.id ?? -1];
           return d ? { id: d.id, name: d.name, label: d.label, solid: d.solid, liquid: d.shape === 'liquid', plant: d.shape === 'cross', replaceable: d.replaceable, light: d.emit } : null;
@@ -479,70 +594,8 @@ export class Runtime {
         placeBlock: (x, y, z, block, opts) => rt.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world'),
         seaLevel: engine.sea_level(),
       },
-      player: {
-        get position() {
-          return rt.playerPos();
-        },
-        get eye() {
-          const s = rt.controller.state;
-          return { x: s.x, y: s.y + 1.62, z: s.z };
-        },
-        get velocity() {
-          const s = rt.controller.state;
-          return { x: s.vx, y: s.vy, z: s.vz };
-        },
-        get look() {
-          const d = rt.camera.getWorldDirection(new THREE.Vector3());
-          return { x: d.x, y: d.y, z: d.z };
-        },
-        get yaw() {
-          return rt.controller.yaw;
-        },
-        get pitch() {
-          return rt.controller.pitch;
-        },
-        get onGround() {
-          return rt.controller.state.onGround;
-        },
-        get health() {
-          return rt.health.health;
-        },
-        set health(v: number) {
-          rt.health.health = Math.max(0, Math.min(rt.health.max, v));
-          rt.health.refresh();
-        },
-        get maxHealth() {
-          return rt.health.max;
-        },
-        set maxHealth(v: number) {
-          rt.health.max = v;
-          rt.health.health = Math.min(rt.health.health, v);
-          rt.health.refresh();
-        },
-        get alive() {
-          return !rt.health.dead;
-        },
-        inventory: this.items.inventory,
-        teleport: (pos, yaw, pitch) => {
-          world.player_reset(pos.x, pos.y, pos.z);
-          if (yaw !== undefined) rt.controller.yaw = yaw;
-          if (pitch !== undefined) rt.controller.pitch = pitch;
-        },
-        damage: (amount, opts) => rt.health.damage(amount, opts),
-        heal: (amount) => rt.health.heal(amount),
-        revive: () => rt.health.revive(),
-        impulse: (x, y, z) => world.player_impulse(x, y, z),
-        freeze: (f) => world.set_frozen(f),
-        get viewModel() {
-          return rt.held;
-        },
-        get armor() {
-          return rt.health.armor;
-        },
-        set armor(v: number) {
-          rt.health.armor = v;
-        },
-      },
+      players: [player],
+      player,
       entities: this.entities,
       items: this.items,
       hud: this.gameHud,
@@ -552,48 +605,8 @@ export class Runtime {
         define: (name, voice) => rt.sfx.define(name, voice),
         loop: (name, opts) => rt.sfx.loop(name, opts),
       },
-      camera: {
-        get position() {
-          const p = rt.camera.position;
-          return { x: p.x, y: p.y, z: p.z };
-        },
-        get forward() {
-          const d = rt.camera.getWorldDirection(new THREE.Vector3());
-          return { x: d.x, y: d.y, z: d.z };
-        },
-        set(pos, target, up) {
-          const c = rt.gameCam;
-          c.pos.set(pos.x, pos.y, pos.z);
-          const m = new THREE.Matrix4().lookAt(c.pos, new THREE.Vector3(target.x, target.y, target.z), new THREE.Vector3(up?.x ?? 0, up?.y ?? 1, up?.z ?? 0));
-          c.quat.setFromRotationMatrix(m);
-        },
-        setPose(pos, q) {
-          rt.gameCam.pos.set(pos.x, pos.y, pos.z);
-          rt.gameCam.quat.set(q.x, q.y, q.z, q.w).normalize();
-        },
-        get fov() {
-          return rt.walker ? rt.camera.fov : rt.gameCam.fov;
-        },
-        set fov(v: number) {
-          rt.gameCam.fov = Math.max(10, Math.min(150, v));
-        },
-      },
-      input: {
-        isDown: (c) => rt.active && rt.input.isDown(c),
-        pressed: (c) => rt.active && rt.input.pressed(c),
-        button: (b) => rt.active && rt.input.button(b),
-        buttonPressed: (b) => rt.active && rt.input.buttonPressed(b),
-        consume: (what) => rt.input.consume(what),
-        get mouseX() {
-          return rt.active ? rt.input.mouseDX : 0;
-        },
-        get mouseY() {
-          return rt.active ? rt.input.mouseDY : 0;
-        },
-        get wheel() {
-          return rt.active ? rt.input.wheel : 0;
-        },
-      },
+      camera,
+      input,
       props: this.props,
       env: {
         get time() {
@@ -661,7 +674,7 @@ export class Runtime {
   }
 
   /** Carve a ragged sphere (bedrock and liquids survive), scatter debris, set off an explosion. */
-  private explode(c: Vec3, radius: number, opts: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Entity | 'player' | 'world' } = {}): number {
+  private explode(c: Vec3, radius: number, opts: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor } = {}): number {
     const world = this.chunks.world;
     const r = Math.max(0.5, radius);
     const ri = Math.ceil(r + 1);
@@ -700,7 +713,7 @@ export class Runtime {
   }
 
   /** Break a block: debris, a sound, the plant on top, the event. */
-  private breakBlockAt(x: number, y: number, z: number, by: Entity | 'player' | 'world'): boolean {
+  private breakBlockAt(x: number, y: number, z: number, by: Actor): boolean {
     const world = this.chunks.world;
     const id = world.get_block(x, y, z);
     if (id === 0 || id === 255) return false;
@@ -717,7 +730,7 @@ export class Runtime {
   }
 
   /** Place a block: a free cell nobody is standing in, ground under plants, a sound, the event. */
-  private placeBlockAt(x: number, y: number, z: number, block: BlockRef, by: Entity | 'player' | 'world'): boolean {
+  private placeBlockAt(x: number, y: number, z: number, block: BlockRef, by: Actor): boolean {
     const world = this.chunks.world;
     const id = this.blockId(block);
     const def = this.registry.blocks[id];
@@ -741,7 +754,7 @@ export class Runtime {
     return true;
   }
 
-  /** `world.highlight`: outline a block, with break cracks at `progress`. */
+  /** `hud.highlight`: outline a block, with break cracks at `progress`. */
   private setHighlight(at: Vec3 | null, progress?: number) {
     if (!at) return this.highlight.set(null);
     const id = this.chunks.world.get_block(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z));
@@ -1008,13 +1021,13 @@ export class Runtime {
       usage: '<item> [count]',
       help: 'Put an item in your hand',
       complete: (args) => (args.length <= 1 ? this.items.ids() : []),
-      run: ([id, n]) => {
+      run: ([id, n], _g, player) => {
         if (!this.itemMode) throw new Error('This game has no item hotbar');
         if (!id) throw new Error('Which item? Tab lists them');
         const def = this.items.get(id);
         if (!def) throw new Error(`Unknown item "${id}"`);
         const count = n === undefined ? 1 : Math.max(1, Math.floor(num(n, 'count')));
-        const inv = this.items.inventory;
+        const inv = player.inventory;
         const left = inv.give(id, count);
         if (left === count) throw new Error('Your hotbar is full');
         const slot = inv.slots.findIndex((st) => st?.item === id);
@@ -1024,9 +1037,9 @@ export class Runtime {
     });
     c.register('heal', {
       help: 'Full health (revives you if dead)',
-      run: (_, g) => {
-        if (!g.player.alive) g.player.revive();
-        else g.player.health = g.player.maxHealth;
+      run: (_, _g, player) => {
+        if (!player.alive) player.revive();
+        else player.health = player.maxHealth;
         return 'Healed';
       },
     });
@@ -1044,14 +1057,14 @@ export class Runtime {
     c.register('tp', {
       usage: '<x> <y> <z>',
       help: 'Teleport (~ for relative, e.g. ~ ~10 ~)',
-      run: (args, g) => {
+      run: (args, _g, player) => {
         if (args.length !== 3) throw new Error('Need x, y and z');
-        const p = g.player.position;
+        const p = player.position;
         const [x, y, z] = args.map((a, i) => {
           const base = [p.x, p.y, p.z][i];
           return a.startsWith('~') ? base + (a.length > 1 ? num(a.slice(1), 'offset') : 0) : num(a, 'xyz'[i]);
         });
-        g.player.teleport({ x, y, z });
+        player.teleport({ x, y, z });
         return `Teleported to ${x.toFixed(1)} ${y.toFixed(1)} ${z.toFixed(1)}`;
       },
     });
@@ -1059,11 +1072,11 @@ export class Runtime {
       usage: '<entity> [count]',
       help: 'Spawn creatures in front of you',
       complete: (args) => (args.length <= 1 ? this.entities.typeNames() : []),
-      run: ([type, n], g) => {
+      run: ([type, n], g, player) => {
         if (!type || !this.entities.typeNames().includes(type)) throw new Error(type ? `Unknown entity "${type}"` : 'Which entity? Tab lists them');
         const count = n === undefined ? 1 : Math.min(50, Math.max(1, Math.floor(num(n, 'count'))));
-        const p = g.player.position;
-        const l = g.player.look;
+        const p = player.position;
+        const l = player.look;
         const len = Math.hypot(l.x, l.z) || 1;
         for (let i = 0; i < count; i++) {
           const a = (i / count) * Math.PI * 2;

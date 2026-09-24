@@ -1,4 +1,4 @@
-import type { IconRef, MenuEntry, MenuHandle, MenuOptions } from '@platform';
+import type { IconRef, MenuEntry, MenuHandle, MenuOptions, Player } from '@platform';
 import { Sprite } from './art';
 import { ARMOR, CURRENCIES, CURRENCY_NAME, PICK_ITEMS, SWORD_ITEMS, type Currency, type Match } from './state';
 
@@ -36,9 +36,10 @@ export class Shop {
     return this.handle?.open ?? false;
   }
 
-  show() {
+  /** Open the shop on this player's screen. */
+  show(player: Player) {
     if (this.open) return;
-    this.handle = this.m.game.hud.menu({ ...this.contents(), onClose: () => (this.handle = null) });
+    this.handle = player.hud.menu({ ...this.contents(), onClose: () => (this.handle = null) });
   }
 
   close() {

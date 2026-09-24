@@ -169,10 +169,10 @@ export default defineGame({
     defineItems(game);
     defineMonsters(game);
     game.events.on('entityDeath', ({ killer }) => {
-      if (killer === 'player') state.kills++;
+      if (killer !== 'world' && killer?.kind === 'player') state.kills++;
     });
     game.events.on('entityDamage', ({ amount, source }) => {
-      if (source === 'player') state.damageDealt += amount;
+      if (source !== 'world' && source?.kind === 'player') state.damageDealt += amount;
     });
     game.events.on('playerDamage', ({ amount }) => {
       state.damageTaken += amount;

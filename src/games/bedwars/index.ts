@@ -1,4 +1,4 @@
-import { defineGame, Models, type Entity, type GameContext } from '@platform';
+import { defineGame, Models, type Actor, type GameContext } from '@platform';
 import { building, interactions, type Building, type Interactions } from '@platform/kits';
 import { BEDWARS_ATLAS, Skin, botSword, paintBedwarsAtlas } from './art';
 import { Bot, type Target } from './bots';
@@ -64,7 +64,7 @@ const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60))
 
 /** Who gets the kill: whoever dealt the blow, else whoever hit them last (knocked into the void). */
 function killerOf(victim: Team, source: unknown): Team | null {
-  const direct = match.teamOf(source as Entity | 'player' | 'world');
+  const direct = match.teamOf(source as Actor | undefined);
   if (direct && direct !== victim) return direct;
   const lh = victim.lastHit;
   return lh && match.now - lh.at < 10 ? lh.team : null;
@@ -228,10 +228,12 @@ function refreshHud(game: GameContext) {
     .join('   ');
   game.hud.objective(`${status}   ·   ${nextEvent()}`);
   const w = match.player.wallet;
-  game.hud.stat('iron', 'Iron', w.iron);
-  game.hud.stat('gold', 'Gold', w.gold);
-  game.hud.stat('diamond', 'Diamonds', w.diamond);
-  game.hud.stat('emerald', 'Emeralds', w.emerald);
+  // The wallet is the player's own; the scoreboard above is everyone's.
+  const own = game.player.hud;
+  own.stat('iron', 'Iron', w.iron);
+  own.stat('gold', 'Gold', w.gold);
+  own.stat('diamond', 'Diamonds', w.diamond);
+  own.stat('emerald', 'Emeralds', w.emerald);
   // Generator holograms.
   map.diamonds.forEach((d, i) => {
     game.hud.marker(`dia${i}`, { x: d.x, y: d.y + 2.4, z: d.z }, { shape: 'dot', color: '#6fe8ff', size: 5, label: `Diamond ${'I'.repeat(match.diamondTier)} · ${Math.ceil(hud.diamondIn)}s` });
@@ -286,7 +288,7 @@ export default defineGame({
         return mineTime(block, Math.max(0, PICK_ITEMS.indexOf(item)), item === 'shears');
       },
     });
-    talk = interactions(game, { shopkeeper: () => shop.show() });
+    talk = interactions(game, { shopkeeper: (_keeper, player) => shop.show(player) });
     fireballs = new Fireballs(match);
     shop = new Shop(match, () => {
       applyGear(game);
@@ -323,7 +325,10 @@ export default defineGame({
       speed: 0,
       knockbackResistance: 1,
       invulnerable: true,
-      ai: (self) => self.lookAt(self.distanceToPlayer() < 7 ? 'player' : null),
+      ai: (self) => {
+        const p = self.nearestPlayer();
+        self.lookAt(p && self.distanceTo(p) < 7 ? p : null);
+      },
     });
 
     // Blocks placed during the match are the only ones that can be broken.

@@ -1,4 +1,4 @@
-import { math, type Entity, type Prop, type Vec3 } from '@platform';
+import { math, type Entity, type Player, type Prop, type Vec3 } from '@platform';
 import type { Match, Team } from './state';
 
 interface Ball {
@@ -7,7 +7,7 @@ interface Ball {
   prop: Prop;
   age: number;
   owner: Team;
-  by: Entity | 'player';
+  by: Entity | Player;
 }
 
 const FORWARD = new math.Vector3(0, 0, -1);
@@ -25,7 +25,7 @@ export class Fireballs {
 
   constructor(private m: Match) {}
 
-  launch(from: Vec3, dir: Vec3, owner: Team, by: Entity | 'player') {
+  launch(from: Vec3, dir: Vec3, owner: Team, by: Entity | Player) {
     const g = this.m.game;
     const prop = g.props.bolt({ color: '#ff7a1a', length: 0.8, width: 0.8, intensity: 4 });
     const vel = new math.Vector3(dir.x, dir.y, dir.z).normalize().multiplyScalar(SPEED);

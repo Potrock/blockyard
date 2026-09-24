@@ -29,11 +29,11 @@ export function defineItems(game: GameContext) {
     icon: 'health_potion',
     hold: { model: HeldModels.healthPotion },
     stack: 4,
-    use(g) {
-      if (g.player.health >= g.player.maxHealth) return false;
-      g.player.heal(10);
-      g.audio.play('heal');
-      g.fx.burst(g.player.eye, { color: '#ff4f6d', count: 16, speed: 2, gravity: -3 });
+    use(g, player) {
+      if (player.health >= player.maxHealth) return false;
+      player.heal(10);
+      g.audio.play('heal', { at: player.position });
+      g.fx.burst(player.eye, { color: '#ff4f6d', count: 16, speed: 2, gravity: -3 });
       return true;
     },
   });
@@ -41,9 +41,9 @@ export function defineItems(game: GameContext) {
     kind: 'misc',
     name: 'Heart',
     icon: 'heart',
-    onPickup(g) {
-      g.player.heal(4);
-      g.audio.play('heal', { volume: 0.8 });
+    onPickup(g, _count, player) {
+      player.heal(4);
+      g.audio.play('heal', { at: player.position, volume: 0.8 });
       return true;
     },
   });
@@ -51,10 +51,10 @@ export function defineItems(game: GameContext) {
     kind: 'misc',
     name: 'Arrows',
     icon: Sprite.arrow_bundle,
-    onPickup(g, count) {
-      g.player.inventory.give('arrow', 6 * count);
-      g.hud.toast(`+${6 * count} Arrows`);
-      g.audio.play('pickup');
+    onPickup(g, count, player) {
+      player.inventory.give('arrow', 6 * count);
+      player.hud.toast(`+${6 * count} Arrows`);
+      g.audio.play('pickup', { at: player.position });
       return true;
     },
   });
@@ -151,7 +151,13 @@ const wardenAI: Behavior = (self, game, dt) => {
   s.meleeCd = (s.meleeCd ?? 0) - dt;
   s.summoned ??= 0;
   const hp = self.health / self.maxHealth;
-  const d = self.distanceToPlayer();
+  // The Warden hunts whoever is closest.
+  const target = self.nearestPlayer();
+  if (!target) {
+    self.stop();
+    return;
+  }
+  const d = self.distanceTo(target);
 
   // Summons at 66% and 33% health.
   const thresholds = [0.66, 0.33];
@@ -175,14 +181,14 @@ const wardenAI: Behavior = (self, game, dt) => {
 
   switch (s.phase) {
     case 'chase': {
-      self.moveTo('player');
-      self.lookAt('player');
+      self.moveTo(target);
+      self.lookAt(target);
       self.glow(s.enraged ? '#ff2a2a' : null);
-      if (d < 3.4 && s.meleeCd <= 0 && self.canSeePlayer()) {
+      if (d < 3.4 && s.meleeCd <= 0 && self.canSee(target)) {
         // Heavy swipe.
         s.meleeCd = 1.4 * tempo;
         self.animate('attack');
-        game.player.damage(7, { source: self, knockback: 1.8 });
+        target.damage(7, { source: self, knockback: 1.8 });
         game.fx.shake(0.12, 0.25);
       } else if (d < 11 && s.slamCd <= 0) {
         s.phase = 'windup';
@@ -191,10 +197,10 @@ const wardenAI: Behavior = (self, game, dt) => {
         self.animate('raise');
         self.glow('#b76bff');
         game.audio.play('brute', { at: self.position, pitch: 0.7 });
-      } else if (d > 9 && s.fireCd <= 0 && self.canSeePlayer()) {
+      } else if (d > 9 && s.fireCd <= 0 && self.canSee(target)) {
         s.fireCd = 3.2 * tempo;
         self.animate('cast');
-        for (const spread of [0, -0.08, 0.08]) self.shoot(FIREBALL, 'player', { lead: true, spread: 0.02 + Math.abs(spread) });
+        for (const spread of [0, -0.08, 0.08]) self.shoot(FIREBALL, target, { lead: true, spread: 0.02 + Math.abs(spread) });
         game.audio.play('spawn', { at: self.position, pitch: 0.6 });
         game.clock.after(0.4, () => self.alive && self.animate('none'));
       }
@@ -202,7 +208,7 @@ const wardenAI: Behavior = (self, game, dt) => {
     }
     case 'windup': {
       self.stop();
-      self.lookAt('player');
+      self.lookAt(target);
       if (s.timer <= 0) {
         // Slam: shockwave that only hits grounded players — jump to dodge.
         const p = self.position;
@@ -210,9 +216,11 @@ const wardenAI: Behavior = (self, game, dt) => {
         game.fx.shockwave({ x: p.x, y: p.y, z: p.z }, 8, '#b76bff');
         game.fx.shake(0.35, 0.6);
         game.audio.play('slam', { at: p, volume: 1.3 });
-        const pp = game.player.position;
-        const dist = Math.hypot(pp.x - p.x, pp.z - p.z);
-        if (dist < 8 && game.player.onGround) game.player.damage(Math.round(10 * (1 - dist / 10)), { source: self, knockback: 2.2 });
+        for (const pl of game.players) {
+          const pp = pl.position;
+          const dist = Math.hypot(pp.x - p.x, pp.z - p.z);
+          if (dist < 8 && pl.onGround) pl.damage(Math.round(10 * (1 - dist / 10)), { source: self, knockback: 2.2 });
+        }
         s.phase = 'recover';
         s.timer = 1.1 * tempo;
         s.slamCd = game.rng.range(6.5, 9) * tempo;

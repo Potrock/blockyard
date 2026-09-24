@@ -1,5 +1,5 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { DamageOptions, GameEvents, PlayerOptions, Vec3 } from '../api/types';
+import type { DamageOptions, GameEvents, Player, PlayerOptions, Vec3 } from '../api/types';
 import type { Sfx } from '../audio/sfx';
 import type { Effects } from '../fx/effects';
 import type { GameHud } from '../ui/hudkit';
@@ -27,6 +27,8 @@ export class PlayerHealth {
     private hud: GameHud,
     private emit: <K extends keyof GameEvents>(event: K, e: GameEvents[K]) => void,
     private playerPos: () => Vec3,
+    /** The player this health belongs to (named in the events). */
+    private player: () => Player,
   ) {}
 
   configure(opts: PlayerOptions) {
@@ -60,12 +62,12 @@ export class PlayerHealth {
     this.sfx.play('hurt');
     this.fx.flash('rgba(180, 10, 10, 1)', Math.min(0.5, 0.15 + amount * 0.04), 0.45);
     this.fx.shake(0.06 + amount * 0.012, 0.3);
-    this.emit('playerDamage', { amount, source: opts.source });
+    this.emit('playerDamage', { player: this.player(), amount, source: opts.source });
     if (this.health <= 0) {
       this.dead = true;
       this.deathTime = 0;
       this.world.set_frozen(true);
-      this.emit('playerDeath', { source: opts.source });
+      this.emit('playerDeath', { player: this.player(), source: opts.source });
     }
     this.refresh();
     return true;

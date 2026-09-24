@@ -7,6 +7,7 @@ import type {
   EntityDefinition,
   GameContext,
   GameEvents,
+  Player,
   ProjectileSpec,
   Vec3,
 } from '../api/types';
@@ -71,14 +72,21 @@ export interface EntityServices {
   playerEye(): Vec3;
   playerPos(): Vec3;
   playerVel(): Vec3;
+  /** The player on this machine (the engine's path-finding and line-of-sight track them). */
+  localPlayer(): Player;
+  players(): readonly Player[];
 }
+
+type Target = Player | Entity | Vec3;
+const isPlayer = (t: unknown): t is Player => typeof t === 'object' && t !== null && (t as { kind?: string }).kind === 'player';
+const isEntity = (t: unknown): t is Entity => typeof t === 'object' && t !== null && (t as { kind?: string }).kind === 'entity';
 
 type Internal = ProjectileSpec & { crit?: boolean };
 
 interface Projectile {
   slot: number;
   spec: Internal;
-  owner: EntityImpl | 'player' | null;
+  owner: EntityImpl | Player | null;
   group: THREE.Group;
   stuckAt: number;
   material: THREE.RawShaderMaterial;
@@ -87,6 +95,7 @@ interface Projectile {
 const tmpColor = new THREE.Color();
 
 class EntityImpl implements Entity {
+  readonly kind = 'entity' as const;
   readonly data: Record<string, unknown> = {};
   health: number;
   readonly maxHealth: number;
@@ -97,7 +106,7 @@ class EntityImpl implements Entity {
   removed = false;
   readonly model: ModelInstance;
   readonly anim: AnimState = { walkPhase: 0, walkAmount: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0 };
-  lookTarget: 'player' | Vec3 | null = null;
+  lookTarget: Target | null = null;
   yaw = 0;
   hurt = 0;
   glowColor: THREE.Color | null = null;
@@ -147,7 +156,7 @@ class EntityImpl implements Entity {
     this.health = Math.max(0, this.health - amount);
     this.hurt = 1;
     const pos = this.position;
-    const from = opts.from ?? (opts.source === 'player' ? this.m.s.playerPos() : typeof opts.source === 'object' ? opts.source.position : null);
+    const from = opts.from ?? (typeof opts.source === 'object' ? opts.source.position : null);
     const kb = (opts.knockback ?? 1) * (1 - (this.def.knockbackResistance ?? 0));
     if (from && kb > 0) {
       const dx = pos.x - from.x;
@@ -207,17 +216,19 @@ class EntityImpl implements Entity {
     b[o + B.IMP_Z] += z;
   }
 
-  moveTo(target: 'player' | Vec3) {
+  moveTo(target: Player | Vec3) {
     const b = this.m.bodies;
     const o = this.o;
     b[o + B.MODE] = 1;
-    if (target === 'player') {
+    if (target === this.m.s.localPlayer()) {
+      // The engine's flow field path-finds to the local player.
       b[o + B.TARGET_KIND] = 0;
     } else {
+      const p = isPlayer(target) ? target.position : target;
       b[o + B.TARGET_KIND] = 1;
-      b[o + B.TX] = target.x;
-      b[o + B.TY] = target.y;
-      b[o + B.TZ] = target.z;
+      b[o + B.TX] = p.x;
+      b[o + B.TY] = p.y;
+      b[o + B.TZ] = p.z;
     }
   }
 
@@ -238,16 +249,38 @@ class EntityImpl implements Entity {
     this.m.bodies[this.o + B.WANT_JUMP] = 1;
   }
 
-  lookAt(target: 'player' | Vec3 | null) {
+  lookAt(target: Target | null) {
     this.lookTarget = target;
   }
 
-  canSeePlayer(): boolean {
-    return this.m.bodies[this.o + B.LOS] > 0.5;
+  nearestPlayer(): Player | null {
+    let best: Player | null = null;
+    let bd = Infinity;
+    for (const p of this.m.s.players()) {
+      if (!p.alive) continue;
+      const d = this.distanceTo(p);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    return best;
   }
 
-  distanceToPlayer(): number {
-    return this.m.bodies[this.o + B.DIST];
+  canSee(target: Target): boolean {
+    // The engine keeps line of sight to the local player for every body.
+    if (target === this.m.s.localPlayer()) return this.m.bodies[this.o + B.LOS] > 0.5;
+    const p = this.position;
+    const eye = { x: p.x, y: p.y + this.height * 0.85, z: p.z };
+    const t = this.m.aimPoint(target);
+    return this.m.s.world.line_clear(eye.x, eye.y, eye.z, t.x, t.y, t.z);
+  }
+
+  distanceTo(target: Target): number {
+    if (target === this.m.s.localPlayer()) return this.m.bodies[this.o + B.DIST];
+    const p = this.position;
+    const t = isPlayer(target) || isEntity(target) ? target.position : target;
+    return Math.hypot(t.x - p.x, t.y - p.y, t.z - p.z);
   }
 
   animate(name: 'attack' | 'raise' | 'cast' | 'none') {
@@ -265,15 +298,15 @@ class EntityImpl implements Entity {
     this.glowColor = color ? new THREE.Color(color) : null;
   }
 
-  shoot(spec: ProjectileSpec, target: 'player' | Vec3, opts: { spread?: number; lead?: boolean } = {}) {
+  shoot(spec: ProjectileSpec, target: Target, opts: { spread?: number; lead?: boolean } = {}) {
     const p = this.position;
     const from = { x: p.x, y: p.y + this.height * 0.82 * Math.min(1.4, this.def.model.scale), z: p.z };
-    let tp = target === 'player' ? { ...this.m.s.playerEye() } : { ...target };
-    if (target === 'player') tp.y -= 0.35;
+    let tp = { ...this.m.aimPoint(target) };
+    if (isPlayer(target)) tp.y -= 0.35;
     const dist = Math.hypot(tp.x - from.x, tp.y - from.y, tp.z - from.z);
     const t = dist / spec.speed;
-    if (opts.lead && target === 'player') {
-      const v = this.m.s.playerVel();
+    if (opts.lead && (isPlayer(target) || isEntity(target))) {
+      const v = target.velocity;
       tp = { x: tp.x + v.x * t * 0.8, y: tp.y, z: tp.z + v.z * t * 0.8 };
     }
     const g = spec.gravity ?? 20;
@@ -445,11 +478,21 @@ export class EntityManager implements EntityApi {
     }
   }
 
-  projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner: Entity | 'player' = 'player') {
-    this.spawnProjectile(spec, from, dir, owner === 'player' ? 'player' : (owner as EntityImpl));
+  projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner: Entity | Player = this.s.localPlayer()) {
+    this.spawnProjectile(spec, from, dir, isPlayer(owner) ? owner : (owner as EntityImpl));
   }
 
-  spawnProjectile(spec: Internal, from: Vec3, dir: Vec3, owner: EntityImpl | 'player' | null) {
+  /** Where to aim at something: a player's eyes, an entity's middle, or the point itself. */
+  aimPoint(t: Target): Vec3 {
+    if (isPlayer(t)) return t.eye;
+    if (isEntity(t)) {
+      const p = t.position;
+      return { x: p.x, y: p.y + this.hitbox(t).height * 0.6, z: p.z };
+    }
+    return t;
+  }
+
+  spawnProjectile(spec: Internal, from: Vec3, dir: Vec3, owner: EntityImpl | Player | null) {
     const slot = this.freeShots.pop();
     if (slot === undefined) return;
     this.refreshViews();
@@ -466,8 +509,8 @@ export class EntityManager implements EntityApi {
     p[o + P.GRAVITY] = spec.gravity ?? 20;
     p[o + P.DRAG] = 0.05;
     p[o + P.RADIUS] = 0.12;
-    p[o + P.OWNER] = owner === 'player' || owner === null ? -1 : owner.slot;
-    p[o + P.FLAGS] = PF_ACTIVE | (owner === 'player' ? PF_HITS_BODIES : PF_HITS_PLAYER);
+    p[o + P.OWNER] = owner === null || isPlayer(owner) ? -1 : owner.slot;
+    p[o + P.FLAGS] = PF_ACTIVE | (isPlayer(owner) ? PF_HITS_BODIES : PF_HITS_PLAYER);
     const group = new THREE.Group();
     if (!spec.sprite) {
       // No sprite: a glowing bolt along +X (the direction of travel).
@@ -549,7 +592,7 @@ export class EntityManager implements EntityApi {
       const pos = { x: p[o + P.X], y: p[o + P.Y], z: p[o + P.Z] };
       if (kind !== 0) {
         p[o + P.HIT_KIND] = 0;
-        const src = shot.owner === 'player' ? 'player' : shot.owner ?? 'world';
+        const src = shot.owner ?? 'world';
         if (kind === 1) {
           this.s.sfx.play('arrow_hit', { at: pos, volume: 0.6 });
           if (shot.spec.sticky) {
@@ -589,7 +632,6 @@ export class EntityManager implements EntityApi {
   private syncVisuals(dt: number, running: boolean) {
     const b = this.bodies;
     const S = this.bodyStride;
-    const pe = this.s.playerEye();
     let boss: EntityImpl | null = null;
     for (const e of [...this.list]) {
       const o = e.slot * S;
@@ -601,9 +643,9 @@ export class EntityManager implements EntityApi {
       const hs = Math.hypot(vx, vz);
       // Facing: look target, else movement heading.
       let target = e.yaw;
-      if (e.alive && e.lookTarget) {
-        const t = e.lookTarget === 'player' ? pe : e.lookTarget;
-        target = Math.atan2(t.x - pos.x, t.z - pos.z);
+      const look = e.alive && e.lookTarget ? this.aimPoint(e.lookTarget) : null;
+      if (look) {
+        target = Math.atan2(look.x - pos.x, look.z - pos.z);
       } else if (hs > 0.4) {
         target = Math.atan2(vx, vz);
       }
@@ -618,10 +660,10 @@ export class EntityManager implements EntityApi {
         a.walkPhase += hs * dt * (4.2 / Math.max(0.6, e.def.model.scale));
       }
       a.walkAmount += (Math.min(1, hs / Math.max(1.2, e.def.speed * 0.7)) - a.walkAmount) * Math.min(1, dt * 8);
-      if (e.alive && e.lookTarget === 'player') {
+      if (look && (isPlayer(e.lookTarget) || isEntity(e.lookTarget))) {
         const eyeY = pos.y + e.height * 0.85;
-        const dist = Math.hypot(pe.x - pos.x, pe.z - pos.z) || 1;
-        a.headPitch = Math.max(-0.6, Math.min(0.6, -Math.atan2(pe.y - eyeY, dist)));
+        const dist = Math.hypot(look.x - pos.x, look.z - pos.z) || 1;
+        a.headPitch = Math.max(-0.6, Math.min(0.6, -Math.atan2(look.y - eyeY, dist)));
       } else {
         a.headPitch *= 0.9;
       }

@@ -344,6 +344,13 @@ export class GameHud implements HudApi {
     window.setTimeout(() => line.remove(), 6600);
   }
 
+  /** Set by the runtime: draws `highlight` in the world. */
+  onHighlight: ((at: Vec3 | null, progress?: number) => void) | null = null;
+
+  highlight(at: Vec3 | null, opts: { progress?: number } = {}) {
+    this.onHighlight?.(at, opts.progress);
+  }
+
   progress(fraction: number | null, opts: { color?: string } = {}) {
     const el = this.progressEl;
     el.style.display = fraction === null ? 'none' : 'block';
@@ -526,6 +533,7 @@ export class GameHud implements HudApi {
     this.bannerEl.classList.remove('show');
     this.feedEl.replaceChildren();
     this.progress(null);
+    this.highlight(null);
     for (const n of this.numbers) n.el.remove();
     this.numbers = [];
     this.closeScreens();

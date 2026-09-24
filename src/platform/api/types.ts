@@ -104,9 +104,20 @@ export interface PlayerOptions {
 
 export interface GameContext {
   readonly world: WorldApi;
-  readonly player: PlayerApi;
+  /**
+   * Everyone playing. A single-player game has exactly one; in a multiplayer game players join
+   * and leave (`playerJoin` / `playerLeave` events). Players already here when `start` runs are
+   * in the list.
+   */
+  readonly players: readonly Player[];
+  /**
+   * The player, for single-player games (in a multiplayer game, the first one). Multiplayer
+   * games use `players` and the player each event and callback names.
+   */
+  readonly player: Player;
   readonly entities: EntityApi;
   readonly items: ItemApi;
+  /** Everyone's screen: banners, the scoreboard, messages for all. One player's: `player.hud`. */
   readonly hud: HudApi;
   readonly fx: FxApi;
   readonly audio: AudioApi;
@@ -117,9 +128,9 @@ export interface GameContext {
   readonly rng: Rng;
   /** Slash commands typed into the command bar (`/` or `T`). */
   readonly commands: CommandApi;
-  /** The view camera (drive it yourself with `player.controller: 'none'`). */
+  /** The player's camera (single-player shortcut for `player.camera`). */
   readonly camera: CameraApi;
-  /** Raw keyboard and mouse (reads as idle while paused or the mouse isn't captured). */
+  /** The player's keyboard and mouse (single-player shortcut for `player.input`). */
   readonly input: InputApi;
   /** Movable objects: block builds (ships, vehicles) and glowing bolts. */
   readonly props: PropApi;
@@ -208,7 +219,7 @@ export interface CommandSpec {
   /** Argument summary, e.g. `<item> [count]`. */
   usage?: string;
   /** Do it. Return a message to show; throw an Error to report a problem. */
-  run(args: string[], game: GameContext): string | void;
+  run(args: string[], game: GameContext, player: Player): string | void;
   /** Tab-completion candidates for the last argument (filtered by what's typed). */
   complete?(args: string[], game: GameContext): string[];
 }
@@ -256,23 +267,18 @@ export interface WorldApi {
    * explosion. `filter` decides which blocks go (e.g. only ones placed this match); `by` is
    * passed on to the `blockBreak` events. Returns blocks removed.
    */
-  explode(center: Vec3, radius: number, opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Entity | 'player' | 'world' }): number;
+  explode(center: Vec3, radius: number, opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor }): number;
   /**
    * Break a block with debris and a sound (and the plant on top), and fire `blockBreak`.
    * Bedrock and liquids don't break. Returns false if nothing was broken. (`setBlock` is the
    * silent version.) Who may break what is up to your game.
    */
-  breakBlock(x: number, y: number, z: number, opts?: { by?: Entity | 'player' | 'world' }): boolean;
+  breakBlock(x: number, y: number, z: number, opts?: { by?: Actor }): boolean;
   /**
    * Place a block if the cell is free (air or a plant), nobody is standing in it, and a plant has
    * ground under it; with a sound, and fire `blockPlace`. Returns false if it couldn't.
    */
-  placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Entity | 'player' | 'world' }): boolean;
-  /**
-   * Outline one block (the one you're aiming at), with Minecraft's break cracks growing over it
-   * as `progress` goes 0..1. `null` hides it. It stays until you move or hide it.
-   */
-  highlight(at: Vec3 | null, opts?: { progress?: number }): void;
+  placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Actor }): boolean;
 }
 
 export interface BlockInfo {
@@ -308,9 +314,15 @@ export interface BlueprintData {
 // Player
 // ---------------------------------------------------------------------------------------------
 
+/** A player (the same object as in `game.players`). */
+export type Player = PlayerApi;
+
+/** Who did something: an entity, a player, or the world (explosions, the void, traps). Check `kind` to tell them apart. */
+export type Actor = Entity | Player | 'world';
+
 export interface DamageOptions {
   /** Who dealt the damage (for events and knockback direction). */
-  source?: Entity | 'player' | 'world';
+  source?: Actor;
   /** Knockback strength (0 = none, 1 = normal). */
   knockback?: number;
   /** Where the hit came from; defaults to the source position. */
@@ -320,6 +332,17 @@ export interface DamageOptions {
 }
 
 export interface PlayerApi {
+  /** Tells players from entities in an `Actor`. */
+  readonly kind: 'player';
+  /** Stable for the session (`local` in single-player). */
+  readonly id: string;
+  readonly name: string;
+  /** This player's screen: HUD calls here reach only them (their wallet, their shop, their toasts). */
+  readonly hud: HudApi;
+  /** This player's keyboard and mouse. */
+  readonly input: InputApi;
+  /** This player's camera (drive it with `player.controller: 'none'`). */
+  readonly camera: CameraApi;
   /** Feet position. */
   readonly position: Vec3;
   readonly eye: Vec3;
@@ -496,7 +519,7 @@ interface ItemBase {
    * Called when the player walks over a pickup of this item. Return true to consume it
    * immediately (e.g. hearts) instead of adding it to the inventory; play your own sound then.
    */
-  onPickup?(game: GameContext, count: number): boolean;
+  onPickup?(game: GameContext, count: number, player: Player): boolean;
 }
 
 export interface ItemSounds {
@@ -537,7 +560,7 @@ export interface BowItem extends ItemBase {
 export interface ConsumableItem extends ItemBase {
   kind: 'consumable';
   /** Right-click to use. Return true to consume one. */
-  use(game: GameContext): boolean;
+  use(game: GameContext, player: Player): boolean;
 }
 
 export interface MiscItem extends ItemBase {
@@ -650,6 +673,8 @@ export interface ProjectileSpec {
 }
 
 export interface Entity {
+  /** Tells entities from players in an `Actor`. */
+  readonly kind: 'entity';
   readonly id: number;
   readonly type: string;
   readonly position: Vec3;
@@ -671,22 +696,25 @@ export interface Entity {
   remove(): void;
   impulse(x: number, y: number, z: number): void;
   /** Path-find toward the player or walk straight to a point. */
-  moveTo(target: 'player' | Vec3): void;
+  moveTo(target: Player | Vec3): void;
   /** Walk in a world-space direction (x, z), e.g. strafing. */
   moveDirection(x: number, z: number): void;
   stop(): void;
   jump(): void;
   /** Turn to face a point (otherwise entities face their movement). */
-  lookAt(target: 'player' | Vec3 | null): void;
-  canSeePlayer(): boolean;
-  distanceToPlayer(): number;
+  lookAt(target: Player | Entity | Vec3 | null): void;
+  /** The closest living player (null if nobody's alive). */
+  nearestPlayer(): Player | null;
+  /** A clear line from its eyes to them (to a player's eyes, an entity's middle, or a point). */
+  canSee(target: Player | Entity | Vec3): boolean;
+  distanceTo(target: Player | Entity | Vec3): number;
   /** Play a model animation: `attack` swings arms, `raise` holds them up (wind-ups), `cast`. */
   animate(name: 'attack' | 'raise' | 'cast' | 'none'): void;
   /** Speed multiplier on top of the type's speed. */
   setSpeed(multiplier: number): void;
   /** Tint the model (flash on wind-up). */
   glow(color: string | null): void;
-  shoot(spec: ProjectileSpec, target: 'player' | Vec3, opts?: { spread?: number; lead?: boolean }): void;
+  shoot(spec: ProjectileSpec, target: Player | Entity | Vec3, opts?: { spread?: number; lead?: boolean }): void;
 }
 
 export interface EntityApi {
@@ -697,7 +725,7 @@ export interface EntityApi {
   near(center: Vec3, radius: number): Entity[];
   clear(): void;
   /** Fire a projectile from anywhere (traps, turrets). */
-  projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner?: Entity | 'player'): void;
+  projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner?: Entity | Player): void;
   /** The first living entity along a ray, stopping at solid blocks (what the crosshair is on). */
   raycast(origin: Vec3, dir: Vec3, maxDistance: number): { entity: Entity; distance: number } | null;
 }
@@ -776,6 +804,11 @@ export interface HudApi {
   menu(opts: MenuOptions): MenuHandle;
   /** A ring round the crosshair filling 0..1 (mining, charging, capturing); `null` hides it. */
   progress(fraction: number | null, opts?: { color?: string }): void;
+  /**
+   * Outline one block (the one being aimed at), with Minecraft's break cracks growing over it as
+   * `progress` goes 0..1. `null` hides it. It stays until moved or hidden.
+   */
+  highlight(at: Vec3 | null, opts?: { progress?: number }): void;
 }
 
 export interface MarkerOptions {
@@ -895,12 +928,16 @@ export interface EnvApi {
 export interface GameEvents {
   entityDamage: { entity: Entity; amount: number; source: DamageOptions['source'] };
   entityDeath: { entity: Entity; killer: DamageOptions['source'] };
-  playerDamage: { amount: number; source: DamageOptions['source'] };
-  playerDeath: { source: DamageOptions['source'] };
-  pickup: { item: string; count: number };
+  playerDamage: { player: Player; amount: number; source: DamageOptions['source'] };
+  playerDeath: { player: Player; source: DamageOptions['source'] };
+  pickup: { player: Player; item: string; count: number };
+  /** A player joined a game in progress (multiplayer). */
+  playerJoin: { player: Player };
+  /** A player left (multiplayer). They're no longer in `players`. */
+  playerLeave: { player: Player };
   /** A block was broken by the player, an entity, an explosion or `world.breakBlock`. */
-  blockBreak: { x: number; y: number; z: number; block: string; by: Entity | 'player' | 'world' };
-  blockPlace: { x: number; y: number; z: number; block: string; by: Entity | 'player' | 'world' };
+  blockBreak: { x: number; y: number; z: number; block: string; by: Actor };
+  blockPlace: { x: number; y: number; z: number; block: string; by: Actor };
 }
 
 export interface EventApi {

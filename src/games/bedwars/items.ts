@@ -38,11 +38,11 @@ export function defineItems(game: GameContext, m: Match, fireballs: Fireballs) {
     name: 'Golden Apple',
     icon: Sprite.golden_apple,
     stack: 16,
-    use(g) {
-      if (g.player.health >= g.player.maxHealth) return false;
-      g.player.heal(8);
-      g.audio.play('eat');
-      g.fx.burst(g.player.eye, { color: '#ffd84a', count: 14, speed: 2, gravity: -3, glow: 1 });
+    use(g, player) {
+      if (player.health >= player.maxHealth) return false;
+      player.heal(8);
+      g.audio.play('eat', { at: player.position });
+      g.fx.burst(player.eye, { color: '#ffd84a', count: 14, speed: 2, gravity: -3, glow: 1 });
       return true;
     },
   });
@@ -51,11 +51,11 @@ export function defineItems(game: GameContext, m: Match, fireballs: Fireballs) {
     name: 'Fireball',
     icon: Sprite.fire_charge,
     stack: 16,
-    use(g) {
-      const e = g.player.eye;
-      const d = g.player.look;
-      fireballs.launch({ x: e.x + d.x * 0.9, y: e.y + d.y * 0.9, z: e.z + d.z * 0.9 }, d, m.player, 'player');
-      g.player.viewModel.play('swing');
+    use(_g, player) {
+      const e = player.eye;
+      const d = player.look;
+      fireballs.launch({ x: e.x + d.x * 0.9, y: e.y + d.y * 0.9, z: e.z + d.z * 0.9 }, d, m.player, player);
+      player.viewModel.play('swing');
       return true;
     },
   });

@@ -304,13 +304,13 @@ export class ItemSystem implements ItemApi {
     const def = this.defs.get(p.item);
     if (!def) return p.remove();
     // Consumed on touch: the item's `onPickup` does its own thing (and sound).
-    if (!def.onPickup?.(ctx, p.count)) {
+    if (!def.onPickup?.(ctx, p.count, ctx.player)) {
       const left = this.inventory.give(p.item, p.count);
       if (left === p.count) return; // inventory full: leave it
       this.s.sfx.play('pickup');
       ctx.hud.toast(`+${p.count > 1 ? `${p.count} ` : ''}${def.name}`);
     }
-    this.s.emit('pickup', { item: p.item, count: p.count });
+    this.s.emit('pickup', { player: ctx.player, item: p.item, count: p.count });
     p.remove();
   }
 }

@@ -104,7 +104,7 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant or replaceable, and `highlight(block, { progress })` outlines one with break cracks. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four team beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant or replaceable. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four team beds…).
 
 ## Player
 
@@ -112,14 +112,27 @@ At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing up
 - `'walk'` (default) is the first-person player.
 - `'none'` removes the walking body, hand and hotbar. The game drives the camera and reads the controls itself, which is what vehicles, flight and top-down games need (next section). `player.position` then stays wherever you last `teleport` it: that's the point mobs chase and pickups fly to, so move it with your vehicle if you use those, and ignore it if you don't.
 
-`game.player` gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
+`game.player` (one of `game.players`, see "Players and multiplayer") gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
+
+## Players and multiplayer
+
+Games are written so the same code works with one player or many:
+
+- **`game.players`** lists everyone playing. A single-player game has exactly one, and **`game.player`** is that player, which is why single-player games can keep using `game.player`, `game.hud`, `game.input` and `game.camera` as they are.
+- **Each player** has an `id`, a `name`, their own `inventory`, `health` and `viewModel`, and their own screen and controls: **`player.hud`** reaches only them (their wallet, their shop, their toasts), `player.input` is their keyboard and mouse, `player.camera` their camera. **`game.hud`** is everyone's screen (banners, the scoreboard).
+- **Who did it.** Damage sources, killers and block events are an `Actor`: an `Entity`, a `Player`, or `'world'`. Tell them apart with `kind` (`'entity'` or `'player'`): `if (killer !== 'world' && killer?.kind === 'player') kills++`.
+- **Callbacks name the player**: `use(game, player)`, `onPickup(game, count, player)`, command `run(args, game, player)`, the `pickup`, `playerDamage` and `playerDeath` events, and the kits' handlers. Use that player rather than `game.player`, and a potion heals whoever drank it.
+- **Mobs pick their target**: `self.nearestPlayer()`, then `moveTo`, `lookAt`, `canSee`, `distanceTo`, `shoot` and `damage` it. The built-in `Behaviors` all hunt the nearest player.
+- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`.
+
+Today every game runs with one local player; the server that hosts several is the next step (see "Architecture and the road to multiplayer"). Writing against `players` and the named player now is what lets a game go multiplayer without a rewrite.
 
 ## Items
 
 ```ts
 game.items.define('iron_sword', { kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42, reach: 3.5, rank: 3, hold: { model: HeldModels.ironSword } });
 game.items.define('bow', { kind: 'bow', name: 'Bow', icon: 'bow', drawIcon: 'bow_pulling', ammo: 'arrow', damage: [2, 9], drawTime: 0.9, speed: 42 });
-game.items.define('potion', { kind: 'consumable', name: 'Potion', icon: 'health_potion', hold: { model: HeldModels.healthPotion }, stack: 4, use: (g) => (g.player.heal(10), true) });
+game.items.define('potion', { kind: 'consumable', name: 'Potion', icon: 'health_potion', hold: { model: HeldModels.healthPotion }, stack: 4, use: (g, player) => (player.heal(10), true) });
 game.items.spawnPickup('iron_sword', pos, { beam: '#ffd36b' });
 ```
 
@@ -127,7 +140,7 @@ The platform implements everything around them:
 - **Melee:** swing animation, hit detection through walls, knockback, crits while falling, and sweep attacks.
 - **Bows:** draw charge, ammo, and ballistic arrows that stick in walls. What flies is the ammo item's icon (or `projectile`); a bow without ammo shoots glowing bolts.
 - **Consumables:** right-click to use.
-- **Pickups:** physics, magnet pull, collection and toasts. An `onPickup` that consumes the item plays its own sound.
+- **Pickups:** physics, magnet pull, collection and toasts. `onPickup(game, count, player)` can consume the item instead (and plays its own sound).
 - **Sounds:** each item can bring its own (`sounds: { use, hit, draw }`, built-in or `audio.define`d); otherwise it gets the generic swing, hit and bow sounds.
 - **Held items:** a first-person arm holds the item: its 3D model if it names one (`hold.model`), otherwise an extruded 3D version of its sprite (next section).
 
@@ -147,7 +160,7 @@ Some gameplay systems are common enough that the platform ships them, but they a
 | Kit | What it does |
 | --- | --- |
 | `building(game, rules)` | Survival building: hold left-click to mine a block (cracks grow over it, the arm swings), right-click with a block to place it against the face you aim at. Your rules decide what may be broken or placed, by whom, and how long mining takes. |
-| `interactions(game, { type: handler })` | Right-click a mob to talk to it: shopkeepers, quest givers, levers. |
+| `interactions(game, { type: (entity, player) => … })` | Right-click a mob to talk to it: shopkeepers, quest givers, levers. |
 
 ```ts
 import { building, interactions, type Building, type Interactions } from '@platform/kits';
@@ -160,9 +173,9 @@ setup(game) {
   build = building(game, {
     canBreak: (at, block, by) => placedThisMatch.has(key(at)) || block.endsWith('_bed'),
     canPlace: (at) => at.y < 110,
-    breakTime: (block, held) => (block.endsWith('_wool') && held?.item === 'shears' ? 0.1 : 0.6),
+    breakTime: (block, held, player) => (block.endsWith('_wool') && held?.item === 'shears' ? 0.1 : 0.6),
   });
-  talk = interactions(game, { shopkeeper: () => shop.show() });
+  talk = interactions(game, { shopkeeper: (keeper, player) => shop.show(player) }); // on their screen
 },
 update(game, dt) {
   talk.update();     // first, so talking to the shopkeeper wins over placing a block
@@ -176,7 +189,7 @@ Without `breakTime`, mining takes a Minecraft-like time by material (`defaultBre
 - **Items that look like blocks.** An item with `icon: { block: 'oak_planks' }` shows the block in the hotbar and menus, is held as a little cube and drops as a spinning cube of the block.
 - **`input.consume(button | key)`** claims an input for the rest of the frame. Your game's `update` runs before the built-in systems, so a click you handle and consume doesn't also swing the sword or eat the apple.
 - **`entities.raycast(origin, dir, reach)`** finds the mob under the crosshair (stopping at blocks); `world.raycast` finds the block.
-- **`world.highlight(block, { progress })`** outlines a block, with Minecraft's break cracks at `progress` 0..1. **`hud.progress(0..1)`** is a ring round the crosshair.
+- **`hud.highlight(block, { progress })`** outlines a block on a player's screen, with Minecraft's break cracks at `progress` 0..1. **`hud.progress(0..1)`** is a ring round the crosshair.
 - **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone. They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant or replaceable.
 - **`world.explode(center, radius, { filter, by })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match).
 
@@ -319,7 +332,7 @@ const z = game.entities.spawn('zombie', { x: 10, y: 71, z: 0 });
 
 - Physics, collision, knockback, flow-field path-finding to the player (around walls, up steps, down drops), line of sight and projectiles run in Rust/WebAssembly for all entities at once.
 - Built-in behaviours: `Behaviors.melee`, `Behaviors.ranged` (kites and strafes, leads its shots), `Behaviors.leaper` (pounces) and `Behaviors.all(...)`. They are written against the public `Entity` API (`src/platform/api/behaviors.ts`), so copy one and change it.
-- Custom AI is a function `(self, game, dt) => void`. It can call `self.moveTo('player' | point)`, `moveDirection(x, z)`, `stop`, `jump`, `lookAt`, `canSeePlayer`, `distanceToPlayer`, `animate('attack' | 'raise' | 'cast')`, `glow(color)`, `shoot(projectile, target, { lead })`, `impulse`, `setSpeed` and `damage`, and keep state in `self.data`. The Warden in `src/games/arena/content.ts` is a complete boss state machine: telegraphed slams, fireballs, summons and an enrage phase.
+- Custom AI is a function `(self, game, dt) => void`. It can call `self.nearestPlayer()`, `moveTo(player | point)`, `moveDirection(x, z)`, `stop`, `jump`, `lookAt(player | entity | point)`, `canSee(…)`, `distanceTo(…)`, `animate('attack' | 'raise' | 'cast')`, `glow(color)`, `shoot(projectile, player | entity | point, { lead })`, `impulse`, `setSpeed` and `damage`, and keep state in `self.data`. The Warden in `src/games/arena/content.ts` is a complete boss state machine: telegraphed slams, fireballs, summons and an enrage phase.
 - `boss: true` shows a boss bar automatically. Hurt flashes, damage numbers, blood particles, death animations, drops and positional sounds are handled for you.
 - Queries: `entities.all(type?)`, `count(type?)`, `near(point, radius)`, `clear()`.
 - `invulnerable: true` ignores all damage (shopkeepers, scenery). `entity.armor` (0..20) reduces damage like the player's. `entities.raycast(origin, dir, reach)` finds the one under a crosshair; the `interactions` kit turns that into right-click-to-talk.
@@ -393,6 +406,8 @@ game.commands.register('wave', {
 game.commands.run('/give pike'); // run one from code
 ```
 
+`run(args, game, player)` gets the player who typed it; the built-in cheats act on them.
+
 ## Presentation
 
 | API | What |
@@ -410,7 +425,7 @@ game.commands.run('/give pike'); // run one from code
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
-| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace', fn)` | Events |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave', fn)` | Events (player events name the `player`) |
 | `rng` | Seeded random numbers |
 
 ## Architecture and the road to multiplayer

@@ -1,4 +1,4 @@
-import type { CommandApi, CommandSpec, GameContext } from './api/types';
+import type { CommandApi, CommandSpec, GameContext, Player } from './api/types';
 
 /** Splits a command line into words; double quotes group words with spaces. */
 function tokenize(line: string): string[] {
@@ -27,15 +27,16 @@ export class Commands implements CommandApi {
     return this.exec(line).text;
   }
 
-  /** Runs a line; `ok` is false for unknown commands and thrown errors. */
-  exec(line: string): { ok: boolean; text: string } {
+  /** Runs a line typed by `player` (default: the player); `ok` is false for unknown commands and thrown errors. */
+  exec(line: string, player?: Player): { ok: boolean; text: string } {
     const words = tokenize(line.trim().replace(/^\/+/, ''));
     if (!words.length) return { ok: true, text: '' };
     const name = words[0].toLowerCase();
     const cmd = this.cmds.get(name);
     if (!cmd) return { ok: false, text: `Unknown command /${name}. Try /help` };
     try {
-      return { ok: true, text: cmd.run(words.slice(1), this.ctx()) ?? '' };
+      const ctx = this.ctx();
+      return { ok: true, text: cmd.run(words.slice(1), ctx, player ?? ctx.player) ?? '' };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { ok: false, text: cmd.usage ? `${msg}\nUsage: /${name} ${cmd.usage}` : msg };
