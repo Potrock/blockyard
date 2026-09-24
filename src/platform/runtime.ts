@@ -27,6 +27,9 @@ import { GameHud } from './ui/hudkit';
 import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
 import { Commands } from './commands';
+import { Content } from './content';
+import { Presentation } from './sim/present';
+import { Presenter } from './client/present';
 import { PropSystem, propObject } from './props/props';
 import { Blueprint } from './api/blueprint';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
@@ -113,6 +116,12 @@ export class Runtime {
   private fx!: Effects;
   readonly sfx = new Sfx();
   private ctx!: GameContext;
+  /** The game's sounds, atlases and animations. */
+  private content = new Content();
+  /** Simulation side of presentation: the game's hud / fx / audio / viewModel calls as messages. */
+  private presentation!: Presentation;
+  /** Client side: shows them for the local player. */
+  private presenter!: Presenter;
   private commands!: Commands;
   private commandBar!: CommandBar;
   private last = performance.now();
@@ -280,6 +289,17 @@ export class Runtime {
     this.held = new ViewModel(this.textures.albedo, this.textures.material, this.graphics);
     this.renderer.overlay = { scene: this.held.scene, camera: this.held.camera };
 
+    // The presentation boundary. In this page the calls go straight across; a worker or a server
+    // would carry the same messages.
+    this.presenter = new Presenter('local', { hud: this.gameHud, fx: this.fx, sfx: this.sfx, view: this.held, send: (m) => this.presentation.receive(m) });
+    this.presentation = new Presentation((c) => this.presenter.apply(c), this.content);
+    this.content.onSound((name, voice) => this.sfx.define(name, voice));
+    this.content.onAnimation((name, anim) => this.held.define(name, anim));
+    this.content.onAtlas((name, source) => {
+      if ('pixels' in source) this.graphics.addAtlas(name, source.width, source.height, source.pixels, source.emissive);
+      else this.graphics.addCanvasAtlas(name, source);
+    });
+
     const emit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => this.emit(k, e);
     const healthEmit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => {
       if (k === 'playerDamage') this.held.kick(0.6);
@@ -320,6 +340,7 @@ export class Runtime {
         const id = world.get_block(x, y, z);
         return id !== 255 && (this.registry.blocks[id]?.solid ?? false);
       },
+      content: this.content,
       blockModel: (block, size) => {
         let model = this.blockModels.get(block);
         if (!model) {
@@ -504,7 +525,7 @@ export class Runtime {
       kind: 'player',
       id: 'local',
       name: 'Player',
-      hud: this.gameHud,
+      hud: this.presentation.hud('local'),
       input,
       camera,
       get position() {
@@ -560,9 +581,7 @@ export class Runtime {
       revive: () => rt.health.revive(),
       impulse: (x, y, z) => world.player_impulse(x, y, z),
       freeze: (f) => world.set_frozen(f),
-      get viewModel() {
-        return rt.held;
-      },
+      viewModel: this.presentation.view('local'),
       get armor() {
         return rt.health.armor;
       },
@@ -598,13 +617,9 @@ export class Runtime {
       player,
       entities: this.entities,
       items: this.items,
-      hud: this.gameHud,
-      fx: this.fx,
-      audio: {
-        play: (name, opts) => rt.sfx.play(name, opts),
-        define: (name, voice) => rt.sfx.define(name, voice),
-        loop: (name, opts) => rt.sfx.loop(name, opts),
-      },
+      hud: this.presentation.hud(null),
+      fx: this.presentation.fx(null),
+      audio: this.presentation.audio(null),
       camera,
       input,
       props: this.props,
@@ -783,6 +798,8 @@ export class Runtime {
     this.items.inventory.clear();
     this.timers = [];
     this.clockNow = 0;
+    this.presentation.reset();
+    this.presenter.reset();
     this.gameHud.clear();
     this.highlight.set(null);
     this.fx.clear();

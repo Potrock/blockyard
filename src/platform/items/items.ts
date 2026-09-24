@@ -1,3 +1,4 @@
+import type { Content } from '../content';
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { AtlasPixels, GameContext, GameEvents, InventoryApi, ItemApi, ItemDefinition, ItemStack, Pickup, Vec3 } from '../api/types';
@@ -15,6 +16,8 @@ export interface ItemServices {
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   playerPos(): Vec3;
   isSolid(x: number, y: number, z: number): boolean;
+  /** Where the game's atlases go (the client picks them up from there). */
+  content: Content;
   /** A small lit cube of a block, placed in the scene (block items lying on the ground). */
   blockModel(block: string, size: number): { object: THREE.Object3D; remove(): void };
 }
@@ -187,8 +190,7 @@ export class ItemSystem implements ItemApi {
   }
 
   atlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels) {
-    if ('pixels' in source) this.s.graphics.addAtlas(name, source.width, source.height, source.pixels, source.emissive);
-    else this.s.graphics.addCanvasAtlas(name, source);
+    this.s.content.defineAtlas(name, source);
   }
 
   private material(atlas: string): THREE.RawShaderMaterial {
