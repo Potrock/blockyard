@@ -512,6 +512,8 @@ export default function myGame() {
 
 `tests/headless/arena.ts` is a complete example: a bot beats the Arena, Warden included, in under a second.
 
+For online play there are probes rather than tests: `tests/headless/_netprobe.ts` measures what each game sends a player each second (`GAME=starfighter PLAYERS=4`), `tests/headless/_ghost.ts` is a player with no screen that joins a server and flies circles (to watch how smoothly others move), and `scripts/lagproxy.mjs` puts a bad network between a browser and a server.
+
 ## Architecture and the road to multiplayer
 
 ```
