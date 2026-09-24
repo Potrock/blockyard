@@ -271,8 +271,9 @@ export class Sim {
   leave(id: string) {
     const p = this.players.find((x) => x.id === id);
     if (!p || p.vacant) return;
-    this.emit('playerLeave', { player: p.api });
+    // Out of `game.players` first: the game counts who's left when it hears.
     this.roster.splice(this.roster.indexOf(p.api), 1);
+    this.emit('playerLeave', { player: p.api });
     if (p === this.local) {
       p.vacant = true;
       this.host.world.set_frozen(p.slot, true);

@@ -133,6 +133,8 @@ class PickupImpl implements Pickup {
     readonly beam: string | undefined,
     velocity: Vec3 | undefined,
     private onRemove: (p: PickupImpl) => void,
+    /** The only player who can take it (their id), if it's theirs. */
+    readonly owner: string | null = null,
   ) {
     this.vel = { x: velocity?.x ?? 0, y: velocity?.y ?? 0, z: velocity?.z ?? 0 };
   }
@@ -179,10 +181,18 @@ export class ItemSim implements ItemApi {
     this.s.content.defineAtlas(name, source);
   }
 
-  spawnPickup(item: string, at: Vec3, opts: { count?: number; velocity?: Vec3; beam?: string; despawn?: number } = {}): Pickup {
+  spawnPickup(item: string, at: Vec3, opts: { count?: number; velocity?: Vec3; beam?: string; despawn?: number; for?: Player } = {}): Pickup {
     if (!this.defs.has(item)) throw new Error(`items.spawnPickup: unknown item "${item}"`);
-    const p = new PickupImpl(this.nextId++, item, opts.count ?? 1, { x: at.x, y: at.y, z: at.z }, opts.despawn ?? 90, opts.beam, opts.velocity, (x) =>
-      this.pickups.splice(this.pickups.indexOf(x), 1),
+    const p = new PickupImpl(
+      this.nextId++,
+      item,
+      opts.count ?? 1,
+      { x: at.x, y: at.y, z: at.z },
+      opts.despawn ?? 90,
+      opts.beam,
+      opts.velocity,
+      (x) => this.pickups.splice(this.pickups.indexOf(x), 1),
+      opts.for?.id ?? null,
     );
     this.pickups.push(p);
     return p;
@@ -217,14 +227,16 @@ export class ItemSim implements ItemApi {
         }
       }
       if (p.age <= 0.5 || p.collectT >= 0) continue;
-      // Pulled toward the nearest living player in reach, then collected.
+      // Pulled toward the nearest living player in reach (its owner, if it has one here), then
+      // collected.
+      const owner = p.owner !== null && players.some((pl) => pl.id === p.owner) ? p.owner : null;
       let who: Player | null = null;
       let d = 3.2;
       let dx = 0;
       let dy = 0;
       let dz = 0;
       for (const pl of players) {
-        if (!pl.alive) continue;
+        if (!pl.alive || (owner !== null && pl.id !== owner)) continue;
         const q = pl.position;
         const ex = q.x - p.pos.x;
         const ey = q.y + 0.9 - p.pos.y;

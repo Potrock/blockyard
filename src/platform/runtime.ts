@@ -1129,10 +1129,11 @@ export class Runtime {
     this.fx.update(dt);
     this.held.setLight(this.probe);
     if (this.walker) this.updateHand(dt, me);
-    // Camera effects: shake and the death tilt.
+    // Camera effects: shake and the death tilt (which rights itself after a moment, for someone
+    // out of the game a while to watch).
     this.camera.position.add(this.fx.shakeOffset);
     if (this.walker && me.dead) {
-      const k = Math.min(1, me.deathTime / 0.6);
+      const k = Math.min(1, me.deathTime / 0.6) * Math.min(1, Math.max(0, (2.8 - me.deathTime) / 0.8));
       this.camera.position.y -= k * 1.2;
       this.camera.rotateZ(k * 0.45);
     }
@@ -1142,6 +1143,8 @@ export class Runtime {
   }
 
   private updateHand(dt: number, me: PlayerFrame) {
+    // Nothing in hand while dead (someone out of the game watching sees only the game).
+    this.held.scene.visible = !me.dead;
     this.held.draw = me.hand.drawing ? me.hand.charge : 0;
     const bobAmt = this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0;
     this.held.update(dt, {

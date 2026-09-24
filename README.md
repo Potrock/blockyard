@@ -20,7 +20,7 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 
 | Game | URL | What it is |
 | --- | --- | --- |
-| **Arena** | `?game=arena` | Six waves of zombies, skeleton archers, spiders and brutes in a colosseum, then the Warden boss. Weapons drop on the dais between waves: bow, stone/iron/diamond swords, a two-handed pike, battle axe and potions. About 560 lines, including the colosseum and the boss AI. |
+| **Arena** | `?game=arena` | Six waves of zombies, skeleton archers, spiders and brutes in a colosseum, then the Warden boss. Weapons drop on the dais between waves: bow, stone/iron/diamond swords, a two-handed pike, battle axe and potions. Online it's co-op: more fighters bring more monsters, each gets their own reward, and anyone who falls sits the wave out. About 640 lines, including the colosseum and the boss AI. |
 | **Starfighter** | `?game=starfighter` | A Star Fox-style dogfighter with block-built X-wing, TIE fighter and TIE interceptor. Fight two waves of TIEs over the sea, then take on a 200-block Star Destroyer built into the world: knock out its two shield generators and blow up the bridge. Mouse to fly, W/S boost and brake, Q/E barrel roll (deflects lasers), right-click proton torpedoes. Uses `player.controller: 'none'` and flies the camera itself. |
 | **Bed Wars** | `?game=bedwars` | Hypixel-style Bed Wars on sky islands, against bots or up to three friends (`npm run server -- bedwars`): each player gets their own team, bots play the rest, and someone joining mid-match takes over a bot's team. Collect iron and gold from your generator (diamonds and emeralds on the outer and middle islands), buy blocks, swords, armour, tools, fireballs and team upgrades from the shopkeeper, bridge across the void and break the other beds. You respawn only while your bed stands. The bots fortify, shop, bridge, dig through defences and fight each other as well as you. |
 | **Sandbox** | `?game=sandbox` | Creative building in an endless world. Edits are saved per seed. 17 lines. |
@@ -101,10 +101,10 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 
 ## Online
 
-The site is at **https://voxel-platform-roan.vercel.app** and the game server at **https://voxel-games.fly.dev** (`/games` lists what's on and who's playing). On a game's title screen, type a name and press **Play online**.
+The site is at **https://blockyard-games.vercel.app** (the older https://voxel-platform-roan.vercel.app still works) and the game server at **https://voxel-games.fly.dev** (`/games` lists what's on and who's playing). The site is online-only: the home page shows the game live, and **Play** joins it under the name you type.
 
 - **Game server:** Fly.io app `voxel-games` in `iad`, one machine (shared CPU, 512 MB) that sleeps when nobody's connected and wakes on the next visit, with a 1 GB volume at `/data` for the SQLite worlds (snapshotted daily). `fly logs -a voxel-games` shows joins, leaves and game errors. Public servers run without cheats: developer commands (`cheat: true`) don't exist, and players can't restart the game for everyone or change the time. Each game starts when its first player arrives and is saved and stopped five minutes after its last leaves. Limits: 16 players per game, 6 connections per address, 300 messages a second per connection, 16 KB per message; every message is checked before the game sees it.
-- **Website:** Vercel project `voxel-platform` (Pat's projects), a static build made locally (Vercel's builders don't have Rust) with `VITE_GAME_SERVER` baked in; that's what makes **Play online** appear.
+- **Website:** Vercel project `voxel-platform` (Pat's projects), a static build made locally (Vercel's builders don't have Rust) with `VITE_GAME_SERVER` baked in, which is what makes the site connect to the server.
 
 ## Controls
 

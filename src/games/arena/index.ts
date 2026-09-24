@@ -1,4 +1,4 @@
-import { defineGame, type GameContext } from '@platform';
+import { defineGame, type GameContext, type Player } from '@platform';
 import { buildArena, FLOOR, GATES, GATE_SPAWN_RADIUS, PIT } from './structure';
 import { defineArt, defineItems, defineMonsters } from './content';
 import { Sprite } from './art';
@@ -23,10 +23,13 @@ const WAVES: Wave[] = [
 const MAX_ALIVE = 12;
 const INTERMISSION = 12;
 const CENTER = { x: 0.5, y: FLOOR + 2, z: 0.5 };
+/** Where someone who's fallen watches from until the wave is over: high over the south stands. */
+const LOOKOUT = { x: 0.5, y: FLOOR + 20, z: 31 };
 
-type Phase = 'intro' | 'fighting' | 'intermission' | 'victory' | 'defeat';
+/** `intro`: not begun. `waiting`: everyone left, and the next to arrive begins it afresh. */
+type Phase = 'intro' | 'waiting' | 'countdown' | 'fighting' | 'intermission' | 'victory' | 'defeat';
 
-const state = {
+const fresh = () => ({
   phase: 'intro' as Phase,
   wave: 0,
   queue: [] as string[],
@@ -37,7 +40,11 @@ const state = {
   damageTaken: 0,
   startedAt: 0,
   lastBeep: 0,
-};
+});
+const state = fresh();
+
+/** Monsters per wave grow with the party: half as many again for each extra fighter. */
+const crowd = (game: GameContext) => 1 + 0.5 * Math.max(0, game.players.length - 1);
 
 function fmtTime(s: number) {
   const m = Math.floor(s / 60);
@@ -49,7 +56,10 @@ function startWave(game: GameContext, n: number) {
   state.wave = n;
   state.phase = 'fighting';
   state.queue = [];
-  for (const [type, count] of Object.entries(w.spawns)) for (let i = 0; i < count; i++) state.queue.push(type);
+  for (const [type, count] of Object.entries(w.spawns)) {
+    const n = type === 'warden' || type === 'brute' ? count : Math.round(count * crowd(game));
+    for (let i = 0; i < n; i++) state.queue.push(type);
+  }
   // Bosses make their entrance first; everything else arrives shuffled.
   const boss = state.queue.filter((t) => t === 'warden');
   const rest = state.queue.filter((t) => t !== 'warden').sort(() => game.rng.next() - 0.5);
@@ -59,6 +69,25 @@ function startWave(game: GameContext, n: number) {
   game.audio.play('wave');
   // Dusk falls as the fight goes on.
   game.env.time = 0.66 + (n - 1) * 0.013;
+}
+
+/** The banner and countdown to the first wave. */
+function begin(game: GameContext) {
+  state.phase = 'countdown';
+  state.startedAt = game.clock.now;
+  game.hud.banner('ARENA', 'Survive six waves', { duration: 2.8, color: '#ffb36b' });
+  let n = 3;
+  const tick = () => {
+    if (n > 0) {
+      game.hud.objective(`First wave in ${n}…`);
+      game.audio.play('countdown');
+      n--;
+      game.clock.after(1, tick);
+    } else {
+      startWave(game, 1);
+    }
+  };
+  game.clock.after(1.5, tick);
 }
 
 function spawnNext(game: GameContext) {
@@ -76,17 +105,61 @@ function spawnNext(game: GameContext) {
 
 function waveCleared(game: GameContext) {
   const w = WAVES[state.wave - 1];
-  if (state.wave >= WAVES.length) return victory(game);
+  const last = state.wave >= WAVES.length;
+  for (const p of game.players) if (!p.alive) rejoin(game, p, !last);
+  if (last) return victory(game);
   state.phase = 'intermission';
   state.nextWaveAt = game.clock.now + INTERMISSION;
   game.hud.banner('Wave cleared!', w.reward ? 'A reward awaits on the dais' : undefined, { duration: 2.4, color: '#9dff8a' });
   game.audio.play('victory', { volume: 0.5 });
-  game.player.heal(6);
-  let i = 0;
-  for (const r of w.reward ?? []) {
-    const a = (i++ / (w.reward!.length || 1)) * Math.PI * 2;
-    game.items.spawnPickup(r.item, { x: CENTER.x + Math.cos(a) * 1.2, y: CENTER.y + 0.5, z: CENTER.z + Math.sin(a) * 1.2 }, { count: r.count ?? 1, beam: '#ffd36b', despawn: 600 });
+  for (const p of game.players) p.heal(6);
+  // A reward for each fighter, in a ring on the dais: each can take only their own.
+  const rewards = game.players.flatMap((p) => (w.reward ?? []).map((r) => ({ ...r, p })));
+  const radius = 1.2 + 0.4 * (game.players.length - 1);
+  rewards.forEach((r, i) => {
+    const a = (i / rewards.length) * Math.PI * 2;
+    const at = { x: CENTER.x + Math.cos(a) * radius, y: CENTER.y + 0.5, z: CENTER.z + Math.sin(a) * radius };
+    game.items.spawnPickup(r.item, at, { count: r.count ?? 1, beam: '#ffd36b', despawn: 600, for: game.players.length > 1 ? r.p : undefined });
+  });
+}
+
+/** A starting sword, and (arriving late) the weapons and arrows the waves so far gave out. */
+function arm(p: Player) {
+  p.inventory.give('wooden_sword');
+  const cleared = state.phase === 'fighting' ? state.wave - 1 : state.phase === 'intermission' || state.phase === 'victory' ? state.wave : 0;
+  for (const w of WAVES.slice(0, cleared)) {
+    for (const r of w.reward ?? []) {
+      if (r.item === 'arrow_bundle') p.inventory.give('arrow', 6 * (r.count ?? 1));
+      else if (r.item !== 'health_potion') p.inventory.give(r.item);
+    }
   }
+  p.inventory.select(0);
+}
+
+/** Someone fell with others still fighting: they watch from the stands until the wave's won. */
+function fall(game: GameContext, p: Player) {
+  p.hud.banner('YOU FELL', "You'll be back when this wave is cleared", { duration: 3, color: '#ff6b6b' });
+  game.hud.feed(`${p.name} is down`, { color: '#ff8a4c' });
+  game.clock.after(1.5, () => {
+    if (p.alive || !game.players.includes(p)) return;
+    p.teleport(LOOKOUT, 0, -0.62);
+    p.freeze(true);
+  });
+}
+
+/** Back on the arena floor after sitting a wave out. */
+function rejoin(game: GameContext, p: Player, announce: boolean) {
+  p.revive();
+  p.freeze(false);
+  p.teleport(CENTER, game.rng.range(0, Math.PI * 2), 0);
+  if (!announce) return;
+  p.hud.banner('BACK IN THE FIGHT', undefined, { duration: 1.6, color: '#9dff8a' });
+  p.audio.play('heal');
+}
+
+/** Everyone's down: the arena wins. */
+function checkWipe(game: GameContext) {
+  if (game.players.length && game.players.every((p) => !p.alive)) defeat(game);
 }
 
 function victory(game: GameContext) {
@@ -121,10 +194,11 @@ function defeat(game: GameContext) {
   if (state.phase === 'defeat' || state.phase === 'victory') return;
   state.phase = 'defeat';
   game.audio.play('defeat');
+  const who = game.players.length > 1 ? 'Your party' : 'You';
   game.clock.after(1.6, () =>
     game.hud.screen({
       title: 'Defeated',
-      subtitle: `You fell on wave ${state.wave}: ${WAVES[Math.max(0, state.wave - 1)].name}.`,
+      subtitle: `${who} fell on wave ${state.wave}: ${WAVES[Math.max(0, state.wave - 1)].name}.`,
       tone: 'defeat',
       stats: [
         ['Wave reached', `${state.wave} / ${WAVES.length}`],
@@ -141,7 +215,9 @@ function defeat(game: GameContext) {
 
 /**
  * Arena: survive six waves of monsters in a colosseum, collect better weapons between waves,
- * and defeat the Warden. Built entirely on the public platform API.
+ * and defeat the Warden. Alone or together: more fighters bring more monsters, anyone who falls
+ * sits out the rest of the wave, and the fight is lost when everyone's down. Built entirely on the
+ * public platform API.
  */
 export default defineGame({
   id: 'arena',
@@ -164,6 +240,7 @@ export default defineGame({
   player: { health: 20, regen: { delay: 6, perSecond: 0.35 }, fallDamage: true, hotbar: 'items' },
 
   setup(game) {
+    Object.assign(state, fresh());
     defineSounds(game);
     defineArt(game);
     defineItems(game);
@@ -177,26 +254,38 @@ export default defineGame({
     game.events.on('playerDamage', ({ amount }) => {
       state.damageTaken += amount;
     });
-    game.events.on('playerDeath', () => defeat(game));
+    game.events.on('playerDeath', ({ player }) => {
+      if (state.phase !== 'countdown' && state.phase !== 'fighting' && state.phase !== 'intermission') return;
+      if (game.players.some((p) => p.alive)) fall(game, player);
+      else defeat(game);
+    });
+    game.events.on('playerJoin', ({ player }) => {
+      // Before the fight, `start` arms everyone; after everyone left, the next one starts it.
+      if (state.phase === 'intro') return;
+      arm(player);
+      if (state.phase === 'waiting') return begin(game);
+      player.hud.banner('ARENA', state.phase === 'fighting' ? `Joining wave ${state.wave}` : 'Survive six waves', { duration: 2.4, color: '#ffb36b' });
+      game.hud.feed(`${player.name} joins the fight`, { color: '#ffb36b' });
+    });
+    game.events.on('playerLeave', () => {
+      // The last one out: the arena resets for whoever comes next.
+      if (!game.players.length) {
+        if (state.phase !== 'waiting' && state.phase !== 'intro') game.restart();
+      } else if (state.phase === 'countdown' || state.phase === 'fighting' || state.phase === 'intermission') {
+        checkWipe(game);
+      }
+    });
   },
 
   start(game) {
-    Object.assign(state, { phase: 'intro', wave: 0, queue: [], spawnTimer: 0, nextWaveAt: 0, kills: 0, damageDealt: 0, damageTaken: 0, startedAt: game.clock.now, lastBeep: 0 });
-    game.player.inventory.give('wooden_sword');
+    Object.assign(state, fresh(), { startedAt: game.clock.now });
     game.env.time = 0.66;
-    game.hud.banner('ARENA', 'Survive six waves', { duration: 2.8, color: '#ffb36b' });
-    let n = 3;
-    const tick = () => {
-      if (n > 0) {
-        game.hud.objective(`First wave in ${n}…`);
-        game.audio.play('countdown');
-        n--;
-        game.clock.after(1, tick);
-      } else {
-        startWave(game, 1);
-      }
-    };
-    game.clock.after(1.5, tick);
+    if (!game.players.length) {
+      state.phase = 'waiting';
+      return;
+    }
+    for (const p of game.players) arm(p);
+    begin(game);
   },
 
   update(game, dt) {

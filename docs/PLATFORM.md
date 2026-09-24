@@ -148,6 +148,7 @@ game.items.define('iron_sword', { kind: 'melee', name: 'Iron Sword', icon: 'iron
 game.items.define('bow', { kind: 'bow', name: 'Bow', icon: 'bow', drawIcon: 'bow_pulling', ammo: 'arrow', damage: [2, 9], drawTime: 0.9, speed: 42 });
 game.items.define('potion', { kind: 'consumable', name: 'Potion', icon: 'health_potion', hold: { model: HeldModels.healthPotion }, stack: 4, use: (g, player) => (player.heal(10), true) });
 game.items.spawnPickup('iron_sword', pos, { beam: '#ffd36b' });
+game.items.spawnPickup('iron_sword', pos, { for: player }); // only they can take it (a reward each)
 ```
 
 The platform implements everything around them:

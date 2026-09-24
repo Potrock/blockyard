@@ -631,8 +631,11 @@ export interface AtlasPixels {
 export interface ItemApi {
   define(id: string, def: ItemDefinition): void;
   get(id: string): ItemDefinition | undefined;
-  /** Drop an item into the world. `beam` adds a light pillar so players can find it. */
-  spawnPickup(item: string, at: Vec3, opts?: { count?: number; velocity?: Vec3; beam?: string; despawn?: number }): Pickup;
+  /**
+   * Drop an item into the world. `beam` adds a light pillar so players can find it. `for`: only
+   * that player can pick it up (a reward each); once they've left, anyone can.
+   */
+  spawnPickup(item: string, at: Vec3, opts?: { count?: number; velocity?: Vec3; beam?: string; despawn?: number; for?: Player }): Pickup;
   clearPickups(): void;
   /** Register a custom sprite / skin atlas from any canvas (e.g. drawn with Canvas 2D). */
   atlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels): void;
