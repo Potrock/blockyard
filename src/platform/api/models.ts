@@ -1,4 +1,4 @@
-import type { BuiltinSprite, HeldModelSpec, ModelPart, ModelSpec } from './types';
+import type { HeldModelSpec, ModelPart, ModelSpec } from './types';
 
 /** Origins of the built-in skins in the `builtin` entity atlas. Games bring their own (`items.atlas`). */
 export const Skins = {
@@ -85,8 +85,8 @@ const sword = (tier: number): HeldModelSpec => {
 };
 
 /**
- * Built-in 3D held items (`hold.model`), in the `builtin` atlas. Items whose icon is a built-in
- * starter sprite get the matching model automatically.
+ * Built-in 3D held items, in the `builtin` atlas. An item uses one by naming it:
+ * `hold: { model: HeldModels.ironSword }`. Without a model, an item is held as its extruded sprite.
  */
 export const HeldModels = {
   woodenSword: sword(0),
@@ -105,13 +105,4 @@ export const HeldModels = {
     // Held up on the palm: the fist sits under the bottle.
     grip: [0, 0, -2.2],
   } as HeldModelSpec,
-};
-
-/** The model an item with this built-in icon is held as, if it has one. */
-export const BUILTIN_HELD_MODELS: Partial<Record<BuiltinSprite, HeldModelSpec>> = {
-  wooden_sword: HeldModels.woodenSword,
-  stone_sword: HeldModels.stoneSword,
-  iron_sword: HeldModels.ironSword,
-  diamond_sword: HeldModels.diamondSword,
-  health_potion: HeldModels.healthPotion,
 };

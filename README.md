@@ -28,7 +28,7 @@ The title screen lists every registered game. The pause menu offers restart and 
 **To write your own game, read [docs/PLATFORM.md](docs/PLATFORM.md).** In short:
 
 ```ts
-import { defineGame, Blueprint, Models, Skins, Behaviors } from '@platform';
+import { defineGame, Blueprint, HeldModels, Models, Skins, Behaviors } from '@platform';
 
 // A ring wall, stamped into the world during generation.
 const ring = new Blueprint({ x: -12, y: 70, z: -12 }, { x: 25, y: 4, z: 25 });
@@ -46,7 +46,9 @@ export default defineGame({
   },
   player: { health: 20, hotbar: 'items' },
   setup(game) {
-    game.items.define('iron_sword', { kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42 });
+    game.items.define('iron_sword', {
+      kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42, hold: { model: HeldModels.ironSword },
+    });
     // Built-in skins are just the player's; bring your own with game.items.atlas (see the docs).
     game.entities.define('rogue', {
       name: 'Rogue', model: Models.humanoid({ skin: Skins.player }), hitbox: { width: 0.6, height: 1.95 },

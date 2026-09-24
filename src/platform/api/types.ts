@@ -345,7 +345,7 @@ export interface HoldSpec {
   hand?: 'right' | 'left';
   /** Sprite pixel `[x, y]` (0..16 from the top left) that sits in the fist. Swords: `[3, 12.5]`. */
   grip?: [number, number];
-  /** Hold a 3D model (`HeldModelSpec`) instead of the extruded icon. */
+  /** Hold a 3D model (`HeldModelSpec`, e.g. `HeldModels.ironSword`). Without one, the icon is extruded into 3D. */
   model?: HeldModelSpec;
   /** Degrees about X, then Y, then Z. Swords: `[0, -90, 25]`. */
   rotation?: [number, number, number];

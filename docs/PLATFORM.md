@@ -108,9 +108,9 @@ At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing up
 ## Items
 
 ```ts
-game.items.define('iron_sword', { kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42, reach: 3.5, rank: 3 });
+game.items.define('iron_sword', { kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42, reach: 3.5, rank: 3, hold: { model: HeldModels.ironSword } });
 game.items.define('bow', { kind: 'bow', name: 'Bow', icon: 'bow', drawIcon: 'bow_pulling', ammo: 'arrow', damage: [2, 9], drawTime: 0.9, speed: 42 });
-game.items.define('potion', { kind: 'consumable', name: 'Potion', icon: 'health_potion', stack: 4, use: (g) => (g.player.heal(10), true) });
+game.items.define('potion', { kind: 'consumable', name: 'Potion', icon: 'health_potion', hold: { model: HeldModels.healthPotion }, stack: 4, use: (g) => (g.player.heal(10), true) });
 game.items.spawnPickup('iron_sword', pos, { beam: '#ffd36b' });
 ```
 
@@ -119,7 +119,7 @@ The platform implements everything around them:
 - **Bows:** draw charge, ammo, and ballistic arrows that stick in walls.
 - **Consumables:** right-click to use.
 - **Pickups:** physics, magnet pull, collection and toasts.
-- **Held items:** a first-person arm holds the item: a 3D model if it has one (the starter swords and potion do), otherwise an extruded 3D version of the sprite (next section).
+- **Held items:** a first-person arm holds the item: its 3D model if it names one (`hold.model`), otherwise an extruded 3D version of its sprite (next section).
 
 Built-in starter sprites: `wooden_sword`, `stone_sword`, `iron_sword`, `diamond_sword`, `bow`, `bow_pulling`, `arrow`, `health_potion` and `heart`. Everything else a game brings itself (see "Your own art and sound").
 
@@ -172,7 +172,7 @@ Built-in animations are `swing` (Minecraft's), `slash` (a diagonal cut for 3D bl
 
 For procedural motion, pass `sample(t)` instead of `keys`.
 
-**3D held items.** An item can be held as a box model (`HeldModelSpec`) instead of its flat sprite: same UV layout as mobs, length along +z, the hand position marked. They look much better in the hand than extruded sprites. The starter swords and the potion come with models (`HeldModels.ironSword`, `HeldModels.healthPotion`…) and items using those icons get them automatically. Held models get their own grip: swords rise from the fist into the scene with their flat turned to you and attack with a diagonal `slash`; axes are held low on the haft and `hew`; bottles sit on the palm and `sip`. The Arena's battle axe and pike are models of its own (`src/games/arena/art/`):
+**3D held items.** An item can be held as a box model (`HeldModelSpec`) instead of its flat sprite: same UV layout as mobs, length along +z, the hand position marked. They look much better in the hand than extruded sprites. The starter kit includes models for the swords and the potion; an item uses one by naming it: `hold: { model: HeldModels.ironSword }`. Without a model, an item is held as its sprite, extruded. Held models get their own grip: swords rise from the fist into the scene with their flat turned to you and attack with a diagonal `slash`; axes are held low on the haft and `hew`; bottles sit on the palm and `sip`. The Arena's battle axe and pike are models of its own (`src/games/arena/art/`):
 
 ```ts
 const PIKE: HeldModelSpec = {
