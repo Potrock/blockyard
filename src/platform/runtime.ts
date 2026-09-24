@@ -449,6 +449,7 @@ export class Runtime {
         lineOfSight: (a, b) => world.line_clear(a.x, a.y, a.z, b.x, b.y, b.z),
         surfaceY: (x, z) => rt.surfaceY(Math.floor(x), Math.floor(z)),
         explode: (c, r, opts) => rt.explode(c, r, opts),
+        seaLevel: engine.sea_level(),
       },
       player: {
         get position() {
@@ -1034,7 +1035,7 @@ export class Runtime {
       return;
     }
     const drawn = def.kind === 'bow' && this.combat.isDrawing && this.combat.charge > 0.25;
-    const icon = drawn && def.kind === 'bow' ? def.drawIcon ?? 'bow_pulling' : def.icon;
+    const icon = drawn && def.kind === 'bow' ? def.drawIcon ?? def.icon : def.icon;
     // The item's 3D model if it names one (`hold.model`); otherwise its sprite, extruded.
     const model = def.hold?.model;
     const { geometry, atlas } = model && !drawn ? this.graphics.heldModelGeometry(model) : this.graphics.spriteGeometry(icon);

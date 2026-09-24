@@ -15,6 +15,30 @@ import type { EntityGraphics, AnimState, ModelInstance } from '../render/entitie
 import type { Sfx } from '../audio/sfx';
 import type { Effects } from '../fx/effects';
 import type { GameHud } from '../ui/hudkit';
+import { Shaders } from '../render/shaders';
+
+let boltGeo: THREE.BufferGeometry[] | null = null;
+
+/** Two crossed quads, 0.8 long along +X and 0.22 wide, with the bolt shader's UVs (v along the length). */
+function boltGeometry(): THREE.BufferGeometry[] {
+  if (!boltGeo) {
+    const a = new THREE.PlaneGeometry(0.22, 0.8).rotateZ(-Math.PI / 2);
+    boltGeo = [a, a.clone().rotateX(Math.PI / 2)];
+  }
+  return boltGeo;
+}
+
+function boltMaterial(color: string): THREE.RawShaderMaterial {
+  return new THREE.RawShaderMaterial({
+    vertexShader: Shaders.fx.vertex,
+    fragmentShader: Shaders.fx.fragment,
+    glslVersion: THREE.GLSL3,
+    uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 4 }, uTime: { value: 0 }, uMode: { value: 3 } },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
 
 // Mirrors engine/src/entities.rs.
 const B = {
@@ -429,13 +453,26 @@ export class EntityManager implements EntityApi {
     p[o + P.RADIUS] = 0.12;
     p[o + P.OWNER] = owner === 'player' || owner === null ? -1 : owner.slot;
     p[o + P.FLAGS] = PF_ACTIVE | (owner === 'player' ? PF_HITS_BODIES : PF_HITS_PLAYER);
-    const { geometry, atlas } = this.s.graphics.spriteGeometry(spec.sprite ?? 'arrow');
+    const group = new THREE.Group();
+    if (!spec.sprite) {
+      // No sprite: a glowing bolt along +X (the direction of travel).
+      const material = boltMaterial(spec.glow ?? '#ffffff');
+      for (const g of boltGeometry()) {
+        const mesh = new THREE.Mesh(g, material);
+        mesh.frustumCulled = false;
+        group.add(mesh);
+      }
+      group.position.set(from.x, from.y, from.z);
+      this.s.scene.add(group);
+      this.shots[slot] = { slot, spec, owner, group, stuckAt: -1, material };
+      return;
+    }
+    const { geometry, atlas } = this.s.graphics.spriteGeometry(spec.sprite);
     const material = this.s.graphics.material(atlas);
     if (spec.glow) {
       tmpColor.set(spec.glow);
       (material.uniforms.uTint.value as THREE.Vector4).set(tmpColor.r * 4, tmpColor.g * 4, tmpColor.b * 4, 0.7);
     }
-    const group = new THREE.Group();
     const shadow = this.s.graphics.shadowMaterial(atlas);
     for (let k = 0; k < 2; k++) {
       const mesh = new THREE.Mesh(geometry, material);

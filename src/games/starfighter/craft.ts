@@ -8,8 +8,6 @@ const _e = new math.Euler();
 const _f = new math.Vector3();
 const _a = new math.Vector3();
 const _b = new math.Vector3();
-/** Sea level (the world's water surface). */
-const SEA = 62;
 
 /** Are any of `a`'s hull points (plus its centre) inside `b`'s box (shrunk a little)? */
 function pointsInside(a: Craft, b: Craft): boolean {
@@ -177,7 +175,7 @@ export class Craft {
       }
       // The sea: skimming below its surface counts as hitting it.
       const to = _b.copy(from).add(step);
-      if (!hit && to.y < SEA + 0.4 && w.blockName(w.getBlock(to.x, to.y, to.z)) === 'water') {
+      if (!hit && to.y < w.seaLevel + 1.4 && w.blockName(w.getBlock(to.x, to.y, to.z)) === 'water') {
         best = 0;
         hit = { at: to.clone(), normal: new math.Vector3(0, 1, 0), force: 0, water: true };
       }

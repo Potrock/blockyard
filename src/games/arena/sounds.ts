@@ -21,6 +21,11 @@ export function defineSounds(game: GameContext) {
     s.tone({ wave: 'sawtooth', from: 70 * s.pitch, to: 48 * s.pitch, duration: 0.8, volume: 0.5, lowpass: 500 });
     s.tone({ from: 45 * s.pitch, to: 35, duration: 0.8, volume: 0.5 });
   });
+  // The Warden's ground slam: a deep thud and a rumble.
+  a.define('slam', (s) => {
+    s.tone({ from: 90 * s.pitch, to: 28, duration: 0.9, volume: 1.0 });
+    s.noise({ duration: 0.7, filter: 'lowpass', from: 1400, to: 120, volume: 0.7 });
+  });
   // The Warden's roar.
   a.define('boss', (s) => {
     s.tone({ wave: 'sawtooth', from: 52 * s.pitch, to: 38 * s.pitch, duration: 1.5, volume: 0.45, lowpass: 700 });

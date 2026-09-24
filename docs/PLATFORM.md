@@ -95,13 +95,13 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`…).
 
 ## Player
 
 `player` options: `build` (break and place blocks), `fly`, `health` (half-hearts; `false` = invulnerable), `regen`, `fallDamage`, `hotbar: 'blocks' | 'items'`, `skin` (a Minecraft-layout skin, default `Skins.player`; it's also the first-person arm), and `controller`:
 - `'walk'` (default) is the first-person player.
-- `'none'` removes the walking body, hand and hotbar. The game drives the camera and reads the controls itself, which is what vehicles, flight and top-down games need (next section).
+- `'none'` removes the walking body, hand and hotbar. The game drives the camera and reads the controls itself, which is what vehicles, flight and top-down games need (next section). `player.position` then stays wherever you last `teleport` it: that's the point mobs chase and pickups fly to, so move it with your vehicle if you use those, and ignore it if you don't.
 
 `game.player` gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
 
@@ -116,12 +116,20 @@ game.items.spawnPickup('iron_sword', pos, { beam: '#ffd36b' });
 
 The platform implements everything around them:
 - **Melee:** swing animation, hit detection through walls, knockback, crits while falling, and sweep attacks.
-- **Bows:** draw charge, ammo, and ballistic arrows that stick in walls.
+- **Bows:** draw charge, ammo, and ballistic arrows that stick in walls. What flies is the ammo item's icon (or `projectile`); a bow without ammo shoots glowing bolts.
 - **Consumables:** right-click to use.
-- **Pickups:** physics, magnet pull, collection and toasts.
+- **Pickups:** physics, magnet pull, collection and toasts. An `onPickup` that consumes the item plays its own sound.
+- **Sounds:** each item can bring its own (`sounds: { use, hit, draw }`, built-in or `audio.define`d); otherwise it gets the generic swing, hit and bow sounds.
 - **Held items:** a first-person arm holds the item: its 3D model if it names one (`hold.model`), otherwise an extruded 3D version of its sprite (next section).
 
 Built-in starter sprites: `wooden_sword`, `stone_sword`, `iron_sword`, `diamond_sword`, `bow`, `bow_pulling`, `arrow`, `health_potion` and `heart`. Everything else a game brings itself (see "Your own art and sound").
+
+**Drawing item sprites.** Sprites are 16×16 and follow Minecraft's conventions, which the held poses and projectiles are built around:
+- Swords, tools and arrows lie on the diagonal: handle (or tail) at the bottom left, tip at the top right. The default sword grip is pixel `[3, 12.5]`.
+- Bows arc from the upper left, with the arrow pointing up and to the left.
+- Potions and trinkets stand upright.
+
+Art drawn another way works too: set `hold.grip` (and `hold.rotation`) to match it.
 
 ## First-person view model
 

@@ -43,6 +43,7 @@ export function defineItems(game: GameContext) {
     icon: 'heart',
     onPickup(g) {
       g.player.heal(4);
+      g.audio.play('heal', { volume: 0.8 });
       return true;
     },
   });

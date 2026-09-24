@@ -337,8 +337,6 @@ export default defineGame({
       pilot.update(dt, weapons.targets.filter((t) => t.team === 'empire'));
       vel.copy(pilot.craft.pos).sub(lastPos).divideScalar(Math.max(dt, 1e-3));
       lastPos.copy(pilot.craft.pos);
-      // Keep the player body with the ship (audio, anything that targets the player).
-      game.player.teleport(pilot.craft.pos);
       // The edge of the battle: warn, then steer back.
       const c = pilot.craft;
       const out = Math.hypot(c.pos.x - ARENA.center.x, c.pos.z - ARENA.center.z) - ARENA.radius;

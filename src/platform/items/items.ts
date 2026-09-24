@@ -283,9 +283,8 @@ export class ItemSystem implements ItemApi {
   private collect(p: PickupImpl, ctx: GameContext) {
     const def = this.defs.get(p.item);
     if (!def) return p.remove();
-    if (def.onPickup?.(ctx, p.count)) {
-      this.s.sfx.play('heal', { volume: 0.8 });
-    } else {
+    // Consumed on touch: the item's `onPickup` does its own thing (and sound).
+    if (!def.onPickup?.(ctx, p.count)) {
       const left = this.inventory.give(p.item, p.count);
       if (left === p.count) return; // inventory full: leave it
       this.s.sfx.play('pickup');

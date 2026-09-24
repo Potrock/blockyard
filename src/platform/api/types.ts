@@ -239,6 +239,8 @@ export interface WorldApi {
   lineOfSight(a: Vec3, b: Vec3): boolean;
   /** Highest non-air, non-plant block in a column (-1 if unloaded). */
   surfaceY(x: number, z: number): number;
+  /** The water surface: the top of sea-level water is at `seaLevel + 1`. */
+  readonly seaLevel: number;
   /** Blow a ragged sphere out of the world (bedrock survives) with debris and an explosion. Returns blocks removed. */
   explode(center: Vec3, radius: number, opts?: { effect?: boolean }): number;
 }
@@ -432,15 +434,26 @@ interface ItemBase {
   icon: SpriteRef;
   /** How it is held and swung in first person. */
   hold?: HoldSpec;
+  /** Its own sounds (built-in or `audio.define`d); each defaults to the platform's generic one. */
+  sounds?: ItemSounds;
   /** Max stack size. Default 1 for weapons, 64 otherwise. */
   stack?: number;
   /** Higher-ranked weapons are auto-selected when picked up. */
   rank?: number;
   /**
    * Called when the player walks over a pickup of this item. Return true to consume it
-   * immediately (e.g. hearts) instead of adding it to the inventory.
+   * immediately (e.g. hearts) instead of adding it to the inventory; play your own sound then.
    */
   onPickup?(game: GameContext, count: number): boolean;
+}
+
+export interface ItemSounds {
+  /** Melee swing, bow release, or using a consumable. Defaults: `swing`, `bow_shoot`, none. */
+  use?: SoundName;
+  /** A melee hit landing. Default `hit` (`crit` for critical hits). */
+  hit?: SoundName;
+  /** Starting to draw a bow. Default `bow_draw`. */
+  draw?: SoundName;
 }
 
 export interface MeleeItem extends ItemBase {
@@ -463,8 +476,10 @@ export interface BowItem extends ItemBase {
   /** Seconds to full draw. */
   drawTime: number;
   speed: number;
-  /** Sprite shown while drawing. */
+  /** Sprite shown while drawing (default: the item's icon). */
   drawIcon?: SpriteRef;
+  /** What flies (default: the ammo item's icon; with no ammo, a glowing bolt). */
+  projectile?: SpriteRef;
 }
 
 export interface ConsumableItem extends ItemBase {
@@ -563,6 +578,7 @@ export interface EntityDefinition {
 }
 
 export interface ProjectileSpec {
+  /** A sprite (drawn on the diagonal, tip at the top right, like an arrow). Without one, a glowing bolt in the `glow` colour. */
   sprite?: SpriteRef;
   speed: number;
   gravity?: number;
@@ -711,7 +727,6 @@ export type BuiltinSound =
   | 'wave'
   | 'victory'
   | 'defeat'
-  | 'slam'
   | 'spawn'
   | 'click'
   | 'countdown'

@@ -260,10 +260,6 @@ const VOICES: Record<BuiltinSound, Voice> = {
   defeat(this: Sfx, ctx, out, t) {
     [392, 370, 349, 262].forEach((f, i) => tone(ctx, out, 'sawtooth', f, f * 0.98, t + i * 0.28, i === 3 ? 1.0 : 0.3, 0.16, 1400));
   },
-  slam(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sine', 90 * p, 28, t, 0.9, 1.0);
-    noiseBurst(this, ctx, out, t, 0.7, 'lowpass', 1400, 120, 0.7);
-  },
   spawn(this: Sfx, ctx, out, t, p) {
     noiseBurst(this, ctx, out, t, 0.5, 'bandpass', 400 * p, 2400 * p, 0.25, 2);
     tone(ctx, out, 'sine', 300 * p, 900 * p, t + 0.05, 0.4, 0.12);
