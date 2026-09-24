@@ -156,14 +156,10 @@ class PickupImpl implements Pickup {
  */
 export class ItemSim implements ItemApi {
   readonly defs = new Map<string, ItemDefinition>();
-  /** The local player's hotbar (a server keeps one per player). */
-  readonly inventory: Inventory;
   private pickups: PickupImpl[] = [];
   private nextId = 1;
 
-  constructor(private s: ItemServices) {
-    this.inventory = new Inventory(this.defs);
-  }
+  constructor(private s: ItemServices) {}
 
   define(id: string, def: ItemDefinition) {
     this.defs.set(id, def);

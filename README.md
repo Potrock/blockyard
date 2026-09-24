@@ -123,11 +123,16 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 │ src/platform/kits   survival building, interactions         │
 │ src/platform/art    pixel-art painter for game atlases      │
 └──────────────────────── GameContext ───────────────────────┘
-┌──────────── platform (TypeScript + three.js) ───────────────┐
+┌──────────── platform simulation (TypeScript, headless) ────┐
 │ src/platform/api        public API: types, Blueprint,       │
 │                         Models, Behaviors                   │
-│ src/platform/runtime.ts lifecycle, game loop, GameContext   │
-│ entities/ items/ player/  entity, item, combat, health      │
+│ src/platform/sim        Sim: players, entities, items,      │
+│                         combat, props, commands, rules      │
+│ src/platform/net        protocol: inputs, frames, calls     │
+├──────────── platform client (TypeScript + three.js) ───────┤
+│ src/platform/runtime.ts game loop, client + local host      │
+│ client/                   camera, entity/pickup/prop views, │
+│                           presenter (HUD/FX/audio calls)    │
 │ render/                   WebGL2 pipeline, first-person arm │
 │ audio/ fx/ ui/            synth SFX, effects, HUD           │
 │ world/ workers/           chunk streaming, worker pool      │
@@ -143,7 +148,7 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Server-ready seams.** The simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types, so a native server can link the same crate and generate the same world from the same seed and blueprints. Entity state lives in flat `f64` buffers that serialise directly into snapshots. Games only talk to `GameContext`. When multiplayer arrives, `world`/`entities`/`player` map onto the authoritative simulation, `hud`/`fx`/`audio` become client messages, and the game files don't change. See [docs/PLATFORM.md](docs/PLATFORM.md#architecture-and-the-road-to-multiplayer).
+**Simulation and client are separate.** The `Sim` (`src/platform/sim`) runs the game: the game's own code, players, entities, items, combat and block edits. It touches no DOM and no WebGL, and talks to the client only in plain data. Each tick it takes a `PlayerInput` snapshot per player and produces a `SimFrame` (positions, poses, health, hotbars, pickups, props). HUD, effects and sound calls become `PresentCall` messages addressed to one player or to everyone. Menu and button callbacks become ids that come back as `ClientMessage`s. The browser runtime is both the client (camera, views, presenter, rendering) and, for now, the local host running the `Sim` in the same page. Because nothing crosses that boundary except data, the same `Sim` can move to a Worker or a server without changing games. On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types, so a native build generates identical worlds from the same seed and blueprints. See [docs/PLATFORM.md](docs/PLATFORM.md#architecture-and-the-road-to-multiplayer).
 
 **Threads.** Terrain generation and meshing run in a pool of Web Workers (hardware threads minus two). They share one `WebAssembly.Module` that is compiled once on the main thread. The main thread keeps its own wasm instance holding the authoritative block data and entity state. Physics, raycasts, edits, entity simulation and per-frame culling all use it synchronously.
 

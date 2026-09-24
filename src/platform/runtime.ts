@@ -14,30 +14,25 @@ import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
 import { DEFAULT_TINT, loadRegistry, type Registry } from './world/registry';
 import { Input } from './player/input';
-import { PlayerController } from './player/controller';
-import { Interaction } from './player/interaction';
-import { PlayerHealth } from './player/health';
-import { Combat } from './player/combat';
-import { EntitySim } from './sim/entities';
-import { EntityView } from './client/entities';
-import { ItemSim } from './sim/items';
-import { PickupView } from './client/pickups';
 import { Effects } from './fx/effects';
 import { Sfx } from './audio/sfx';
 import { Hud } from './ui/hud';
 import { GameHud } from './ui/hudkit';
 import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
-import { Commands } from './commands';
 import { Content } from './content';
-import { Presentation } from './sim/present';
 import { Presenter } from './client/present';
-import { PropSim } from './sim/props';
+import { PlayerCamera } from './client/camera';
+import { EntityView } from './client/entities';
+import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
+import { Sim, type SimFrame } from './sim/sim';
+import type { PlayerFrame } from './sim/player';
+import type { WorldHost } from './sim/world';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
-import type { Actor, BlockRef, CameraApi, GameContext, GameDefinition, GameEvents, InputApi, ItemDefinition, Player, Rng, Vec3 } from './api/types';
+import type { BlockRef, GameContext, GameDefinition, ItemDefinition, ItemStack, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -55,34 +50,11 @@ const toB64 = (u: Uint8Array) => {
 };
 const fromB64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-function mulberry32(seed: number): Rng {
-  let a = seed >>> 0;
-  const next = () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  return {
-    next,
-    range: (min, max) => min + (max - min) * next(),
-    int: (min, max) => Math.floor(min + (max - min + 1) * next()),
-    pick: (items) => items[Math.floor(next() * items.length)],
-    chance: (p) => next() < p,
-  };
-}
-
-interface Timer {
-  at: number;
-  every: number;
-  fn: () => void;
-  dead: boolean;
-}
-
 /**
- * The platform runtime: engine, streaming world, renderer, player, entities, items, UI and the
- * game lifecycle. One `GameDefinition` runs per page.
+ * The browser runtime: the client (renderer, streaming world, HUD, audio, input, first-person
+ * view) with the simulation (`Sim`) running in the same page. Each frame it sends the player's
+ * controls to the simulation, ticks it, and draws the `SimFrame` it returns; presentation calls
+ * arrive through the `Presenter`. One `GameDefinition` runs per page.
  */
 export class Runtime {
   mode: Mode = 'title';
@@ -95,8 +67,8 @@ export class Runtime {
   private registry!: Registry;
   private textures!: TextureSet;
   private input: Input;
-  private controller!: PlayerController;
-  private interaction: Interaction | null = null;
+  /** Mouse look and the first-person camera (the client's side of the player). */
+  private view!: PlayerCamera;
   /** `hud.highlight`: the outline and break cracks on one block. */
   private highlight = new BlockHighlight();
   private blockIcons = new Map<number, string>();
@@ -110,49 +82,34 @@ export class Runtime {
   private hooks!: FrameHooks;
   private held!: ViewModel;
   private graphics!: EntityGraphics;
-  private entities!: EntitySim;
   private entityView!: EntityView;
-  private items!: ItemSim;
   private pickupView!: PickupView;
-  private combat!: Combat;
-  private health!: PlayerHealth;
+  private propView!: PropView;
   private fx!: Effects;
   readonly sfx = new Sfx();
-  private ctx!: GameContext;
-  /** The game's sounds, atlases and animations. */
+  /** The game's sounds, atlases, animations, entity and item types. */
   private content = new Content();
-  /** Simulation side of presentation: the game's hud / fx / audio / viewModel calls as messages. */
-  private presentation!: Presentation;
-  /** Client side: shows them for the local player. */
   private presenter!: Presenter;
-  private commands!: Commands;
+  /** The simulation: the game's rules and world. */
+  private sim!: Sim;
+  private frameData: SimFrame | null = null;
   private commandBar!: CommandBar;
   private last = performance.now();
   private spawnPending = true;
-  private spawn: Vec3 = { x: 0.5, y: 80, z: 0.5 };
-  private spawnYaw = Math.PI * 0.25;
   private hasSave = false;
   private worldReady = false;
-  private started = false;
   /** First-person walker (default) or a game-driven camera (`player.controller: 'none'`). */
   private walker = true;
-  /** Controls reach the game this frame (playing, mouse captured, no modal). */
-  private active = false;
-  private gameCam = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 70 };
-  private props!: PropSim;
-  private propView!: PropView;
+  private itemMode: boolean;
   private hudVisible = true;
   private saveTimer = 0;
   private dir = new THREE.Vector3();
   private light = new THREE.Vector3();
   private probe = new THREE.Vector3(1, 1, 1);
   private probeFrame = 0;
-  private listeners = new Map<string, Set<(e: unknown) => void>>();
-  private timers: Timer[] = [];
-  private clockNow = 0;
-  private rng: Rng;
-  private itemMode: boolean;
-  private drawFrame = false;
+  private titleSpin = 0;
+  /** What's on screen, to redraw only on change. */
+  private shown = { health: '', hotbar: '', creative: '', held: '' };
   /** Development: treat input as active without pointer lock (headless tests). */
   debugActive = false;
 
@@ -167,10 +124,9 @@ export class Runtime {
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.1, 400);
     this.camera.layers.enable(LAYER_CHUNKS);
     this.input = new Input(canvas);
-    this.rng = mulberry32(seed ^ 0x9e3779b9);
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
-    this.title = new TitleScreen(ui, seed, () => this.play(), games, def.id, (id) => this.switchGame(id), def.controls, (def.player?.controller ?? 'walk') === 'walk');
+    this.title = new TitleScreen(ui, seed, () => this.play(), games, def.id, (id) => this.switchGame(id), def.controls, this.walker);
   }
 
   /** Boot the game selected by `?game=` (default: the first registered game). */
@@ -277,7 +233,7 @@ export class Runtime {
     if (!this.walker) this.hud.setHotbarVisible(false);
     this.debug = new DebugOverlay(this.ui);
     this.fx = new Effects(this.particles, this.gameHud, this.renderer.fxScene, this.sfx, () => this.camera.position);
-    this.props = new PropSim(this.registry, (b) => this.blockId(b), this.content);
+
     this.propView = new PropView({
       shared: this.renderer.uniforms,
       albedo: this.textures.albedo,
@@ -289,57 +245,7 @@ export class Runtime {
       world,
       content: this.content,
     });
-
-    this.controller = new PlayerController(world, this.camera, this.input);
-    this.controller.allowFlight = def.player?.fly ?? false;
-    this.held = new ViewModel(this.textures.albedo, this.textures.material, this.graphics);
-    this.renderer.overlay = { scene: this.held.scene, camera: this.held.camera };
-
-    // The presentation boundary. In this page the calls go straight across; a worker or a server
-    // would carry the same messages.
-    this.presenter = new Presenter('local', { hud: this.gameHud, fx: this.fx, sfx: this.sfx, view: this.held, send: (m) => this.presentation.receive(m) });
-    this.presentation = new Presentation((c) => this.presenter.apply(c), this.content);
-    this.content.onSound((name, voice) => this.sfx.define(name, voice));
-    this.content.onAnimation((name, anim) => this.held.define(name, anim));
-    this.content.onAtlas((name, source) => {
-      if ('pixels' in source) this.graphics.addAtlas(name, source.width, source.height, source.pixels, source.emissive);
-      else this.graphics.addCanvasAtlas(name, source);
-    });
-
-    const emit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => this.emit(k, e);
-    const healthEmit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => {
-      if (k === 'playerDamage') this.held.kick(0.6);
-      this.emit(k, e);
-    };
-    this.health = new PlayerHealth(world, this.sfx, this.fx, this.gameHud, healthEmit, () => this.playerPos(), () => this.ctx.player);
-    this.health.configure(def.player ?? {});
-
-    this.entities = new EntitySim({
-      world,
-      content: this.content,
-      fx: this.presentation.fx(null),
-      audio: this.presentation.audio(null),
-      hud: this.presentation.hud(null),
-      ctx: () => this.ctx,
-      emit,
-      dropItem: (item, at, count) => {
-        if (this.items.get(item)) this.items.spawnPickup(item, at, { count, velocity: { x: this.rng.range(-2, 2), y: 4, z: this.rng.range(-2, 2) } });
-      },
-      localPlayer: () => this.ctx.player,
-      players: () => this.ctx.players,
-    });
     this.entityView = new EntityView(this.graphics, this.renderer.entityScene, world, this.content);
-    this.items = new ItemSim({
-      ctx: () => this.ctx,
-      emit,
-      players: () => this.ctx.players,
-      isSolid: (x, y, z) => {
-        const id = world.get_block(x, y, z);
-        return id !== 255 && (this.registry.blocks[id]?.solid ?? false);
-      },
-      content: this.content,
-      present: this.presentation,
-    });
     this.pickupView = new PickupView({
       graphics: this.graphics,
       scene: this.renderer.entityScene,
@@ -347,38 +253,60 @@ export class Runtime {
       content: this.content,
       blockModel: (block, size) => this.propView.localCube(block, size),
     });
-    this.items.inventory.onChange = () => this.syncInventory(true);
-    this.combat = new Combat(world, this.entities, this.items, this.camera, this.sfx, this.fx, this.gameHud, this.held, () => this.ctx, () => {
-      const s = this.controller.state;
-      return !s.onGround && s.vy < -1 && !s.inWater;
-    });
 
+    this.view = new PlayerCamera(this.camera);
+    this.held = new ViewModel(this.textures.albedo, this.textures.material, this.graphics);
+    this.renderer.overlay = { scene: this.held.scene, camera: this.held.camera };
     this.renderer.opaqueScene.add(this.highlight.object);
 
+    // The game's content reaches the client's renderer and audio as it's defined.
+    this.content.onSound((name, voice) => this.sfx.define(name, voice));
+    this.content.onAnimation((name, anim) => this.held.define(name, anim));
+    this.content.onAtlas((name, source) => {
+      if ('pixels' in source) this.graphics.addAtlas(name, source.width, source.height, source.pixels, source.emissive);
+      else this.graphics.addCanvasAtlas(name, source);
+    });
+
+    // The simulation, and the presentation boundary between it and this client. In this page the
+    // calls go straight across; a worker or a server would carry the same messages.
+    this.presenter = new Presenter('local', {
+      hud: this.gameHud,
+      fx: this.fx,
+      sfx: this.sfx,
+      view: this.held,
+      send: (m) => this.sim.receive(m),
+      client: (method, args) => this.clientCall(method, args),
+    });
+    const host: WorldHost = {
+      world,
+      edit: (x, y, z, id) => this.chunks.editBlock(x, y, z, id),
+      editMany: (cells) => this.chunks.editBlocks(cells),
+      revert: () => this.chunks.revertEdits(),
+    };
+    this.sim = new Sim({
+      def,
+      seed: this.seed,
+      registry: this.registry,
+      world: host,
+      content: this.content,
+      sink: (c) => this.presenter.apply(c),
+      exit: () => this.exit(),
+      cheats: import.meta.env.DEV || !!def.cheats,
+    });
+
     if (def.player?.build) {
-      this.interaction = new Interaction(this.chunks, world, this.registry, this.particles, this.textures.albedoData);
-      this.renderer.opaqueScene.add(this.interaction.outline);
-      this.interaction.onSwing = () => this.held.use();
-      this.interaction.onHotbarChange = () => {
-        this.hud.setHotbar(this.interaction!.hotbar, this.interaction!.selected, true);
-        this.held.setBlock(this.registry.blocks[this.interaction!.selectedBlock]);
-      };
-      this.hud.setHotbar(this.interaction.hotbar, this.interaction.selected, false);
-      this.held.setBlock(this.registry.blocks[this.interaction.selectedBlock]);
       this.picker = new BlockPicker(this.ui, this.registry, icons, () => this.closePicker());
       this.picker.onPick = (id) => {
-        this.interaction!.setSlot(this.interaction!.selected, id);
+        this.sim.receive({ t: 'creativePick', player: 'local', block: id });
         this.hud.showToast(this.registry.blocks[id]?.label ?? '');
       };
-    } else {
-      this.syncInventory(false);
     }
     this.hud.setVisible(false);
     this.gameHud.setVisible(false);
     this.held.scene.visible = false;
 
     this.pause = new PauseMenu(this.ui, this.settings, (s) => this.applySettings(s), () => this.input.lock());
-    this.pause.onTime = (t) => (this.env.time = t);
+    this.pause.onTime = (t) => (this.sim.env.time = t);
     this.pause.onNewWorld = (seed) => this.newWorld(seed);
     this.pause.onRestart = () => {
       this.pause.hide();
@@ -408,11 +336,8 @@ export class Runtime {
     window.addEventListener('beforeunload', () => this.save());
     document.addEventListener('visibilitychange', () => document.hidden && this.save());
 
-    this.env.time = def.world?.time ?? 0.3;
-    this.env.paused = def.world?.freezeTime ?? false;
-    this.commands = new Commands(() => this.ctx);
     this.commandBar = new CommandBar(this.ui);
-    this.commandBar.complete = (line) => this.commands.complete(line);
+    this.commandBar.complete = (line) => this.sim.commands.complete(line);
     this.commandBar.onClose = () => {
       if (this.mode !== 'console') return;
       this.mode = 'playing';
@@ -420,12 +345,11 @@ export class Runtime {
     };
     this.commandBar.onSubmit = (line) => {
       this.commandBar.print(`/${line.replace(/^\/+/, '')}`, 'echo');
-      const r = this.commands.exec(line);
+      const r = this.sim.exec(line);
       this.commandBar.print(r.text, r.ok ? 'ok' : 'error');
     };
-    this.ctx = this.createContext();
-    this.registerCommands();
-    def.setup?.(this.ctx);
+
+    this.sim.setup();
     // After setup: the skin may live in an atlas the game registers there.
     if (def.player?.skin) this.held.setSkin(def.player.skin, def.player.skinAtlas);
 
@@ -456,313 +380,24 @@ export class Runtime {
     }
   }
 
-  // ---------------------------------------------------------------------------------------------
-  // Game context (public API implementation)
-  // ---------------------------------------------------------------------------------------------
-
-  private playerPos(): Vec3 {
-    const s = this.controller.state;
-    return { x: s.x, y: s.y, z: s.z };
-  }
-
-  private emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]) {
-    const set = this.listeners.get(event);
-    if (set) for (const fn of [...set]) fn(e);
-  }
-
-  private createContext(): GameContext {
-    const rt = this;
-    const world = this.chunks.world;
-    const reg = this.registry;
-    const camera: CameraApi = {
-      get position() {
-        const p = rt.camera.position;
-        return { x: p.x, y: p.y, z: p.z };
-      },
-      get forward() {
-        const d = rt.camera.getWorldDirection(new THREE.Vector3());
-        return { x: d.x, y: d.y, z: d.z };
-      },
-      set(pos, target, up) {
-        const c = rt.gameCam;
-        c.pos.set(pos.x, pos.y, pos.z);
-        const m = new THREE.Matrix4().lookAt(c.pos, new THREE.Vector3(target.x, target.y, target.z), new THREE.Vector3(up?.x ?? 0, up?.y ?? 1, up?.z ?? 0));
-        c.quat.setFromRotationMatrix(m);
-      },
-      setPose(pos, q) {
-        rt.gameCam.pos.set(pos.x, pos.y, pos.z);
-        rt.gameCam.quat.set(q.x, q.y, q.z, q.w).normalize();
-      },
-      get fov() {
-        return rt.walker ? rt.camera.fov : rt.gameCam.fov;
-      },
-      set fov(v: number) {
-        rt.gameCam.fov = Math.max(10, Math.min(150, v));
-      },
-    };
-    const input: InputApi = {
-      isDown: (c) => rt.active && rt.input.isDown(c),
-      pressed: (c) => rt.active && rt.input.pressed(c),
-      button: (b) => rt.active && rt.input.button(b),
-      buttonPressed: (b) => rt.active && rt.input.buttonPressed(b),
-      consume: (what) => rt.input.consume(what),
-      get mouseX() {
-        return rt.active ? rt.input.mouseDX : 0;
-      },
-      get mouseY() {
-        return rt.active ? rt.input.mouseDY : 0;
-      },
-      get wheel() {
-        return rt.active ? rt.input.wheel : 0;
-      },
-    };
-    // The player on this machine. A server keeps one of these per connected player.
-    const player: Player = {
-      kind: 'player',
-      id: 'local',
-      name: 'Player',
-      hud: this.presentation.hud('local'),
-      input,
-      camera,
-      get position() {
-        return rt.playerPos();
-      },
-      get eye() {
-        const s = rt.controller.state;
-        return { x: s.x, y: s.y + 1.62, z: s.z };
-      },
-      get velocity() {
-        const s = rt.controller.state;
-        return { x: s.vx, y: s.vy, z: s.vz };
-      },
-      get look() {
-        const d = rt.camera.getWorldDirection(new THREE.Vector3());
-        return { x: d.x, y: d.y, z: d.z };
-      },
-      get yaw() {
-        return rt.controller.yaw;
-      },
-      get pitch() {
-        return rt.controller.pitch;
-      },
-      get onGround() {
-        return rt.controller.state.onGround;
-      },
-      get health() {
-        return rt.health.health;
-      },
-      set health(v: number) {
-        rt.health.health = Math.max(0, Math.min(rt.health.max, v));
-        rt.health.refresh();
-      },
-      get maxHealth() {
-        return rt.health.max;
-      },
-      set maxHealth(v: number) {
-        rt.health.max = v;
-        rt.health.health = Math.min(rt.health.health, v);
-        rt.health.refresh();
-      },
-      get alive() {
-        return !rt.health.dead;
-      },
-      inventory: this.items.inventory,
-      teleport: (pos, yaw, pitch) => {
-        world.player_reset(pos.x, pos.y, pos.z);
-        if (yaw !== undefined) rt.controller.yaw = yaw;
-        if (pitch !== undefined) rt.controller.pitch = pitch;
-      },
-      damage: (amount, opts) => rt.health.damage(amount, opts),
-      heal: (amount) => rt.health.heal(amount),
-      revive: () => rt.health.revive(),
-      impulse: (x, y, z) => world.player_impulse(x, y, z),
-      freeze: (f) => world.set_frozen(f),
-      viewModel: this.presentation.view('local'),
-      get armor() {
-        return rt.health.armor;
-      },
-      set armor(v: number) {
-        rt.health.armor = v;
-      },
-    };
-    const ctx: GameContext = {
-      world: {
-        getBlock: (x, y, z) => {
-          const id = world.get_block(Math.floor(x), Math.floor(y), Math.floor(z));
-          return id === 255 ? -1 : id;
-        },
-        setBlock: (x, y, z, block) => rt.chunks.editBlock(Math.floor(x), Math.floor(y), Math.floor(z), rt.blockId(block)),
-        blockId: (name) => rt.blockId(name),
-        blockName: (id) => reg.blocks[id]?.name ?? 'unknown',
-        raycast: (o, d, max) => {
-          const r = world.raycast(o.x, o.y, o.z, d.x, d.y, d.z, max);
-          return r[0] ? { x: r[1], y: r[2], z: r[3], normal: { x: r[4], y: r[5], z: r[6] }, block: r[7] } : null;
-        },
-        lineOfSight: (a, b) => world.line_clear(a.x, a.y, a.z, b.x, b.y, b.z),
-        surfaceY: (x, z) => rt.surfaceY(Math.floor(x), Math.floor(z)),
-        explode: (c, r, opts) => rt.explode(c, r, opts),
-        breakBlock: (x, y, z, opts) => rt.breakBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), opts?.by ?? 'world'),
-        blockInfo: (block) => {
-          const d = rt.registry.blocks[typeof block === 'number' ? block : rt.registry.byName.get(block)?.id ?? -1];
-          return d ? { id: d.id, name: d.name, label: d.label, solid: d.solid, liquid: d.shape === 'liquid', plant: d.shape === 'cross', replaceable: d.replaceable, light: d.emit } : null;
-        },
-        placeBlock: (x, y, z, block, opts) => rt.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world'),
-        seaLevel: engine.sea_level(),
-      },
-      players: [player],
-      player,
-      entities: this.entities,
-      items: this.items,
-      hud: this.presentation.hud(null),
-      fx: this.presentation.fx(null),
-      audio: this.presentation.audio(null),
-      camera,
-      input,
-      props: this.props,
-      env: {
-        get time() {
-          return rt.env.time;
-        },
-        set time(t: number) {
-          rt.env.time = ((t % 1) + 1) % 1;
-        },
-        get frozen() {
-          return rt.env.paused;
-        },
-        set frozen(f: boolean) {
-          rt.env.paused = f;
-        },
-      },
-      events: {
-        on: (event, fn) => {
-          let set = rt.listeners.get(event);
-          if (!set) {
-            set = new Set();
-            rt.listeners.set(event, set);
-          }
-          const f = fn as (e: unknown) => void;
-          set.add(f);
-          return () => set!.delete(f);
-        },
-      },
-      clock: {
-        get now() {
-          return rt.clockNow;
-        },
-        after: (seconds, fn) => rt.addTimer(seconds, 0, fn),
-        every: (seconds, fn) => rt.addTimer(seconds, seconds, fn),
-      },
-      rng: this.rng,
-      get commands() {
-        return rt.commands;
-      },
-      restart: () => rt.restart(),
-      exit: () => rt.exit(),
-    };
-    return ctx;
-  }
-
-  private addTimer(delay: number, every: number, fn: () => void): () => void {
-    const t: Timer = { at: this.clockNow + delay, every, fn, dead: false };
-    this.timers.push(t);
-    return () => {
-      t.dead = true;
-    };
-  }
-
-  private tickTimers(dt: number) {
-    this.clockNow += dt;
-    for (let i = 0; i < this.timers.length; i++) {
-      const t = this.timers[i];
-      if (t.dead) continue;
-      if (this.clockNow >= t.at) {
-        if (t.every > 0) t.at += t.every;
-        else t.dead = true;
-        t.fn();
-      }
-    }
-    this.timers = this.timers.filter((t) => !t.dead);
-  }
-
-  /** Carve a ragged sphere (bedrock and liquids survive), scatter debris, set off an explosion. */
-  private explode(c: Vec3, radius: number, opts: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor } = {}): number {
-    const world = this.chunks.world;
-    const r = Math.max(0.5, radius);
-    const ri = Math.ceil(r + 1);
-    const cx = Math.floor(c.x);
-    const cy = Math.floor(c.y);
-    const cz = Math.floor(c.z);
-    const cells: [number, number, number, number][] = [];
-    const removed: [number, number, number, number][] = [];
-    for (let dy = -ri; dy <= ri; dy++)
-      for (let dz = -ri; dz <= ri; dz++)
-        for (let dx = -ri; dx <= ri; dx++) {
-          const d = Math.hypot(dx + 0.5 + cx - c.x, dy + 0.5 + cy - c.y, dz + 0.5 + cz - c.z);
-          if (d > r + (Math.random() - 0.5) * 1.2) continue;
-          const x = cx + dx;
-          const y = cy + dy;
-          const z = cz + dz;
-          const id = world.get_block(x, y, z);
-          if (id === 0 || id === 255) continue;
-          const def = this.registry.blocks[id];
-          if (!def || def.name === 'bedrock' || def.shape === 'liquid') continue;
-          if (opts.filter && !opts.filter({ x, y, z }, def.name)) continue;
-          cells.push([x, y, z, 0]);
-          removed.push([x, y, z, id]);
-        }
-    const n = this.chunks.editBlocks(cells);
-    for (const [x, y, z, id] of removed) this.emit('blockBreak', { x, y, z, block: this.registry.blocks[id].name, by: opts.by ?? 'world' });
-    // Debris from a sample of what was destroyed.
-    for (let i = 0; i < Math.min(12, removed.length); i++) {
-      const [x, y, z, id] = removed[Math.floor(Math.random() * removed.length)];
+  /** Calls from the simulation for the client itself. */
+  private clientCall(method: string, args: unknown[]) {
+    if (method === 'debris') {
+      const [x, y, z, id] = args as [number, number, number, number];
       const def = this.registry.blocks[id];
+      if (!def) return;
       const face = def.tex[0];
-      this.particles.burst(x, y, z, this.textures.albedoData.subarray(face * 1024, face * 1024 + 1024), null);
+      this.particles.burst(x, y, z, this.textures.albedoData.subarray(face * 1024, face * 1024 + 1024), def.tint ? DEFAULT_TINT : null);
+    } else if (method === 'reset') {
+      // A restart: everything the game put on screen goes.
+      this.entityView.clear();
+      this.pickupView.clear();
+      this.propView.clear();
+      this.presenter.reset();
+      this.gameHud.clear();
+      this.highlight.set(null);
+      this.fx.clear();
     }
-    if (opts.effect !== false) this.fx.explosion(c, { size: Math.max(1, r / 2) });
-    return n;
-  }
-
-  /** Break a block: debris, a sound, the plant on top, the event. */
-  private breakBlockAt(x: number, y: number, z: number, by: Actor): boolean {
-    const world = this.chunks.world;
-    const id = world.get_block(x, y, z);
-    if (id === 0 || id === 255) return false;
-    const def = this.registry.blocks[id];
-    if (!def || def.name === 'bedrock' || def.shape === 'liquid') return false;
-    if (!this.chunks.editBlock(x, y, z, 0)) return false;
-    const face = def.tex[0];
-    this.particles.burst(x, y, z, this.textures.albedoData.subarray(face * 1024, face * 1024 + 1024), def.tint ? DEFAULT_TINT : null);
-    this.sfx.play('hit', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.45, pitch: 1.6 });
-    const above = world.get_block(x, y + 1, z);
-    if (this.registry.blocks[above]?.shape === 'cross') this.chunks.editBlock(x, y + 1, z, 0);
-    this.emit('blockBreak', { x, y, z, block: def.name, by });
-    return true;
-  }
-
-  /** Place a block: a free cell nobody is standing in, ground under plants, a sound, the event. */
-  private placeBlockAt(x: number, y: number, z: number, block: BlockRef, by: Actor): boolean {
-    const world = this.chunks.world;
-    const id = this.blockId(block);
-    const def = this.registry.blocks[id];
-    if (!def || y < 0 || y > 255) return false;
-    const cur = world.get_block(x, y, z);
-    if (cur === 255 || !(this.registry.blocks[cur]?.replaceable ?? false)) return false;
-    if (def.solid) {
-      if (this.walker && world.player_overlaps(x, y, z)) return false;
-      for (const e of this.entities.near({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, 3)) {
-        const p = e.position;
-        const box = this.entities.hitbox(e);
-        const hw = box.width / 2;
-        // A little slack so a body standing on the block's top face (or brushing its side) doesn't count.
-        if (Math.abs(p.x - (x + 0.5)) < 0.49 + hw && Math.abs(p.z - (z + 0.5)) < 0.49 + hw && p.y < y + 0.98 && p.y + box.height > y + 0.02) return false;
-      }
-    }
-    if (def.shape === 'cross' && !this.registry.blocks[world.get_block(x, y - 1, z)]?.solid) return false;
-    if (!this.chunks.editBlock(x, y, z, id)) return false;
-    this.sfx.play('click', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.5, pitch: 0.7 });
-    this.emit('blockPlace', { x, y, z, block: def.name, by });
-    return true;
   }
 
   /** `hud.highlight`: outline a block, with break cracks at `progress`. */
@@ -772,45 +407,9 @@ export class Runtime {
     this.highlight.set(at, this.registry.blocks[id]?.shape === 'cross', progress);
   }
 
-  private surfaceY(x: number, z: number): number {
-    const w = this.chunks.world;
-    for (let y = 255; y > 0; y--) {
-      const id = w.get_block(x, y, z);
-      if (id === 255) return -1;
-      const d = this.registry.blocks[id];
-      if (d && d.shape !== 'air' && d.shape !== 'cross') return y;
-    }
-    return 0;
-  }
-
   /** Reset game state and call `start` again. */
   restart() {
-    this.entities.clear();
-    this.entityView.clear();
-    this.props.clear();
-    this.propView.clear();
-    // Put the world back the way it was generated (craters, broken blocks), unless the game
-    // saves the world (Sandbox keeps your builds).
-    if (!this.def.world?.persist) this.chunks.revertEdits();
-    this.items.clearPickups();
-    this.pickupView.clear();
-    this.items.inventory.clear();
-    this.timers = [];
-    this.clockNow = 0;
-    this.presentation.reset();
-    this.presenter.reset();
-    this.gameHud.clear();
-    this.highlight.set(null);
-    this.fx.clear();
-    this.combat.reset();
-    this.health.configure(this.def.player ?? {});
-    this.health.revive();
-    this.chunks.world.player_reset(this.spawn.x, this.spawn.y, this.spawn.z);
-    this.controller.yaw = this.spawnYaw;
-    this.controller.pitch = 0;
-    this.env.time = this.def.world?.time ?? this.env.time;
-    this.def.start?.(this.ctx);
-    this.syncInventory(false);
+    this.sim.restart();
   }
 
   exit() {
@@ -839,6 +438,7 @@ export class Runtime {
 
   private load() {
     const w = this.chunks.world;
+    const me = this.sim.local;
     const opts = this.def.world ?? {};
     let save: SaveData | null = null;
     if (opts.persist) {
@@ -849,51 +449,53 @@ export class Runtime {
         save = null;
       }
     }
+    let yaw = Math.PI * 0.25;
+    let pitch = 0;
     if (save) {
       try {
         w.import_edits(fromB64(save.edits));
       } catch {
         // Corrupt edits are ignored.
       }
-      const [x, y, z, yaw, pitch] = save.player;
+      const [x, y, z, sy, sp] = save.player;
       w.player_reset(x, y, z);
       w.set_flying(save.flying && (this.def.player?.fly ?? false));
-      this.controller.yaw = yaw;
-      this.controller.pitch = pitch;
-      this.env.time = save.time;
-      this.spawn = { x, y, z };
+      yaw = sy;
+      pitch = sp;
+      this.sim.env.time = save.time;
+      this.sim.spawn = { x, y, z, yaw };
       this.hasSave = true;
     } else if (opts.spawn && opts.spawn !== 'auto') {
-      this.spawn = { ...opts.spawn };
-      this.spawnYaw = opts.spawnYaw ?? 0;
-      w.player_reset(this.spawn.x, this.spawn.y, this.spawn.z);
-      this.controller.yaw = this.spawnYaw;
+      yaw = opts.spawnYaw ?? 0;
+      this.sim.spawn = { ...opts.spawn, yaw };
+      w.player_reset(opts.spawn.x, opts.spawn.y, opts.spawn.z);
       this.hasSave = true;
     } else {
       const gen = new TerrainGen(this.seed);
       applyWorldConfig(gen, this.worldConfig());
       const s = gen.find_spawn();
       gen.free();
-      this.spawn = { x: s[0] + 0.5, y: s[1] + 2, z: s[2] + 0.5 };
-      w.player_reset(this.spawn.x, this.spawn.y, this.spawn.z);
-      this.controller.yaw = this.spawnYaw;
+      this.sim.spawn = { x: s[0] + 0.5, y: s[1] + 2, z: s[2] + 0.5, yaw };
+      w.player_reset(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z);
     }
     w.set_frozen(true);
-    this.controller.update(0, false);
+    me.syncState();
+    me.setView(yaw, pitch);
     // A game-driven camera starts where the player would have stood.
-    this.gameCam.pos.copy(this.camera.position);
-    this.gameCam.quat.copy(this.camera.quaternion);
-    this.gameCam.fov = this.settings.fov;
+    const st = me.state;
+    me.cam.pos.set(st.x, st.y + 1.62, st.z);
+    me.cam.quat.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+    me.cam.fov = this.settings.fov;
   }
 
   private save() {
     if (!this.chunks || !this.def.world?.persist) return;
-    const s = this.controller.state;
+    const s = this.sim.local.state;
     const data: SaveData = {
       edits: toB64(this.chunks.world.export_edits()),
-      player: [s.x, s.y, s.z, this.controller.yaw, this.controller.pitch],
+      player: [s.x, s.y, s.z, this.view.yaw, this.view.pitch],
       flying: s.flying,
-      time: this.env.time,
+      time: this.sim.env.time,
     };
     try {
       localStorage.setItem(this.saveKey, JSON.stringify(data));
@@ -913,8 +515,9 @@ export class Runtime {
 
   private updateSpawn() {
     const w = this.chunks.world;
-    const sx = Math.floor(this.spawn.x);
-    const sz = Math.floor(this.spawn.z);
+    const sp = this.sim.spawn;
+    const sx = Math.floor(sp.x);
+    const sz = Math.floor(sp.z);
     if (this.spawnPending && w.has_column(Math.floor(sx / 16), Math.floor(sz / 16))) {
       if (!this.hasSave) {
         const ground = new Set(['grass_block', 'dirt', 'sand', 'snowy_grass', 'podzol', 'stone', 'gravel']);
@@ -925,11 +528,12 @@ export class Runtime {
               if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
               const x = sx + dx;
               const z = sz + dz;
-              const y = this.surfaceY(x, z);
+              const y = this.sim.surfaceY(x, z);
               const top = this.registry.blocks[w.get_block(x, y, z)];
               if (y > 0 && top && ground.has(top.name) && w.get_block(x, y + 1, z) !== 255) {
-                this.spawn = { x: x + 0.5, y: y + 1.02, z: z + 0.5 };
-                w.player_reset(this.spawn.x, this.spawn.y, this.spawn.z);
+                this.sim.spawn = { ...sp, x: x + 0.5, y: y + 1.02, z: z + 0.5 };
+                w.player_reset(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z);
+                this.sim.local.syncState();
                 placed = true;
               }
             }
@@ -938,7 +542,7 @@ export class Runtime {
       }
       this.spawnPending = false;
     }
-    const s = this.controller.state;
+    const s = this.sim.local.state;
     const ready = this.chunks.readiness(s.x, s.z, Math.min(this.settings.renderDistance, 6));
     if (!this.worldReady) {
       this.title.progress(0.1 + 0.9 * ready, ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : 'Ready');
@@ -958,26 +562,25 @@ export class Runtime {
     if (this.worldReady) this.input.lock();
   }
 
+  private beginPlay() {
+    this.title.hide();
+    this.hud.setVisible(this.hudVisible);
+    this.gameHud.setVisible(this.hudVisible);
+    this.held.scene.visible = this.hudVisible;
+    this.chunks.world.set_frozen(this.sim.local.health.dead);
+    this.mode = 'playing';
+    this.sim.start();
+  }
+
   private onLockChange(locked: boolean) {
     if (locked) {
-      if (this.mode === 'title') {
-        this.title.hide();
-        this.hud.setVisible(this.hudVisible);
-        this.gameHud.setVisible(this.hudVisible);
-        this.held.scene.visible = this.hudVisible;
-        this.chunks.world.set_frozen(this.health.dead);
-      }
+      if (this.mode === 'title') this.beginPlay();
       this.pause.hide();
       this.picker?.hide();
       this.mode = 'playing';
-      if (!this.started) {
-        this.started = true;
-        this.def.start?.(this.ctx);
-        this.syncInventory(false);
-      }
     } else if (this.mode === 'playing' && !this.gameHud.screenOpen) {
       this.mode = 'paused';
-      this.pause.show(this.env.time);
+      this.pause.show(this.sim.env.time);
       this.save();
     }
   }
@@ -1011,114 +614,10 @@ export class Runtime {
       }
     }
     if (this.mode === 'playing' && this.def.player?.build) {
-      if (code === 'BracketLeft') this.env.time = (this.env.time - 1 / 24 + 1) % 1;
-      if (code === 'BracketRight') this.env.time = (this.env.time + 1 / 24) % 1;
+      const env = this.sim.env;
+      if (code === 'BracketLeft') env.time = (env.time - 1 / 24 + 1) % 1;
+      if (code === 'BracketRight') env.time = (env.time + 1 / 24) % 1;
     }
-  }
-
-  /** Built-in commands: `/help` always; the cheats in development or when the game allows them. */
-  private registerCommands() {
-    const c = this.commands;
-    c.register('help', {
-      help: 'List commands',
-      run: () =>
-        c
-          .list()
-          .map(([n, s]) => `/${n}${s.usage ? ` ${s.usage}` : ''}${s.help ? `  ${s.help}` : ''}`)
-          .join('\n'),
-    });
-    if (!import.meta.env.DEV && !this.def.cheats) return;
-    const num = (v: string | undefined, name: string) => {
-      const n = Number(v);
-      if (v === undefined || v === '' || !Number.isFinite(n)) throw new Error(`Expected a number for ${name}`);
-      return n;
-    };
-    c.register('give', {
-      usage: '<item> [count]',
-      help: 'Put an item in your hand',
-      complete: (args) => (args.length <= 1 ? this.items.ids() : []),
-      run: ([id, n], _g, player) => {
-        if (!this.itemMode) throw new Error('This game has no item hotbar');
-        if (!id) throw new Error('Which item? Tab lists them');
-        const def = this.items.get(id);
-        if (!def) throw new Error(`Unknown item "${id}"`);
-        const count = n === undefined ? 1 : Math.max(1, Math.floor(num(n, 'count')));
-        const inv = player.inventory;
-        const left = inv.give(id, count);
-        if (left === count) throw new Error('Your hotbar is full');
-        const slot = inv.slots.findIndex((st) => st?.item === id);
-        if (slot >= 0) inv.select(slot);
-        return `Gave ${count - left} ${def.name}`;
-      },
-    });
-    c.register('heal', {
-      help: 'Full health (revives you if dead)',
-      run: (_, _g, player) => {
-        if (!player.alive) player.revive();
-        else player.health = player.maxHealth;
-        return 'Healed';
-      },
-    });
-    const times: Record<string, number> = { midnight: 0, dawn: 0.26, day: 0.35, noon: 0.5, dusk: 0.74, night: 0.85 };
-    c.register('time', {
-      usage: '<day|noon|dusk|night|midnight|0..1>',
-      help: 'Set the time of day',
-      complete: () => Object.keys(times),
-      run: ([t], g) => {
-        const v = t !== undefined && t in times ? times[t] : num(t, 'time');
-        g.env.time = ((v % 1) + 1) % 1;
-        return `Time set to ${t}`;
-      },
-    });
-    c.register('tp', {
-      usage: '<x> <y> <z>',
-      help: 'Teleport (~ for relative, e.g. ~ ~10 ~)',
-      run: (args, _g, player) => {
-        if (args.length !== 3) throw new Error('Need x, y and z');
-        const p = player.position;
-        const [x, y, z] = args.map((a, i) => {
-          const base = [p.x, p.y, p.z][i];
-          return a.startsWith('~') ? base + (a.length > 1 ? num(a.slice(1), 'offset') : 0) : num(a, 'xyz'[i]);
-        });
-        player.teleport({ x, y, z });
-        return `Teleported to ${x.toFixed(1)} ${y.toFixed(1)} ${z.toFixed(1)}`;
-      },
-    });
-    c.register('spawn', {
-      usage: '<entity> [count]',
-      help: 'Spawn creatures in front of you',
-      complete: (args) => (args.length <= 1 ? this.entities.typeNames() : []),
-      run: ([type, n], g, player) => {
-        if (!type || !this.entities.typeNames().includes(type)) throw new Error(type ? `Unknown entity "${type}"` : 'Which entity? Tab lists them');
-        const count = n === undefined ? 1 : Math.min(50, Math.max(1, Math.floor(num(n, 'count'))));
-        const p = player.position;
-        const l = player.look;
-        const len = Math.hypot(l.x, l.z) || 1;
-        for (let i = 0; i < count; i++) {
-          const a = (i / count) * Math.PI * 2;
-          const x = p.x + (l.x / len) * 5 + (count > 1 ? Math.cos(a) * 1.5 : 0);
-          const z = p.z + (l.z / len) * 5 + (count > 1 ? Math.sin(a) * 1.5 : 0);
-          g.entities.spawn(type, { x, y: g.world.surfaceY(x, z) + 1, z });
-        }
-        return `Spawned ${count} ${type}`;
-      },
-    });
-    c.register('kill', {
-      help: 'Kill every creature',
-      run: (_, g) => {
-        const all = g.entities.all();
-        for (const e of all) e.damage(1e9, { source: 'world', knockback: 0 });
-        return `Killed ${all.length}`;
-      },
-    });
-    c.register('fly', {
-      help: 'Toggle flight (double-tap Space)',
-      run: () => {
-        this.controller.allowFlight = !this.controller.allowFlight;
-        if (!this.controller.allowFlight) this.chunks.world.set_flying(false);
-        return this.controller.allowFlight ? 'Flight on' : 'Flight off';
-      },
-    });
   }
 
   private closePicker() {
@@ -1127,21 +626,9 @@ export class Runtime {
     this.input.lock();
   }
 
-  /** Hotbar + held item for item mode. */
-  private syncInventory(announce: boolean) {
-    if (!this.itemMode || !this.hud) return;
-    const inv = this.items.inventory;
-    this.hud.setSlots(
-      inv.slots.map((s) => {
-        if (!s) return null;
-        const d = this.items.get(s.item);
-        return d ? { icon: this.itemIcon(d, 48), count: s.count, label: d.name } : null;
-      }),
-      inv.selected,
-      announce,
-    );
-    this.updateHeldItem();
-  }
+  // ---------------------------------------------------------------------------------------------
+  // The local player's HUD and hand, from the frame
+  // ---------------------------------------------------------------------------------------------
 
   /** The icon an item shows: its sprite, or its block. */
   private itemIcon(d: ItemDefinition, size: number): string {
@@ -1150,16 +637,47 @@ export class Runtime {
     return this.graphics.spriteIcon(icon, size);
   }
 
-  /** Item games, per frame: the built-in weapons (after the game has had its say on the mouse). */
-  private updateHands(dt: number, active: boolean) {
-    this.combat.update(dt, this.input, active);
-    this.held.draw = this.combat.isDrawing ? this.combat.charge : 0;
-    this.updateHeldItem();
+  private showPlayer(me: PlayerFrame, creative: SimFrame['creative']) {
+    const health = `${me.health}|${me.mortal ? me.maxHealth : 0}`;
+    if (health !== this.shown.health) {
+      this.shown.health = health;
+      this.gameHud.setHealth(me.health, me.mortal ? me.maxHealth : 0);
+    }
+    if (creative) {
+      const key = `${creative.hotbar.join(',')}|${creative.selected}`;
+      if (key !== this.shown.creative) {
+        const announce = this.shown.creative !== '' && !this.shown.creative.endsWith(`|${creative.selected}`);
+        this.shown.creative = key;
+        this.hud.setHotbar(creative.hotbar, creative.selected, announce);
+        this.held.setBlock(this.registry.blocks[creative.hotbar[creative.selected]]);
+      }
+    }
+    if (me.hotbar) this.showHotbar(me.hotbar.slots, me.hotbar.selected, me.hand);
   }
 
-  private updateHeldItem() {
-    const stack = this.items.inventory.held;
-    const def = stack ? this.items.get(stack.item) : undefined;
+  private showHotbar(slots: (ItemStack | null)[], selected: number, hand: PlayerFrame['hand']) {
+    const key = `${slots.map((s) => (s ? `${s.item}x${s.count}` : '')).join(',')}|${selected}`;
+    if (key !== this.shown.hotbar) {
+      const prevSelected = this.shown.hotbar.split('|')[1];
+      this.shown.hotbar = key;
+      this.hud.setSlots(
+        slots.map((s) => {
+          if (!s) return null;
+          const d = this.content.items.get(s.item);
+          return d ? { icon: this.itemIcon(d, 48), count: s.count, label: d.name } : null;
+        }),
+        selected,
+        prevSelected !== undefined && prevSelected !== String(selected),
+      );
+    }
+    // The held item: its 3D model, its sprite extruded, a block, or the bow's draw frame.
+    const stack = slots[selected];
+    const def = stack ? this.content.items.get(stack.item) : undefined;
+    const drawn = def?.kind === 'bow' && hand.drawing && hand.charge > 0.25;
+    const heldKey = `${stack?.item ?? ''}|${drawn}`;
+    if (heldKey === this.shown.held) return;
+    const sameItem = this.shown.held.split('|')[0] === (stack?.item ?? '');
+    this.shown.held = heldKey;
     if (!def) {
       this.held.setEmpty();
       return;
@@ -1169,18 +687,16 @@ export class Runtime {
       this.held.setBlock(this.registry.blocks[this.blockId(def.icon.block)]);
       return;
     }
-    const drawn = def.kind === 'bow' && this.combat.isDrawing && this.combat.charge > 0.25;
     const icon = drawn && def.kind === 'bow' ? def.drawIcon ?? def.icon : def.icon;
-    // The item's 3D model if it names one (`hold.model`); otherwise its sprite, extruded.
     const model = def.hold?.model;
     const { geometry, atlas } = model && !drawn ? this.graphics.heldModelGeometry(model) : this.graphics.spriteGeometry(icon);
-    const a = this.graphics.atlas(atlas);
-    const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : 'item';
-    if (def.kind === 'bow' && drawn !== this.drawFrame) {
-      this.drawFrame = drawn;
+    if (def.kind === 'bow' && sameItem) {
+      // Drawing or releasing: swap the frame without the lower-and-raise.
       this.held.swapItemGeometry(geometry);
       return;
     }
+    const a = this.graphics.atlas(atlas);
+    const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : 'item';
     this.held.setItem(geometry, a.albedo, a.emissive, def.hold ?? {}, style);
   }
 
@@ -1195,10 +711,10 @@ export class Runtime {
     const rd = this.viewDistance(s);
     if (this.chunks.renderDistance !== rd) this.chunks.setRenderDistance(rd);
     this.chunks.occlusion = s.occlusion;
-    this.controller.sensitivity = s.sensitivity;
-    this.controller.baseFov = s.fov;
-    this.controller.viewBobbing = s.viewBobbing;
-    if (!this.def.world?.freezeTime) this.env.dayLength = s.dayMinutes * 60;
+    this.view.sensitivity = s.sensitivity;
+    this.view.baseFov = s.fov;
+    this.view.viewBobbing = s.viewBobbing;
+    if (!this.def.world?.freezeTime) this.sim.env.dayLength = s.dayMinutes * 60;
     this.camera.far = Math.max(256, (rd + 1.5) * 16 * 1.08);
     this.camera.updateProjectionMatrix();
     this.renderer.fogEnd = (rd - 0.35) * 16;
@@ -1226,63 +742,60 @@ export class Runtime {
     const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
     this.last = now;
     const playing = this.mode === 'playing';
-    const running = playing && this.started;
-    const active = playing && (this.input.locked || this.debugActive) && !this.health.dead && !this.gameHud.screenOpen;
-    this.active = active;
-    this.sfx.hold(this.started && (this.mode === 'paused' || this.mode === 'console'));
+    const running = playing && this.sim.started;
+    const dead = this.frameData?.players[0]?.dead ?? false;
+    const active = playing && (this.input.locked || this.debugActive) && !dead && !this.gameHud.screenOpen;
+    this.sfx.hold(this.sim.started && (this.mode === 'paused' || this.mode === 'console'));
 
-    this.env.update(dt);
+    // Mouse look is the client's; the controls and the view go to the simulation.
     if (this.walker) {
       if (this.mode === 'title') {
-        this.controller.yaw += dt * 0.03;
-        this.controller.pitch = -0.18;
+        this.view.yaw += dt * 0.03;
+        this.view.pitch = -0.18;
+      } else {
+        this.view.look(this.input, active);
       }
-      this.controller.update(dt, active);
+    }
+    this.sim.tick(dt, running, { local: this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq) });
+    const f = this.sim.frame();
+    this.frameData = f;
+    const me = f.players[0];
+    this.updateSpawn();
+
+    this.env.time = f.time;
+    this.env.paused = true;
+    this.env.update(dt);
+    if (this.walker) {
+      this.view.follow(dt, me);
       if (this.mode === 'title') {
         this.camera.position.y += 22;
         this.camera.updateMatrixWorld();
       }
     } else {
-      // No walking body: it stays put (games may teleport it, e.g. to follow a vehicle).
-      this.chunks.world.set_frozen(true);
-      if (this.mode === 'title') this.gameCam.quat.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dt * 0.03));
-    }
-    this.updateSpawn();
-
-    const s = this.controller.state;
-    if (running) {
-      this.tickTimers(dt);
-      this.def.update?.(this.ctx, dt);
-      this.health.update(dt, s.onGround, s.vy);
-    }
-    if (!this.walker) {
-      // After the game's update, so the camera it set this frame is the one we draw.
-      const c = this.gameCam;
-      this.camera.position.copy(c.pos);
-      this.camera.quaternion.copy(c.quat);
-      if (this.camera.fov !== c.fov) {
-        this.camera.fov = c.fov;
+      // The game's camera, as the simulation has it this tick (slowly turning on the title screen).
+      if (this.mode === 'title') this.titleSpin += dt * 0.03;
+      this.camera.position.set(me.camera.p[0], me.camera.p[1], me.camera.p[2]);
+      this.camera.quaternion.set(me.camera.q[0], me.camera.q[1], me.camera.q[2], me.camera.q[3]);
+      if (this.titleSpin) this.camera.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.titleSpin));
+      if (this.camera.fov !== me.camera.fov) {
+        this.camera.fov = me.camera.fov;
         this.camera.updateProjectionMatrix();
       }
       this.camera.updateMatrixWorld();
+      if (this.mode !== 'title') this.titleSpin = 0;
     }
-    this.entities.update(dt, running);
-    const ef = this.entities.frame();
-    this.entityView.sync(ef.entities, ef.projectiles, dt, running);
-    this.items.update(dt, running);
-    this.pickupView.sync(this.items.frame(), dt);
-    this.props.update(dt);
-    this.propView.sync(this.props.frame(), dt);
-    if (this.itemMode) this.updateHands(dt, active);
+    this.entityView.sync(f.entities, f.projectiles, dt, running);
+    this.pickupView.sync(f.pickups, dt);
+    this.propView.sync(f.props, dt);
+    this.showPlayer(me, f.creative);
 
     if (this.walker) {
-      this.controller.viewDirection(this.dir);
-      this.chunks.update(s.x, s.z, this.dir.x, this.dir.z);
+      this.view.viewDirection(this.dir);
+      this.chunks.update(me.x, me.z, this.dir.x, this.dir.z);
     } else {
       this.camera.getWorldDirection(this.dir);
       this.chunks.update(this.camera.position.x, this.camera.position.z, this.dir.x, this.dir.z);
     }
-    if (this.interaction) this.interaction.update(dt, this.camera, this.input, active);
 
     // Light probe at the player's eyes drives the held item and particles.
     if (++this.probeFrame % 4 === 0) {
@@ -1302,31 +815,32 @@ export class Runtime {
     this.particles.update(dt);
     this.fx.update(dt);
     this.held.setLight(this.probe);
-    if (this.walker) this.updateHand(dt, s);
+    if (this.walker) this.updateHand(dt, me);
     // Camera effects: shake and the death tilt.
     this.camera.position.add(this.fx.shakeOffset);
-    if (this.walker && this.health.dead) {
-      const k = Math.min(1, this.health.deathTime / 0.6);
+    if (this.walker && me.dead) {
+      const k = Math.min(1, me.deathTime / 0.6);
       this.camera.position.y -= k * 1.2;
       this.camera.rotateZ(k * 0.45);
     }
     this.camera.updateMatrixWorld();
-    this.sfx.setListener(this.camera.position, this.walker ? this.controller.yaw : Math.atan2(-this.dir.x, -this.dir.z));
+    this.sfx.setListener(this.camera.position, this.walker ? this.view.yaw : Math.atan2(-this.dir.x, -this.dir.z));
     this.present(dt, playing, t0);
   }
 
-  private updateHand(dt: number, s: PlayerController['state']) {
-    const bobAmt = this.settings.viewBobbing && s.onGround && !s.flying ? Math.min(1, Math.hypot(s.vx, s.vz) / 4.3) : 0;
+  private updateHand(dt: number, me: PlayerFrame) {
+    this.held.draw = me.hand.drawing ? me.hand.charge : 0;
+    const bobAmt = this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0;
     this.held.update(dt, {
       aspect: this.camera.aspect,
-      bobPhase: s.bob * Math.PI * 0.9,
+      bobPhase: me.bob * Math.PI * 0.9,
       bobAmount: bobAmt,
-      yaw: this.controller.yaw,
-      pitch: this.controller.pitch,
-      onGround: s.onGround,
-      vy: s.vy,
-      down: this.health.dead,
-      strength: this.itemMode ? this.combat.strength : 1,
+      yaw: this.view.yaw,
+      pitch: this.view.pitch,
+      onGround: me.onGround,
+      vy: me.vy,
+      down: me.dead,
+      strength: this.itemMode ? me.hand.strength : 1,
     });
   }
 
@@ -1362,10 +876,10 @@ export class Runtime {
   }
 
   private updateDebug() {
-    const s = this.controller.state;
+    const s = this.sim.local.state;
     const c = this.chunks.stats();
     const r = this.renderer;
-    const yawDeg = ((((-this.controller.yaw * 180) / Math.PI) % 360) + 360) % 360;
+    const yawDeg = ((((-this.view.yaw * 180) / Math.PI) % 360) + 360) % 360;
     const facing = ['north (-Z)', 'east (+X)', 'south (+Z)', 'west (-X)'][Math.round(yawDeg / 90) % 4];
     const rs = r.settings;
     const mem = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
@@ -1375,10 +889,10 @@ export class Runtime {
       '',
       `XYZ      ${s.x.toFixed(2)} / ${s.y.toFixed(2)} / ${s.z.toFixed(2)}`,
       `Chunk    ${Math.floor(s.x / 16)}, ${Math.floor(s.z / 16)}   section ${Math.floor(s.y / 16)}`,
-      `Facing   ${facing}   pitch ${((this.controller.pitch * 180) / Math.PI).toFixed(1)}°`,
+      `Facing   ${facing}   pitch ${((this.view.pitch * 180) / Math.PI).toFixed(1)}°`,
       `Motion   ${s.flying ? 'flying' : s.inWater ? 'swimming' : s.onGround ? 'grounded' : 'airborne'}   ${Math.hypot(s.vx, s.vz).toFixed(2)} m/s`,
-      `Time     ${this.env.clock()}   game clock ${this.clockNow.toFixed(1)} s`,
-      `Entities ${this.entities.count()} alive`,
+      `Time     ${this.env.clock()}   game clock ${(this.frameData?.clock ?? 0).toFixed(1)} s`,
+      `Entities ${this.sim.entities.count()} alive`,
       '',
       `Columns  ${c.loaded} loaded · ${c.meshed} meshed · ${c.pending} pending upload`,
       `Workers  ${this.pool.size} · gen ${c.generating} (${c.genMs.toFixed(2)} ms) · mesh ${c.meshing} (${c.meshMs.toFixed(2)} ms)`,
@@ -1394,21 +908,17 @@ export class Runtime {
   // ---------------------------------------------------------------------------------------------
 
   debugPlay() {
-    this.title.hide();
-    this.hud.setVisible(true);
-    this.gameHud.setVisible(true);
-    this.held.scene.visible = true;
-    this.mode = 'playing';
+    this.beginPlay();
     this.chunks.world.set_frozen(false);
-    if (!this.started) {
-      this.started = true;
-      this.def.start?.(this.ctx);
-      this.syncInventory(false);
-    }
   }
 
   get context(): GameContext {
-    return this.ctx;
+    return this.sim.ctx;
+  }
+
+  /** The first-person view (tests steer it through `yaw` / `pitch`). */
+  get controller(): PlayerCamera {
+    return this.view;
   }
 
   debugInfo() {
@@ -1416,9 +926,9 @@ export class Runtime {
       game: this.def.id,
       mode: this.mode,
       ready: this.worldReady,
-      state: { ...this.controller.state },
-      health: this.health.health,
-      entities: this.entities.count(),
+      state: { ...this.sim.local.state },
+      health: this.sim.local.health.health,
+      entities: this.sim.entities.count(),
       chunks: this.chunks.stats(),
       render: { ...this.renderer.stats },
       time: this.env.time,
@@ -1428,12 +938,12 @@ export class Runtime {
   }
 
   debugView(yaw: number, pitch: number) {
-    this.controller.yaw = yaw;
-    this.controller.pitch = pitch;
+    this.view.yaw = yaw;
+    this.view.pitch = pitch;
   }
 
   debugSetTime(t: number) {
-    this.env.time = t;
+    this.sim.env.time = t;
   }
 
   debugToggle(key: string) {

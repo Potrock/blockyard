@@ -436,9 +436,12 @@ game.commands.run('/give pike'); // run one from code
 ├──────────── kits + art toolkit (optional, only @platform) ──┤
 │ survival building · interactions · pixel-art painter        │
 └──────────────────────── GameContext ───────────────────────┘
-┌──────────── platform runtime (TypeScript + three.js) ──────┐
-│ lifecycle · entity/item/combat systems · HUD · audio · FX  │
-│ renderer (WebGL2) · chunk streaming · input                │
+┌──────────── simulation: Sim (headless, no DOM / WebGL) ─────┐
+│ players · entities · items · combat · props · commands      │
+└──── PlayerInput in ▲   ▼ SimFrame + PresentCalls out ───────┘
+┌──────────── client (TypeScript + three.js) ────────────────┐
+│ camera · entity / pickup / prop views · presenter           │
+│ HUD · audio · FX · renderer (WebGL2) · chunk streaming      │
 └─────────────── flat buffers / wasm-bindgen ────────────────┘
 ┌──────────── engine (Rust → WebAssembly) ───────────────────┐
 │ worldgen + blueprints · lighting · meshing · culling        │
@@ -447,9 +450,19 @@ game.commands.run('/give pike'); // run one from code
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The seams are chosen so a server can take over simulation later without changing games:
+Your game runs inside the **simulation**, and everything it does reaches players as plain data:
 
-- The simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server binary can link the same crate and produce identical worlds from the same seed and blueprints.
-- Entity state lives in flat `f64` buffers (layout documented in `entities.rs`), which serialise trivially into network snapshots.
-- Games only talk to `GameContext`. On a server, `hud` / `fx` / `audio` calls become messages sent to clients, and `world` / `entities` / `player` map onto the authoritative simulation. The game file itself doesn't change. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
-- Rendering, chunk meshing, lighting and culling stay client-side.
+- **Input in.** Each tick the simulation gets one `PlayerInput` per player: keys held and pressed, buttons, wheel and view angles. `player.input` reads that snapshot. The client owns mouse look. When the game turns a player (`teleport`, `camera.lookAt`), the view carries a sequence number, so a client's stale angles can't override it.
+- **Frames out.** After each tick the simulation produces a `SimFrame`: every player's position, pose, health, hotbar, held item and camera, plus entities, projectiles, pickups and props. The client draws only from frames.
+- **Presentation calls out.** `hud`, `fx`, `audio` and the view model are proxies. Each call becomes a `PresentCall` addressed to one player (`player.hud`) or to everyone (`game.hud`). Menu entries, buttons and other callbacks go out as ids and come back as `ClientMessage`s, which call your function inside the simulation.
+- **Content by name.** Sounds, atlases, animations, entity and item definitions, and prop models go into a shared `Content` registry, so a frame only has to name them.
+
+In the browser today, the runtime is both the client and the host: it runs the `Sim` in the same page and passes frames and calls straight through. Nothing crosses that boundary except data, so the same `Sim` can move into a Web Worker or onto a server, with clients streaming frames, without changing your game. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
+
+On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server can link the same crate and generate identical worlds from the same seed and blueprints. Entity state lives in flat `f64` buffers (layout documented in `entities.rs`) that serialise directly into snapshots. Rendering, chunk meshing, lighting and culling stay on the client.
+
+What this means when you write a game:
+
+- Keep state in the game module or on entities, not in the DOM. Draw on screen only through `hud`, `fx`, `audio` and models.
+- Use `player.hud` for things only that player should see, such as a shop, a wallet or a death screen. Use `game.hud` for match-wide banners and objectives.
+- Write for any number of players: iterate `game.players`, target `entity.nearestPlayer()`, and use the `player` passed to callbacks and events. `game.player` is only a convenience for single-player games.

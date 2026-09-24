@@ -1,3 +1,5 @@
+import type { PlayerInput } from '../net/protocol';
+
 /** Keyboard / mouse state with pointer lock and per-frame edge detection. */
 export class Input {
   private down = new Set<string>();
@@ -92,6 +94,23 @@ export class Input {
 
   buttonPressed(b: number): boolean {
     return (this.buttonsPressed & ~this.consumedButtons & (1 << b)) !== 0;
+  }
+
+  /** This frame's controls as plain data, for the simulation. */
+  snapshot(active: boolean, yaw: number, pitch: number, viewSeq: number): PlayerInput {
+    return {
+      active,
+      down: [...this.down],
+      pressed: [...this.pressedThisFrame],
+      buttons: this.buttonsDown,
+      clicked: this.buttonsPressed,
+      mouseX: this.mouseDX,
+      mouseY: this.mouseDY,
+      wheel: this.wheel,
+      yaw,
+      pitch,
+      viewSeq,
+    };
   }
 
   /** Claim a mouse button or key for the rest of this frame. */

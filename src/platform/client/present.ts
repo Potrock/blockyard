@@ -12,6 +12,8 @@ export interface PresenterParts {
   view: ViewModel;
   /** Messages back to the simulation (callbacks, closed menus). */
   send: (m: ClientMessage) => void;
+  /** Calls for the client itself: `debris` from broken blocks, `reset` on restart. */
+  client: (method: string, args: unknown[]) => void;
 }
 
 type Callable = Record<string, (...args: unknown[]) => unknown>;
@@ -47,6 +49,8 @@ export class Presenter {
         if (c.method === 'visible') p.view.visible = args[0] as boolean;
         else (p.view as unknown as Callable)[c.method](...args);
         return;
+      case 'client':
+        return p.client(c.method, args);
     }
   }
 

@@ -1,10 +1,10 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { DamageOptions, GameEvents, Player, PlayerOptions, Vec3 } from '../api/types';
-import type { Sfx } from '../audio/sfx';
-import type { Effects } from '../fx/effects';
-import type { GameHud } from '../ui/hudkit';
+import type { AudioApi, DamageOptions, FxApi, GameEvents, Player, PlayerOptions, Vec3 } from '../api/types';
 
-/** Player health, damage, knockback, regeneration, fall damage and death. */
+/**
+ * A player's health, damage, knockback, regeneration, fall damage and death. The hearts are
+ * shown from the player frame; the hurt sound, red flash and shake go to that player's client.
+ */
 export class PlayerHealth {
   enabled = true;
   health = 20;
@@ -22,13 +22,15 @@ export class PlayerHealth {
 
   constructor(
     private world: VoxelWorld,
-    private sfx: Sfx,
-    private fx: Effects,
-    private hud: GameHud,
+    /** This player's own sound and screen effects. */
+    private audio: AudioApi,
+    private fx: FxApi,
     private emit: <K extends keyof GameEvents>(event: K, e: GameEvents[K]) => void,
     private playerPos: () => Vec3,
     /** The player this health belongs to (named in the events). */
     private player: () => Player,
+    /** Hit: the first-person view flinches. */
+    private onHurt: () => void,
   ) {}
 
   configure(opts: PlayerOptions) {
@@ -40,9 +42,8 @@ export class PlayerHealth {
     this.refresh();
   }
 
-  refresh() {
-    this.hud.setHealth(this.health, this.enabled ? this.max : 0);
-  }
+  /** Kept for callers that change health directly (shown from the frame, so nothing to do). */
+  refresh() {}
 
   damage(amount: number, opts: DamageOptions = {}): boolean {
     if (!this.enabled || this.dead || this.invuln > 0 || amount <= 0) return false;
@@ -59,7 +60,8 @@ export class PlayerHealth {
       const l = Math.hypot(dx, dz) || 1;
       this.world.player_impulse((dx / l) * 7 * kb, 5.5 * kb, (dz / l) * 7 * kb);
     }
-    this.sfx.play('hurt');
+    this.audio.play('hurt');
+    this.onHurt();
     this.fx.flash('rgba(180, 10, 10, 1)', Math.min(0.5, 0.15 + amount * 0.04), 0.45);
     this.fx.shake(0.06 + amount * 0.012, 0.3);
     this.emit('playerDamage', { player: this.player(), amount, source: opts.source });

@@ -33,4 +33,34 @@ export type ClientMessage =
   /** A callback the simulation sent (a menu entry, a screen button) was triggered. */
   | { t: 'callback'; player: string; id: number }
   /** A menu was closed on the client (Esc, the close button). */
-  | { t: 'menuClosed'; player: string; menu: number };
+  | { t: 'menuClosed'; player: string; menu: number }
+  /** Creative building: put a block in the current hotbar slot (the block picker). */
+  | { t: 'creativePick'; player: string; block: number };
+
+/**
+ * One player's controls for one tick. The client owns mouse look (it feels immediate), so the
+ * view direction arrives here too; the simulation moves the player and runs the game with it.
+ */
+export interface PlayerInput {
+  /** Controls reach the game (playing, mouse captured, no menu open, alive). */
+  active: boolean;
+  /** Keys held and keys that went down this tick (KeyboardEvent.code). */
+  down: string[];
+  pressed: string[];
+  /** Mouse buttons held and clicked this tick (bit masks: 1 left, 2 middle, 4 right). */
+  buttons: number;
+  clicked: number;
+  mouseX: number;
+  mouseY: number;
+  wheel: number;
+  /** Where the player is looking (radians; yaw 0 looks toward -z). */
+  yaw: number;
+  pitch: number;
+  /**
+   * The last view the simulation set (`PlayerFrame.view.seq`) that this client has taken on. Until
+   * it catches up, its `yaw` / `pitch` are stale and the simulation keeps its own.
+   */
+  viewSeq: number;
+}
+
+export const IDLE_INPUT: PlayerInput = { active: false, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: -1 };

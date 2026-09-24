@@ -1,19 +1,30 @@
-import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { BowItem, GameContext, IconRef, MeleeItem, SpriteRef } from '../api/types';
-import type { EntitySim } from '../sim/entities';
-import type { ItemSim } from '../sim/items';
-import type { Input } from './input';
-import type { Sfx } from '../audio/sfx';
-import type { Effects } from '../fx/effects';
-import type { GameHud } from '../ui/hudkit';
-import type { ViewModel } from '../render/viewmodel';
+import type { AudioApi, BowItem, FxApi, GameContext, HudApi, IconRef, InventoryApi, MeleeItem, Player, SpriteRef, Vec3 } from '../api/types';
+import type { EntitySim } from './entities';
+import type { ItemSim } from './items';
+import type { SimInput } from './input';
+
+/** What combat needs of the player it belongs to. */
+export interface Fighter {
+  readonly api: Player;
+  readonly inventory: InventoryApi;
+  readonly eye: Vec3;
+  readonly look: Vec3;
+  /** Falling (for critical hits). */
+  readonly falling: boolean;
+  /** Their own first-person view, sounds, screen effects and HUD. */
+  view(method: 'use' | 'swing', power?: number): void;
+  readonly audio: AudioApi;
+  readonly fx: FxApi;
+  readonly hud: HudApi;
+  hitMarker(crit: boolean): void;
+}
 
 /** What a melee attack needs (the bare fist is one, with no item behind it). */
 type Strike = Pick<MeleeItem, 'damage' | 'cooldown' | 'reach' | 'knockback' | 'sweep' | 'sounds'>;
 const FIST: Strike = { damage: 1, cooldown: 0.3, reach: 3, knockback: 0.6 };
 
-/** Player attacks: melee swings, charged bow shots and consumables. */
+/** A player's attacks: melee swings, charged bow shots and consumables, and choosing a hotbar slot. */
 export class Combat {
   private cooldown = 0;
   private cooldownMax = 1;
@@ -26,13 +37,10 @@ export class Combat {
     private world: VoxelWorld,
     private entities: EntitySim,
     private items: ItemSim,
-    private camera: THREE.PerspectiveCamera,
-    private sfx: Sfx,
-    private fx: Effects,
-    private hud: GameHud,
-    private held: ViewModel,
+    private me: Fighter,
+    /** Everyone's effects (the sweep). */
+    private worldFx: FxApi,
     private ctx: () => GameContext,
-    private falling: () => boolean,
   ) {}
 
   reset() {
@@ -50,9 +58,10 @@ export class Combat {
     return 1 - this.cooldown / this.cooldownMax;
   }
 
-  update(dt: number, input: Input, active: boolean) {
+  update(dt: number, input: SimInput) {
+    const active = input.active;
     this.cooldown = Math.max(0, this.cooldown - dt);
-    const inv = this.items.inventory;
+    const inv = this.me.inventory;
     if (active) {
       if (input.wheel !== 0) inv.select(inv.selected + input.wheel);
       for (let i = 0; i < 9; i++) if (input.pressed(`Digit${i + 1}`)) inv.select(i);
@@ -75,55 +84,52 @@ export class Combat {
       }
     }
     if (def?.kind === 'consumable' && input.buttonPressed(2)) {
-      if (def.use(this.ctx(), this.ctx().player)) {
+      if (def.use(this.ctx(), this.me.api)) {
         inv.take(stack!.item, 1);
-        this.held.use();
-        if (def.sounds?.use) this.sfx.play(def.sounds.use);
+        this.me.view('use');
+        if (def.sounds?.use) this.me.audio.play(def.sounds.use);
       }
     }
   }
 
   private melee(def: Strike, weapon: boolean) {
     this.cooldown = this.cooldownMax = def.cooldown;
-    if (weapon) this.held.use();
-    else this.held.swing();
-    this.sfx.play(def.sounds?.use ?? 'swing', { pitch: 0.9 + Math.random() * 0.2 });
-    const cam = this.camera.position;
-    const dir = this.camera.getWorldDirection(this.dirTmp);
+    this.me.view(weapon ? 'use' : 'swing');
+    this.me.audio.play(def.sounds?.use ?? 'swing', { pitch: 0.9 + Math.random() * 0.2 });
+    const cam = this.me.eye;
+    const dir = this.me.look;
     const hit = this.world.pick_body(cam.x, cam.y, cam.z, dir.x, dir.y, dir.z, def.reach ?? 3.3, 0.25);
     if (hit[0] < 0) return;
     const target = this.entities.byBody(hit[0]);
     if (!target || !target.alive) return;
-    const crit = this.falling();
+    const crit = this.me.falling;
     const dmg = def.damage * (crit ? 1.5 : 1);
-    target.damage(dmg, { source: this.ctx().player, knockback: def.knockback ?? 1, crit });
+    target.damage(dmg, { source: this.me.api, knockback: def.knockback ?? 1, crit });
     this.hits++;
     const hitSound = def.sounds?.hit;
-    this.sfx.play(hitSound ?? (crit ? 'crit' : 'hit'), { at: target.position, pitch: hitSound && crit ? 1.25 : 1 });
-    this.hud.hitMarker(crit);
-    this.fx.shake(crit ? 0.05 : 0.025, 0.12);
+    this.me.audio.play(hitSound ?? (crit ? 'crit' : 'hit'), { at: target.position, pitch: hitSound && crit ? 1.25 : 1 });
+    this.me.hitMarker(crit);
+    this.me.fx.shake(crit ? 0.05 : 0.025, 0.12);
     if (def.sweep) {
       const tp = target.position;
       for (const e of this.entities.near(tp, 2.4)) {
         if (e === target) continue;
         const p = e.position;
         if (Math.hypot(p.x - cam.x, p.z - cam.z) > (def.reach ?? 3.3) + 1) continue;
-        e.damage(dmg * 0.5, { source: this.ctx().player, knockback: 0.6 });
+        e.damage(dmg * 0.5, { source: this.me.api, knockback: 0.6 });
       }
-      this.fx.burst({ x: tp.x, y: tp.y + 1, z: tp.z }, { color: '#e8f4ff', count: 14, speed: 4, gravity: 2 });
+      this.worldFx.burst({ x: tp.x, y: tp.y + 1, z: tp.z }, { color: '#e8f4ff', count: 14, speed: 4, gravity: 2 });
     }
   }
 
-  private dirTmp = new THREE.Vector3();
-
-  private bow(dt: number, input: Input, def: BowItem) {
-    const inv = this.items.inventory;
+  private bow(dt: number, input: SimInput, def: BowItem) {
+    const inv = this.me.inventory;
     const hasAmmo = !def.ammo || inv.count(def.ammo) > 0;
     if (input.button(0) && hasAmmo) {
       if (!this.drawing) {
         this.drawing = true;
         this.charge = 0;
-        this.sfx.play(def.sounds?.draw ?? 'bow_draw', { volume: 0.7 });
+        this.me.audio.play(def.sounds?.draw ?? 'bow_draw', { volume: 0.7 });
       }
       this.charge = Math.min(1, this.charge + dt / def.drawTime);
     } else if (this.drawing) {
@@ -131,8 +137,8 @@ export class Combat {
       this.drawing = false;
       if (this.charge > 0.1 && (!def.ammo || inv.take(def.ammo, 1))) {
         const c = this.charge;
-        const cam = this.camera.position;
-        const dir = this.camera.getWorldDirection(this.dirTmp);
+        const cam = this.me.eye;
+        const dir = this.me.look;
         const crit = c >= 1;
         this.entities.spawnProjectile(
           {
@@ -147,15 +153,15 @@ export class Combat {
           },
           { x: cam.x + dir.x * 0.4, y: cam.y - 0.1 + dir.y * 0.4, z: cam.z + dir.z * 0.4 },
           dir,
-          this.ctx().player,
+          this.me.api,
         );
         this.shots++;
-        this.sfx.play(def.sounds?.use ?? 'bow_shoot', { pitch: 0.9 + c * 0.2 });
-        this.held.use(0.6 + c * 0.6);
+        this.me.audio.play(def.sounds?.use ?? 'bow_shoot', { pitch: 0.9 + c * 0.2 });
+        this.me.view('use', 0.6 + c * 0.6);
       }
       this.charge = 0;
     } else if (input.buttonPressed(0) && !hasAmmo) {
-      this.hud.toast('No arrows');
+      this.me.hud.toast('No arrows');
     }
   }
 }
