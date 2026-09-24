@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && npm run check:boundaries",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "test:engine": "cargo test --release --manifest-path engine/Cargo.toml"
+    "test:engine": "cargo test --release --manifest-path engine/Cargo.toml",
+    "test:headless": "node scripts/headless.mjs"
   },
   "dependencies": {
     "three": "^0.186.0"

@@ -1,4 +1,5 @@
-import init, * as engine from '@engine/voxel_engine.js';
+import init, { initSync } from '@engine/voxel_engine.js';
+import * as engine from '@engine/voxel_engine.js';
 import wasmUrl from '@engine/voxel_engine_bg.wasm?url';
 
 export { engine };
@@ -16,6 +17,14 @@ export async function loadEngine(): Promise<WebAssembly.Module> {
   });
   const out = await init({ module_or_path: module });
   memory = out.memory;
+  return module;
+}
+
+/** Headless (Node, tests): instantiate from the `.wasm` file's bytes, synchronously. */
+export function loadEngineSync(bytes: BufferSource): WebAssembly.Module {
+  if (module) return module;
+  module = new WebAssembly.Module(bytes);
+  memory = initSync({ module }).memory;
   return module;
 }
 

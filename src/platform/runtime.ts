@@ -1,8 +1,7 @@
 import * as THREE from 'three';
-import { TerrainGen } from '@engine/voxel_engine.js';
 import { engine, loadEngine } from './engine/wasm';
 import { WorkerPool } from './workers/pool';
-import { applyWorldConfig } from './workers/config';
+import { groundSpawn, startSpawn, worldGenConfig } from './host/spawn';
 import type { WorldGenConfig } from './workers/protocol';
 import { LAYER_CHUNKS, Renderer, type FrameHooks } from './render/pipeline';
 import { Environment } from './render/environment';
@@ -160,17 +159,6 @@ export class Runtime {
   // Setup
   // ---------------------------------------------------------------------------------------------
 
-  private worldConfig(): WorldGenConfig {
-    const w = this.def.world ?? {};
-    const resolve = (b: BlockRef) => this.blockId(b);
-    return {
-      flat: w.terrain === 'flat' ? (w.flatHeight ?? 64) : undefined,
-      void: w.terrain === 'void',
-      terraforms: w.terraform ?? [],
-      blueprints: (w.structures ?? []).map((s) => s.build(resolve)),
-    };
-  }
-
   private blockId(b: BlockRef): number {
     if (typeof b === 'number') return b;
     const def = this.registry.byName.get(b);
@@ -192,7 +180,7 @@ export class Runtime {
     }
 
     this.title.progress(0.06, 'Generating textures…');
-    const worldCfg = this.worldConfig();
+    const worldCfg = worldGenConfig(def, (b) => this.blockId(b));
     const workers = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 2));
     const poolPromise = WorkerPool.create(module, this.seed, workers, worldCfg);
 
@@ -355,7 +343,7 @@ export class Runtime {
 
     this.applySettings(this.settings, false);
     this.resize();
-    this.load();
+    this.load(worldCfg);
     this.renderer.warmup(this.camera);
     this.title.progress(0.1, 'Generating terrain…');
     requestAnimationFrame((t) => this.frame(t));
@@ -436,12 +424,11 @@ export class Runtime {
     return `voxel.${this.def.id}.world.${this.seed}`;
   }
 
-  private load() {
+  private load(cfg: WorldGenConfig) {
     const w = this.chunks.world;
     const me = this.sim.local;
-    const opts = this.def.world ?? {};
     let save: SaveData | null = null;
-    if (opts.persist) {
+    if (this.def.world?.persist) {
       try {
         const raw = localStorage.getItem(this.saveKey);
         if (raw) save = JSON.parse(raw) as SaveData;
@@ -449,42 +436,25 @@ export class Runtime {
         save = null;
       }
     }
-    let yaw = Math.PI * 0.25;
-    let pitch = 0;
     if (save) {
       try {
         w.import_edits(fromB64(save.edits));
       } catch {
         // Corrupt edits are ignored.
       }
-      const [x, y, z, sy, sp] = save.player;
-      w.player_reset(x, y, z);
-      w.set_flying(save.flying && (this.def.player?.fly ?? false));
-      yaw = sy;
-      pitch = sp;
+      const [x, y, z, yaw, pitch] = save.player;
       this.sim.env.time = save.time;
       this.sim.spawn = { x, y, z, yaw };
-      this.hasSave = true;
-    } else if (opts.spawn && opts.spawn !== 'auto') {
-      yaw = opts.spawnYaw ?? 0;
-      this.sim.spawn = { ...opts.spawn, yaw };
-      w.player_reset(opts.spawn.x, opts.spawn.y, opts.spawn.z);
+      w.set_flying(save.flying && (this.def.player?.fly ?? false));
+      me.place(x, y, z, yaw, pitch);
       this.hasSave = true;
     } else {
-      const gen = new TerrainGen(this.seed);
-      applyWorldConfig(gen, this.worldConfig());
-      const s = gen.find_spawn();
-      gen.free();
-      this.sim.spawn = { x: s[0] + 0.5, y: s[1] + 2, z: s[2] + 0.5, yaw };
-      w.player_reset(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z);
+      const { fixed, ...sp } = startSpawn(this.def, this.seed, cfg);
+      this.sim.spawn = sp;
+      me.place(sp.x, sp.y, sp.z, sp.yaw);
+      this.hasSave = fixed;
     }
     w.set_frozen(true);
-    me.syncState();
-    me.setView(yaw, pitch);
-    // A game-driven camera starts where the player would have stood.
-    const st = me.state;
-    me.cam.pos.set(st.x, st.y + 1.62, st.z);
-    me.cam.quat.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
     me.cam.fov = this.settings.fov;
   }
 
@@ -516,29 +486,12 @@ export class Runtime {
   private updateSpawn() {
     const w = this.chunks.world;
     const sp = this.sim.spawn;
-    const sx = Math.floor(sp.x);
-    const sz = Math.floor(sp.z);
-    if (this.spawnPending && w.has_column(Math.floor(sx / 16), Math.floor(sz / 16))) {
-      if (!this.hasSave) {
-        const ground = new Set(['grass_block', 'dirt', 'sand', 'snowy_grass', 'podzol', 'stone', 'gravel']);
-        let placed = false;
-        for (let r = 0; r <= 12 && !placed; r++) {
-          for (let dz = -r; dz <= r && !placed; dz++) {
-            for (let dx = -r; dx <= r && !placed; dx++) {
-              if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-              const x = sx + dx;
-              const z = sz + dz;
-              const y = this.sim.surfaceY(x, z);
-              const top = this.registry.blocks[w.get_block(x, y, z)];
-              if (y > 0 && top && ground.has(top.name) && w.get_block(x, y + 1, z) !== 255) {
-                this.sim.spawn = { ...sp, x: x + 0.5, y: y + 1.02, z: z + 0.5 };
-                w.player_reset(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z);
-                this.sim.local.syncState();
-                placed = true;
-              }
-            }
-          }
-        }
+    if (this.spawnPending && w.has_column(Math.floor(sp.x / 16), Math.floor(sp.z / 16))) {
+      const g = this.hasSave ? null : groundSpawn(w, this.registry, (x, z) => this.sim.surfaceY(x, z), sp.x, sp.z);
+      if (g) {
+        this.sim.spawn = { ...sp, ...g };
+        w.player_reset(g.x, g.y, g.z);
+        this.sim.local.syncState();
       }
       this.spawnPending = false;
     }
@@ -568,6 +521,9 @@ export class Runtime {
     this.gameHud.setVisible(this.hudVisible);
     this.held.scene.visible = this.hudVisible;
     this.chunks.world.set_frozen(this.sim.local.health.dead);
+    // Face where the player was placed (a save, the spawn), not where the title screen turned.
+    const me = this.sim.local;
+    me.setView(me.yaw, me.pitch);
     this.mode = 'playing';
     this.sim.start();
   }

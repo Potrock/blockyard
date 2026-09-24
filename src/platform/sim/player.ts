@@ -79,7 +79,7 @@ export class PlayerSim {
   readonly combat: Combat;
   /** The game's camera, for `controller: 'none'`. */
   readonly cam = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 70 };
-  private viewSeq = 0;
+  private seq = 0;
   private lastJumpTap = -1;
   private lastForwardTap = -1;
   private sprintLatched = false;
@@ -157,7 +157,21 @@ export class PlayerSim {
   setView(yaw: number, pitch: number) {
     this.yaw = yaw;
     this.pitch = pitch;
-    this.viewSeq++;
+    this.seq++;
+  }
+
+  /** Counts up each time the simulation turns the player; clients echo it to show they've caught up. */
+  get viewSeq(): number {
+    return this.seq;
+  }
+
+  /** Put the player somewhere, facing `yaw` / `pitch` (spawning, a save); a game-driven camera starts at their eyes. */
+  place(x: number, y: number, z: number, yaw: number, pitch = 0) {
+    this.p.world.player_reset(x, y, z);
+    this.syncState();
+    this.setView(yaw, pitch);
+    this.cam.pos.set(x, y + EYE, z);
+    this.cam.quat.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
   }
 
   /** Read the physics body back from WebAssembly. */

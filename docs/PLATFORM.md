@@ -428,6 +428,32 @@ game.commands.run('/give pike'); // run one from code
 | `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave', fn)` | Events (player events name the `player`) |
 | `rng` | Seeded random numbers |
 
+## Testing a game headless
+
+Your game can run in Node with no browser, no GPU and no rendering. A bot plays it at 100–200× real time, and the result is the same every run with the same seed. Tests live in `tests/headless/` and run with `npm run test:headless`:
+
+```ts
+import { check, launch, lastScreen } from './_harness';
+
+export default function myGame() {
+  const h = launch('my-game', { seed: 7 }); // set up and started, as if Play was clicked
+  const game = h.ctx;                       // the same GameContext your game gets
+  h.run(300, {                              // up to 5 minutes of game time
+    pilot: () => ({ down: ['KeyW'], clicked: 1, yaw: 0, pitch: 0 }), // the player's controls each tick
+    until: () => lastScreen(h) !== undefined,                        // stop when a result screen opens
+  });
+  check(lastScreen(h) === 'Victory!', 'expected a win');
+  check(game.player.alive, 'the player died');
+}
+```
+
+- `h.run(seconds, { pilot, until, dt })` steps the simulation at 60 ticks per second. `h.step(dt, input)` steps once.
+- `pilot` returns the local player's controls as a `PlayerInput`: `down` for keys held, `pressed` for keys pressed this tick, `clicked` for the buttons clicked this tick as a bitmask (1 = left), and `yaw` / `pitch` to aim. Return `{}` to stand still.
+- `h.calls` records every presentation call (banners, feeds, screens, sounds), and `h.find('hud', 'banner')` filters them. `lastScreen(h)` is the title of the last `hud.screen`.
+- `h.sim` is the whole simulation, for looking at pickups (`h.sim.items.frame()`) or players (`h.me.state`).
+
+`tests/headless/arena.ts` is a complete example: a bot beats the Arena, Warden included, in under a second.
+
 ## Architecture and the road to multiplayer
 
 ```
@@ -457,7 +483,7 @@ Your game runs inside the **simulation**, and everything it does reaches players
 - **Presentation calls out.** `hud`, `fx`, `audio` and the view model are proxies. Each call becomes a `PresentCall` addressed to one player (`player.hud`) or to everyone (`game.hud`). Menu entries, buttons and other callbacks go out as ids and come back as `ClientMessage`s, which call your function inside the simulation.
 - **Content by name.** Sounds, atlases, animations, entity and item definitions, and prop models go into a shared `Content` registry, so a frame only has to name them.
 
-In the browser today, the runtime is both the client and the host: it runs the `Sim` in the same page and passes frames and calls straight through. Nothing crosses that boundary except data, so the same `Sim` can move into a Web Worker or onto a server, with clients streaming frames, without changing your game. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
+In the browser today, the runtime is both the client and the host: it runs the `Sim` in the same page and passes frames and calls straight through. In Node, `Headless` (`src/platform/host/headless.ts`) hosts the same `Sim` with a world generated around the players and no client at all; that's what the headless tests run on. Nothing crosses that boundary except data, so the same `Sim` can move into a Web Worker or onto a server, with clients streaming frames, without changing your game. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
 
 On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server can link the same crate and generate identical worlds from the same seed and blueprints. Entity state lives in flat `f64` buffers (layout documented in `entities.rs`) that serialise directly into snapshots. Rendering, chunk meshing, lighting and culling stay on the client.
 
