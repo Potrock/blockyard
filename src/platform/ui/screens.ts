@@ -2,128 +2,203 @@ import { h } from './dom';
 import type { Settings, ShadowQuality } from '../settings';
 import type { Registry } from '../world/registry';
 
-/** Title / loading screen shown until the spawn area is ready and the player clicks. */
-/** Playing on a game server, from the title screen. */
+/** Playing on a game server: the home page asks for a name, and says who's on. */
 export interface OnlineOptions {
-  /** This build's game server (`wss://…`), if it has one. */
-  server: string | null;
-  /** The game on show (to ask the server whether it hosts it). */
+  /** The server (`wss://host`), to ask how many are playing each game. */
+  server: string;
+  /** The game on show. */
   game: string;
-  /** Already on a server: as whom. */
-  joined: { name: string } | null;
-  /** Join the game on the server as `name`. */
-  join(name: string): void;
-  /** Back to playing alone. */
-  leave(): void;
 }
 
-/** The online row: a name and "Play online" (with how many are playing), or who you are online. */
-function onlineRow(o: OnlineOptions): HTMLElement | null {
-  if (o.joined) {
-    const off = h('a.online-leave', { href: '#', onclick: (e: Event) => (e.preventDefault(), o.leave()) }, 'Play offline');
-    return h('div.online', {}, h('span.online-dot', {}), h('span', {}, 'Online as '), h('b', {}, o.joined.name), h('span', {}, ' · '), off);
-  }
-  if (!o.server) return null;
-  let saved = '';
-  try {
-    saved = localStorage.getItem('voxel.name') ?? '';
-  } catch {
-    // no storage: no remembered name
-  }
-  const name = h('input.online-name', { type: 'text', maxlength: '20', placeholder: 'Your name', value: saved, spellcheck: false }) as HTMLInputElement;
-  const count = h('span.online-count', {}, '');
-  const go = () => {
-    const n = name.value.trim().slice(0, 20) || 'Player';
-    try {
-      localStorage.setItem('voxel.name', n);
-    } catch {
-      // not remembered
-    }
-    o.join(n);
-  };
-  name.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    if (e.key === 'Enter') go();
-  });
-  const row = h('div.online', { style: 'display: none' }, name, h('button.btn.online-play', { onclick: go }, 'Play online', count));
-  // Show it once the server says it hosts this game (and how many are in it).
-  const http = o.server.replace(/^ws/, 'http').replace(/\/+$/, '');
-  fetch(`${http}/games`)
-    .then((r) => r.json() as Promise<{ games: { id: string; players: number }[] }>)
-    .then(({ games }) => {
-      const g = games.find((x) => x.id === o.game);
-      if (!g) return;
-      row.style.display = '';
-      count.textContent = g.players ? ` · ${g.players} playing` : '';
-    })
-    .catch(() => {});
-  return row;
+interface GameEntry {
+  id: string;
+  title: string;
+  tagline?: string;
+  accent?: string;
 }
 
+/** Blockyard's mark: a grass block, drawn isometric. */
+const MARK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="#6fd35c" d="M8 1l6 3.5L8 8 2 4.5z"/><path fill="#7a5530" d="M2 4.5L8 8v7l-6-3.5z"/><path fill="#9b6c3e" d="M14 4.5L8 8v7l6-3.5z"/><path fill="#57b247" d="M2 4.5L8 8v1.6L2 6.1z"/><path fill="#62c051" d="M14 4.5L8 8v1.6l6-3.5z"/></svg>';
+
+/** What the home page shows for one game (and does when played or another game is picked). */
+export interface HomeGame {
+  current: string;
+  onPlay: () => void;
+  onPick: (id: string) => void;
+  controls?: [string, string][];
+  walks?: boolean;
+  online?: OnlineOptions | null;
+}
+
+/**
+ * The home page, shown while the world loads and until the player clicks Play: Blockyard's name,
+ * the games (with how many are playing each, online), a name to play under (online), and one
+ * button that fills as the world loads and then starts the game. The world itself (the game's
+ * spawn, slowly circling) is the backdrop. It outlives a game: picking another one switches in
+ * place (`select`, then `show` for the new game), with the page staying put.
+ */
 export class TitleScreen {
   readonly root: HTMLElement;
-  private bar: HTMLElement;
+  private nameInput: HTMLInputElement | null = null;
+  private list: HTMLElement;
+  private start: HTMLElement;
+  private fill: HTMLElement;
   private label: HTMLElement;
   private button: HTMLButtonElement;
+  private status: HTMLElement;
+  private counts = new Map<string, HTMLElement>();
   private ready = false;
+  private title = 'the game';
+  private poll = 0;
+  private game: HomeGame | null = null;
 
   constructor(
     parent: HTMLElement,
-    seed: number,
-    onPlay: () => void,
-    games: { id: string; title: string; tagline?: string; accent?: string }[] = [],
-    current = '',
-    onPick: (id: string) => void = () => {},
-    controls: [string, string][] = [['LMB', 'break'], ['RMB', 'place'], ['E', 'blocks']],
-    walks = true,
-    online: OnlineOptions | null = null,
+    private games: GameEntry[],
   ) {
-    this.bar = h('div.progress-fill');
-    const cards = games.length > 1
-      ? h(
-          'div.game-cards',
-          {},
-          ...games.map((g) =>
-            h(
-              `button.game-card${g.id === current ? '.current' : ''}`,
-              { style: `--accent: ${g.accent ?? '#7fd46b'}`, onclick: () => g.id !== current && onPick(g.id) },
-              h('div.game-card-title', {}, g.title),
-              g.tagline ? h('div.game-card-tag', {}, g.tagline) : null,
-            ),
-          ),
-        )
-      : null;
-    this.label = h('div.progress-label', {}, 'Compiling engine…');
-    this.button = h('button.btn.primary.play', { disabled: true, onclick: () => this.ready && onPlay() }, 'Generating world…') as HTMLButtonElement;
+    const mark = h('span.home-mark');
+    mark.innerHTML = MARK;
+    this.list = h('nav.home-games');
+    this.fill = h('span.home-play-fill');
+    this.label = h('span.home-play-label', {}, 'Starting the engine…');
+    this.button = h('button.btn.play.home-play', { disabled: true, onclick: () => this.ready && this.game?.onPlay() }, this.fill, this.label) as HTMLButtonElement;
+    this.status = h('div.home-status', {}, '');
+    this.start = h('section.home-start');
     this.root = h(
-      'div.screen.title-screen',
+      'div.screen.title-screen.home',
       {},
       h(
-        'div.title-card',
+        'div.home-panel',
         {},
-        h('h1.logo', {}, 'VOXEL'),
-        h('div.tagline', {}, 'Rust + WebAssembly engine · three.js renderer'),
-        cards,
-        h('div.progress', {}, this.bar),
-        this.label,
-        this.button,
-        online ? onlineRow(online) : null,
-        h(
-          'div.controls-hint',
-          {},
-          ...(walks ? [h('span', {}, h('kbd', {}, 'WASD'), ' move'), h('span', {}, h('kbd', {}, 'Space'), ' jump')] : []),
-          ...controls.map(([k, v]) => h('span', {}, h('kbd', {}, k), ` ${v}`)),
-          h('span', {}, h('kbd', {}, '/'), ' commands'),
-          h('span', {}, h('kbd', {}, 'F3'), ' debug'),
-        ),
-        h('div.seed', {}, `Seed ${seed}`),
+        h('header.home-brand', {}, mark, h('div', {}, h('h1.home-logo', {}, 'Blockyard'), h('p.home-pitch', {}, 'Block games anyone can build, played together.'))),
+        this.list,
+        this.start,
       ),
     );
     parent.append(this.root);
   }
 
+  /** Show the page for a game: it's the selected one, loading until `setReady`. */
+  show(g: HomeGame) {
+    this.game = g;
+    const entry = this.games.find((x) => x.id === g.current);
+    this.title = entry?.title ?? 'the game';
+    this.root.style.setProperty('--game', entry?.accent ?? '#7fd46b');
+    this.root.classList.remove('hidden', 'ready');
+    this.ready = false;
+    this.renderList(g.current);
+    // The name box keeps what's typed across games.
+    const typed = this.nameInput?.value;
+    this.nameInput = null;
+    let name: HTMLElement | null = null;
+    if (g.online) {
+      this.nameInput = this.makeName(typed);
+      this.nameInput.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter' && this.ready) this.game?.onPlay();
+      });
+      name = h('label.home-name', {}, h('span', {}, 'Your name'), this.nameInput);
+    }
+    const walks = g.walks ?? true;
+    const controls = g.controls ?? [['LMB', 'break'], ['RMB', 'place'], ['E', 'blocks']];
+    this.start.replaceChildren(
+      ...[name, this.button, this.status].filter((x): x is HTMLElement => !!x),
+      h(
+        'div.home-controls',
+        {},
+        ...(walks ? [h('span', {}, h('kbd', {}, 'WASD'), ' move'), h('span', {}, h('kbd', {}, 'Space'), ' jump')] : []),
+        ...controls.map(([k, v]) => h('span', {}, h('kbd', {}, k), ` ${v}`)),
+        h('span', {}, h('kbd', {}, '/'), ' commands'),
+      ),
+    );
+    this.loading(`Loading ${this.title}…`);
+    this.status.textContent = '';
+    window.clearInterval(this.poll);
+    if (g.online) this.watchCounts(g.online);
+  }
+
+  /** Picked another game: show it chosen at once, while the switch happens behind. */
+  select(id: string) {
+    const entry = this.games.find((x) => x.id === id);
+    this.root.style.setProperty('--game', entry?.accent ?? '#7fd46b');
+    this.root.classList.remove('hidden', 'ready');
+    this.ready = false;
+    this.renderList(id);
+    this.loading(`Loading ${entry?.title ?? 'the game'}…`);
+    this.status.textContent = '';
+  }
+
+  private renderList(current: string) {
+    this.counts.clear();
+    if (this.games.length < 2) return this.list.replaceChildren();
+    this.list.replaceChildren(
+      ...this.games.map((x) => {
+        const count = h('span.home-game-live', {}, '');
+        this.counts.set(x.id, count);
+        return h(
+          `button.home-game${x.id === current ? '.current' : ''}`,
+          { style: `--game: ${x.accent ?? '#7fd46b'}`, onclick: () => x.id !== this.game?.current && this.game?.onPick(x.id), 'aria-current': x.id === current ? 'true' : undefined },
+          h('span.home-game-name', {}, x.title),
+          x.tagline ? h('span.home-game-tag', {}, x.tagline) : null,
+          count,
+        );
+      }),
+    );
+  }
+
+  private loading(text: string) {
+    this.button.disabled = true;
+    this.fill.style.width = '0%';
+    this.label.textContent = text;
+  }
+
+  /** How many are playing each game (online), kept fresh while the page is up. */
+  private watchCounts(online: OnlineOptions) {
+    const http = online.server.replace(/^ws/, 'http').replace(/\/+$/, '');
+    const load = () =>
+      fetch(`${http}/games`)
+        .then((r) => r.json() as Promise<{ games: { id: string; players: number }[] }>)
+        .then(({ games }) => {
+          for (const g of games) {
+            const el = this.counts.get(g.id);
+            if (!el) continue;
+            el.textContent = g.players ? `${g.players} playing` : '';
+            el.classList.toggle('on', g.players > 0);
+          }
+          const here = games.find((g) => g.id === online.game)?.players ?? 0;
+          this.status.textContent = here ? `${here} ${here === 1 ? 'player' : 'players'} in this game now` : 'Nobody in this game yet: you could be first';
+        })
+        .catch(() => {});
+    void load();
+    this.poll = window.setInterval(load, 5000);
+  }
+
+  private makeName(typed?: string): HTMLInputElement {
+    let saved = typed ?? '';
+    if (typed === undefined) {
+      try {
+        saved = localStorage.getItem('voxel.name') ?? '';
+      } catch {
+        // no storage: no remembered name
+      }
+    }
+    return h('input.home-name-input', { type: 'text', maxlength: '20', placeholder: 'Pick a name', value: saved, spellcheck: false, autocomplete: 'nickname' }) as HTMLInputElement;
+  }
+
+  /** The name typed (remembered for next time), online. */
+  name(): string {
+    const n = (this.nameInput?.value ?? '').trim().slice(0, 20) || 'Player';
+    try {
+      localStorage.setItem('voxel.name', n);
+    } catch {
+      // not remembered
+    }
+    return n;
+  }
+
   progress(fraction: number, text: string) {
-    this.bar.style.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
+    if (this.ready) return;
+    this.fill.style.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
     this.label.textContent = text;
   }
 
@@ -131,13 +206,22 @@ export class TitleScreen {
     if (this.ready) return;
     this.ready = true;
     this.button.disabled = false;
-    this.button.textContent = 'Click to play';
+    this.fill.style.width = '100%';
+    this.label.textContent = `Play ${this.title}`;
     this.root.classList.add('ready');
   }
 
+  /** The game couldn't start (say, its server is down): say so; another can still be picked. */
+  failed(text: string, onPick: (id: string) => void) {
+    this.game = { current: this.game?.current ?? '', onPlay: () => {}, onPick };
+    this.label.textContent = `Couldn't load ${this.title}`;
+    this.status.textContent = text;
+  }
+
+  /** Playing: the page fades away (it comes back with `show`). */
   hide() {
+    window.clearInterval(this.poll);
     this.root.classList.add('hidden');
-    window.setTimeout(() => this.root.remove(), 600);
   }
 }
 

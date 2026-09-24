@@ -21,7 +21,12 @@ export class Input {
   onLockChange: ((locked: boolean) => void) | null = null;
   onKey: ((code: string, e: KeyboardEvent) => void) | null = null;
 
-  constructor(private target: HTMLElement) {
+  constructor(
+    private target: HTMLElement,
+    /** Aborting it removes every listener (the game is over). */
+    signal?: AbortSignal,
+  ) {
+    const opts = { signal };
     window.addEventListener('keydown', (e) => {
       if (e.repeat) {
         if (this.locked && isGameKey(e.code)) e.preventDefault();
@@ -31,34 +36,34 @@ export class Input {
       this.pressedThisFrame.add(e.code);
       if (this.locked && isGameKey(e.code)) e.preventDefault();
       this.onKey?.(e.code, e);
-    });
-    window.addEventListener('keyup', (e) => this.down.delete(e.code));
+    }, opts);
+    window.addEventListener('keyup', (e) => this.down.delete(e.code), opts);
     window.addEventListener('blur', () => {
       this.down.clear();
       this.buttonsDown = 0;
-    });
+    }, opts);
     target.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
       this.buttonsDown |= 1 << e.button;
       this.buttonsPressed |= 1 << e.button;
       e.preventDefault();
-    });
+    }, opts);
     window.addEventListener('mouseup', (e) => {
       this.buttonsDown &= ~(1 << e.button);
-    });
-    target.addEventListener('contextmenu', (e) => e.preventDefault());
+    }, opts);
+    target.addEventListener('contextmenu', (e) => e.preventDefault(), opts);
     window.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
       this.mouseDX += e.movementX;
       this.mouseDY += e.movementY;
-    });
+    }, opts);
     window.addEventListener(
       'wheel',
       (e) => {
         if (!this.locked) return;
         this.wheel += Math.sign(e.deltaY);
       },
-      { passive: true },
+      { passive: true, signal },
     );
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.target;
@@ -67,7 +72,7 @@ export class Input {
         this.buttonsDown = 0;
       }
       this.onLockChange?.(this.locked);
-    });
+    }, opts);
   }
 
   lock() {

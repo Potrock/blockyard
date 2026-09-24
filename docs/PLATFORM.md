@@ -1,4 +1,4 @@
-# Building games on the Voxel platform
+# Building games on Blockyard
 
 The platform is a complete voxel engine: an endless procedural world, lighting, rendering, physics, streaming, entities, items, combat, audio and UI. You write the *game*: rules, content and moments. A game is one `defineGame({...})` object in `src/games/<name>/` that imports only from `@platform` (plus the optional `@platform/kits` and `@platform/art` libraries, which are themselves built only on `@platform`).
 

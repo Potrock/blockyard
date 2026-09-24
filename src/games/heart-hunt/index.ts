@@ -14,7 +14,7 @@ const pedestal = new Blueprint({ x: -2, y: 70, z: -2 }, { x: 5, y: 3, z: 5 })
 export default defineGame({
   id: 'heart-hunt',
   title: 'Heart Hunt',
-  tagline: 'Tutorial: find ten hearts (see docs/PLATFORM.md)',
+  tagline: 'A gentle hunt for ten hidden hearts',
   accent: '#ff5a7a',
   controls: [['Walk', 'into hearts to collect']],
   world: {

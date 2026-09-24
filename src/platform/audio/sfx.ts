@@ -12,6 +12,13 @@ export class Sfx {
   volume = 0.7;
 
   /** Must be called from a user gesture at least once (browser autoplay rules). */
+  /** Done (switching games): release the audio device. */
+  close() {
+    void this.ctx?.close();
+    this.ctx = null;
+    this.master = null;
+  }
+
   unlock() {
     if (!this.ctx) {
       const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;

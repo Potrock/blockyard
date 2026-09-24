@@ -104,10 +104,12 @@ export type HostEvent =
   | { t: 'revert' }
   /** Set up and placed: play can begin. */
   | { t: 'ready' }
-  /** The game called `exit()`: for the player whose action it answered, or everyone. */
-  | { t: 'exit'; player?: string }
-  /** The answer to a request (`exec`, `complete`), for the player who asked. */
-  | { t: 'reply'; id: number; value: unknown; player?: string }
+  /** The game called `exit()`: for the client whose action it answered, or everyone. */
+  | { t: 'exit'; client?: string }
+  /** The answer to a request (`exec`, `complete`), for the client who asked. */
+  | { t: 'reply'; id: number; value: unknown; client?: string }
+  /** This client is in the game now, as this player (a server's client, after `start`). */
+  | { t: 'joined'; player: string; client: string }
   /** The game threw (the host carries on). */
   | { t: 'error'; text: string };
 
@@ -128,8 +130,11 @@ export type ClientCommand =
    */
   | { t: 'input'; input: PlayerInput; seq?: number; dt?: number }
   | { t: 'message'; msg: ClientMessage }
-  /** Play begins (the title screen was clicked). */
-  | { t: 'start' }
+  /**
+   * Play begins (the title screen was clicked). On a server, a client that was watching joins the
+   * game here, as `name`.
+   */
+  | { t: 'start'; name?: string }
   | { t: 'restart' }
   /** Time of day (the pause menu, `[` `]`), and the day length (settings). */
   | { t: 'env'; time?: number; dayLength?: number }
@@ -167,7 +172,10 @@ export interface ServerWelcome {
   t: 'welcome';
   game: string;
   seed: number;
-  player: string;
+  /** Null: watching until the client sends `start` (then `joined` names the player). */
+  player: string | null;
+  /** Where players start: where a watching client's camera looks on. */
+  spawn: { x: number; y: number; z: number; yaw: number };
   /** Steps per second. */
   tickRate: number;
 }

@@ -119,9 +119,9 @@ export interface GameHostOptions {
   onError?: (err: unknown) => void;
 }
 
-/** A connected client. */
+/** A connected client: watching (no player yet), or playing. */
 interface Client {
-  player: PlayerSim;
+  player: PlayerSim | null;
   /** Their controls since the last step: held keys as they are now, presses and clicks added up. */
   input: PlayerInput;
   radius: number;
@@ -154,8 +154,9 @@ export class GameHost {
   private state = new PresentState();
   /** Every content definition so far, for clients that join later. */
   private contentLog: HostEvent[] = [];
-  /** The player whose command is running (a button they pressed may call `game.exit()`). */
+  /** The client whose command is running (a button they pressed may call `game.exit()`). */
   private acting: string | undefined;
+  private nextClient = 1;
 
   constructor(
     readonly def: GameDefinition,
@@ -210,7 +211,7 @@ export class GameHost {
       sink: (call) => {
         if (this.state.admit(call)) this.events.push({ t: 'call', call });
       },
-      exit: () => this.events.push({ t: 'exit', player: this.acting }),
+      exit: () => this.events.push({ t: 'exit', client: this.acting }),
       cheats: o.cheats ?? false,
       player: o.player,
       store,
@@ -277,12 +278,36 @@ export class GameHost {
   // -----------------------------------------------------------------------------------------------
 
   /**
-   * A client connects: they join the game as a player. Returns their player id and the batch
-   * that catches them up (the game's content, the world's edits, what's on everyone's screen).
+   * A client connects, watching: they get the batch that catches them up (the game's content, the
+   * world's edits, what's on everyone's screen) and then every step's, but aren't in the game
+   * until their `start` (with a name). With `name`, they join straight away. The id is theirs
+   * for `command`, `step`'s batches and `disconnect`.
    */
-  connect(name: string): { id: string; batch: HostBatch } {
+  connect(name?: string): { id: string; player: string | null; batch: HostBatch } {
+    const client: Client = { player: null, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 };
+    let id = `c${this.nextClient++}`;
+    if (name !== undefined) {
+      // Straight in: known by their player's id.
+      this.join(id, client, name);
+      const joined = this.events.find((e) => e.t === 'joined' && e.client === id);
+      if (joined?.t === 'joined') joined.client = id = client.player!.id;
+    }
+    this.clients.set(id, client);
+    // Ready (the game's defaults applied) before what's on screen, which may change them (a skin).
+    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }, { t: 'ready' }, ...this.flushFor(id)];
+    for (const call of this.state.snapshot(client.player?.id ?? '')) events.push({ t: 'call', call });
+    return { id, player: client.player?.id ?? null, batch: { events, frame: this.sim.frame() } };
+  }
+
+  /**
+   * A watching client joins the game as a player, named `asked` (a number added if someone here
+   * has it), back where they left off if the world is kept.
+   */
+  private join(id: string, client: Client, asked: string) {
+    const taken = new Set(this.sim.players.filter((p) => !p.vacant).map((p) => p.name));
+    let name = asked || 'Player';
+    for (let n = 2; taken.has(name); n++) name = `${asked} ${n}`;
     const player = this.sim.join(name);
-    // Back in a kept world: where they left off.
     const was = this.keeps ? this.store.player(name) : null;
     if (was) {
       this.world.update([was], 4, Infinity);
@@ -290,20 +315,26 @@ export class GameHost {
       player.place(was.x, was.y, was.z, was.yaw, was.pitch);
       if (was.hotbar && player.creative) player.creative.hotbar.splice(0, was.hotbar.length, ...was.hotbar);
     }
-    this.clients.set(player.id, { player, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 });
-    // Ready (the game's defaults applied) before what's on screen, which may change them (a skin).
-    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }, { t: 'ready' }];
-    for (const call of this.state.snapshot(player.id)) events.push({ t: 'call', call });
-    return { id: player.id, batch: { events, frame: this.sim.frame() } };
+    client.player = player;
+    this.events.push({ t: 'joined', player: player.id, client: id });
+  }
+
+  /** Events so far that concern only this client (its `joined`), taken out of the queue. */
+  private flushFor(id: string): HostEvent[] {
+    const mine = this.events.filter((e) => e.t === 'joined' && e.client === id);
+    this.events = this.events.filter((e) => !(e.t === 'joined' && e.client === id));
+    return mine;
   }
 
   disconnect(id: string) {
     const c = this.clients.get(id);
     if (!c) return;
-    this.guard(() => this.keepPlayer(c.player));
     this.clients.delete(id);
-    this.guard(() => this.sim.leave(id));
-    if (c.player !== this.sim.local) this.state.forget(id);
+    const p = c.player;
+    if (!p) return;
+    this.guard(() => this.keepPlayer(p));
+    this.guard(() => this.sim.leave(p.id));
+    if (p !== this.sim.local) this.state.forget(p.id);
   }
 
   /** Whether this game keeps its world (and players' places) across restarts. */
@@ -326,7 +357,7 @@ export class GameHost {
   persist() {
     const w = this.world.world;
     this.store.saveWorld({ game: this.def.id, seed: this.seed, edits: this.keeps ? w.export_edits() : null, time: this.sim.env.time });
-    for (const c of this.clients.values()) this.keepPlayer(c.player);
+    for (const c of this.clients.values()) if (c.player) this.keepPlayer(c.player);
     this.store.flush();
   }
 
@@ -340,7 +371,7 @@ export class GameHost {
     const client = this.clients.get(id);
     if (!client) return;
     this.acting = id;
-    this.guard(() => this.run(client, c));
+    this.guard(() => this.run(id, client, c));
     this.acting = undefined;
   }
 
@@ -358,11 +389,13 @@ export class GameHost {
       );
       const inputs: Record<string, PlayerInput> = {};
       const premoved = new Set<string>();
-      for (const [id, c] of this.clients) {
-        inputs[id] = c.input;
+      for (const c of this.clients.values()) {
+        const p = c.player;
+        if (!p) continue;
+        inputs[p.id] = c.input;
         if (c.moves) {
-          premoved.add(id);
-          this.moveInputs(c, dt);
+          premoved.add(p.id);
+          this.moveInputs(c, p, dt);
         }
       }
       sim.tick(dt, running && sim.started, inputs, premoved);
@@ -379,18 +412,32 @@ export class GameHost {
     const events = this.flush();
     const frame = sim.frame();
     const out = new Map<string, HostBatch>();
-    for (const id of this.clients.keys()) {
+    for (const [id, c] of this.clients) {
+      const me = c.player?.id;
       out.set(id, {
-        events: events.filter((e) => (e.t === 'call' ? e.call.to === null || e.call.to === id : e.t === 'reply' ? e.player === id : e.t === 'exit' ? !e.player || e.player === id : true)),
+        events: events.filter((e) => {
+          if (e.t === 'call') return e.call.to === null || e.call.to === me;
+          if (e.t === 'reply' || e.t === 'exit') return !e.client || e.client === id;
+          if (e.t === 'joined') return e.client === id;
+          return true;
+        }),
         frame,
       });
     }
     return out;
   }
 
-  private run(client: Client, c: ClientCommand) {
+  private run(id: string, client: Client, c: ClientCommand) {
     const sim = this.sim;
+    // Watching: they can join (`start`) and say how far they see, nothing else yet.
+    if (c.t === 'start' && !client.player) this.join(id, client, c.name ?? 'Player');
+    if (c.t === 'radius') {
+      client.radius = c.columns;
+      this.radius = Math.max(...[...this.clients.values()].map((x) => x.radius));
+      return;
+    }
     const me = client.player;
+    if (!me) return;
     switch (c.t) {
       case 'tick':
         return;
@@ -425,15 +472,11 @@ export class GameHost {
         if (c.time !== undefined) sim.env.time = c.time;
         if (c.dayLength !== undefined && !this.def.world?.freezeTime) sim.env.dayLength = c.dayLength;
         return;
-      case 'radius':
-        client.radius = c.columns;
-        this.radius = Math.max(...[...this.clients.values()].map((x) => x.radius));
-        return;
       case 'exec':
-        this.events.push({ t: 'reply', id: c.id, player: me.id, value: sim.exec(c.line, me) });
+        this.events.push({ t: 'reply', id: c.id, client: id, value: sim.exec(c.line, me) });
         return;
       case 'complete':
-        this.events.push({ t: 'reply', id: c.id, player: me.id, value: sim.commands.complete(c.line) });
+        this.events.push({ t: 'reply', id: c.id, client: id, value: sim.commands.complete(c.line) });
         return;
     }
   }
@@ -444,8 +487,7 @@ export class GameHost {
    * is earned from the server's clock, so a client that sends too much waits; one that's fallen
    * far behind (a queue over 30) catches up at once rather than lagging for good.
    */
-  private moveInputs(c: Client, dt: number) {
-    const p = c.player;
+  private moveInputs(c: Client, p: PlayerSim, dt: number) {
     const moves = c.moves!;
     c.bank = Math.min(MAX_BANK, c.bank + dt);
     while (moves.length && (moves[0].dt <= c.bank || moves.length > 30)) {

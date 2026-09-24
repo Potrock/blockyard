@@ -49,6 +49,8 @@ export class GameHud implements HudApi {
   private markers = new Map<string, Marker>();
   private radarCanvas: HTMLCanvasElement;
   private screens: HTMLElement[] = [];
+  /** An open menu's key listener, removed when it closes, however it closes. */
+  private unhooks = new Map<HTMLElement, () => void>();
 
   constructor(parent: HTMLElement, private iconFor: (ref: IconRef) => string) {
     this.hearts = h('div.hearts');
@@ -431,8 +433,7 @@ export class GameHud implements HudApi {
     };
     const close = () => {
       if (!open) return;
-      open = false;
-      window.removeEventListener('keydown', onKey, true);
+      this.unhooks.get(el)?.();
       el.classList.add('closing');
       window.setTimeout(() => el.remove(), 150);
       this.screens = this.screens.filter((x) => x !== el);
@@ -445,6 +446,11 @@ export class GameHud implements HudApi {
     };
     render();
     window.addEventListener('keydown', onKey, true);
+    this.unhooks.set(el, () => {
+      open = false;
+      window.removeEventListener('keydown', onKey, true);
+      this.unhooks.delete(el);
+    });
     this.root.parentElement!.append(el);
     this.screens.push(el);
     this.onScreen?.(true);
@@ -461,6 +467,7 @@ export class GameHud implements HudApi {
   }
 
   closeScreens() {
+    for (const unhook of [...this.unhooks.values()]) unhook();
     for (const s of this.screens) s.remove();
     if (this.screens.length) this.onScreen?.(false);
     this.screens = [];

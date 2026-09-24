@@ -1,4 +1,4 @@
-# Voxel
+# Blockyard
 
 A voxel game platform that runs in the browser. The engine gives you a Minecraft-style world that is already built: an endless procedural world, lighting, a shader pipeline, physics, entities, items, combat, audio and UI. A game on top of it is a single TypeScript module that only describes rules and content.
 
@@ -24,7 +24,7 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 | **Starfighter** | `?game=starfighter` | A Star Fox-style dogfighter with block-built X-wing, TIE fighter and TIE interceptor. Fight two waves of TIEs over the sea, then take on a 200-block Star Destroyer built into the world: knock out its two shield generators and blow up the bridge. Mouse to fly, W/S boost and brake, Q/E barrel roll (deflects lasers), right-click proton torpedoes. Uses `player.controller: 'none'` and flies the camera itself. |
 | **Bed Wars** | `?game=bedwars` | Hypixel-style Bed Wars on sky islands, against bots or up to three friends (`npm run server -- bedwars`): each player gets their own team, bots play the rest, and someone joining mid-match takes over a bot's team. Collect iron and gold from your generator (diamonds and emeralds on the outer and middle islands), buy blocks, swords, armour, tools, fireballs and team upgrades from the shopkeeper, bridge across the void and break the other beds. You respawn only while your bed stands. The bots fortify, shop, bridge, dig through defences and fight each other as well as you. |
 | **Sandbox** | `?game=sandbox` | Creative building in an endless world. Edits are saved per seed. 17 lines. |
-| **Heart Hunt** | `?game=heart-hunt` | The tutorial: find ten hearts. About 70 lines. |
+| **Heart Hunt** | `?game=heart-hunt` | A gentle hunt for ten hidden hearts, and the tutorial game (about 70 lines; see docs/PLATFORM.md). |
 
 The title screen lists every registered game. The pause menu offers restart and exit.
 

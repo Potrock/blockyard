@@ -29,8 +29,8 @@ export class Presenter {
   private loops = new Map<number, LoopHandle>();
 
   constructor(
-    /** The player this client shows. */
-    readonly player: string,
+    /** The player this client shows; null while watching a server's game before joining. */
+    public player: string | null,
     private parts: PresenterParts,
   ) {}
 
@@ -84,7 +84,7 @@ export class Presenter {
             ...opts,
             onClose: () => {
               this.menus.delete(id);
-              this.parts.send({ t: 'menuClosed', player: this.player, menu: id });
+              this.parts.send({ t: 'menuClosed', player: this.player ?? '', menu: id });
             },
           }),
         );
@@ -128,7 +128,7 @@ export class Presenter {
   private decode(v: unknown): unknown {
     if (isCallbackRef(v)) {
       const id = v.$cb;
-      return () => this.parts.send({ t: 'callback', player: this.player, id });
+      return () => this.parts.send({ t: 'callback', player: this.player ?? '', id });
     }
     if (Array.isArray(v)) return v.map((x) => this.decode(x));
     if (v && typeof v === 'object') {

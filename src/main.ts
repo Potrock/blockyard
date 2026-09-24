@@ -4,11 +4,11 @@ import { devGames, games } from './games';
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const ui = document.getElementById('ui') as HTMLElement;
 
+// In development, `__game` is the running game (tests reach in); switching games replaces it.
+if (import.meta.env.DEV) Runtime.onStart = (rt) => ((window as unknown as { __game: Runtime }).__game = rt);
+
 devGames()
   .then((previews) => Runtime.start(canvas, ui, games, previews, () => new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' })))
-  .then((rt) => {
-    if (import.meta.env.DEV) (window as unknown as { __game: Runtime }).__game = rt;
-  })
   .catch((err: unknown) => {
     console.error(err);
     const box = document.createElement('div');

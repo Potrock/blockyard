@@ -4,9 +4,9 @@ import { decode, encode } from '../../src/platform/net/codec';
 import type { ClientCommand, ServerWelcome, TimedBatch } from '../../src/platform/net/protocol';
 import { check, games } from './_harness';
 
-/** A client as the browser is one: a socket, the welcome, then batches; it sends commands. */
+/** A client as the browser is one: a socket, the welcome (watching), then `start` to join as `name`. */
 async function join(port: number, name: string) {
-  const ws = new WebSocket(`ws://localhost:${port}/?name=${name}`);
+  const ws = new WebSocket(`ws://localhost:${port}/`);
   const batches: TimedBatch[] = [];
   const welcome = await new Promise<ServerWelcome>((resolve, reject) => {
     ws.onerror = () => reject(new Error('socket error'));
@@ -16,11 +16,21 @@ async function join(port: number, name: string) {
       else batches.push(m as TimedBatch);
     };
   });
+  const watching = batches.at(-1)?.frame?.players.length ?? -1;
+  ws.send(encode({ t: 'start', name } satisfies ClientCommand));
+  // Joined: the server says which player is ours.
+  let player = '';
+  for (let i = 0; i < 50 && !player; i++) {
+    await new Promise((r) => setTimeout(r, 20));
+    for (const b of batches) for (const e of b.events) if (e.t === 'joined') player = e.player;
+  }
   return {
     welcome,
+    player,
+    watching,
     batches,
     send: (c: ClientCommand) => ws.send(encode(c)),
-    me: () => batches.at(-1)?.frame?.players.find((p) => p.id === welcome.player),
+    me: () => batches.at(-1)?.frame?.players.find((p) => p.id === player),
     close: () => ws.close(),
   };
 }
@@ -34,9 +44,8 @@ export default async function server() {
   try {
     const ann = await join(srv.port, 'Ann');
     const bob = await join(srv.port, 'Bob');
-    check(ann.welcome.game === 'sandbox' && ann.welcome.seed === srv.host('sandbox')!.seed && ann.welcome.player === 'p1' && bob.welcome.player === 'p2', `welcomes: ${JSON.stringify([ann.welcome, bob.welcome])}`);
-    ann.send({ t: 'start' });
-    bob.send({ t: 'start' });
+    check(ann.welcome.game === 'sandbox' && ann.welcome.seed === srv.host('sandbox')!.seed && ann.welcome.player === null && ann.watching === 0, `a client watches first: ${JSON.stringify(ann.welcome)}, ${ann.watching} players`);
+    check(ann.player === 'p1' && bob.player === 'p2', `then joins: ${ann.player}, ${bob.player}`);
     await wait(300);
     const b0 = bob.me()!;
     const names = ann.batches.at(-1)!.frame!.players.map((p) => p.name).join();
@@ -47,7 +56,7 @@ export default async function server() {
       await wait(33);
     }
     await wait(150);
-    const bobSeenByAnn = ann.batches.at(-1)!.frame!.players.find((p) => p.id === 'p2')!;
+    const bobSeenByAnn = ann.batches.at(-1)!.frame!.players.find((p) => p.id === bob.player)!;
     const moved = Math.hypot(bobSeenByAnn.x - b0.x, bobSeenByAnn.z - b0.z);
     check(moved > 0.5, `Ann saw Bob walk: ${moved.toFixed(2)}`);
     // Bob runs a command; only Bob gets the answer.

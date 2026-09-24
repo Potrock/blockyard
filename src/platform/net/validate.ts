@@ -20,9 +20,15 @@ export function sanitizeCommand(raw: unknown): ClientCommand | null {
       const msg = sanitizeMessage(raw.msg);
       return msg ? { t: 'message', msg } : null;
     }
-    case 'start':
+    case 'start': {
+      if (raw.name === undefined) return { t: 'start' };
+      if (typeof raw.name !== 'string') return null;
+      // Printable and short: it's shown over their head and keys their saved place.
+      const name = raw.name.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 20);
+      return { t: 'start', name: name || 'Player' };
+    }
     case 'restart':
-      return { t: raw.t };
+      return { t: 'restart' };
     case 'env': {
       const time = raw.time === undefined ? undefined : num(raw.time, 0, 1);
       const dayLength = raw.dayLength === undefined ? undefined : num(raw.dayLength, 10, 24 * 3600);

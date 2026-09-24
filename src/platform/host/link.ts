@@ -10,6 +10,8 @@ export interface SimLink {
   onBatch: ((b: HostBatch) => void) | null;
   /** The host itself when it runs in this page (development hooks and tests reach into it). */
   readonly local: GameHost | null;
+  /** Done with this game: stop the host (or leave the server). */
+  close(): void;
 }
 
 /** The host in this page (`?host=page`): each command runs straight away. */
@@ -24,6 +26,11 @@ export class PageLink implements SimLink {
   send(cmd: ClientCommand) {
     const b = this.local.handle(cmd);
     if (b) this.onBatch?.(b);
+  }
+
+  close() {
+    this.onBatch = null;
+    this.local.dispose();
   }
 }
 
@@ -54,6 +61,12 @@ export class WorkerLink implements SimLink {
   send(cmd: ClientCommand) {
     this.worker.postMessage(cmd);
   }
+
+  close() {
+    this.onBatch = null;
+    this.onStore = null;
+    this.worker.terminate();
+  }
 }
 
 /**
@@ -71,17 +84,19 @@ export class SocketLink implements SimLink {
   private constructor(
     private ws: WebSocket,
     readonly welcome: ServerWelcome,
+    /** Where it's connected (`wss://host/<game>`). */
+    readonly url: string,
   ) {}
 
-  /** Connect and wait for the welcome: which game, which world, which player. */
-  static connect(url: string, name: string): Promise<SocketLink> {
+  /** Connect and wait for the welcome: which game, which world (the player comes with `start`). */
+  static connect(url: string): Promise<SocketLink> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${url}${url.includes('?') ? '&' : '?'}name=${encodeURIComponent(name)}`);
+      const ws = new WebSocket(url);
       let link: SocketLink | null = null;
       ws.onmessage = (e: MessageEvent<string>) => {
         const m = decode<ServerWelcome | TimedBatch>(e.data);
         if (link) link.deliver(m as TimedBatch);
-        else if ('t' in m && m.t === 'welcome') resolve((link = new SocketLink(ws, m)));
+        else if ('t' in m && m.t === 'welcome') resolve((link = new SocketLink(ws, m, url)));
       };
       // Turned away (full, too many connections) or unreachable: the server's reason, if it gave one.
       ws.onclose = (e: CloseEvent) => {
@@ -106,7 +121,10 @@ export class SocketLink implements SimLink {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(encode(cmd));
   }
 
+  /** Leaving on purpose: not a lost connection. */
   close() {
+    this.onClose = null;
+    this.handler = null;
     this.ws.close();
   }
 

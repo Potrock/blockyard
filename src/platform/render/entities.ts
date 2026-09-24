@@ -45,6 +45,19 @@ export class EntityGraphics {
 
   constructor(private shared: SharedUniforms) {}
 
+  /** Free every atlas texture and cached geometry (a game is over). */
+  dispose() {
+    for (const a of this.atlases.values()) {
+      a.albedo.dispose();
+      a.emissive.dispose();
+    }
+    for (const m of this.shadowMaterials.values()) m.dispose();
+    for (const g of this.spriteCache.values()) g.dispose();
+    this.atlases.clear();
+    this.shadowMaterials.clear();
+    this.spriteCache.clear();
+  }
+
   addAtlas(name: string, width: number, height: number, pixels: Uint8Array, emissive?: Uint8Array) {
     const albedo = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
     albedo.colorSpace = THREE.SRGBColorSpace;

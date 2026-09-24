@@ -76,8 +76,14 @@ class Room {
     readonly log: (line: string) => void,
   ) {}
 
+  /** Connections: people playing, and people watching from the title screen. */
   get players(): number {
     return this.sockets.size;
+  }
+
+  /** People in the game (joined). */
+  get playing(): number {
+    return this.host?.sim.players.filter((p) => !p.vacant).length ?? 0;
   }
 
   /** The game, started if it isn't. */
@@ -165,7 +171,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
     if (path === '/health') {
       res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
     } else if (path === '/games' || path === '/') {
-      const games = [...rooms.values()].map((r) => ({ id: r.def.id, title: r.def.title, players: r.players, running: !!r.host }));
+      const games = [...rooms.values()].map((r) => ({ id: r.def.id, title: r.def.title, players: r.playing, watching: r.players - r.playing, running: !!r.host }));
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ games }));
     } else {
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found');
@@ -189,18 +195,13 @@ export function serve(o: ServeOptions): Promise<GameServer> {
     if ((perAddress.get(address) ?? 0) >= limits.perAddress) return ws.close(CLOSE_LIMIT, 'Too many connections from your address');
     perAddress.set(address, (perAddress.get(address) ?? 0) + 1);
 
+    // They watch until their client says `start` (with a name): then they're in the game.
     const host = room.start();
-    // Names are who you are here (a kept world remembers your place by name): printable, short,
-    // one of each at a time.
-    const url = new URL(req.url ?? '/', 'http://server');
-    const asked = (url.searchParams.get('name') ?? '').replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 20) || 'Player';
-    const taken = new Set(host.sim.players.filter((p) => !p.vacant).map((p) => p.name));
-    let name = asked;
-    for (let n = 2; taken.has(name); n++) name = `${asked} ${n}`;
-    const { id, batch } = host.connect(name);
+    const { id, batch } = host.connect();
     room.sockets.set(id, ws);
-    room.log(`${name} joined as ${id} from ${address} (${room.players} playing)`);
-    ws.send(encode({ t: 'welcome', game: room.def.id, seed: host.seed, player: id, tickRate: rate } satisfies ServerWelcome));
+    room.log(`${id} connected from ${address} (${room.players} here)`);
+    const sp = host.sim.spawn;
+    ws.send(encode({ t: 'welcome', game: room.def.id, seed: host.seed, player: null, spawn: { x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw }, tickRate: rate } satisfies ServerWelcome));
     ws.send(encode({ ...batch, time: room.time } satisfies TimedBatch));
 
     // A bucket of messages, refilled each second; a client far over it is disconnected.
@@ -226,6 +227,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
       // game and changing their time of day are for development servers.
       if (!cmd || cmd.t === 'tick' || (!o.cheats && (cmd.t === 'restart' || cmd.t === 'env'))) return;
       room.host?.command(id, cmd);
+      if (cmd.t === 'start' && cmd.name) room.log(`${id} plays as ${cmd.name}`);
     });
     ws.on('close', () => {
       clearInterval(refill);
@@ -234,7 +236,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
       room.sockets.delete(id);
       room.host?.disconnect(id);
       if (!room.players) room.emptySince = clock();
-      room.log(`${name} (${id}) left (${room.players} playing)`);
+      room.log(`${id} left (${room.players} here)`);
     });
   }
 

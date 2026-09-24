@@ -16,8 +16,11 @@ function client(port: number, path: string, name: string) {
   const opened = new Promise<void>((resolve) => (ws.onopen = () => resolve()));
   ws.onmessage = (e) => {
     const m = decode<ServerWelcome | TimedBatch>(String(e.data));
-    if ('t' in m && m.t === 'welcome') welcome = m;
-    else batches.push(m as TimedBatch);
+    if ('t' in m && m.t === 'welcome') {
+      welcome = m;
+      // Watching; press Play.
+      ws.send(encode({ t: 'start', name } satisfies ClientCommand));
+    } else batches.push(m as TimedBatch);
   };
   return {
     ws,

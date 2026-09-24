@@ -40,6 +40,27 @@ import type { BlockRef, GameContext, GameDefinition, ItemDefinition, ItemStack, 
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
+/**
+ * What a game's runtime hands the next when switching games in place: the home page, and the
+ * renderer with its textures (the WebGL context and compiled shaders don't need redoing).
+ */
+interface Carry {
+  title: TitleScreen;
+  renderer: Renderer;
+  textures: TextureSet;
+  biome: BiomeMap;
+}
+
+/** Free a finished game's meshes: geometry and materials (shared block textures stay). */
+function disposeTree(root: THREE.Object3D) {
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    m.geometry?.dispose();
+    const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
+    for (const mat of mats) mat.dispose();
+  });
+}
+
 interface SaveData {
   edits: string;
   player: [number, number, number, number, number];
@@ -71,6 +92,13 @@ export class Runtime {
   private chunks!: ChunkManager;
   private registry!: Registry;
   private textures!: TextureSet;
+  private biome!: BiomeMap;
+  /** Every listener this game adds goes when it's aborted (switching games). */
+  private life = new AbortController();
+  private disposed = false;
+  private switching = false;
+  /** Set by the app: told of each new runtime (a switch makes one). */
+  static onStart: ((rt: Runtime) => void) | null = null;
   private input: Input;
   /** Mouse look and the first-person camera (the client's side of the player). */
   private view!: PlayerCamera;
@@ -105,8 +133,8 @@ export class Runtime {
   /** The host has set the game up and placed the player. */
   private hostReady = false;
   private requests = new Map<number, (value: unknown) => void>();
-  /** Which player in the frames is this client's. */
-  private playerId: string;
+  /** Which player in the frames is this client's (null: watching a server's game, not in it yet). */
+  private playerId: string | null;
   /** A server's frames, played back smoothly (a server only). */
   private playback: FrameBuffer | null = null;
   /** This client's own movement, predicted ahead of the server (a server, walking games). */
@@ -138,61 +166,49 @@ export class Runtime {
     private canvas: HTMLCanvasElement,
     private ui: HTMLElement,
     private def: GameDefinition,
-    games: GameDefinition[],
+    private games: GameDefinition[],
+    private hidden: GameDefinition[],
     private seed: number,
     private makeWorker: (() => Worker) | null,
     /** Joined a game server (`?server=`): the host is there, not here. */
     private server: SocketLink | null = null,
+    /** What the previous game left for this one (switching in place). */
+    private carried: Carry | null = null,
   ) {
-    this.playerId = server?.welcome.player ?? 'local';
+    this.playerId = server ? server.welcome.player : 'local';
     this.settings = loadSettings();
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.1, 400);
     this.camera.layers.enable(LAYER_CHUNKS);
-    this.input = new Input(canvas);
+    this.input = new Input(canvas, this.life.signal);
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
-    // Online: this build's game server (VITE_GAME_SERVER, e.g. wss://voxel-games.fly.dev), if any.
-    const gameServer = (import.meta.env.VITE_GAME_SERVER as string | undefined)?.replace(/\/+$/, '') ?? null;
-    const url = new URL(location.href);
-    const online = {
-      server: gameServer,
-      game: def.id,
-      joined: server ? { name: url.searchParams.get('name') ?? 'Player' } : null,
-      join: (name: string) => {
-        const to = new URL(location.href);
-        to.searchParams.set('server', `${gameServer}/${def.id}`);
-        to.searchParams.set('name', name);
-        to.searchParams.delete('seed');
-        to.searchParams.delete('game');
-        location.href = to.toString();
-      },
-      leave: () => {
-        const to = new URL(location.href);
-        to.searchParams.delete('server');
-        to.searchParams.delete('name');
-        to.searchParams.set('game', def.id);
-        location.href = to.toString();
-      },
-    };
-    this.title = new TitleScreen(ui, seed, () => this.play(), games, def.id, (id) => this.switchGame(id), def.controls, this.walker, online);
+    // On a server, the title screen asks for a name (and says who's on).
+    const online = server ? { server: server.url.replace(/\/[^/]*$/, ''), game: def.id } : null;
+    this.title = carried?.title ?? new TitleScreen(ui, games);
+    this.title.show({ current: def.id, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, walks: this.walker, online });
   }
 
   /**
-   * Boot the game selected by `?game=` (default: the first registered game). `worker` starts the
-   * app's game host worker; without it (or with `?host=page`) the game runs in this page. With
-   * `?server=ws://…` it joins that server's game instead (`&name=` names the player).
+   * Boot the game selected by `?game=` (default: the first registered game). A build with a game
+   * server (`VITE_GAME_SERVER`, e.g. wss://voxel-games.fly.dev) plays online only: it connects to
+   * that server's game at once, watching behind the title screen, and joins on Play. `?server=`
+   * picks a server for any build (`ws://localhost:8787/sandbox`). Otherwise the game runs here:
+   * in the app's worker (`worker`), or in this page (`?host=page`).
    */
-  static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[] = [], worker?: () => Worker): Promise<Runtime> {
+  static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[] = [], worker?: () => Worker, carried: Carry | null = null): Promise<Runtime> {
     const url = new URL(location.href);
-    const address = url.searchParams.get('server');
-    const server = address ? await SocketLink.connect(address, url.searchParams.get('name') ?? 'Player') : null;
-    const id = server?.welcome.game ?? url.searchParams.get('game');
+    const online = (import.meta.env.VITE_GAME_SERVER as string | undefined)?.replace(/\/+$/, '');
+    const picked = url.searchParams.get('game');
+    const address = url.searchParams.get('server') ?? (online ? `${online}/${(games.find((g) => g.id === picked) ?? games[0]).id}` : null);
+    const server = address ? await SocketLink.connect(address) : null;
+    const id = server?.welcome.game ?? picked;
     // Hidden games (dev previews) open by id but aren't listed in the launcher.
     const def = [...games, ...hidden].find((g) => g.id === id) ?? games[0];
     if (server && def.id !== server.welcome.game) throw new Error(`The server is running "${server.welcome.game}", which this client doesn't have.`);
     const seed = server?.welcome.seed ?? Runtime.chooseSeed(def);
-    const rt = new Runtime(canvas, ui, def, games, seed, worker ?? null, server);
+    const rt = new Runtime(canvas, ui, def, games, hidden, seed, worker ?? null, server, carried);
     await rt.init();
+    Runtime.onStart?.(rt);
     return rt;
   }
 
@@ -240,13 +256,22 @@ export class Runtime {
     const workers = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 2));
     const poolPromise = WorkerPool.create(module, this.seed, workers, worldCfg);
 
-    const noise = createNoiseTexture();
-    const torchLayer = this.registry.byName.get('torch')?.tex[0] ?? 0;
-    this.renderer = new Renderer(this.canvas, toRenderSettings(this.settings), noise, torchLayer);
-    this.renderer.fxScene.matrixWorldAutoUpdate = true;
-    this.textures = createBlockTextures(this.renderer.gl);
-    const biome = new BiomeMap(this.renderer.gl);
-    this.renderer.setTextures(this.textures.albedo, this.textures.material, biome.texture);
+    // The renderer and block textures carry over from the previous game, if there was one.
+    const c = this.carried;
+    if (c) {
+      this.renderer = c.renderer;
+      this.textures = c.textures;
+      this.biome = c.biome;
+    } else {
+      const noise = createNoiseTexture();
+      const torchLayer = this.registry.byName.get('torch')?.tex[0] ?? 0;
+      this.renderer = new Renderer(this.canvas, toRenderSettings(this.settings), noise, torchLayer);
+      this.renderer.fxScene.matrixWorldAutoUpdate = true;
+      this.textures = createBlockTextures(this.renderer.gl);
+      this.biome = new BiomeMap(this.renderer.gl);
+      this.renderer.setTextures(this.textures.albedo, this.textures.material, this.biome.texture);
+    }
+    const biome = this.biome;
     this.renderer.uniforms.uVoid.value = def.world?.terrain === 'void' ? 1 : 0;
     this.graphics = new EntityGraphics(this.renderer.uniforms);
     this.loadEntityAtlas();
@@ -357,7 +382,7 @@ export class Runtime {
     if (def.player?.build) {
       this.picker = new BlockPicker(this.ui, this.registry, icons, () => this.closePicker());
       this.picker.onPick = (id) => {
-        this.link.send({ t: 'message', msg: { t: 'creativePick', player: this.playerId, block: id } });
+        this.link.send({ t: 'message', msg: { t: 'creativePick', player: this.playerId ?? '', block: id } });
         this.hud.showToast(this.registry.blocks[id]?.label ?? '');
       };
     }
@@ -382,6 +407,7 @@ export class Runtime {
 
     this.input.onLockChange = (locked) => this.onLockChange(locked);
     this.input.onKey = (code, e) => this.onKey(code, e);
+    const life = { signal: this.life.signal };
     this.canvas.addEventListener('click', () => {
       this.sfx.unlock();
       if (this.mode === 'console') {
@@ -391,10 +417,10 @@ export class Runtime {
       if (this.gameHud.screenOpen) return;
       const unlockedPlay = this.mode === 'playing' && !this.input.locked;
       if (this.mode === 'paused' || unlockedPlay || (this.mode === 'title' && this.worldReady)) this.input.lock();
-    });
-    window.addEventListener('resize', () => this.resize());
-    window.addEventListener('beforeunload', () => this.save());
-    document.addEventListener('visibilitychange', () => document.hidden && this.save());
+    }, life);
+    window.addEventListener('resize', () => this.resize(), life);
+    window.addEventListener('beforeunload', () => this.save(), life);
+    document.addEventListener('visibilitychange', () => document.hidden && this.save(), life);
 
     this.commandBar = new CommandBar(this.ui);
     this.commandBar.complete = (line) => this.request<{ start: number; options: string[] }>({ t: 'complete', line });
@@ -482,6 +508,11 @@ export class Runtime {
         case 'revert':
           this.chunks.revertEdits();
           break;
+        case 'joined':
+          // In the game now, as this player.
+          this.playerId = e.player;
+          this.presenter.player = e.player;
+          break;
         case 'ready':
           this.hostReady = true;
           // The skin may live in an atlas the game registered in `setup`, which has arrived by now.
@@ -522,9 +553,49 @@ export class Runtime {
     return type;
   }
 
-  /** This client's player in a frame. */
+  /**
+   * This client's player in a frame. Watching a server's game before joining, a stand-in at the
+   * spawn, for the camera (circling above it on the title screen) and the terrain around it.
+   */
   private mine(f: SimFrame | null): PlayerFrame | undefined {
-    return f?.players.find((p) => p.id === this.playerId);
+    const me = f?.players.find((p) => p.id === this.playerId);
+    if (me || !f || !this.server || this.playerId) return me;
+    const sp = this.server.welcome.spawn;
+    return {
+      id: '',
+      name: '',
+      x: sp.x,
+      y: sp.y,
+      z: sp.z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      onGround: true,
+      inWater: false,
+      eyesInWater: false,
+      inLava: false,
+      flying: false,
+      bob: 0,
+      sneaking: false,
+      sprinting: false,
+      view: { seq: 0, yaw: sp.yaw, pitch: 0 },
+      health: 20,
+      maxHealth: 20,
+      mortal: false,
+      dead: false,
+      deathTime: 0,
+      hotbar: null,
+      hand: { drawing: false, charge: 0, strength: 1 },
+      camera: { p: [sp.x, sp.y + 1.62, sp.z], q: [0, 0, 0, 1], fov: this.settings.fov },
+      creative: null,
+      frozen: true,
+      canFly: false,
+      swings: 0,
+      ack: -1,
+      move: { time: 0, lastJumpTap: -1, lastForwardTap: -1, sprintLatched: false },
+      skin: null,
+      color: null,
+    };
   }
 
   /** The server went away: say so, and stop sending. */
@@ -590,25 +661,78 @@ export class Runtime {
     });
   }
 
+  /** Back to the home page (this game's, fresh): `game.exit()`, the pause menu's Switch game. */
   exit() {
-    this.save();
-    const url = new URL(location.href);
-    url.searchParams.delete('game');
-    url.searchParams.delete('seed');
-    url.searchParams.delete('server');
-    url.searchParams.delete('name');
-    location.href = url.toString();
+    this.switchGame(this.def.id);
   }
 
+  /**
+   * Another game, in place: the home page stays (showing it picked at once), the world fades
+   * out, this game shuts down and the next starts, fading in when its world is ready.
+   */
   private switchGame(id: string) {
+    if (this.switching) return;
+    this.switching = true;
     this.save();
+    this.canvas.classList.add('fading');
+    window.setTimeout(() => {
+      const carry = this.shutdown();
+      Runtime.switchTo(id, this.canvas, this.ui, this.games, this.hidden, this.makeWorker, carry);
+    }, 260);
+    this.title.select(id);
+  }
+
+  /** Start another game on the page the last one left (the home page stays up throughout). */
+  private static switchTo(id: string, canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[], worker: (() => Worker) | null, carry: Carry) {
     const url = new URL(location.href);
     url.searchParams.set('game', id);
-    url.searchParams.delete('seed');
-    // Another game: played alone (join it online from its title screen).
-    url.searchParams.delete('server');
-    url.searchParams.delete('name');
-    location.href = url.toString();
+    for (const p of ['seed', 'server', 'name']) url.searchParams.delete(p);
+    history.replaceState(null, '', url);
+    carry.title.select(id);
+    Runtime.start(canvas, ui, games, hidden, worker ?? undefined, carry).catch((err: unknown) => {
+      console.error(err);
+      carry.title.failed(err instanceof Error ? err.message : String(err), (next) => Runtime.switchTo(next, canvas, ui, games, hidden, worker, carry));
+    });
+  }
+
+  /**
+   * This game is over: stop its loop, its host (worker, page or server connection), its terrain
+   * workers, its listeners and sound; free its meshes, textures and HUD. The home page, renderer
+   * and block textures go to the next game.
+   */
+  private shutdown(): Carry {
+    this.disposed = true;
+    this.life.abort();
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.link?.close();
+    this.pool?.dispose();
+    this.chunks?.dispose();
+    this.entityView?.clear();
+    this.pickupView?.clear();
+    this.propView?.clear();
+    this.fx?.clear();
+    const r = this.renderer;
+    for (const o of [this.particles?.points, this.highlight.object]) {
+      if (!o) continue;
+      o.removeFromParent();
+      disposeTree(o);
+    }
+    for (const scene of [r.entityScene, r.fxScene]) {
+      for (const o of [...scene.children]) {
+        scene.remove(o);
+        disposeTree(o);
+      }
+    }
+    if (r.overlay) {
+      disposeTree(r.overlay.scene);
+      r.overlay = null;
+    }
+    this.graphics?.dispose();
+    this.sfx.close();
+    this.gameHud?.closeScreens();
+    // The HUD, menus and overlays this game put up; the home page stays.
+    for (const el of [...this.ui.children]) if (el !== this.title.root) el.remove();
+    return { title: this.title, renderer: r, textures: this.textures, biome: this.biome };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -701,6 +825,7 @@ export class Runtime {
     if (ready >= 0.999) {
       this.worldReady = true;
       this.title.setReady();
+      this.canvas.classList.remove('fading');
     }
   }
 
@@ -719,7 +844,8 @@ export class Runtime {
     this.gameHud.setVisible(this.hudVisible);
     this.held.scene.visible = this.hudVisible;
     this.mode = 'playing';
-    this.link.send({ t: 'start' });
+    // On a server this is joining: as the name on the title screen.
+    this.link.send(this.server ? { t: 'start', name: this.title.name() } : { t: 'start' });
   }
 
   private onLockChange(locked: boolean) {
@@ -894,6 +1020,7 @@ export class Runtime {
   // ---------------------------------------------------------------------------------------------
 
   private frame(now: number) {
+    if (this.disposed) return;
     requestAnimationFrame((t) => this.frame(t));
     const t0 = performance.now();
     const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
@@ -1072,7 +1199,7 @@ export class Runtime {
     const rs = r.settings;
     const mem = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
     this.debug.set([
-      `VOXEL platform · ${this.def.title}`,
+      `Blockyard · ${this.def.title}`,
       `${Math.round(this.debug.fpsValue)} fps   cpu ${this.debug.cpu.toFixed(2)} ms`,
       '',
       `XYZ      ${s.x.toFixed(2)} / ${s.y.toFixed(2)} / ${s.z.toFixed(2)}`,
