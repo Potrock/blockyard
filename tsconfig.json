@@ -27,6 +27,9 @@
       "@platform/art": [
         "./src/platform/art/index.ts"
       ],
+      "@platform/kits": [
+        "./src/platform/kits/index.ts"
+      ],
       "@engine/*": [
         "./engine/pkg/*"
       ]

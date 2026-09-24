@@ -4,6 +4,9 @@ export class Input {
   private pressedThisFrame = new Set<string>();
   private buttonsDown = 0;
   private buttonsPressed = 0;
+  /** Buttons and keys claimed this frame (`consume`): they read as idle until the frame ends. */
+  private consumedButtons = 0;
+  private consumedKeys = new Set<string>();
   mouseDX = 0;
   mouseDY = 0;
   wheel = 0;
@@ -76,24 +79,32 @@ export class Input {
   }
 
   isDown(code: string): boolean {
-    return this.down.has(code);
+    return this.down.has(code) && !this.consumedKeys.has(code);
   }
 
   pressed(code: string): boolean {
-    return this.pressedThisFrame.has(code);
+    return this.pressedThisFrame.has(code) && !this.consumedKeys.has(code);
   }
 
   button(b: number): boolean {
-    return (this.buttonsDown & (1 << b)) !== 0;
+    return (this.buttonsDown & ~this.consumedButtons & (1 << b)) !== 0;
   }
 
   buttonPressed(b: number): boolean {
-    return (this.buttonsPressed & (1 << b)) !== 0;
+    return (this.buttonsPressed & ~this.consumedButtons & (1 << b)) !== 0;
+  }
+
+  /** Claim a mouse button or key for the rest of this frame. */
+  consume(what: number | string) {
+    if (typeof what === 'number') this.consumedButtons |= 1 << what;
+    else this.consumedKeys.add(what);
   }
 
   endFrame() {
     this.pressedThisFrame.clear();
     this.buttonsPressed = 0;
+    this.consumedButtons = 0;
+    this.consumedKeys.clear();
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.wheel = 0;

@@ -8,6 +8,7 @@ import { LAYER_CHUNKS, Renderer, type FrameHooks } from './render/pipeline';
 import { Environment } from './render/environment';
 import { BiomeMap, createBlockTextures, createNoiseTexture, type TextureSet } from './render/textures';
 import { Particles } from './render/particles';
+import { BlockHighlight } from './render/highlight';
 import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
@@ -28,7 +29,6 @@ import { CommandBar } from './ui/commandbar';
 import { Commands } from './commands';
 import { PropSystem, propObject } from './props/props';
 import { Blueprint } from './api/blueprint';
-import { Mining, defaultBreakTime, type MiningTarget } from './player/mining';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -92,8 +92,8 @@ export class Runtime {
   private input: Input;
   private controller!: PlayerController;
   private interaction: Interaction | null = null;
-  /** Survival mining and block placing (item games). */
-  private mining: Mining | null = null;
+  /** `world.highlight`: the outline and break cracks on one block. */
+  private highlight = new BlockHighlight();
   private blockIcons = new Map<number, string>();
   private blockModels = new Map<string, PropModel>();
   private particles!: Particles;
@@ -333,16 +333,7 @@ export class Runtime {
       return !s.onGround && s.vy < -1 && !s.inWater;
     });
 
-    if (this.itemMode) {
-      this.mining = new Mining(world, this.registry, {
-        breakTime: (t) => this.miningTime(t),
-        breakBlock: (t) => this.breakBlockAt(t.x, t.y, t.z, 'player'),
-        place: (x, y, z, id) => this.placeBlockAt(x, y, z, this.registry.blocks[id].name, 'player') && this.items.inventory.takeHeld(1),
-        swing: () => this.held.swing(),
-        progress: (f) => this.hud.setMining(f),
-      });
-      this.renderer.opaqueScene.add(this.mining.outline);
-    }
+    this.renderer.opaqueScene.add(this.highlight.object);
 
     if (def.player?.build) {
       this.interaction = new Interaction(this.chunks, world, this.registry, this.particles, this.textures.albedoData);
@@ -480,6 +471,11 @@ export class Runtime {
         surfaceY: (x, z) => rt.surfaceY(Math.floor(x), Math.floor(z)),
         explode: (c, r, opts) => rt.explode(c, r, opts),
         breakBlock: (x, y, z, opts) => rt.breakBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), opts?.by ?? 'world'),
+        highlight: (at, opts) => rt.setHighlight(at, opts?.progress),
+        blockInfo: (block) => {
+          const d = rt.registry.blocks[typeof block === 'number' ? block : rt.registry.byName.get(block)?.id ?? -1];
+          return d ? { id: d.id, name: d.name, label: d.label, solid: d.solid, liquid: d.shape === 'liquid', plant: d.shape === 'cross', replaceable: d.replaceable, light: d.emit } : null;
+        },
         placeBlock: (x, y, z, block, opts) => rt.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world'),
         seaLevel: engine.sea_level(),
       },
@@ -587,6 +583,7 @@ export class Runtime {
         pressed: (c) => rt.active && rt.input.pressed(c),
         button: (b) => rt.active && rt.input.button(b),
         buttonPressed: (b) => rt.active && rt.input.buttonPressed(b),
+        consume: (what) => rt.input.consume(what),
         get mouseX() {
           return rt.active ? rt.input.mouseDX : 0;
         },
@@ -664,7 +661,7 @@ export class Runtime {
   }
 
   /** Carve a ragged sphere (bedrock and liquids survive), scatter debris, set off an explosion. */
-  private explode(c: Vec3, radius: number, opts: { effect?: boolean } = {}): number {
+  private explode(c: Vec3, radius: number, opts: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Entity | 'player' | 'world' } = {}): number {
     const world = this.chunks.world;
     const r = Math.max(0.5, radius);
     const ri = Math.ceil(r + 1);
@@ -685,12 +682,12 @@ export class Runtime {
           if (id === 0 || id === 255) continue;
           const def = this.registry.blocks[id];
           if (!def || def.name === 'bedrock' || def.shape === 'liquid') continue;
-          if (this.def.blocks?.canBreak && !this.def.blocks.canBreak(this.ctx, { x, y, z }, def.name, 'world')) continue;
+          if (opts.filter && !opts.filter({ x, y, z }, def.name)) continue;
           cells.push([x, y, z, 0]);
           removed.push([x, y, z, id]);
         }
     const n = this.chunks.editBlocks(cells);
-    for (const [x, y, z, id] of removed) this.emit('blockBreak', { x, y, z, block: this.registry.blocks[id].name, by: 'world' });
+    for (const [x, y, z, id] of removed) this.emit('blockBreak', { x, y, z, block: this.registry.blocks[id].name, by: opts.by ?? 'world' });
     // Debris from a sample of what was destroyed.
     for (let i = 0; i < Math.min(12, removed.length); i++) {
       const [x, y, z, id] = removed[Math.floor(Math.random() * removed.length)];
@@ -702,14 +699,13 @@ export class Runtime {
     return n;
   }
 
-  /** Break a block the way the player does: rules, debris, the plant on top, the event. */
+  /** Break a block: debris, a sound, the plant on top, the event. */
   private breakBlockAt(x: number, y: number, z: number, by: Entity | 'player' | 'world'): boolean {
     const world = this.chunks.world;
     const id = world.get_block(x, y, z);
     if (id === 0 || id === 255) return false;
     const def = this.registry.blocks[id];
     if (!def || def.name === 'bedrock' || def.shape === 'liquid') return false;
-    if (this.def.blocks?.canBreak && !this.def.blocks.canBreak(this.ctx, { x, y, z }, def.name, by)) return false;
     if (!this.chunks.editBlock(x, y, z, 0)) return false;
     const face = def.tex[0];
     this.particles.burst(x, y, z, this.textures.albedoData.subarray(face * 1024, face * 1024 + 1024), def.tint ? DEFAULT_TINT : null);
@@ -720,7 +716,7 @@ export class Runtime {
     return true;
   }
 
-  /** Place a block the way the player does: rules, nobody standing in it, support for plants, the event. */
+  /** Place a block: a free cell nobody is standing in, ground under plants, a sound, the event. */
   private placeBlockAt(x: number, y: number, z: number, block: BlockRef, by: Entity | 'player' | 'world'): boolean {
     const world = this.chunks.world;
     const id = this.blockId(block);
@@ -739,21 +735,18 @@ export class Runtime {
       }
     }
     if (def.shape === 'cross' && !this.registry.blocks[world.get_block(x, y - 1, z)]?.solid) return false;
-    if (this.def.blocks?.canPlace && !this.def.blocks.canPlace(this.ctx, { x, y, z }, def.name, by)) return false;
     if (!this.chunks.editBlock(x, y, z, id)) return false;
     this.sfx.play('click', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.5, pitch: 0.7 });
     this.emit('blockPlace', { x, y, z, block: def.name, by });
     return true;
   }
 
-  /** The mob under the crosshair within `reach`, if any. */
-  private aimedEntity(reach: number) {
-    const c = this.camera.position;
-    const d = this.camera.getWorldDirection(this.aimDir);
-    const hit = this.chunks.world.pick_body(c.x, c.y, c.z, d.x, d.y, d.z, reach, 0.2);
-    return hit[0] >= 0 ? this.entities.byBody(hit[0]) : null;
+  /** `world.highlight`: outline a block, with break cracks at `progress`. */
+  private setHighlight(at: Vec3 | null, progress?: number) {
+    if (!at) return this.highlight.set(null);
+    const id = this.chunks.world.get_block(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z));
+    this.highlight.set(at, this.registry.blocks[id]?.shape === 'cross', progress);
   }
-  private aimDir = new THREE.Vector3();
 
   private surfaceY(x: number, z: number): number {
     const w = this.chunks.world;
@@ -778,6 +771,7 @@ export class Runtime {
     this.timers = [];
     this.clockNow = 0;
     this.gameHud.clear();
+    this.highlight.set(null);
     this.fx.clear();
     this.combat.reset();
     this.health.configure(this.def.player ?? {});
@@ -1120,44 +1114,18 @@ export class Runtime {
     this.updateHeldItem();
   }
 
-  /** The icon an item shows: its sprite, or a block item's block. */
+  /** The icon an item shows: its sprite, or its block. */
   private itemIcon(d: ItemDefinition, size: number): string {
-    if (d.kind === 'block' && !d.icon) return this.blockIcons.get(this.blockId(d.block)) ?? '';
-    return this.graphics.spriteIcon(d.icon!, size);
+    const icon = d.icon;
+    if (typeof icon === 'object' && 'block' in icon) return this.blockIcons.get(this.blockId(icon.block)) ?? '';
+    return this.graphics.spriteIcon(icon, size);
   }
 
-  /**
-   * Item games, per frame: right-click talks to the mob you aim at, left-click hits a mob if you
-   * aim at one and otherwise mines (when the game allows mining), block items place.
-   */
+  /** Item games, per frame: the built-in weapons (after the game has had its say on the mouse). */
   private updateHands(dt: number, active: boolean) {
-    const stack = this.items.inventory.held;
-    const def = stack ? this.items.get(stack.item) : undefined;
-    const aimed = active ? this.aimedEntity(4) : null;
-    let rightUsed = false;
-    if (active && aimed?.alive && aimed.def.onInteract && this.input.buttonPressed(2)) {
-      aimed.def.onInteract(aimed, this.ctx);
-      rightUsed = true;
-    }
-    let mining = false;
-    if (this.mining) {
-      const canMine = (this.def.player?.mining ?? false) && !aimed && def?.kind !== 'bow';
-      const placeId = !rightUsed && def?.kind === 'block' ? this.blockId(def.block) : null;
-      this.mining.aim(this.camera);
-      this.mining.update(dt, this.input, active, { mine: canMine, placeId, showOutline: canMine || placeId !== null });
-      mining = canMine && this.mining.target !== null;
-    }
-    this.combat.update(dt, this.input, active, { melee: !mining, use: !rightUsed });
+    this.combat.update(dt, this.input, active);
     this.held.draw = this.combat.isDrawing ? this.combat.charge : 0;
     this.updateHeldItem();
-  }
-
-  private miningTime(t: MiningTarget): number {
-    const def = this.registry.blocks[t.id];
-    if (!def) return Infinity;
-    const rules = this.def.blocks;
-    if (def.name === 'bedrock' || (rules?.canBreak && !rules.canBreak(this.ctx, { x: t.x, y: t.y, z: t.z }, def.name, 'player'))) return Infinity;
-    return rules?.breakTime?.(this.ctx, def.name, this.items.inventory.held) ?? defaultBreakTime(def.name, def.shape);
   }
 
   private updateHeldItem() {
@@ -1167,8 +1135,9 @@ export class Runtime {
       this.held.setEmpty();
       return;
     }
-    if (def.kind === 'block') {
-      this.held.setBlock(this.registry.blocks[this.blockId(def.block)]);
+    if (typeof def.icon === 'object' && 'block' in def.icon) {
+      // Looks like a block: held as a little cube of it.
+      this.held.setBlock(this.registry.blocks[this.blockId(def.icon.block)]);
       return;
     }
     const drawn = def.kind === 'bow' && this.combat.isDrawing && this.combat.charge > 0.25;

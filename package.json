@@ -7,9 +7,10 @@
     "wasm": "wasm-pack build engine --target web --release --out-dir pkg --out-name voxel_engine",
     "wasm:dev": "wasm-pack build engine --target web --profiling --out-dir pkg --out-name voxel_engine",
     "dev": "npm run wasm && vite",
-    "build": "npm run wasm && tsc --noEmit && vite build",
+    "build": "npm run wasm && tsc --noEmit && npm run check:boundaries && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && npm run check:boundaries",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
     "test:engine": "cargo test --release --manifest-path engine/Cargo.toml"
   },
   "dependencies": {

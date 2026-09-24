@@ -118,7 +118,10 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 
 ```
 ┌──────────── games (TypeScript, import only @platform) ─────┐
-│ src/games/arena · sandbox · heart-hunt                      │
+│ src/games/arena · starfighter · bedwars · sandbox · …       │
+├──────────── kits (optional, also only @platform) ──────────┤
+│ src/platform/kits   survival building, interactions         │
+│ src/platform/art    pixel-art painter for game atlases      │
 └──────────────────────── GameContext ───────────────────────┘
 ┌──────────── platform (TypeScript + three.js) ───────────────┐
 │ src/platform/api        public API: types, Blueprint,       │

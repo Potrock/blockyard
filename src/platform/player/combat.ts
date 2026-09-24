@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { BowItem, GameContext, MeleeItem } from '../api/types';
+import type { BowItem, GameContext, IconRef, MeleeItem, SpriteRef } from '../api/types';
 import type { EntityManager } from '../entities/manager';
 import type { ItemSystem } from '../items/items';
 import type { Input } from './input';
@@ -50,8 +50,7 @@ export class Combat {
     return 1 - this.cooldown / this.cooldownMax;
   }
 
-  /** `melee: false` while left-click is mining instead; `use: false` when right-click was taken (talking to a mob). */
-  update(dt: number, input: Input, active: boolean, opts: { melee?: boolean; use?: boolean } = {}) {
+  update(dt: number, input: Input, active: boolean) {
     this.cooldown = Math.max(0, this.cooldown - dt);
     const inv = this.items.inventory;
     if (active) {
@@ -70,12 +69,12 @@ export class Combat {
     } else {
       this.drawing = false;
       this.charge = 0;
-      if (opts.melee !== false && (input.buttonPressed(0) || (input.button(0) && this.cooldown <= 0))) {
+      if (input.buttonPressed(0) || (input.button(0) && this.cooldown <= 0)) {
         // Weapons and the bare fist use their own animation; anything else just swings.
         if (this.cooldown <= 0) this.melee(def?.kind === 'melee' ? def : FIST, !def || def.kind === 'melee');
       }
     }
-    if (def?.kind === 'consumable' && opts.use !== false && input.buttonPressed(2)) {
+    if (def?.kind === 'consumable' && input.buttonPressed(2)) {
       if (def.use(this.ctx())) {
         inv.take(stack!.item, 1);
         this.held.use();
@@ -137,7 +136,7 @@ export class Combat {
         const crit = c >= 1;
         this.entities.spawnProjectile(
           {
-            sprite: def.projectile ?? (def.ammo ? this.items.get(def.ammo)?.icon : undefined),
+            sprite: def.projectile ?? spriteOf(def.ammo ? this.items.get(def.ammo)?.icon : undefined),
             glow: def.projectile || def.ammo ? undefined : '#bfe7ff',
             speed: def.speed * (0.35 + 0.65 * c),
             gravity: 20,
@@ -159,4 +158,9 @@ export class Combat {
       this.hud.toast('No arrows');
     }
   }
+}
+
+/** A sprite icon, or nothing for an item that looks like a block (it can't fly as an arrow). */
+function spriteOf(icon: IconRef | undefined): SpriteRef | undefined {
+  return typeof icon === 'object' && 'block' in icon ? undefined : icon;
 }

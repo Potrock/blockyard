@@ -1374,8 +1374,8 @@ input[type='range']::-moz-range-thumb {
   white-space: nowrap;
 }
 
-/* Mining progress around the crosshair */
-.mining-ring {
+/* hud.progress: a ring round the crosshair */
+.progress-ring {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -1383,7 +1383,7 @@ input[type='range']::-moz-range-thumb {
   height: 34px;
   margin: -17px 0 0 -17px;
   border-radius: 50%;
-  background: conic-gradient(rgba(255, 255, 255, 0.85) var(--p, 0%), rgba(255, 255, 255, 0.12) 0);
+  background: conic-gradient(var(--c, rgba(255, 255, 255, 0.85)) var(--p, 0%), rgba(255, 255, 255, 0.12) 0);
   -webkit-mask: radial-gradient(circle, transparent 12px, #000 13px);
   mask: radial-gradient(circle, transparent 12px, #000 13px);
   pointer-events: none;

@@ -1,6 +1,6 @@
 # Building games on the Voxel platform
 
-The platform is a complete voxel engine: an endless procedural world, lighting, rendering, physics, streaming, entities, items, combat, audio and UI. You write the *game*: rules, content and moments. A game is one `defineGame({...})` object in `src/games/<name>/` that imports only from `@platform`.
+The platform is a complete voxel engine: an endless procedural world, lighting, rendering, physics, streaming, entities, items, combat, audio and UI. You write the *game*: rules, content and moments. A game is one `defineGame({...})` object in `src/games/<name>/` that imports only from `@platform` (plus the optional `@platform/kits` and `@platform/art` libraries, which are themselves built only on `@platform`).
 
 ```
 src/games/
@@ -24,7 +24,7 @@ src/games/
   bedwars/              Bed Wars against three bots: sky islands, mining, building, a shop
     index.ts            rules: generators, beds, deaths and respawns, the timeline, win/lose
     map.ts              the islands, as Blueprints in a void world
-    state.ts            teams, the match, block rules and mining times
+    state.ts            teams, the match, block rules and mining times (for the building kit)
     bots.ts nav.ts      bot players: route-finding that bridges and digs, fighting, raiding
     shop.ts items.ts    the shopkeeper's menu and everything it sells
     fireballs.ts        thrown fireballs that blast wool and wood
@@ -104,11 +104,11 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` do what a player does: they check your block rules, won't place a block inside anyone, show debris, and fire the `blockBreak` / `blockPlace` events (next section). `setBlock` is the raw version that skips all of that. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four team beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant or replaceable, and `highlight(block, { progress })` outlines one with break cracks. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four team beds…).
 
 ## Player
 
-`player` options: `build` (creative: break and place blocks from a block hotbar), `mining` (survival: see the next section), `fly`, `health` (half-hearts; `false` = invulnerable), `regen`, `fallDamage`, `hotbar: 'blocks' | 'items'`, `skin` (a Minecraft-layout skin, default `Skins.player`; it's also the first-person arm), and `controller`:
+`player` options: `build` (creative: break and place blocks from a block hotbar; for survival building see the `building` kit), `fly`, `health` (half-hearts; `false` = invulnerable), `regen`, `fallDamage`, `hotbar: 'blocks' | 'items'`, `skin` (a Minecraft-layout skin, default `Skins.player`; it's also the first-person arm), and `controller`:
 - `'walk'` (default) is the first-person player.
 - `'none'` removes the walking body, hand and hotbar. The game drives the camera and reads the controls itself, which is what vehicles, flight and top-down games need (next section). `player.position` then stays wherever you last `teleport` it: that's the point mobs chase and pickups fly to, so move it with your vehicle if you use those, and ignore it if you don't.
 
@@ -140,29 +140,45 @@ Built-in starter sprites: `wooden_sword`, `stone_sword`, `iron_sword`, `diamond_
 
 Art drawn another way works too: set `hold.grip` (and `hold.rotation`) to match it.
 
-## Blocks, mining and building
+## Kits: ready-made systems, no special access
 
-Survival-style building is part of the platform: blocks are items, the player mines and places them, and the game decides what's allowed.
+Some gameplay systems are common enough that the platform ships them, but they aren't part of the core. A **kit** is an ordinary module under `src/platform/kits/`, written only against `@platform`, exactly like code in your game folder. `npm run check:boundaries` (part of `typecheck` and `build`) fails if a kit, or a game, imports anything else. Use a kit as is, copy it into your game and change it, or write your own: nothing a kit does needs access your game doesn't have. `Behaviors` for mobs follow the same idea.
 
-```ts
-game.items.define('wool', { kind: 'block', name: 'Wool', block: 'red_wool' }); // icon: the block itself
-game.player.inventory.give('wool', 64);
-```
-
-- **Block items** stack to 64, show the block as their hotbar icon, are held as a little cube, and drop as small spinning cubes of the block.
-- **`player: { hotbar: 'items', mining: true }`**: hold left-click on a block to mine it (a progress ring fills; the arm swings), right-click with a block item to place it against the face you're aiming at. Aiming at a mob attacks it instead, and right-clicking a mob with `onInteract` talks to it.
-- **Block rules** decide what can be broken and placed, by whom, and how long mining takes. They apply to the player, to `world.breakBlock` / `placeBlock` (so bots follow them too) and to explosions (`by: 'world'`):
+| Kit | What it does |
+| --- | --- |
+| `building(game, rules)` | Survival building: hold left-click to mine a block (cracks grow over it, the arm swings), right-click with a block to place it against the face you aim at. Your rules decide what may be broken or placed, by whom, and how long mining takes. |
+| `interactions(game, { type: handler })` | Right-click a mob to talk to it: shopkeepers, quest givers, levers. |
 
 ```ts
-blocks: {
-  canBreak: (game, at, block, by) => placedThisMatch.has(key(at)) || block.endsWith('_bed'),
-  canPlace: (game, at, block, by) => at.y < 110,
-  breakTime: (game, block, held) => (block.endsWith('_wool') && held?.item === 'shears' ? 0.1 : 0.6),
+import { building, interactions, type Building, type Interactions } from '@platform/kits';
+
+let build: Building;
+let talk: Interactions;
+
+setup(game) {
+  game.items.define('wool', { kind: 'misc', name: 'Wool', icon: { block: 'red_wool' } }); // looks like a block: placeable
+  build = building(game, {
+    canBreak: (at, block, by) => placedThisMatch.has(key(at)) || block.endsWith('_bed'),
+    canPlace: (at) => at.y < 110,
+    breakTime: (block, held) => (block.endsWith('_wool') && held?.item === 'shears' ? 0.1 : 0.6),
+  });
+  talk = interactions(game, { shopkeeper: () => shop.show() });
+},
+update(game, dt) {
+  talk.update();     // first, so talking to the shopkeeper wins over placing a block
+  build.update(dt);  // before the built-in weapons, so mining a block doesn't also swing the sword
 },
 ```
 
-  Without `breakTime`, mining takes a Minecraft-like time by material (plants instantly, wool and glass fast, wood medium, stone slow, obsidian very slow). Bedrock and liquids never break.
-- **Events:** `blockBreak` and `blockPlace` fire with `{ x, y, z, block, by }` for the player, entities, explosions and `world.breakBlock` / `placeBlock`. Bed Wars uses them to track which blocks were placed during the match (the only ones that can be broken) and to notice a bed going.
+Without `breakTime`, mining takes a Minecraft-like time by material (`defaultBreakTime`: plants instantly, wool and glass fast, wood medium, stone slow, obsidian very slow). Bots build under the same rules through `build.placeBlock(x, y, z, block, bot)` and `build.breakBlock(x, y, z, bot)`; that's how the Bed Wars bots bridge and dig.
+
+**The primitives underneath**, available to any game:
+- **Items that look like blocks.** An item with `icon: { block: 'oak_planks' }` shows the block in the hotbar and menus, is held as a little cube and drops as a spinning cube of the block.
+- **`input.consume(button | key)`** claims an input for the rest of the frame. Your game's `update` runs before the built-in systems, so a click you handle and consume doesn't also swing the sword or eat the apple.
+- **`entities.raycast(origin, dir, reach)`** finds the mob under the crosshair (stopping at blocks); `world.raycast` finds the block.
+- **`world.highlight(block, { progress })`** outlines a block, with Minecraft's break cracks at `progress` 0..1. **`hud.progress(0..1)`** is a ring round the crosshair.
+- **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone. They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant or replaceable.
+- **`world.explode(center, radius, { filter, by })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match).
 
 ## First-person view model
 
@@ -256,7 +272,7 @@ game.player.viewModel.visible = false;                // cutscenes
 With `player: { controller: 'none' }`, the world streams around wherever the camera is.
 
 - **Camera:** `game.camera.set(position, lookAt, up?)`, or `setPose(position, quaternion)`, plus `fov`. Read `position` and `forward`. Set it in `update` and it's used that same frame.
-- **Input:** `game.input.isDown('KeyW')`, `pressed(code)`, `button(0)`, `buttonPressed(2)`, and `mouseX` / `mouseY` / `wheel` deltas while the mouse is captured. Everything reads as idle while paused, so games never need to check.
+- **Input:** `game.input.isDown('KeyW')`, `pressed(code)`, `button(0)`, `buttonPressed(2)`, and `mouseX` / `mouseY` / `wheel` deltas while the mouse is captured. Everything reads as idle while paused, so games never need to check. `consume(button | key)` claims an input for the rest of the frame, so the built-in systems (which run after your `update`) ignore it.
 - **Math:** `import { math } from '@platform'` gives `Vector3`, `Quaternion`, `Euler`, `Matrix4` and `MathUtils`.
 - **Props** are movable objects:
   - `props.model(blueprint, { scale, pivot })` meshes a Blueprint once. The mesh uses the world's block textures, with ambient occlusion, sun shadows and glowing blocks. At `scale: 0.25`, each block is a quarter metre, which is how the Starfighter builds detailed X-wings.
@@ -306,8 +322,8 @@ const z = game.entities.spawn('zombie', { x: 10, y: 71, z: 0 });
 - Custom AI is a function `(self, game, dt) => void`. It can call `self.moveTo('player' | point)`, `moveDirection(x, z)`, `stop`, `jump`, `lookAt`, `canSeePlayer`, `distanceToPlayer`, `animate('attack' | 'raise' | 'cast')`, `glow(color)`, `shoot(projectile, target, { lead })`, `impulse`, `setSpeed` and `damage`, and keep state in `self.data`. The Warden in `src/games/arena/content.ts` is a complete boss state machine: telegraphed slams, fireballs, summons and an enrage phase.
 - `boss: true` shows a boss bar automatically. Hurt flashes, damage numbers, blood particles, death animations, drops and positional sounds are handled for you.
 - Queries: `entities.all(type?)`, `count(type?)`, `near(point, radius)`, `clear()`.
-- `onInteract(self, game)` runs when the player right-clicks it (shopkeepers, quest givers). `invulnerable: true` ignores all damage. `entity.armor` (0..20) reduces damage like the player's.
-- Mobs can fight each other and build: `other.damage(n, { source: self })` hurts another entity with the right knockback and kill credit, and `world.placeBlock(x, y, z, 'red_wool', { by: self })` / `breakBlock` let them bridge and dig under the game's block rules. The Bed Wars bots (`src/games/bedwars/bots.ts`) are built that way: they fortify their bed, gather and shop, find routes across the void (bridging as they go) and through defences (digging), and fight.
+- `invulnerable: true` ignores all damage (shopkeepers, scenery). `entity.armor` (0..20) reduces damage like the player's. `entities.raycast(origin, dir, reach)` finds the one under a crosshair; the `interactions` kit turns that into right-click-to-talk.
+- Mobs can fight each other and build: `other.damage(n, { source: self })` hurts another entity with the right knockback and kill credit, and the building kit's `placeBlock(x, y, z, 'red_wool', self)` / `breakBlock` let them bridge and dig under the game's block rules. The Bed Wars bots (`src/games/bedwars/bots.ts`) are built that way: they fortify their bed, gather and shop, find routes across the void (bridging as they go) and through defences (digging), and fight.
 
 Box models use the Minecraft skin UV layout, so any 64×64 humanoid skin works. The only built-in skin is `Skins.player`; mobs come from your own atlas. `extras` adds parts of your own to a humanoid (the Warden's crown is one, with `parent: 'head'`).
 
@@ -386,6 +402,7 @@ game.commands.run('/give pike'); // run one from code
 | `hud.stat(id, label, value)` | Corner chips (kills, timers) |
 | `hud.bossBar(name, fraction)` | Manual boss bar |
 | `hud.toast(text)` | Small toast (one at a time) |
+| `hud.progress(0..1, { color })` | A ring round the crosshair (mining, charging, capturing) |
 | `hud.feed(text, { color })` | A line in the message feed at the top left (kill feeds, match events); lines stack and fade |
 | `hud.screen({ title, tone, stats, buttons })` | Modal victory / defeat / menu |
 | `hud.menu({ title, subtitle, sections: [{ title, entries }] })` | A panel of clickable entries (shops, upgrades, level select) while the game keeps running. Entries take an `icon` (a sprite or `{ block }`), `label`, `detail` (a price), `note`, `disabled`, `active` and `onSelect`; `update()` refreshes it after a purchase. Esc or E closes it |
@@ -401,6 +418,8 @@ game.commands.run('/give pike'); // run one from code
 ```
 ┌──────────── games (TypeScript, only @platform) ────────────┐
 │ rules · content · AI behaviours · HUD choreography          │
+├──────────── kits + art toolkit (optional, only @platform) ──┤
+│ survival building · interactions · pixel-art painter        │
 └──────────────────────── GameContext ───────────────────────┘
 ┌──────────── platform runtime (TypeScript + three.js) ──────┐
 │ lifecycle · entity/item/combat systems · HUD · audio · FX  │
@@ -417,5 +436,5 @@ The seams are chosen so a server can take over simulation later without changing
 
 - The simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server binary can link the same crate and produce identical worlds from the same seed and blueprints.
 - Entity state lives in flat `f64` buffers (layout documented in `entities.rs`), which serialise trivially into network snapshots.
-- Games only talk to `GameContext`. On a server, `hud` / `fx` / `audio` calls become messages sent to clients, and `world` / `entities` / `player` map onto the authoritative simulation. The game file itself doesn't change.
+- Games only talk to `GameContext`. On a server, `hud` / `fx` / `audio` calls become messages sent to clients, and `world` / `entities` / `player` map onto the authoritative simulation. The game file itself doesn't change. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
 - Rendering, chunk meshing, lighting and culling stay client-side.

@@ -43,6 +43,7 @@ export class GameHud implements HudApi {
   onCrosshair: ((visible: boolean) => void) | null = null;
   private metersEl: HTMLElement;
   private feedEl: HTMLElement;
+  private progressEl: HTMLElement;
   private meterEls = new Map<string, HTMLElement>();
   private markersEl: HTMLElement;
   private markers = new Map<string, Marker>();
@@ -62,6 +63,7 @@ export class GameHud implements HudApi {
     this.hitEl = h('div.hitmarker');
     this.metersEl = h('div.meters');
     this.feedEl = h('div.feed');
+    this.progressEl = h('div.progress-ring');
     this.markersEl = h('div.markers');
     this.radarCanvas = h('canvas.radar', { width: 150, height: 150 }) as HTMLCanvasElement;
     this.radarCanvas.style.display = 'none';
@@ -78,6 +80,7 @@ export class GameHud implements HudApi {
       this.boss,
       this.toastEl,
       this.feedEl,
+      this.progressEl,
       this.metersEl,
       this.radarCanvas,
     );
@@ -341,6 +344,15 @@ export class GameHud implements HudApi {
     window.setTimeout(() => line.remove(), 6600);
   }
 
+  progress(fraction: number | null, opts: { color?: string } = {}) {
+    const el = this.progressEl;
+    el.style.display = fraction === null ? 'none' : 'block';
+    if (fraction === null) return;
+    el.style.setProperty('--p', `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`);
+    if (opts.color) el.style.setProperty('--c', opts.color);
+    else el.style.removeProperty('--c');
+  }
+
   screen(opts: ScreenOptions): () => void {
     const buttons = h('div.result-buttons');
     let closed = false;
@@ -513,6 +525,7 @@ export class GameHud implements HudApi {
     this.hideBossBar();
     this.bannerEl.classList.remove('show');
     this.feedEl.replaceChildren();
+    this.progress(null);
     for (const n of this.numbers) n.el.remove();
     this.numbers = [];
     this.closeScreens();

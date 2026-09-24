@@ -28,10 +28,11 @@ export function defineItems(game: GameContext, m: Match, fireballs: Fireballs) {
   it.define('shears', { kind: 'misc', name: 'Shears', icon: Sprite.shears, stack: 1 });
   it.define('bow', { kind: 'bow', name: 'Bow', icon: 'bow', drawIcon: 'bow_pulling', ammo: 'arrow', damage: [1.5, 7], drawTime: 1, speed: 44, rank: 0 });
   it.define('arrow', { kind: 'misc', name: 'Arrow', icon: 'arrow', stack: 64 });
-  it.define('wool', { kind: 'block', name: 'Wool', block: m.player.wool });
-  it.define('planks', { kind: 'block', name: 'Oak Planks', block: 'oak_planks' });
-  it.define('end_stone', { kind: 'block', name: 'End Stone', block: 'end_stone' });
-  it.define('obsidian', { kind: 'block', name: 'Obsidian', block: 'obsidian' });
+  // Blocks: items that look like a block, which the building kit places.
+  it.define('wool', { kind: 'misc', name: 'Wool', icon: { block: m.player.wool } });
+  it.define('planks', { kind: 'misc', name: 'Oak Planks', icon: { block: 'oak_planks' } });
+  it.define('end_stone', { kind: 'misc', name: 'End Stone', icon: { block: 'end_stone' } });
+  it.define('obsidian', { kind: 'misc', name: 'Obsidian', icon: { block: 'obsidian' } });
   it.define('golden_apple', {
     kind: 'consumable',
     name: 'Golden Apple',

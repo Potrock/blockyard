@@ -1,4 +1,5 @@
 import { defineGame, Models, type Entity, type GameContext } from '@platform';
+import { building, interactions, type Building, type Interactions } from '@platform/kits';
 import { BEDWARS_ATLAS, Skin, botSword, paintBedwarsAtlas } from './art';
 import { Bot, type Target } from './bots';
 import { Fireballs } from './fireballs';
@@ -29,6 +30,9 @@ let match: Match;
 let nav: Nav;
 let shop: Shop;
 let fireballs: Fireballs;
+/** Survival building (mining and placing, under Bed Wars' rules) and the shopkeepers. */
+let build: Building;
+let talk: Interactions;
 const bots = new Map<number, Bot>();
 /** HUD timers and the diamond / emerald countdowns. */
 const hud = { refresh: 0, alarm: 0, diamondIn: 30, emeraldIn: 60 };
@@ -159,7 +163,7 @@ function spawnBot(game: GameContext, t: Team, firstLife: boolean) {
     t.pick = t.pick > 1 ? t.pick - 1 : t.pick;
   }
   const skill = BOT_SKILL[nextBotSkill++ % BOT_SKILL.length];
-  bots.set(e.id, new Bot(match, nav, fireballs, t, e, skill, firstLife));
+  bots.set(e.id, new Bot(match, nav, build, fireballs, t, e, skill, firstLife));
 }
 
 function applyGear(game: GameContext) {
@@ -262,28 +266,27 @@ export default defineGame({
   },
   player: {
     hotbar: 'items',
-    mining: true,
     health: 20,
     regen: { delay: 5, perSecond: 0.5 },
     fallDamage: true,
     skin: [Skin.red[0], Skin.red[1]],
     skinAtlas: BEDWARS_ATLAS,
   },
-  blocks: {
-    canBreak: (_g, at, block, by) => match.canBreak(at, block, by),
-    canPlace: (_g, at, block, by) => match.canPlace(at, block, by),
-    breakTime: (_g, block, held) => {
-      const item = held?.item ?? '';
-      return mineTime(block, Math.max(0, PICK_ITEMS.indexOf(item)), item === 'shears');
-    },
-  },
-
   setup(game) {
     const art = paintBedwarsAtlas();
     game.items.atlas(BEDWARS_ATLAS, { width: art.width, height: art.height, pixels: art.albedo, emissive: art.emissive });
     defineSounds(game);
     match = new Match(game, map);
     nav = new Nav(game, navBounds(), (x, y, z) => match.isPlaced(x, y, z));
+    build = building(game, {
+      canBreak: (at, block, by) => match.canBreak(at, block, by),
+      canPlace: (at, block, by) => match.canPlace(at, block, by),
+      breakTime: (block, held) => {
+        const item = held?.item ?? '';
+        return mineTime(block, Math.max(0, PICK_ITEMS.indexOf(item)), item === 'shears');
+      },
+    });
+    talk = interactions(game, { shopkeeper: () => shop.show() });
     fireballs = new Fireballs(match);
     shop = new Shop(match, () => {
       applyGear(game);
@@ -320,7 +323,6 @@ export default defineGame({
       speed: 0,
       knockbackResistance: 1,
       invulnerable: true,
-      onInteract: () => shop.show(),
       ai: (self) => self.lookAt(self.distanceToPlayer() < 7 ? 'player' : null),
     });
 
@@ -435,6 +437,9 @@ export default defineGame({
   },
 
   update(game, dt) {
+    // Talking to a shopkeeper takes the right-click before building can.
+    talk.update();
+    build.update(dt);
     if (match.over) return;
     const now = match.now;
     for (const p of match.piles) p.sync();

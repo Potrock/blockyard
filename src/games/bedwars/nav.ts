@@ -64,7 +64,7 @@ export class Nav {
     if (s === undefined) {
       const w = this.game.world;
       const id = w.getBlock(x, y, z);
-      s = id !== 0 && (id < 0 || !/^(water|lava)$/.test(w.blockName(id)));
+      s = id !== 0 && (id < 0 || (w.blockInfo(id)?.solid ?? false));
       this.cache.set(k, s);
     }
     return s;

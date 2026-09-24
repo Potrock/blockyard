@@ -35,8 +35,6 @@ export interface GameDefinition {
    * in production builds. They're always available in development.
    */
   cheats?: boolean;
-  /** Rules for breaking and placing blocks (the player, `world.breakBlock` / `placeBlock`, and explosions). */
-  blocks?: BlockRules;
   world?: WorldOptions;
   player?: PlayerOptions;
   /**
@@ -92,12 +90,6 @@ export interface PlayerOptions {
    * vehicles, flight or strategy games. The world streams around the camera.
    */
   controller?: 'walk' | 'none';
-  /**
-   * With an items hotbar: holding left-click on a block mines it (see `GameDefinition.blocks` for
-   * which blocks and how long), and block items (`kind: 'block'`) are placed with right-click.
-   * Default false (block items can still be placed).
-   */
-  mining?: boolean;
   /**
    * Player skin (Minecraft layout, origin in `skinAtlas`). Used for the first-person arm.
    * Default `Skins.player`.
@@ -161,6 +153,13 @@ export interface InputApi {
   /** Mouse button held / clicked this frame (0 left, 1 middle, 2 right). */
   button(b: number): boolean;
   buttonPressed(b: number): boolean;
+  /**
+   * Claim a mouse button (0, 1, 2) or key code for the rest of this frame: everything that reads
+   * input after you, including the platform's built-in weapons, sees it as idle. Your game's
+   * `update` runs before the built-in systems each frame, so handling a click and consuming it
+   * (a pickaxe mining a block, say) stops the sword from also swinging.
+   */
+  consume(input: number | string): void;
   /** Mouse movement this frame, in pixels (while the mouse is captured). */
   readonly mouseX: number;
   readonly mouseY: number;
@@ -242,6 +241,8 @@ export interface WorldApi {
   setBlock(x: number, y: number, z: number, block: BlockRef): boolean;
   blockId(name: string): number;
   blockName(id: number): string;
+  /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing. Null if unknown. */
+  blockInfo(block: BlockRef): BlockInfo | null;
   /** First targetable block along a ray. */
   raycast(origin: Vec3, dir: Vec3, maxDistance: number): RayHit | null;
   /** True if nothing solid blocks the straight line between two points. */
@@ -250,15 +251,44 @@ export interface WorldApi {
   surfaceY(x: number, z: number): number;
   /** The water surface: the top of sea-level water is at `seaLevel + 1`. */
   readonly seaLevel: number;
-  /** Blow a ragged sphere out of the world (bedrock survives) with debris and an explosion. Returns blocks removed. */
-  explode(center: Vec3, radius: number, opts?: { effect?: boolean }): number;
   /**
-   * Break a block the way the player does: checks `blocks.canBreak`, shows debris and fires
-   * `blockBreak`. Returns false if nothing was broken. (`setBlock` is the raw version.)
+   * Blow a ragged sphere out of the world (bedrock and liquids survive) with debris and an
+   * explosion. `filter` decides which blocks go (e.g. only ones placed this match); `by` is
+   * passed on to the `blockBreak` events. Returns blocks removed.
+   */
+  explode(center: Vec3, radius: number, opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Entity | 'player' | 'world' }): number;
+  /**
+   * Break a block with debris and a sound (and the plant on top), and fire `blockBreak`.
+   * Bedrock and liquids don't break. Returns false if nothing was broken. (`setBlock` is the
+   * silent version.) Who may break what is up to your game.
    */
   breakBlock(x: number, y: number, z: number, opts?: { by?: Entity | 'player' | 'world' }): boolean;
-  /** Place a block the way the player does: checks `blocks.canPlace` and that nobody is standing there, and fires `blockPlace`. */
+  /**
+   * Place a block if the cell is free (air or a plant), nobody is standing in it, and a plant has
+   * ground under it; with a sound, and fire `blockPlace`. Returns false if it couldn't.
+   */
   placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Entity | 'player' | 'world' }): boolean;
+  /**
+   * Outline one block (the one you're aiming at), with Minecraft's break cracks growing over it
+   * as `progress` goes 0..1. `null` hides it. It stays until you move or hide it.
+   */
+  highlight(at: Vec3 | null, opts?: { progress?: number }): void;
+}
+
+export interface BlockInfo {
+  id: number;
+  name: string;
+  /** Display name, e.g. "Oak Planks". */
+  label: string;
+  /** Bodies collide with it. */
+  solid: boolean;
+  liquid: boolean;
+  /** A cross-shaped plant (flowers, grass, torches). */
+  plant: boolean;
+  /** Placing a block here replaces it (air, plants, liquids). */
+  replaceable: boolean;
+  /** Light it gives off, 0..15. */
+  light: number;
 }
 
 /** Anything that can be packed into generator data (the `Blueprint` class). */
@@ -449,7 +479,11 @@ export type BuiltinSprite =
 
 interface ItemBase {
   name: string;
-  icon: SpriteRef;
+  /**
+   * A sprite, or `{ block }`: an item that looks like a block is shown as the block in the
+   * hotbar, held as a little cube, and dropped as a spinning cube of it.
+   */
+  icon: IconRef;
   /** How it is held and swung in first person. */
   hold?: HoldSpec;
   /** Its own sounds (built-in or `audio.define`d); each defaults to the platform's generic one. */
@@ -510,33 +544,10 @@ export interface MiscItem extends ItemBase {
   kind: 'misc';
 }
 
-/** A placeable block, carried in the inventory like any item. */
-export interface BlockItem extends Omit<ItemBase, 'icon'> {
-  kind: 'block';
-  /** The block it places. */
-  block: string;
-  /** Hotbar icon (default: the block itself). */
-  icon?: SpriteRef;
-}
-
-export type ItemDefinition = MeleeItem | BowItem | ConsumableItem | MiscItem | BlockItem;
+export type ItemDefinition = MeleeItem | BowItem | ConsumableItem | MiscItem;
 
 /** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
 export type IconRef = SpriteRef | { block: string };
-
-/** Block positions are whole numbers (the block's minimum corner). */
-export interface BlockRules {
-  /** May this block be broken? `by` is who's breaking it. Default: anything but bedrock. */
-  canBreak?(game: GameContext, at: Vec3, block: string, by: Entity | 'player' | 'world'): boolean;
-  /** May this block be placed here? Default: yes. */
-  canPlace?(game: GameContext, at: Vec3, block: string, by: Entity | 'player' | 'world'): boolean;
-  /**
-   * Seconds for the player to mine it with what they're holding (0 = instant). Default: a
-   * Minecraft-like time by material (wool and plants fast, wood medium, stone slow, obsidian very
-   * slow), so tools are yours to add here.
-   */
-  breakTime?(game: GameContext, block: string, held: ItemStack | null): number;
-}
 
 export interface Pickup {
   readonly id: number;
@@ -621,8 +632,6 @@ export interface EntityDefinition {
   sounds?: { hurt?: SoundName; death?: SoundName; ambient?: SoundName };
   /** Particle colour for hits and death puffs. */
   bloodColor?: string;
-  /** Right-clicking it (shopkeepers, quest givers, levers…). */
-  onInteract?(self: Entity, game: GameContext): void;
   /** Ignores all damage (shopkeepers, scenery). */
   invulnerable?: boolean;
 }
@@ -689,6 +698,8 @@ export interface EntityApi {
   clear(): void;
   /** Fire a projectile from anywhere (traps, turrets). */
   projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner?: Entity | 'player'): void;
+  /** The first living entity along a ray, stopping at solid blocks (what the crosshair is on). */
+  raycast(origin: Vec3, dir: Vec3, maxDistance: number): { entity: Entity; distance: number } | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -763,6 +774,8 @@ export interface HudApi {
   radar(data: RadarData | null): void;
   /** A panel of clickable entries (shops, upgrade trees, level select); releases the mouse while open. The game keeps running. */
   menu(opts: MenuOptions): MenuHandle;
+  /** A ring round the crosshair filling 0..1 (mining, charging, capturing); `null` hides it. */
+  progress(fraction: number | null, opts?: { color?: string }): void;
 }
 
 export interface MarkerOptions {

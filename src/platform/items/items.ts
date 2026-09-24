@@ -78,7 +78,10 @@ export class Inventory implements InventoryApi {
   take(item: string, count = 1): boolean {
     if (this.count(item) < count) return false;
     let left = count;
-    for (let i = 8; i >= 0 && left > 0; i--) {
+    // From the stack in hand first (placing blocks, eating), then from the end of the hotbar.
+    const order = [this.selected, 8, 7, 6, 5, 4, 3, 2, 1, 0].filter((v, i, a) => a.indexOf(v) === i);
+    for (const i of order) {
+      if (left <= 0) break;
       const s = this.slots[i];
       if (s && s.item === item) {
         const n = Math.min(s.count, left);
@@ -87,16 +90,6 @@ export class Inventory implements InventoryApi {
         if (s.count === 0) this.slots[i] = null;
       }
     }
-    this.onChange?.();
-    return true;
-  }
-
-  /** Use up `count` of the held stack (placing a block, eating). */
-  takeHeld(count = 1): boolean {
-    const s = this.slots[this.selected];
-    if (!s || s.count < count) return false;
-    s.count -= count;
-    if (s.count === 0) this.slots[this.selected] = null;
     this.onChange?.();
     return true;
   }
@@ -212,13 +205,14 @@ export class ItemSystem implements ItemApi {
     if (!def) throw new Error(`items.spawnPickup: unknown item "${item}"`);
     let group: THREE.Object3D;
     let dispose: (() => void) | null = null;
-    if (def.kind === 'block' && !def.icon) {
-      // Block items drop as little cubes of the block.
-      const cube = this.s.blockModel(def.block, 0.3);
+    const icon = def.icon;
+    if (typeof icon === 'object' && 'block' in icon) {
+      // Items that look like a block drop as little cubes of it.
+      const cube = this.s.blockModel(icon.block, 0.3);
       group = cube.object;
       dispose = cube.remove;
     } else {
-      const { geometry, atlas } = this.s.graphics.spriteGeometry(def.icon!);
+      const { geometry, atlas } = this.s.graphics.spriteGeometry(icon);
       const mesh = new THREE.Mesh(geometry, this.material(atlas));
       mesh.customDepthMaterial = this.s.graphics.shadowMaterial(atlas);
       mesh.scale.setScalar(0.62);

@@ -69,7 +69,8 @@ export class Fireballs {
 
   private explode(at: Vec3, b: Ball) {
     const g = this.m.game;
-    g.world.explode(at, 2.6);
+    // Only wool and wood placed this match go (Bed Wars' rules for explosions).
+    g.world.explode(at, 2.6, { filter: (p, block) => this.m.canBreak(p, block, 'world'), by: b.by });
     for (const e of g.entities.near(at, BLAST)) {
       if (!e.alive || !e.data.team) continue;
       const p = e.position;

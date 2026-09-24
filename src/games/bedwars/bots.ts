@@ -1,4 +1,5 @@
 import type { Entity, Vec3 } from '@platform';
+import type { Building } from '@platform/kits';
 import type { Fireballs } from './fireballs';
 import type { Nav, Step } from './nav';
 import { armorPoints, mineTime, swordDamage, type Match, type Team } from './state';
@@ -21,8 +22,8 @@ const dist = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 /**
  * A Bed Wars bot: fortifies its bed with wool, gathers from its generator, shops, then bridges
  * out to break other beds and hunt, fighting whoever comes near (with a little strafing and
- * jump-crits). Everything goes through the public API: `moveDirection`, `world.placeBlock` /
- * `breakBlock` (so the game's block rules apply to bots too), and `damage`.
+ * jump-crits). Everything goes through the public API (`moveDirection`, `damage`) and the
+ * building kit's `placeBlock` / `breakBlock`, so the game's block rules apply to bots too.
  */
 export class Bot {
   mode: Mode = 'fortify';
@@ -55,6 +56,7 @@ export class Bot {
   constructor(
     private m: Match,
     private nav: Nav,
+    private build: Building,
     private fireballs: Fireballs,
     readonly team: Team,
     readonly e: Entity,
@@ -77,7 +79,7 @@ export class Bot {
   private solid(x: number, y: number, z: number): boolean {
     const w = this.game.world;
     const id = w.getBlock(x, y, z);
-    return id !== 0 && (id < 0 || !/^(water|lava)$/.test(w.blockName(id)));
+    return id !== 0 && (id < 0 || (w.blockInfo(id)?.solid ?? false));
   }
 
   /** Ground within a few blocks below (live, unlike the route planner's snapshot). */
@@ -262,7 +264,7 @@ export class Bot {
     this.e.lookAt({ x: f.x + 0.5, y: f.y + 0.5, z: f.z + 0.5 });
     if (this.placeCd > 0) return;
     this.fortify.shift();
-    if (!this.solid(f.x, f.y, f.z) && this.game.world.placeBlock(f.x, f.y, f.z, this.team.wool, { by: this.e })) {
+    if (!this.solid(f.x, f.y, f.z) && this.build.placeBlock(f.x, f.y, f.z, this.team.wool, this.e)) {
       this.placeCd = 0.3 / this.skill;
       this.e.animate('attack');
     }
@@ -455,7 +457,7 @@ export class Bot {
     }
     if (this.mining.t >= this.mining.need) {
       this.mining = null;
-      if (!this.game.world.breakBlock(b.x, b.y, b.z, { by: e })) this.path = null;
+      if (!this.build.breakBlock(b.x, b.y, b.z, e)) this.path = null;
     }
   }
 
@@ -490,7 +492,7 @@ export class Bot {
 
   private bridge(x: number, y: number, z: number): boolean {
     if (this.placeCd > 0) return false;
-    if (!this.game.world.placeBlock(x, y, z, this.team.wool, { by: this.e })) return false;
+    if (!this.build.placeBlock(x, y, z, this.team.wool, this.e)) return false;
     this.placeCd = 0.3 / this.skill;
     this.bridgingT = 0.9;
     this.e.animate('attack');
