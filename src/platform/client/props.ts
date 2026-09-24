@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { BlockRef, Prop, PropApi, PropModel, Vec3 } from '../api/types';
-import type { Blueprint } from '../api/blueprint';
+import type { BlockRef, Vec3 } from '../api/types';
+import { Blueprint } from '../api/blueprint';
 import type { Registry } from '../world/registry';
 import type { SharedUniforms } from '../render/pipeline';
+import type { Content } from '../content';
+import type { PropFrame } from '../sim/props';
 import { Shaders } from '../render/shaders';
 
-export interface PropServices {
+export interface PropViewParts {
   shared: SharedUniforms;
   albedo: THREE.Texture;
   material: THREE.Texture;
@@ -15,6 +17,7 @@ export interface PropServices {
   scene: THREE.Scene;
   fxScene: THREE.Scene;
   world: VoxelWorld;
+  content: Content;
 }
 
 // Faces in engine order (+X, -X, +Y, -Y, +Z, -Z): normal, and in-plane axes u (right) and v (up)
@@ -35,69 +38,28 @@ const CORNERS = [
 ];
 const AO_LEVELS = [0.45, 0.64, 0.82, 1];
 
-class PropModelImpl implements PropModel {
-  constructor(
-    readonly geometry: THREE.BufferGeometry,
-    readonly radius: number,
-    readonly blocks: number,
-  ) {}
+interface Shown {
+  object: THREE.Object3D;
+  /** Block builds light and flash; bolts glow on their own. */
+  material: THREE.RawShaderMaterial | null;
+  probeTimer: number;
 }
 
-class PropImpl implements Prop {
-  removed = false;
-  probeTimer = Math.random() * 0.2;
-  flashT = 0;
-  flashColor = new THREE.Color();
+const tmpColor = new THREE.Color();
 
-  constructor(
-    readonly object: THREE.Object3D,
-    readonly material: THREE.RawShaderMaterial | null,
-    private onRemove: (p: PropImpl) => void,
-  ) {}
-
-  get position(): THREE.Vector3 {
-    return this.object.position;
-  }
-  get quaternion(): THREE.Quaternion {
-    return this.object.quaternion;
-  }
-  get scale(): number {
-    return this.object.scale.x;
-  }
-  set scale(s: number) {
-    this.object.scale.setScalar(s);
-  }
-  get visible(): boolean {
-    return this.object.visible;
-  }
-  set visible(v: boolean) {
-    this.object.visible = v;
-  }
-
-  flash(color = '#ffffff', seconds = 0.12) {
-    this.flashColor.set(color);
-    this.flashT = seconds;
-  }
-
-  remove() {
-    if (this.removed) return;
-    this.removed = true;
-    this.onRemove(this);
-  }
-}
-
-/** The scene object behind a prop (platform-internal). */
-export function propObject(p: Prop): THREE.Object3D {
-  return (p as PropImpl).object;
-}
-
-/** Movable objects: block builds drawn with the world's textures, and glowing bolts. */
-export class PropSystem implements PropApi {
-  private props: PropImpl[] = [];
+/**
+ * Draws the simulation's props: block builds meshed with the world's textures (lit, shadowed,
+ * glowing blocks glow) and bolts. Also makes local block cubes (items lying on the ground).
+ */
+export class PropView {
+  private shown = new Map<number, Shown>();
+  private local = new Set<Shown>();
+  private geometries = new Map<number, THREE.BufferGeometry>();
+  private cubes = new Map<string, THREE.BufferGeometry>();
   private shadow: THREE.RawShaderMaterial;
   private boltGeo: THREE.BufferGeometry;
 
-  constructor(private s: PropServices) {
+  constructor(private s: PropViewParts) {
     this.shadow = new THREE.RawShaderMaterial({
       vertexShader: Shaders.propShadow.vertex,
       fragmentShader: Shaders.propShadow.fragment,
@@ -119,11 +81,10 @@ export class PropSystem implements PropApi {
   }
 
   /**
-   * Mesh a Blueprint once: visible faces only, per-vertex ambient occlusion, block textures.
-   * `pivot` (blueprint coordinates, default 0,0,0) becomes the prop's origin; `scale` is the size
-   * of one block in world units.
+   * Mesh a Blueprint: visible faces only, per-vertex ambient occlusion, block textures. `pivot`
+   * (blueprint coordinates) becomes the origin; `scale` is the size of one block in world units.
    */
-  model(bp: Blueprint, opts: { scale?: number; pivot?: Vec3 } = {}): PropModel {
+  mesh(bp: Blueprint, opts: { scale?: number; pivot?: Vec3 } = {}): THREE.BufferGeometry {
     const scale = opts.scale ?? 1;
     const pv = opts.pivot ?? { x: 0, y: 0, z: 0 };
     const { origin: o, size } = bp;
@@ -144,8 +105,6 @@ export class PropSystem implements PropApi {
     const lay: number[] = [];
     const aos: number[] = [];
     const idx: number[] = [];
-    let r2 = 0;
-    let count = 0;
     for (let y = 1; y < H - 1; y++)
       for (let z = 1; z < D - 1; z++)
         for (let x = 1; x < W - 1; x++) {
@@ -153,7 +112,6 @@ export class PropSystem implements PropApi {
           if (id === 0) continue;
           const def = blocks[id];
           if (!def || def.shape !== 'cube') continue;
-          count++;
           for (let f = 0; f < 6; f++) {
             const { n, u, v } = FACES[f];
             const nb = ids[at(x + n[0], y + n[1], z + n[2])];
@@ -169,7 +127,6 @@ export class PropSystem implements PropApi {
               const py = (cy - pv.y) * scale;
               const pz = (cz - pv.z) * scale;
               pos.push(px, py, pz);
-              r2 = Math.max(r2, px * px + py * py + pz * pz);
               nrm.push(n[0], n[1], n[2]);
               uvs.push((su + 1) / 2, (sv + 1) / 2);
               lay.push(def.tex[f]);
@@ -197,11 +154,10 @@ export class PropSystem implements PropApi {
     g.setAttribute('ao', new THREE.Float32BufferAttribute(aos, 1));
     g.setIndex(idx);
     g.computeBoundingSphere();
-    return new PropModelImpl(g, Math.sqrt(r2), count);
+    return g;
   }
 
-  spawn(model: PropModel, opts: { position?: Vec3; scale?: number } = {}): Prop {
-    const m = model as PropModelImpl;
+  private blockMesh(geometry: THREE.BufferGeometry): Shown {
     const material = new THREE.RawShaderMaterial({
       vertexShader: Shaders.prop.vertex,
       fragmentShader: Shaders.prop.fragment,
@@ -215,17 +171,13 @@ export class PropSystem implements PropApi {
       },
       side: THREE.FrontSide,
     });
-    const mesh = new THREE.Mesh(m.geometry, material);
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.customDepthMaterial = this.shadow;
-    if (opts.position) mesh.position.set(opts.position.x, opts.position.y, opts.position.z);
-    if (opts.scale) mesh.scale.setScalar(opts.scale);
     this.s.scene.add(mesh);
-    const p = new PropImpl(mesh, material, (x) => this.drop(x));
-    this.props.push(p);
-    return p;
+    return { object: mesh, material, probeTimer: Math.random() * 0.2 };
   }
 
-  bolt(opts: { color: string; length?: number; width?: number; intensity?: number }): Prop {
+  private boltMesh(opts: { color: string; length?: number; width?: number; intensity?: number }): Shown {
     const mat = new THREE.RawShaderMaterial({
       vertexShader: Shaders.fx.vertex,
       fragmentShader: Shaders.fx.fragment,
@@ -244,46 +196,98 @@ export class PropSystem implements PropApi {
     const mesh = new THREE.Mesh(this.boltGeo, mat);
     mesh.scale.set(opts.width ?? 0.18, opts.width ?? 0.18, opts.length ?? 3);
     mesh.frustumCulled = false;
-    // Scale is fixed by the bolt's shape; `prop.scale` multiplies it.
+    // Scale is fixed by the bolt's shape; the prop's scale multiplies it.
     const holder = new THREE.Group();
     holder.add(mesh);
     this.s.fxScene.add(holder);
-    const p = new PropImpl(holder, null, (x) => this.drop(x));
-    this.props.push(p);
-    return p;
+    return { object: holder, material: null, probeTimer: 0 };
   }
 
-  private drop(p: PropImpl) {
-    p.object.removeFromParent();
-    p.material?.dispose();
-    if (!p.material) ((p.object.children[0] as THREE.Mesh).material as THREE.Material).dispose();
-    const i = this.props.indexOf(p);
-    if (i >= 0) this.props.splice(i, 1);
+  private drop(v: Shown) {
+    v.object.removeFromParent();
+    if (v.material) v.material.dispose();
+    else ((v.object.children[0] as THREE.Mesh).material as THREE.Material).dispose();
   }
 
-  /** Per frame: light probes (staggered) and hit flashes. */
-  update(dt: number) {
-    for (const p of this.props) {
-      if (!p.material) continue;
-      const u = p.material.uniforms;
-      p.probeTimer -= dt;
-      if (p.probeTimer <= 0) {
-        p.probeTimer = 0.2;
-        const o = p.object.position;
-        const l = this.s.world.light_probe(Math.floor(o.x), Math.floor(o.y), Math.floor(o.z));
-        (u.uProbe.value as THREE.Vector2).set(l[0], l[1]);
+  private geometry(model: number): THREE.BufferGeometry | null {
+    let g = this.geometries.get(model);
+    if (!g) {
+      const m = this.s.content.models.get(model);
+      if (!m) return null;
+      g = this.mesh(m.blueprint, m.opts);
+      this.geometries.set(model, g);
+    }
+    return g;
+  }
+
+  /** A little cube of a block, drawn until `remove` (items lying on the ground). */
+  localCube(block: string, size: number): { object: THREE.Object3D; remove(): void } {
+    let g = this.cubes.get(block);
+    if (!g) {
+      g = this.mesh(new Blueprint({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }).set(0, 0, 0, block), { pivot: { x: 0.5, y: 0.5, z: 0.5 } });
+      this.cubes.set(block, g);
+    }
+    const v = this.blockMesh(g);
+    v.object.scale.setScalar(size);
+    this.local.add(v);
+    return {
+      object: v.object,
+      remove: () => {
+        if (!this.local.delete(v)) return;
+        this.drop(v);
+      },
+    };
+  }
+
+  sync(frames: PropFrame[], dt: number) {
+    const seen = new Set<number>();
+    for (const f of frames) {
+      seen.add(f.id);
+      let v = this.shown.get(f.id);
+      if (!v) {
+        if (f.bolt) v = this.boltMesh(f.bolt);
+        else {
+          const g = f.model !== undefined ? this.geometry(f.model) : null;
+          if (!g) continue;
+          v = this.blockMesh(g);
+        }
+        this.shown.set(f.id, v);
       }
-      const tint = u.uTint.value as THREE.Vector4;
-      if (p.flashT > 0) {
-        p.flashT -= dt;
-        tint.set(p.flashColor.r * 2, p.flashColor.g * 2, p.flashColor.b * 2, Math.min(0.85, p.flashT * 8));
-      } else {
-        tint.w = 0;
+      const o = v.object;
+      o.position.set(f.p[0], f.p[1], f.p[2]);
+      o.quaternion.set(f.q[0], f.q[1], f.q[2], f.q[3]);
+      o.scale.setScalar(f.scale);
+      o.visible = f.visible;
+      if (v.material) {
+        const tint = v.material.uniforms.uTint.value as THREE.Vector4;
+        if (f.flash) {
+          tmpColor.set(f.flash[0]);
+          tint.set(tmpColor.r * 2, tmpColor.g * 2, tmpColor.b * 2, Math.min(0.85, f.flash[1] * 8));
+        } else tint.w = 0;
       }
     }
+    for (const [id, v] of this.shown) {
+      if (seen.has(id)) continue;
+      this.drop(v);
+      this.shown.delete(id);
+    }
+    for (const v of this.shown.values()) this.probe(v, dt);
+    for (const v of this.local) this.probe(v, dt);
+  }
+
+  /** Light probes, staggered. */
+  private probe(v: Shown, dt: number) {
+    if (!v.material) return;
+    v.probeTimer -= dt;
+    if (v.probeTimer > 0) return;
+    v.probeTimer = 0.2;
+    const o = v.object.position;
+    const l = this.s.world.light_probe(Math.floor(o.x), Math.floor(o.y), Math.floor(o.z));
+    (v.material.uniforms.uProbe.value as THREE.Vector2).set(l[0], l[1]);
   }
 
   clear() {
-    for (const p of [...this.props]) p.remove();
+    for (const v of this.shown.values()) this.drop(v);
+    this.shown.clear();
   }
 }

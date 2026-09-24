@@ -32,12 +32,12 @@ import { Commands } from './commands';
 import { Content } from './content';
 import { Presentation } from './sim/present';
 import { Presenter } from './client/present';
-import { PropSystem, propObject } from './props/props';
-import { Blueprint } from './api/blueprint';
+import { PropSim } from './sim/props';
+import { PropView } from './client/props';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
-import type { Actor, BlockRef, CameraApi, GameContext, GameDefinition, GameEvents, InputApi, ItemDefinition, Player, PropModel, Rng, Vec3 } from './api/types';
+import type { Actor, BlockRef, CameraApi, GameContext, GameDefinition, GameEvents, InputApi, ItemDefinition, Player, Rng, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -100,7 +100,6 @@ export class Runtime {
   /** `hud.highlight`: the outline and break cracks on one block. */
   private highlight = new BlockHighlight();
   private blockIcons = new Map<number, string>();
-  private blockModels = new Map<string, PropModel>();
   private particles!: Particles;
   private hud!: Hud;
   private gameHud!: GameHud;
@@ -140,7 +139,8 @@ export class Runtime {
   /** Controls reach the game this frame (playing, mouse captured, no modal). */
   private active = false;
   private gameCam = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 70 };
-  private props!: PropSystem;
+  private props!: PropSim;
+  private propView!: PropView;
   private hudVisible = true;
   private saveTimer = 0;
   private dir = new THREE.Vector3();
@@ -277,7 +277,8 @@ export class Runtime {
     if (!this.walker) this.hud.setHotbarVisible(false);
     this.debug = new DebugOverlay(this.ui);
     this.fx = new Effects(this.particles, this.gameHud, this.renderer.fxScene, this.sfx, () => this.camera.position);
-    this.props = new PropSystem({
+    this.props = new PropSim(this.registry, (b) => this.blockId(b), this.content);
+    this.propView = new PropView({
       shared: this.renderer.uniforms,
       albedo: this.textures.albedo,
       material: this.textures.material,
@@ -286,6 +287,7 @@ export class Runtime {
       scene: this.renderer.entityScene,
       fxScene: this.renderer.fxScene,
       world,
+      content: this.content,
     });
 
     this.controller = new PlayerController(world, this.camera, this.input);
@@ -343,15 +345,7 @@ export class Runtime {
       scene: this.renderer.entityScene,
       fxScene: this.renderer.fxScene,
       content: this.content,
-      blockModel: (block, size) => {
-        let model = this.blockModels.get(block);
-        if (!model) {
-          model = this.props.model(new Blueprint({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }).set(0, 0, 0, block), { pivot: { x: 0.5, y: 0.5, z: 0.5 } });
-          this.blockModels.set(block, model);
-        }
-        const prop = this.props.spawn(model, { scale: size });
-        return { object: propObject(prop), remove: () => prop.remove() };
-      },
+      blockModel: (block, size) => this.propView.localCube(block, size),
     });
     this.items.inventory.onChange = () => this.syncInventory(true);
     this.combat = new Combat(world, this.entities, this.items, this.camera, this.sfx, this.fx, this.gameHud, this.held, () => this.ctx, () => {
@@ -794,6 +788,7 @@ export class Runtime {
     this.entities.clear();
     this.entityView.clear();
     this.props.clear();
+    this.propView.clear();
     // Put the world back the way it was generated (craters, broken blocks), unless the game
     // saves the world (Sandbox keeps your builds).
     if (!this.def.world?.persist) this.chunks.revertEdits();
@@ -1277,6 +1272,7 @@ export class Runtime {
     this.items.update(dt, running);
     this.pickupView.sync(this.items.frame(), dt);
     this.props.update(dt);
+    this.propView.sync(this.props.frame(), dt);
     if (this.itemMode) this.updateHands(dt, active);
 
     if (this.walker) {

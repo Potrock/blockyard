@@ -1,4 +1,5 @@
-import type { AtlasPixels, EntityDefinition, ItemDefinition, SynthVoice, ViewAnimation } from './api/types';
+import type { AtlasPixels, EntityDefinition, ItemDefinition, SynthVoice, Vec3, ViewAnimation } from './api/types';
+import type { Blueprint } from './api/blueprint';
 
 type Listener<T> = (name: string, value: T) => void;
 
@@ -17,6 +18,8 @@ export class Content {
   readonly entities = new Map<string, EntityDefinition>();
   /** Items: their icons and how they're held. */
   readonly items = new Map<string, ItemDefinition>();
+  /** Prop models (`props.model`): the blueprint to mesh. */
+  readonly models = new Map<number, { blueprint: Blueprint; opts: { scale?: number; pivot?: Vec3 } }>();
   private soundListeners: Listener<SynthVoice>[] = [];
   private atlasListeners: Listener<HTMLCanvasElement | OffscreenCanvas | AtlasPixels>[] = [];
   private animationListeners: Listener<ViewAnimation>[] = [];
@@ -30,6 +33,10 @@ export class Content {
   defineAtlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels) {
     this.atlases.set(name, source);
     for (const l of this.atlasListeners) l(name, source);
+  }
+
+  defineModel(id: number, blueprint: Blueprint, opts: { scale?: number; pivot?: Vec3 }) {
+    this.models.set(id, { blueprint, opts });
   }
 
   defineItem(id: string, def: ItemDefinition) {
