@@ -67,6 +67,11 @@ export interface SimOptions {
   cheats: boolean;
   /** The first player (`game.player`): 'local' and 'Player' unless a server names them. */
   player?: { id: string; name: string };
+  /**
+   * Game code threw (a timer, `update`, an entity's AI): report it and carry on with the tick,
+   * so one bug doesn't stop the whole game. Without it, errors are thrown.
+   */
+  error?: (err: unknown) => void;
 }
 
 /**
@@ -125,6 +130,8 @@ export class Sim {
       },
       slotOf: (p) => this.players.find((x) => x.api === p)?.slot ?? -1,
       bySlot: (slot) => this.players.find((x) => x.slot === slot)?.api,
+      pvp: o.def.player?.pvp ?? false,
+      guard: (fn) => this.guard(fn),
       players: () => this.ctx.players,
     });
     this.items = new ItemSim({
@@ -147,6 +154,16 @@ export class Sim {
     this.commands = new Commands(() => this.ctx);
     this.ctx = this.createContext();
     this.registerCommands();
+  }
+
+  /** Run game code; with an error handler, a throw is reported and the tick goes on. */
+  guard(fn: () => void) {
+    if (!this.o.error) return fn();
+    try {
+      fn();
+    } catch (err) {
+      this.o.error(err);
+    }
   }
 
   blockId(b: BlockRef): number {
@@ -190,7 +207,7 @@ export class Sim {
     }
     if (running) {
       this.tickTimers(dt);
-      this.def.update?.(this.ctx, dt);
+      this.guard(() => this.def.update?.(this.ctx, dt));
       for (const p of this.players) p.updateHealth(dt);
     }
     this.entities.update(dt, running);
@@ -336,7 +353,7 @@ export class Sim {
       if (this.clockNow >= t.at) {
         if (t.every > 0) t.at += t.every;
         else t.dead = true;
-        t.fn();
+        this.guard(t.fn);
       }
     }
     this.timers = this.timers.filter((t) => !t.dead);

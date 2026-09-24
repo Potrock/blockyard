@@ -1,5 +1,5 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { AudioApi, BowItem, FxApi, GameContext, HudApi, IconRef, InventoryApi, MeleeItem, Player, SpriteRef, Vec3 } from '../api/types';
+import type { AudioApi, BowItem, Entity, FxApi, GameContext, HudApi, IconRef, InventoryApi, MeleeItem, Player, SpriteRef, Vec3 } from '../api/types';
 import type { EntitySim } from './entities';
 import type { ItemSim } from './items';
 import type { SimInput } from './input';
@@ -41,6 +41,8 @@ export class Combat {
     /** Everyone's effects (the sweep). */
     private worldFx: FxApi,
     private ctx: () => GameContext,
+    /** Hits land on other players too (`player.pvp`). */
+    private pvp = false,
   ) {}
 
   reset() {
@@ -98,10 +100,24 @@ export class Combat {
     this.me.audio.play(def.sounds?.use ?? 'swing', { pitch: 0.9 + Math.random() * 0.2 });
     const cam = this.me.eye;
     const dir = this.me.look;
-    const hit = this.world.pick_body(cam.x, cam.y, cam.z, dir.x, dir.y, dir.z, def.reach ?? 3.3, 0.25);
-    if (hit[0] < 0) return;
-    const target = this.entities.byBody(hit[0]);
-    if (!target || !target.alive) return;
+    const reach = def.reach ?? 3.3;
+    const hit = this.world.pick_body(cam.x, cam.y, cam.z, dir.x, dir.y, dir.z, reach, 0.25);
+    let target: Entity | Player | null = hit[0] >= 0 ? (this.entities.byBody(hit[0]) ?? null) : null;
+    if (target && !target.alive) target = null;
+    // Another player in the way, nearer than any monster and not behind a wall.
+    if (this.pvp) {
+      let best = target ? hit[1] : reach;
+      for (const p of this.ctx().players) {
+        if (p === this.me.api || !p.alive) continue;
+        const b = p.position;
+        const t = rayBox(cam, dir, [b.x - 0.55, b.y - 0.25, b.z - 0.55], [b.x + 0.55, b.y + 2.05, b.z + 0.55]);
+        if (t === null || t >= best) continue;
+        if (!this.world.line_clear(cam.x, cam.y, cam.z, cam.x + dir.x * t, cam.y + dir.y * t, cam.z + dir.z * t)) continue;
+        best = t;
+        target = p;
+      }
+    }
+    if (!target) return;
     const crit = this.me.falling;
     const dmg = def.damage * (crit ? 1.5 : 1);
     target.damage(dmg, { source: this.me.api, knockback: def.knockback ?? 1, crit });
@@ -169,4 +185,25 @@ export class Combat {
 /** A sprite icon, or nothing for an item that looks like a block (it can't fly as an arrow). */
 function spriteOf(icon: IconRef | undefined): SpriteRef | undefined {
   return typeof icon === 'object' && 'block' in icon ? undefined : icon;
+}
+
+/** Where a ray (unit direction) first enters a box, or null. */
+function rayBox(o: Vec3, d: Vec3, min: [number, number, number], max: [number, number, number]): number | null {
+  let t0 = 0;
+  let t1 = Infinity;
+  const os = [o.x, o.y, o.z];
+  const ds = [d.x, d.y, d.z];
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(ds[i]) < 1e-9) {
+      if (os[i] < min[i] || os[i] > max[i]) return null;
+      continue;
+    }
+    let a = (min[i] - os[i]) / ds[i];
+    let b = (max[i] - os[i]) / ds[i];
+    if (a > b) [a, b] = [b, a];
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+  return t0;
 }

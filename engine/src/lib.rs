@@ -141,12 +141,14 @@ pub struct VoxelWorld {
 }
 
 impl VoxelWorld {
-    fn player(&self, i: u32) -> &world::Player {
-        self.players.get(i as usize).and_then(|p| p.as_ref()).expect("no player in this slot")
+    // A slot with no player (removed, never added) is ignored rather than a panic: a panic in
+    // WebAssembly leaves the world unusable for every later call.
+    fn player(&self, i: u32) -> Option<&world::Player> {
+        self.players.get(i as usize).and_then(|p| p.as_ref())
     }
 
-    fn player_mut(&mut self, i: u32) -> &mut world::Player {
-        self.players.get_mut(i as usize).and_then(|p| p.as_mut()).expect("no player in this slot")
+    fn player_mut(&mut self, i: u32) -> Option<&mut world::Player> {
+        self.players.get_mut(i as usize).and_then(|p| p.as_mut())
     }
 
     /// The players the entities react to: everyone not frozen (spectating, dead, in a menu).
@@ -253,7 +255,7 @@ impl VoxelWorld {
     }
 
     pub fn player_reset(&mut self, i: u32, x: f64, y: f64, z: f64) {
-        let p = self.player_mut(i);
+        let Some(p) = self.player_mut(i) else { return };
         let (flying, frozen) = (p.flying, p.frozen);
         *p = world::Player::new(x, y, z);
         p.flying = flying;
@@ -261,7 +263,7 @@ impl VoxelWorld {
     }
 
     pub fn set_flying(&mut self, i: u32, on: bool) {
-        let p = self.player_mut(i);
+        let Some(p) = self.player_mut(i) else { return };
         p.flying = on;
         if on {
             p.vel[1] = p.vel[1].max(0.0);
@@ -269,7 +271,9 @@ impl VoxelWorld {
     }
 
     pub fn set_frozen(&mut self, i: u32, on: bool) {
-        self.player_mut(i).frozen = on;
+        if let Some(p) = self.player_mut(i) {
+            p.frozen = on;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -283,7 +287,12 @@ impl VoxelWorld {
 
     /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob, frozen]
     pub fn player_state(&self, i: u32) -> Vec<f64> {
-        let p = self.player(i);
+        let Some(p) = self.player(i) else {
+            // Nobody there: nowhere, frozen.
+            let mut v = vec![0.0; 13];
+            v[12] = 1.0;
+            return v;
+        };
         vec![
             p.pos[0],
             p.pos[1],
@@ -304,7 +313,10 @@ impl VoxelWorld {
     /// Put a player's body back exactly as `player_state` described it (client-side prediction
     /// starts again from the server's word).
     pub fn player_restore(&mut self, i: u32, s: &[f64]) {
-        let p = self.player_mut(i);
+        if s.len() < 12 {
+            return;
+        }
+        let Some(p) = self.player_mut(i) else { return };
         p.pos = [s[0], s[1], s[2]];
         p.vel = [s[3], s[4], s[5]];
         p.on_ground = s[6] > 0.5;
@@ -324,7 +336,9 @@ impl VoxelWorld {
 
     /// Add a velocity change to a player (knockback, launch pads).
     pub fn player_impulse(&mut self, i: u32, vx: f64, vy: f64, vz: f64) {
-        self.player_mut(i).impulse([vx, vy, vz]);
+        if let Some(p) = self.player_mut(i) {
+            p.impulse([vx, vy, vz]);
+        }
     }
 
     // ---- Entity simulation (see `entities.rs` for the buffer layouts) ----

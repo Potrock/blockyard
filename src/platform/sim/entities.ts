@@ -49,6 +49,10 @@ export interface EntityServices {
   /** A player's body in the engine (its path-finding, line of sight and projectile hits), or -1. */
   slotOf(p: Player): number;
   bySlot(slot: number): Player | undefined;
+  /** Players' shots hit other players (`player.pvp`). */
+  pvp: boolean;
+  /** Run game code (AI) so a throw is reported rather than stopping every entity. */
+  guard(fn: () => void): void;
 }
 
 /** One entity as the client needs to draw it. */
@@ -73,6 +77,8 @@ export interface EntityFrame {
   hurt: number;
   /** Seconds since it died, or -1 while alive. */
   dying: number;
+  /** An item in its right hand (players' figures): its id. */
+  held?: string | null;
 }
 
 /** One projectile in flight (or stuck in a wall). */
@@ -528,8 +534,8 @@ export class EntitySim implements EntityApi {
     p[o + P.RADIUS] = 0.12;
     // Owner: a body index, -1 - slot for a player (never hit by their own shot), or nobody.
     p[o + P.OWNER] = owner === null ? -1e6 : isPlayer(owner) ? -1 - this.s.slotOf(owner) : owner.slot;
-    // A player's shots hit monsters and other players; a monster's hit players.
-    p[o + P.FLAGS] = PF_ACTIVE | (isPlayer(owner) ? PF_HITS_BODIES | PF_HITS_PLAYER : PF_HITS_PLAYER);
+    // A player's shots hit monsters (and other players, with pvp); a monster's hit players.
+    p[o + P.FLAGS] = PF_ACTIVE | (isPlayer(owner) ? PF_HITS_BODIES | (this.s.pvp ? PF_HITS_PLAYER : 0) : PF_HITS_PLAYER);
     this.shots[slot] = { id: this.nextShot++, slot, spec, owner, stuckAt: -1 };
   }
 
@@ -550,7 +556,7 @@ export class EntitySim implements EntityApi {
         if (e.removed) continue;
         e.age += dt;
         if (!e.alive) continue;
-        e.def.ai?.(e, ctx, dt);
+        if (e.def.ai) this.s.guard(() => e.def.ai!(e, ctx, dt));
         e.ambientTimer -= dt;
         if (e.ambientTimer <= 0 && e.def.sounds?.ambient) {
           e.ambientTimer = 4 + Math.random() * 6;

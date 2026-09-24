@@ -50,9 +50,13 @@ export class Fireballs {
           if (e.alive && e.data.team && e.data.team !== b.owner.color) boom = { x: b.pos.x, y: b.pos.y, z: b.pos.z };
         }
       }
-      if (!boom && !b.owner.isPlayer && g.player.alive) {
-        const pe = g.player.position;
-        if (Math.hypot(pe.x - b.pos.x, pe.y + 0.9 - b.pos.y, pe.z - b.pos.z) < 1.3) boom = { x: b.pos.x, y: b.pos.y, z: b.pos.z };
+      if (!boom) {
+        // It bursts on anyone from another team.
+        for (const p of g.players) {
+          if (!p.alive || this.m.seatOf(p) === b.owner) continue;
+          const pe = p.position;
+          if (Math.hypot(pe.x - b.pos.x, pe.y + 0.9 - b.pos.y, pe.z - b.pos.z) < 1.3) boom = { x: b.pos.x, y: b.pos.y, z: b.pos.z };
+        }
       }
       b.pos.addScaledVector(b.vel, dt);
       if (boom || b.age > 5 || b.pos.y < this.m.map.voidY) {
@@ -79,19 +83,19 @@ export class Fireballs {
       if (e.data.team !== b.owner.color) e.damage(1 + 6 * f, { source: b.by, from: at, knockback: 0.6 + 1.4 * f });
       else push(e, at, f);
     }
-    if (g.player.alive) {
-      const p = g.player.position;
+    for (const pl of g.players) {
+      if (!pl.alive) continue;
+      const p = pl.position;
       const d = Math.hypot(p.x - at.x, p.y + 0.9 - at.y, p.z - at.z);
-      if (d < BLAST) {
-        const f = 1 - d / BLAST;
-        const dx = p.x - at.x;
-        const dz = p.z - at.z;
-        const l = Math.hypot(dx, dz) || 1;
-        if (!b.owner.isPlayer) g.player.damage(1 + 6 * f, { source: b.by, from: at, knockback: 0.6 + 1.2 * f });
-        else g.player.damage(1 * f, { source: 'world', knockback: 0 });
-        // Everybody flies: the thrower too (fireball jumping).
-        g.player.impulse((dx / l) * 9 * f, 6 + 7 * f, (dz / l) * 9 * f);
-      }
+      if (d >= BLAST) continue;
+      const f = 1 - d / BLAST;
+      const dx = p.x - at.x;
+      const dz = p.z - at.z;
+      const l = Math.hypot(dx, dz) || 1;
+      if (this.m.seatOf(pl) !== b.owner) pl.damage(1 + 6 * f, { source: b.by, from: at, knockback: 0.6 + 1.2 * f });
+      else pl.damage(1 * f, { source: 'world', knockback: 0 });
+      // Everybody flies: the thrower too (fireball jumping).
+      pl.impulse((dx / l) * 9 * f, 6 + 7 * f, (dz / l) * 9 * f);
     }
   }
 

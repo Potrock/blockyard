@@ -1,4 +1,4 @@
-import type { Actor, Entity, GameContext, Pickup, Vec3 } from '@platform';
+import type { Actor, Entity, GameContext, Pickup, Player, Vec3 } from '@platform';
 import type { BedwarsMap, TeamBase, TeamColor } from './map';
 
 export const TEAM_STYLE: Record<TeamColor, { name: string; css: string; wool: string }> = {
@@ -23,6 +23,9 @@ export const ARMOR = [4, 10, 14];
 /** Sword damage per tier (wood, stone, iron, diamond). */
 export const SWORD = [4, 5, 6, 7];
 export const SWORD_ITEMS = ['wooden_sword', 'stone_sword', 'iron_sword', 'diamond_sword'];
+/** The sword item a team's player gets at this tier: the sharpened kind once the team has the upgrade. */
+export const swordItem = (t: Team, tier: number) => SWORD_ITEMS[tier] + (t.sharp ? '_sharp' : '');
+export const ALL_SWORDS = SWORD_ITEMS.flatMap((s) => [s, `${s}_sharp`]);
 export const PICK_ITEMS = ['', 'wooden_pickaxe', 'iron_pickaxe', 'diamond_pickaxe'];
 
 export const RESPAWN_SECONDS = 5;
@@ -34,7 +37,8 @@ export interface Team {
   css: string;
   wool: string;
   base: TeamBase;
-  isPlayer: boolean;
+  /** The person playing this team, or null: a bot plays it. */
+  player: Player | null;
   bed: boolean;
   eliminated: boolean;
   /** The bot's body while it is alive (bot teams). */
@@ -149,7 +153,7 @@ export class Match {
       color: base.color,
       ...TEAM_STYLE[base.color],
       base,
-      isPlayer: base.color === 'red',
+      player: null,
       bed: true,
       eliminated: false,
       body: null,
@@ -174,8 +178,14 @@ export class Match {
     return this.game.clock.now - this.startedAt;
   }
 
+  /** The team a player is playing, or null (watching). */
+  seatOf(p: Player): Team | null {
+    return this.teams.find((t) => t.player === p) ?? null;
+  }
+
+  /** The first player's team (single-player shorthand, and handy in tests). */
   get player(): Team {
-    return this.teams.find((t) => t.isPlayer)!;
+    return this.seatOf(this.game.player) ?? this.teams[0];
   }
 
   reset() {
@@ -193,10 +203,10 @@ export class Match {
     }
   }
 
-  /** The team of whoever did something: the human player's team (red), or a bot's. */
+  /** The team of whoever did something: a player's, or a bot's. */
   teamOf(by: Actor | undefined | null): Team | null {
     if (!by || by === 'world') return null;
-    if (by.kind === 'player') return this.player;
+    if (by.kind === 'player') return this.seatOf(by);
     return this.teams.find((t) => t.color === (by as Entity).data.team) ?? null;
   }
 

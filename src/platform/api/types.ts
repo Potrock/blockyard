@@ -96,6 +96,11 @@ export interface PlayerOptions {
    */
   skin?: [number, number];
   skinAtlas?: string;
+  /**
+   * Players can hurt each other: melee hits and shots land on other players (never the shooter).
+   * Off by default, so co-op games have no friendly fire.
+   */
+  pvp?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -339,6 +344,8 @@ export interface PlayerApi {
   readonly name: string;
   /** This player's screen: HUD calls here reach only them (their wallet, their shop, their toasts). */
   readonly hud: HudApi;
+  /** Sounds only this player hears (their coins, their kill). */
+  readonly audio: AudioApi;
   /** This player's keyboard and mouse. */
   readonly input: InputApi;
   /** This player's camera (drive it with `player.controller: 'none'`). */
@@ -369,6 +376,13 @@ export interface PlayerApi {
   armor: number;
   /** The first-person arm and held item. */
   readonly viewModel: ViewModelApi;
+  /**
+   * How others see this player: their figure's skin (Minecraft layout, origin in `atlas`), which
+   * their own first-person arm wears too. Default: the game's `player.skin`.
+   */
+  setSkin(skin: [number, number], atlas?: string): void;
+  /** The colour of their name above their figure (team colours); null for white. */
+  color: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------

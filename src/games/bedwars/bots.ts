@@ -1,11 +1,11 @@
-import type { Entity, Vec3 } from '@platform';
+import type { Entity, Player, Vec3 } from '@platform';
 import type { Building } from '@platform/kits';
 import type { Fireballs } from './fireballs';
 import type { Nav, Step } from './nav';
 import { armorPoints, mineTime, swordDamage, type Match, type Team } from './state';
 
-/** Someone to fight: the player, or another team's bot. */
-export type Target = { kind: 'player' } | { kind: 'bot'; team: Team; e: Entity };
+/** Someone to fight: a player, or another team's bot. */
+export type Target = { kind: 'player'; team: Team; p: Player } | { kind: 'bot'; team: Team; e: Entity };
 
 type Mode = 'fortify' | 'gear' | 'guard' | 'raid' | 'hunt';
 
@@ -112,25 +112,28 @@ export class Bot {
 
   private enemies(): Target[] {
     const out: Target[] = [];
-    const pt = this.m.player;
-    if (pt !== this.team && !pt.eliminated && this.game.player.alive) out.push({ kind: 'player' });
-    for (const t of this.m.teams) if (t !== this.team && t.body?.alive) out.push({ kind: 'bot', team: t, e: t.body });
+    for (const t of this.m.teams) {
+      if (t === this.team || t.eliminated) continue;
+      if (t.player?.alive) out.push({ kind: 'player', team: t, p: t.player });
+      if (t.body?.alive) out.push({ kind: 'bot', team: t, e: t.body });
+    }
     return out;
   }
 
   private posOf(t: Target): Vec3 {
-    return t.kind === 'player' ? this.game.player.position : t.e.position;
+    return t.kind === 'player' ? t.p.position : t.e.position;
   }
 
   private valid(t: Target | null): t is Target {
     if (!t) return false;
-    if (t.kind === 'player') return this.game.player.alive && !this.m.player.eliminated;
+    // Still in the game, and still on that team (a player who left is someone else's now).
+    if (t.kind === 'player') return t.p.alive && t.team.player === t.p && !t.team.eliminated;
     return t.e.alive;
   }
 
   /** What it's up to (debugging). */
   get status(): string {
-    const t = this.target ? (this.target.kind === 'player' ? 'player' : this.target.team.color) : '-';
+    const t = this.target ? (this.target.kind === 'player' ? this.target.p.name : this.target.team.color) : '-';
     return `${this.mode}${this.victim ? `>${this.victim.color}` : ''} fight:${t} path:${this.path ? `${this.i}/${this.path.length}` : '-'}${this.mining ? ' mining' : ''}`;
   }
 
@@ -232,7 +235,7 @@ export class Bot {
     }
     // Neighbours are likelier than the far side; the player a little likelier still.
     const home = this.team.base.spawn;
-    const weights = beds.map((t) => (flat(home, t.base.spawn) < 80 ? 1 : 0.45) * (t.isPlayer ? 1.25 : 1));
+    const weights = beds.map((t) => (flat(home, t.base.spawn) < 80 ? 1 : 0.45) * (t.player ? 1.25 : 1));
     let r = Math.random() * weights.reduce((a, b) => a + b, 0);
     this.victim = beds[beds.length - 1];
     for (let i = 0; i < beds.length; i++) {
@@ -374,7 +377,7 @@ export class Bot {
       this.game.audio.play('swing', { at: p, volume: 0.45 });
       if (Math.random() < 0.6 + 0.3 * this.skill) {
         const dmg = swordDamage(this.team);
-        if (t.kind === 'player') this.game.player.damage(dmg, { source: e, knockback: 0.8 });
+        if (t.kind === 'player') t.p.damage(dmg, { source: e, knockback: 0.8 });
         else t.e.damage(dmg, { source: e, knockback: 0.9 });
       }
     }
@@ -392,7 +395,7 @@ export class Bot {
       const q = this.posOf(t);
       const d = dist(eye, q);
       if (d < 7 || d > 30 || !this.exposed(q)) continue;
-      const v = t.kind === 'player' ? this.game.player.velocity : t.e.velocity;
+      const v = t.kind === 'player' ? t.p.velocity : t.e.velocity;
       const lead = d / 20;
       const aim = { x: q.x + v.x * lead, y: q.y + 0.9, z: q.z + v.z * lead };
       if (!this.game.world.lineOfSight(eye, aim)) continue;

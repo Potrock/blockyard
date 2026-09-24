@@ -37,6 +37,9 @@ interface Shown {
   height: number;
   scale: number;
   speed: number;
+  /** The item in its hand, and the mesh showing it. */
+  held: string | null;
+  heldMesh: THREE.Mesh | null;
 }
 
 interface Shot {
@@ -84,6 +87,8 @@ export class EntityView {
           height: def.hitbox.height,
           scale: def.model.scale,
           speed: def.speed,
+          held: null,
+          heldMesh: null,
         };
         this.shown.set(f.id, v);
       }
@@ -91,6 +96,7 @@ export class EntityView {
     }
     for (const [id, v] of this.shown) {
       if (seen.has(id)) continue;
+      this.hold(v, null);
       v.model.root.removeFromParent();
       v.model.dispose();
       this.shown.delete(id);
@@ -155,7 +161,45 @@ export class EntityView {
       a.dying = Math.min(1, f.dying / 0.35);
       (u.uOpacity as { value: number }).value = Math.max(0, 1 - Math.max(0, f.dying - 0.7) / 0.35);
     }
+    if ((f.held ?? null) !== v.held) this.hold(v, f.held ?? null);
+    if (v.heldMesh) {
+      // Lit like the body.
+      const hu = (v.heldMesh.material as THREE.RawShaderMaterial).uniforms;
+      (hu.uProbe.value as THREE.Vector2).copy(u.uProbe.value as THREE.Vector2);
+      (hu.uOpacity as { value: number }).value = (u.uOpacity as { value: number }).value;
+    }
     v.model.animate(a);
+  }
+
+  /** Put an item in a figure's right hand (its model, or its sprite extruded), or empty it. */
+  private hold(v: Shown, item: string | null) {
+    v.held = item;
+    if (v.heldMesh) {
+      v.heldMesh.removeFromParent();
+      (v.heldMesh.material as THREE.Material).dispose();
+      v.heldMesh = null;
+    }
+    const def = item ? this.content.items.get(item) : undefined;
+    const arm = v.model.pivots.get('armR');
+    if (!def || !arm) return;
+    const icon = def.icon;
+    const blockIcon = typeof icon === 'object' && 'block' in icon;
+    const model = def.hold?.model;
+    if (!model && blockIcon) return;
+    const { geometry, atlas } = model ? this.graphics.heldModelGeometry(model) : this.graphics.spriteGeometry(icon as Exclude<typeof icon, { block: string }>);
+    const mesh = new THREE.Mesh(geometry, this.graphics.material(atlas));
+    // In the fist at the end of the hanging arm (the figure faces +z). A held model runs along
+    // +z already: tilt it up a little, its grip in the fist. A sprite stands on edge, turned so
+    // its handle-to-tip diagonal points forward and up, the handle (lower left) in the fist.
+    const scale = model ? 0.5 : 0.62;
+    mesh.scale.setScalar(scale);
+    if (model) mesh.rotation.set(-0.3, 0, 0);
+    else mesh.rotation.set(0, -Math.PI / 2, 0);
+    const grip = model ? new THREE.Vector3(...(model.grip ?? [0, 0, 0])).divideScalar(16) : new THREE.Vector3(-0.28, -0.28, 0);
+    grip.multiplyScalar(scale).applyEuler(mesh.rotation);
+    mesh.position.set(0, -0.66, 0).sub(grip);
+    arm.add(mesh);
+    v.heldMesh = mesh;
   }
 
   private syncShots(frames: ProjectileFrame[]) {

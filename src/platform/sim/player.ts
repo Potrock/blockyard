@@ -57,6 +57,10 @@ export interface PlayerFrame {
   /** For client-side prediction: the last input of theirs applied, and movement's memory then. */
   ack: number;
   move: MoveMemory;
+  /** Their figure's skin (`player.setSkin`), or null for the game's. */
+  skin: { uv: [number, number]; atlas?: string } | null;
+  /** Their name's colour above their figure. */
+  color: string | null;
 }
 
 export interface PlayerSimParts {
@@ -101,6 +105,8 @@ export class PlayerSim {
   ack = -1;
   /** Swings and uses so far. */
   swings = 0;
+  skin: { uv: [number, number]; atlas?: string } | null = null;
+  color: string | null = null;
   readonly api: Player;
   /** Creative building's block hotbar and placing (games with `player.build`). */
   creative: CreativeBuild | null = null;
@@ -162,6 +168,7 @@ export class PlayerSim {
       },
       present.fx(null),
       p.ctx,
+      o.pvp ?? false,
     );
     this.api = this.makeApi();
   }
@@ -296,6 +303,8 @@ export class PlayerSim {
       swings: this.swings,
       ack: this.ack,
       move: { ...this.memory },
+      skin: this.skin,
+      color: this.color,
     };
   }
 
@@ -347,6 +356,17 @@ export class PlayerSim {
         return me.name;
       },
       hud: present.hud(this.id),
+      audio: present.audio(this.id),
+      setSkin: (skin, atlas) => {
+        me.skin = { uv: [skin[0], skin[1]], atlas };
+        present.send(me.id, 'view', 'setSkin', [skin, atlas]);
+      },
+      get color() {
+        return me.color;
+      },
+      set color(c: string | null) {
+        me.color = c;
+      },
       input: this.input,
       camera,
       viewModel: present.view(this.id),

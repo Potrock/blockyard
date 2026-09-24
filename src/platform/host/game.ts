@@ -192,6 +192,7 @@ export class GameHost {
       exit: () => this.events.push({ t: 'exit', player: this.acting }),
       cheats: o.cheats ?? false,
       player: o.player,
+      error: (err) => this.events.push({ t: 'error', text: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) }),
     });
     if (o.dayLength && !def.world?.freezeTime) this.sim.env.dayLength = o.dayLength;
     this.sim.setup();
@@ -253,9 +254,9 @@ export class GameHost {
   connect(name: string): { id: string; batch: HostBatch } {
     const player = this.sim.join(name);
     this.clients.set(player.id, { player, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 });
-    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }];
+    // Ready (the game's defaults applied) before what's on screen, which may change them (a skin).
+    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }, { t: 'ready' }];
     for (const call of this.state.snapshot(player.id)) events.push({ t: 'call', call });
-    events.push({ t: 'ready' });
     return { id: player.id, batch: { events, frame: this.sim.frame() } };
   }
 

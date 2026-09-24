@@ -17,7 +17,7 @@ function sandbox() {
   const host = new GameHost(game('sandbox'), { engine: wasm, seed: 9, remote: true, radius: 3, budget: Infinity, cheats: true, player: { id: 'p1', name: 'Host' } });
   const ann = host.connect('Ann');
   check(ann.id === 'p1', `the first client takes the first player: ${ann.id}`);
-  check(ann.batch.events.at(-1)?.t === 'ready', 'the catch-up ends ready');
+  check(ann.batch.events.some((e) => e.t === 'ready'), 'the catch-up says ready');
   const bob = host.connect('Bob');
   check(bob.id === 'p2', `second player ${bob.id}`);
   host.command(ann.id, { t: 'start' });

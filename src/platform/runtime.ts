@@ -318,9 +318,7 @@ export class Runtime {
     } else {
       this.link = inPage || !this.makeWorker ? new PageLink(def, { ...opts, engine: module, budget: 2 }) : new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts });
     }
-    // Other players look like the game's player (its first-person arm's skin), or the default.
-    const skin = def.player?.skin ?? Skins.player;
-    this.content.defineEntity('$player', { name: 'Player', model: Models.humanoid({ skin, atlas: def.player?.skin ? def.player.skinAtlas : undefined }), hitbox: { width: 0.6, height: 1.8 }, health: 20, speed: 4.3 });
+
     this.link.onBatch = (b) => this.receive(b);
 
     if (def.player?.build) {
@@ -477,6 +475,20 @@ export class Runtime {
     }
   }
 
+  /**
+   * The figure type for a player: a humanoid in their skin (`player.setSkin`), else the game's
+   * player skin, else the default. Defined the first time it's needed.
+   */
+  private avatarType(p: PlayerFrame): string {
+    const d = this.def.player;
+    const skin = p.skin ?? (d?.skin ? { uv: d.skin, atlas: d.skinAtlas } : { uv: Skins.player, atlas: undefined });
+    const type = `$player:${skin.atlas ?? 'builtin'}:${skin.uv.join(',')}`;
+    if (!this.content.entities.has(type)) {
+      this.content.defineEntity(type, { name: 'Player', model: Models.humanoid({ skin: skin.uv, atlas: skin.atlas }), hitbox: { width: 0.6, height: 1.8 }, health: 20, speed: 4.3 });
+    }
+    return type;
+  }
+
   /** This client's player in a frame. */
   private mine(f: SimFrame | null): PlayerFrame | undefined {
     return f?.players.find((p) => p.id === this.playerId);
@@ -494,6 +506,7 @@ export class Runtime {
     const seen = new Set<string>();
     for (const p of f.players) {
       if (p.id === this.playerId) continue;
+      const type = this.avatarType(p);
       let id = this.avatarIds.get(p.id);
       if (id === undefined) this.avatarIds.set(p.id, (id = -1 - this.avatarIds.size));
       const cp = Math.cos(p.view.pitch);
@@ -506,7 +519,7 @@ export class Runtime {
       this.avatarHurt.set(p.id, h);
       out.push({
         id,
-        type: '$player',
+        type,
         x: p.x,
         y: p.y,
         z: p.z,
@@ -520,11 +533,12 @@ export class Runtime {
         glow: null,
         hurt: h.flash,
         dying: p.dead ? p.deathTime : -1,
+        held: p.hotbar?.slots[p.hotbar.selected]?.item ?? null,
       });
       const tag = `$name:${p.id}`;
       seen.add(tag);
       this.tags.add(tag);
-      this.gameHud.marker(tag, { x: p.x, y: p.y + 2.25, z: p.z }, { label: p.name, shape: 'dot', size: 3, color: '#ffffff' });
+      this.gameHud.marker(tag, { x: p.x, y: p.y + 2.25, z: p.z }, { label: p.name, shape: 'dot', size: 3, color: p.color ?? '#ffffff' });
     }
     for (const tag of this.tags) {
       if (seen.has(tag)) continue;
