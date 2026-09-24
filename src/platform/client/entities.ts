@@ -169,6 +169,10 @@ export class EntityView {
     if (!alive) {
       a.dying = Math.min(1, f.dying / 0.35);
       (u.uOpacity as { value: number }).value = Math.max(0, 1 - Math.max(0, f.dying - 0.7) / 0.35);
+    } else if (a.dying > 0) {
+      // Back from the dead (a player revived): standing, and seen, again.
+      a.dying = 0;
+      (u.uOpacity as { value: number }).value = 1;
     }
     if ((f.held ?? null) !== v.held) this.hold(v, f.held ?? null);
     if (v.heldMesh) {
