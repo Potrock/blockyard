@@ -23,7 +23,7 @@ export class FrameBuffer {
   push(frame: SimFrame, hostTime: number, now = performance.now() / 1000) {
     const off = now - hostTime;
     this.offset = this.offset === null ? off : Math.min(off, this.offset + 0.0005);
-    this.frames.push({ time: hostTime, frame });
+    this.frames.push({ time: hostTime, frame: caughtUp(frame) });
     if (this.frames.length > 30) this.frames.shift();
   }
 
@@ -44,6 +44,15 @@ export class FrameBuffer {
 
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
+/**
+ * Players where they are at the frame's time: a server plays whole inputs, so a player's state
+ * trails the step a little (`lead`); drawn from there, they'd move in fits and starts.
+ */
+function caughtUp(f: SimFrame): SimFrame {
+  if (!f.players.some((p) => p.lead > 0)) return f;
+  return { ...f, players: f.players.map((p) => (p.lead > 0 ? { ...p, x: p.x + p.vx * p.lead, y: p.y + p.vy * p.lead, z: p.z + p.vz * p.lead, lead: 0 } : p)) };
+}
+
 function byId<T extends { id: number | string }>(list: T[]): Map<number | string, T> {
   return new Map(list.map((x) => [x.id, x]));
 }
@@ -57,6 +66,7 @@ function blend(a: SimFrame, b: SimFrame, k: number): SimFrame {
   const ra = byId(a.props);
   return {
     ...b,
+    clock: lerp(a.clock, b.clock, k),
     players: b.players.map((p) => {
       const o = pa.get(p.id);
       if (!o) return p;
@@ -66,7 +76,7 @@ function blend(a: SimFrame, b: SimFrame, k: number): SimFrame {
         y: lerp(o.y, p.y, k),
         z: lerp(o.z, p.z, k),
         bob: lerp(o.bob, p.bob, k),
-        camera: { p: [0, 1, 2].map((i) => lerp(o.camera.p[i], p.camera.p[i], k)) as [number, number, number], q: nlerp(o.camera.q, p.camera.q, k), fov: lerp(o.camera.fov, p.camera.fov, k) },
+        camera: { ...p.camera, p: [0, 1, 2].map((i) => lerp(o.camera.p[i], p.camera.p[i], k)) as [number, number, number], q: nlerp(o.camera.q, p.camera.q, k), fov: lerp(o.camera.fov, p.camera.fov, k) },
       };
     }),
     entities: b.entities.map((e) => {

@@ -46,6 +46,11 @@ export interface GameDefinition {
   start?(game: GameContext): void;
   /** Runs every frame while the game is running (not while paused). `dt` is in seconds. */
   update?(game: GameContext, dt: number): void;
+  /**
+   * Vehicles players can drive (`player.drive(name, state)`): ships, cars, boards. Defined here,
+   * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
+   */
+  vehicles?: Record<string, VehicleDefinition>;
 }
 
 export interface WorldOptions {
@@ -174,6 +179,11 @@ export interface CameraApi {
   setPose(position: Vec3, rotation: { x: number; y: number; z: number; w: number }): void;
   /** Vertical field of view in degrees. */
   fov: number;
+  /**
+   * Back to the vehicle's own camera (`VehicleDefinition.camera`) after `set` / `setPose` took
+   * over (a cutscene, watching after being shot down). Driving starts with it.
+   */
+  follow(): void;
 }
 
 export interface InputApi {
@@ -207,12 +217,26 @@ export interface PropModel {
 
 /** A movable object. Mutate `position` / `quaternion` directly each frame. */
 export interface Prop {
+  /** Where it is and how it's turned: in the world, or on its parent (`attach`). */
   readonly position: MathVector3;
   readonly quaternion: MathQuaternion;
   scale: number;
   visible: boolean;
   /** Tint it briefly (hits). */
   flash(color?: string, seconds?: number): void;
+  /**
+   * Ride on another prop (an engine flame on its ship, a turret on its tank): from now on
+   * `position` and `quaternion` are on the parent, so it goes wherever the parent goes, on every
+   * screen and without being moved each tick. Null puts it back in the world.
+   */
+  attach(parent: Prop | null): void;
+  /**
+   * Send it flying in a straight line from `from` at `velocity` (blocks a second): it moves on its
+   * own, on every screen, and its `position` follows (moving it yourself stops that). For shots:
+   * nothing is sent while it flies. `by` the player who fired it: on their own screen it leaves
+   * from where their (predicted) guns were when they fired, rather than where the server had them.
+   */
+  launch(from: Vec3, velocity: Vec3, opts?: { by?: Player }): void;
   remove(): void;
 }
 
@@ -225,8 +249,61 @@ export interface PropApi {
    */
   model(blueprint: Blueprint, opts?: { scale?: number; pivot?: Vec3 }): PropModel;
   spawn(model: PropModel, opts?: { position?: Vec3; scale?: number }): Prop;
-  /** A glowing streak pointing along its -z (lasers, tracers). Length and width in blocks. */
-  bolt(opts: { color: string; length?: number; width?: number; intensity?: number }): Prop;
+  /**
+   * A glowing streak pointing along its -z (lasers, tracers, engine flames). Length and width in
+   * blocks; `flicker` (0..1) makes it waver in length on its own (flames); past `far` blocks from
+   * each player's camera it grows with the distance, so it stays visible.
+   */
+  bolt(opts: { color: string; length?: number; width?: number; intensity?: number; flicker?: number; far?: number }): Prop;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Vehicles
+// ---------------------------------------------------------------------------------------------
+
+/** One input's controls, as a vehicle's `step` reads them (one frame on the pilot's screen). */
+export type VehicleControls = Pick<InputApi, 'isDown' | 'pressed' | 'button' | 'buttonPressed' | 'mouseX' | 'mouseY' | 'wheel'>;
+
+/** What a vehicle's `step` and `camera` may ask of the world: the same answers on the host and on the pilot's screen. */
+export type VehicleWorld = Pick<WorldApi, 'getBlock' | 'blockName' | 'raycast' | 'lineOfSight' | 'surfaceY' | 'seaLevel'>;
+
+/** A vehicle's camera, kept from frame to frame (so it can ease after the vehicle). */
+export interface VehicleCamera {
+  readonly position: MathVector3;
+  /** The point it looks at, and which way is up. */
+  readonly target: MathVector3;
+  readonly up: MathVector3;
+  /** Vertical field of view in degrees. */
+  fov: number;
+  /** The first frame, or after a jump (a respawn): place it rather than ease into it. */
+  readonly snap: boolean;
+}
+
+/**
+ * Something players drive with the game's own physics: a ship, a car, a board. `step` runs on the
+ * host for everyone and, ahead of it, on each pilot's own screen (client-side prediction, as
+ * walking has), so the controls answer at once however far away the server is; when the host's
+ * state comes back, the pilot's screen starts again from it and replays the inputs it hasn't
+ * seen yet. So `step` must be pure: it reads the state, the controls and the world, changes only
+ * the state, and does the same with the same inputs wherever it runs. Anything with consequences
+ * (damage, sounds, shots) is the game's `update`, reading the state.
+ */
+export interface VehicleDefinition<S extends object = any> {
+  /** Move it `dt` seconds under these controls. */
+  step(state: S, controls: VehicleControls, dt: number, world: VehicleWorld): void;
+  /** Where it is and how it's turned: its model (`drive`'s `prop`) goes there. */
+  pose(state: S, position: MathVector3, quaternion: MathQuaternion): void;
+  /** The pilot's camera, every frame on their screen (a chase camera, a cockpit). */
+  camera?(state: S, camera: VehicleCamera, dt: number, world: VehicleWorld): void;
+}
+
+/** A player's vehicle (`player.drive`). */
+export interface Vehicle<S extends object = any> {
+  readonly name: string;
+  /** Its state, live: the game reads it and may change it (a knock-back, a refill); the pilot's screen follows. */
+  readonly state: S;
+  /** Its model, kept at its pose (on the pilot's own screen, where prediction has it). */
+  readonly prop: Prop | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -367,6 +444,8 @@ export interface PlayerApi {
   readonly hud: HudApi;
   /** Sounds only this player hears (their coins, their kill). */
   readonly audio: AudioApi;
+  /** Effects only this player sees (their screen shaking, a flash when they're hit). */
+  readonly fx: FxApi;
   /** This player's keyboard and mouse. */
   readonly input: InputApi;
   /** This player's camera (drive it with `player.controller: 'none'`). */
@@ -393,6 +472,17 @@ export interface PlayerApi {
   impulse(x: number, y: number, z: number): void;
   /** Freeze movement (cutscenes, countdowns). */
   freeze(frozen: boolean): void;
+  /**
+   * Put them in one of the game's `vehicles`, starting from `state` (plain numbers, booleans and
+   * lists: it goes to their screen as data). From now on their controls drive it (the vehicle's
+   * `step`, on the host and, ahead of it, on their own screen), `prop` (its model) is kept at its
+   * `pose` on every screen, their camera is the vehicle's, and their body goes where it goes.
+   */
+  drive<S extends object>(vehicle: string, state: S, opts?: { prop?: Prop }): Vehicle<S>;
+  /** Out of their vehicle (their model stays where it was; remove it if it should go). */
+  leaveVehicle(): void;
+  /** The vehicle they're driving, if any. */
+  readonly vehicle: Vehicle | null;
   /** Armour points, 0..20: each blocks 4% of incoming damage (Minecraft-style). Default 0. */
   armor: number;
   /** The first-person arm and held item. */
@@ -833,7 +923,7 @@ export interface HudApi {
    * A marker drawn over a world position (targets, waypoints); `null` removes it. With `edge`,
    * an off-screen target shows as an arrow on the screen edge.
    */
-  marker(id: string, at: Vec3 | null, opts?: MarkerOptions): void;
+  marker(id: string, at: Anchor | null, opts?: MarkerOptions): void;
   /** Show or hide the default crosshair. */
   crosshair(visible: boolean): void;
   /** A round radar in the bottom-right corner; `null` hides it. */
@@ -849,7 +939,16 @@ export interface HudApi {
   highlight(at: Vec3 | null, opts?: { progress?: number }): void;
 }
 
+/**
+ * Where a marker or radar blip is: a spot, or something it follows (a prop, an entity, a player).
+ * Followed things are placed by each player's screen every frame, where that screen draws them
+ * (smooth, and where prediction has a pilot's own ship), and sent only once.
+ */
+export type Anchor = Vec3 | Prop | Entity | Player;
+
 export interface MarkerOptions {
+  /** Offset from what it follows: in a prop's own space (`{ z: -30 }` is 30 ahead of a ship's nose), else in the world. */
+  offset?: Vec3;
   color?: string;
   /** `box` (target brackets), `diamond`, `ring`, `reticle` (aiming sight), `dot`. */
   shape?: 'box' | 'diamond' | 'ring' | 'reticle' | 'dot';
@@ -863,13 +962,20 @@ export interface MarkerOptions {
 }
 
 export interface RadarData {
-  center: Vec3;
-  /** Heading in radians (0 = looking toward -z, like `player.yaw`); the radar turns with it. */
-  heading: number;
+  /** The middle of the radar: a spot, or something to follow (a pilot's ship). */
+  center: Anchor;
+  /**
+   * Heading in radians (0 = looking toward -z, like `player.yaw`); the radar turns with it.
+   * Following a prop, leave it out to turn with the prop.
+   */
+  heading?: number;
   /** Blocks from the centre to the rim. */
   range: number;
-  blips: { x: number; z: number; color: string; size?: number; y?: number }[];
+  /** Blips at spots (`x`, `z`, and `y` for the above / below tick), or following things (`at`). */
+  blips: RadarBlip[];
 }
+
+export type RadarBlip = ({ x: number; z: number; y?: number } | { at: Anchor }) & { color: string; size?: number };
 
 export interface FxApi {
   /** Particles: `glow` makes them emissive, `life` (seconds) and `drag` shape trails and smoke. */

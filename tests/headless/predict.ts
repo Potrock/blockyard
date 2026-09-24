@@ -42,7 +42,8 @@ export default function predict() {
       pitch: 0,
       viewSeq: me.viewSeq,
     };
-    host.command(ann.id, { t: 'input', input, seq: predictor.step(input, 1 / 60), dt: 1 / 60 });
+    predictor.step(input, 1 / 60, frame + 1);
+    host.command(ann.id, { t: 'input', input, seq: frame + 1, dt: 1 / 60 });
     // Once, the server shoves the player (a knockback the client couldn't know about).
     if (frame === 600) me.api.impulse(0, 9, 6);
     if (frame % 2 === 1) {

@@ -45,7 +45,6 @@ export interface Predicted {
  */
 export class Predictor {
   private slot: number;
-  private seq = 0;
   private pending: { seq: number; input: PlayerInput; dt: number }[] = [];
   private memory: MoveMemory = freshMemory();
   private ready = false;
@@ -62,16 +61,14 @@ export class Predictor {
     world.set_frozen(this.slot, true);
   }
 
-  /** This frame's controls: move now, and number them for the server. */
-  step(input: PlayerInput, dt: number): number {
-    const seq = ++this.seq;
+  /** This frame's controls (numbered `seq` for the server): move now. */
+  step(input: PlayerInput, dt: number, seq: number) {
     const d = Math.max(0, Math.min(0.1, dt));
     this.pending.push({ seq, input, dt: d });
     if (this.pending.length > 120) this.pending.shift();
     if (this.ready) this.run(input, d);
     const k = Math.exp(-dt * 12);
     for (let i = 0; i < 3; i++) this.error[i] *= k;
-    return seq;
   }
 
   /** The server's newest word on this player: start from it and replay what it hasn't applied. */

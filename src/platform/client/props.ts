@@ -43,7 +43,32 @@ interface Shown {
   /** Block builds light and flash; bolts glow on their own. */
   material: THREE.RawShaderMaterial | null;
   probeTimer: number;
+  /** Wavers in length by up to this fraction (flames). */
+  flicker: number;
+  /** Grows past this distance from the camera. */
+  far: number;
 }
+
+/** A pose this client knows better than the frame (its own vehicle's model, predicted). */
+export interface PropPose {
+  p: THREE.Vector3;
+  q: THREE.Quaternion;
+}
+
+/** When to draw a frame's props: its game clock, and this client's own timeline for its own shots. */
+export interface PropTime {
+  /** The (blended) frame's game clock. */
+  clock: number;
+  /** This client's player, and when (local seconds) it applied one of its inputs; null if too old. */
+  me: string | null;
+  inputTime(seq: number): number | null;
+  /** Local seconds now. */
+  now: number;
+  /** The camera, for bolts that grow with distance. */
+  camera: THREE.Vector3;
+}
+
+const FORWARD = new THREE.Vector3();
 
 const tmpColor = new THREE.Color();
 
@@ -174,10 +199,10 @@ export class PropView {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.customDepthMaterial = this.shadow;
     this.s.scene.add(mesh);
-    return { object: mesh, material, probeTimer: Math.random() * 0.2 };
+    return { object: mesh, material, probeTimer: Math.random() * 0.2, flicker: 0, far: 0 };
   }
 
-  private boltMesh(opts: { color: string; length?: number; width?: number; intensity?: number }): Shown {
+  private boltMesh(opts: { color: string; length?: number; width?: number; intensity?: number; flicker?: number; far?: number }): Shown {
     const mat = new THREE.RawShaderMaterial({
       vertexShader: Shaders.fx.vertex,
       fragmentShader: Shaders.fx.fragment,
@@ -200,7 +225,7 @@ export class PropView {
     const holder = new THREE.Group();
     holder.add(mesh);
     this.s.fxScene.add(holder);
-    return { object: holder, material: null, probeTimer: 0 };
+    return { object: holder, material: null, probeTimer: 0, flicker: opts.flicker ?? 0, far: opts.far ?? 0 };
   }
 
   private drop(v: Shown) {
@@ -239,7 +264,11 @@ export class PropView {
     };
   }
 
-  sync(frames: PropFrame[], dt: number) {
+  /**
+   * Draw the frame's props. Riders (`attach`) are placed on their parents, which come first;
+   * `overrides` are poses this client knows better (its own vehicle's model, where prediction has it).
+   */
+  sync(frames: PropFrame[], dt: number, time: PropTime, overrides?: ReadonlyMap<number, PropPose>) {
     const seen = new Set<number>();
     for (const f of frames) {
       seen.add(f.id);
@@ -254,10 +283,35 @@ export class PropView {
         this.shown.set(f.id, v);
       }
       const o = v.object;
-      o.position.set(f.p[0], f.p[1], f.p[2]);
-      o.quaternion.set(f.q[0], f.q[1], f.q[2], f.q[3]);
-      o.scale.setScalar(f.scale);
-      o.visible = f.visible;
+      const own = overrides?.get(f.id);
+      const parent = f.parent !== undefined ? this.shown.get(f.parent)?.object : undefined;
+      let scale = f.scale;
+      let visible = f.visible;
+      if (f.v) {
+        // Flying on its own: from where it started, for as long as it's flown. Our own shots, on
+        // our own timeline (from when we fired, where our predicted guns were).
+        const mine = f.by !== undefined && f.by === time.me && f.seq !== undefined ? time.inputTime(f.seq) : null;
+        const age = mine !== null ? time.now - mine : time.clock - (f.t ?? 0);
+        if (age < 0) visible = false;
+        o.position.set(f.p[0] + f.v[0] * age, f.p[1] + f.v[1] * age, f.p[2] + f.v[2] * age);
+        o.quaternion.set(f.q[0], f.q[1], f.q[2], f.q[3]);
+      } else if (own) {
+        o.position.copy(own.p);
+        o.quaternion.copy(own.q);
+      } else {
+        o.position.set(f.p[0], f.p[1], f.p[2]);
+        o.quaternion.set(f.q[0], f.q[1], f.q[2], f.q[3]);
+        if (parent) {
+          // On its parent: turned and carried with it.
+          o.position.multiplyScalar(parent.scale.x).applyQuaternion(parent.quaternion).add(parent.position);
+          o.quaternion.premultiply(parent.quaternion);
+          scale *= parent.scale.x;
+        }
+      }
+      if (v.flicker) scale *= 1 + Math.random() * v.flicker;
+      if (v.far) scale *= Math.max(1, o.position.distanceTo(time.camera) / v.far);
+      o.scale.setScalar(scale);
+      o.visible = visible && (f.parent === undefined || (!!parent && parent.visible));
       if (v.material) {
         const tint = v.material.uniforms.uTint.value as THREE.Vector4;
         if (f.flash) {
@@ -273,6 +327,23 @@ export class PropView {
     }
     for (const v of this.shown.values()) this.probe(v, dt);
     for (const v of this.local) this.probe(v, dt);
+  }
+
+  /** Where a prop is drawn now, with `offset` in its own space; false if it isn't drawn. */
+  locate(id: number, offset: Vec3 | undefined, out: THREE.Vector3): boolean {
+    const o = this.shown.get(id)?.object;
+    if (!o || !o.visible) return false;
+    if (offset) out.set(offset.x, offset.y, offset.z).multiplyScalar(o.scale.x).applyQuaternion(o.quaternion).add(o.position);
+    else out.copy(o.position);
+    return true;
+  }
+
+  /** Which way a prop's -z points, as a heading (0 toward -z). */
+  heading(id: number): number | null {
+    const o = this.shown.get(id)?.object;
+    if (!o) return null;
+    FORWARD.set(0, 0, -1).applyQuaternion(o.quaternion);
+    return Math.atan2(-FORWARD.x, -FORWARD.z);
   }
 
   /** Light probes, staggered. */

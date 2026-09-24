@@ -1,4 +1,4 @@
-import { math, type GameContext, type Prop, type Vec3 } from '@platform';
+import { math, type GameContext, type Player, type Prop, type Vec3 } from '@platform';
 
 /** Anything shots can hit: ships, turrets, shield generators, the bridge. */
 export interface Target {
@@ -8,7 +8,8 @@ export interface Target {
   team: 'rebel' | 'empire';
   /** Velocity, for leading shots (moving targets). */
   vel?: Vec3;
-  hit(damage: number, at: Vec3, by: 'laser' | 'torpedo'): void;
+  /** Hit by a laser or torpedo, fired by a player (`shooter`) or not. */
+  hit(damage: number, at: Vec3, by: 'laser' | 'torpedo', shooter?: Player): void;
 }
 
 interface Shot {
@@ -26,6 +27,8 @@ interface Shot {
   halo?: Prop;
   marker?: string;
   age?: number;
+  /** The player who fired it. */
+  shooter?: Player;
 }
 
 const _a = new math.Vector3();
@@ -42,13 +45,19 @@ export class Weapons {
 
   constructor(private game: GameContext) {}
 
-  laser(from: Vec3, dir: Vec3, team: 'rebel' | 'empire', opts: { speed?: number; damage?: number; inherit?: Vec3 } = {}) {
+  /**
+   * A laser bolt: it flies on its own on every screen (nothing more is sent while it does), and
+   * from the shooter's (predicted) guns on their own screen.
+   */
+  laser(from: Vec3, dir: Vec3, team: 'rebel' | 'empire', opts: { speed?: number; damage?: number; inherit?: Vec3; by?: Player } = {}) {
     const color = team === 'rebel' ? '#ff3b2f' : '#3dff5a';
-    const prop = this.game.props.bolt({ color, length: 5.5, width: 0.7, intensity: 4 });
+    const prop = this.game.props.bolt({ color, length: 5.5, width: 0.7, intensity: 4, far: 35 });
     const speed = opts.speed ?? (team === 'rebel' ? 170 : 125);
     const vel = new math.Vector3(dir.x, dir.y, dir.z).normalize().multiplyScalar(speed);
     if (opts.inherit) vel.add(_a.set(opts.inherit.x, opts.inherit.y, opts.inherit.z));
-    this.shots.push({ prop, pos: new math.Vector3(from.x, from.y, from.z), vel, life: 1.8, damage: opts.damage ?? (team === 'rebel' ? 12 : 6), team, kind: 'laser', target: null, turn: 0 });
+    prop.quaternion.setFromUnitVectors(FWD, _d.copy(vel).normalize());
+    prop.launch(from, vel, { by: opts.by });
+    this.shots.push({ prop, pos: new math.Vector3(from.x, from.y, from.z), vel, life: 1.8, damage: opts.damage ?? (team === 'rebel' ? 12 : 6), team, kind: 'laser', target: null, turn: 0, shooter: opts.by });
     this.game.audio.play(team === 'rebel' ? 'laser' : 'laser_enemy', { at: from, volume: team === 'rebel' ? 0.5 : 0.7, pitch: 0.92 + Math.random() * 0.16 });
   }
 
@@ -56,13 +65,15 @@ export class Weapons {
    * A proton torpedo: a bright blue-white core in a wide glow, a sparkling trail, a flash at
    * launch and a HUD marker that follows it (and says what it's locked onto).
    */
-  torpedo(from: Vec3, dir: Vec3, team: 'rebel' | 'empire', target: Target | null, launchSpeed = 0) {
+  torpedo(from: Vec3, dir: Vec3, team: 'rebel' | 'empire', target: Target | null, launchSpeed = 0, by?: Player) {
     const g = this.game;
-    const prop = g.props.bolt({ color: '#bfe2ff', length: 2.6, width: 1.1, intensity: 9 });
-    const halo = g.props.bolt({ color: '#4f9dff', length: 4.5, width: 3.2, intensity: 3 });
+    const prop = g.props.bolt({ color: '#bfe2ff', length: 2.6, width: 1.1, intensity: 9, far: 35 });
+    // The glow rides on the torpedo.
+    const halo = g.props.bolt({ color: '#4f9dff', length: 4.5, width: 3.2, intensity: 3, flicker: 0.25 });
+    halo.attach(prop);
     const vel = new math.Vector3(dir.x, dir.y, dir.z).normalize().multiplyScalar(launchSpeed + 35);
     const marker = `torp${this.torpId++}`;
-    this.shots.push({ prop, halo, marker, pos: new math.Vector3(from.x, from.y, from.z), vel, life: 4.5, damage: 60, team, kind: 'torpedo', target, turn: 2.6, age: 0 });
+    this.shots.push({ prop, halo, marker, pos: new math.Vector3(from.x, from.y, from.z), vel, life: 4.5, damage: 60, team, kind: 'torpedo', target, turn: 2.6, age: 0, shooter: by });
     g.audio.play('torpedo', { at: from, volume: 1 });
     g.fx.burst(from, { color: '#9fd0ff', count: 24, speed: 5, size: 0.3, gravity: 0, glow: 1.5, life: 0.35, drag: 5 });
     g.fx.flash('rgba(120, 190, 255, 1)', 0.12, 0.25);
@@ -72,7 +83,6 @@ export class Weapons {
 
   update(dt: number) {
     const w = this.game.world;
-    const cam = this.game.camera.position;
     for (let i = this.shots.length - 1; i >= 0; i--) {
       const s = this.shots[i];
       s.life -= dt;
@@ -129,7 +139,7 @@ export class Weapons {
       }
       if (hit) {
         const at = { x: s.pos.x + dir.x * hitT, y: s.pos.y + dir.y * hitT, z: s.pos.z + dir.z * hitT };
-        hit.hit(s.damage, at, s.kind);
+        hit.hit(s.damage, at, s.kind, s.shooter);
         this.impact(s, at);
         this.drop(i);
         continue;
@@ -139,19 +149,14 @@ export class Weapons {
         this.drop(i);
         continue;
       }
-      s.prop.position.copy(s.pos);
-      s.prop.quaternion.setFromUnitVectors(FWD, dir);
-      // Keep a readable size on screen far away.
-      const dc = Math.hypot(s.pos.x - cam.x, s.pos.y - cam.y, s.pos.z - cam.z);
-      s.prop.scale = Math.max(1, dc / 35);
-      if (s.halo) {
-        s.halo.position.copy(s.pos);
-        s.halo.quaternion.copy(s.prop.quaternion);
-        s.halo.scale = Math.max(1, dc / 22) * (0.9 + Math.random() * 0.25);
+      // Lasers fly on their own (launched); torpedoes turn, so they're moved.
+      if (s.kind === 'torpedo') {
+        s.prop.position.copy(s.pos);
+        s.prop.quaternion.setFromUnitVectors(FWD, dir);
       }
-      if (s.marker && s.team === 'rebel') {
+      if (s.marker && s.shooter) {
         const locked = s.target?.alive;
-        this.game.hud.marker(s.marker, s.pos, { shape: 'ring', color: '#8fd0ff', size: 18, edge: true, label: locked ? 'TORPEDO · LOCKED' : 'TORPEDO' });
+        s.shooter.hud.marker(s.marker, s.prop, { shape: 'ring', color: '#8fd0ff', size: 18, edge: true, label: locked ? 'TORPEDO · LOCKED' : 'TORPEDO' });
       }
     }
   }
@@ -169,7 +174,7 @@ export class Weapons {
     const s = this.shots[i];
     s.prop.remove();
     s.halo?.remove();
-    if (s.marker) this.game.hud.marker(s.marker, null);
+    if (s.marker) s.shooter?.hud.marker(s.marker, null);
     this.shots.splice(i, 1);
   }
 
@@ -180,6 +185,8 @@ export class Weapons {
       if (_a.set(s.pos.x - center.x, s.pos.y - center.y, s.pos.z - center.z).lengthSq() < radius * radius) {
         s.vel.multiplyScalar(-1).applyQuaternion(_q.setFromAxisAngle(_a.normalize(), (Math.random() - 0.5) * 1.2));
         s.team = team;
+        s.prop.quaternion.setFromUnitVectors(FWD, _d.copy(s.vel).normalize());
+        s.prop.launch(s.pos, s.vel);
         this.game.fx.burst(s.pos, { color: '#bfffd0', count: 5, speed: 2, size: 0.1, gravity: 0 });
       }
     }

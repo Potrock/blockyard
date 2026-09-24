@@ -6,6 +6,8 @@ import { PageLink, SocketLink, WorkerLink, type SimLink } from './host/link';
 import { MemoryStore } from './host/store';
 import { FrameBuffer } from './client/interp';
 import { Predictor } from './client/predict';
+import { VehicleView } from './client/vehicle';
+import { worldQuery } from './sim/worldquery';
 import { Models, Skins } from './api/models';
 import { LAYER_CHUNKS, Renderer, type FrameHooks } from './render/pipeline';
 import { Environment } from './render/environment';
@@ -139,6 +141,12 @@ export class Runtime {
   private playback: FrameBuffer | null = null;
   /** This client's own movement, predicted ahead of the server (a server, walking games). */
   private predictor: Predictor | null = null;
+  /** This client's own vehicle (`player.drive`): predicted on a server, its camera and model's pose. */
+  private vehicles!: VehicleView;
+  /** Inputs sent to a server, numbered (prediction replays what the server hasn't applied). */
+  private inputSeq = 0;
+  /** When each recent input was applied here (local seconds): our own shots fly from then. */
+  private inputTimes = new Map<number, number>();
   /** Other players drawn as figures: their stable entity ids, hurt flashes, and name tags shown. */
   private avatarIds = new Map<string, number>();
   private avatarHurt = new Map<string, { health: number; flash: number }>();
@@ -293,6 +301,33 @@ export class Runtime {
     this.hud = new Hud(this.ui, this.registry, icons);
     this.gameHud = new GameHud(this.ui, (ref) => (typeof ref === 'object' && 'block' in ref ? this.blockIcons.get(this.blockId(ref.block)) ?? '' : this.graphics.spriteIcon(ref, 96)));
     this.gameHud.onHighlight = (at, progress) => this.setHighlight(at, progress);
+    // Markers and radar blips that follow things: where this screen draws them, every frame.
+    this.gameHud.locate = {
+      at: (a, offset, out) => {
+        if ('x' in a) {
+          out.set(a.x + (offset?.x ?? 0), a.y + (offset?.y ?? 0), a.z + (offset?.z ?? 0));
+          return true;
+        }
+        if ('$prop' in a) return this.propView.locate(a.$prop, offset, out);
+        if ('$entity' in a) return this.entityView.locate(a.$entity, offset, out);
+        const p = this.frameData?.players.find((x) => x.id === a.$player);
+        if (!p) return false;
+        if (p.vehicle?.prop != null) return this.propView.locate(p.vehicle.prop, offset, out);
+        const avatar = this.avatarIds.get(p.id);
+        if (p.id !== this.playerId && avatar !== undefined && this.entityView.locate(avatar, offset, out)) return true;
+        out.set(p.x + (offset?.x ?? 0), p.y + (offset?.y ?? 0), p.z + (offset?.z ?? 0));
+        return true;
+      },
+      heading: (a) => {
+        if ('$prop' in a) return this.propView.heading(a.$prop);
+        if ('$player' in a) {
+          const p = this.frameData?.players.find((x) => x.id === a.$player);
+          if (p?.vehicle?.prop != null) return this.propView.heading(p.vehicle.prop);
+          return p ? p.view.yaw : null;
+        }
+        return null;
+      },
+    };
     this.gameHud.onScreen = (open) => {
       if (open) this.input.unlock();
       // Closed by a button click: grab the mouse again (needs a user gesture).
@@ -377,6 +412,7 @@ export class Runtime {
       }
     }
 
+    this.vehicles = new VehicleView(def.vehicles ?? {}, worldQuery(this.chunks.world, this.registry), !!this.server);
     this.link.onBatch = (b) => this.receive(b);
 
     if (def.player?.build) {
@@ -534,8 +570,11 @@ export class Runtime {
       this.frameData = b.frame;
       this.ticking = false;
       this.playback?.push(b.frame, (b as TimedBatch).time);
-      const me = this.predictor && this.mine(b.frame);
-      if (me) this.predictor!.reconcile(me);
+      const me = this.playerId !== null ? b.frame.players.find((p) => p.id === this.playerId) : undefined;
+      if (me) {
+        this.predictor?.reconcile(me);
+        this.vehicles.reconcile(me);
+      }
     }
   }
 
@@ -586,13 +625,15 @@ export class Runtime {
       deathTime: 0,
       hotbar: null,
       hand: { drawing: false, charge: 0, strength: 1 },
-      camera: { p: [sp.x, sp.y + 1.62, sp.z], q: [0, 0, 0, 1], fov: this.settings.fov },
+      camera: { p: [sp.x, sp.y + 1.62, sp.z], q: [0, 0, 0, 1], fov: this.settings.fov, follow: false },
+      vehicle: null,
       creative: null,
       frozen: true,
       canFly: false,
       swings: 0,
       ack: -1,
       move: { time: 0, lastJumpTap: -1, lastForwardTap: -1, sprintLatched: false },
+      lead: 0,
       skin: null,
       color: null,
     };
@@ -609,7 +650,8 @@ export class Runtime {
     const out: EntityFrame[] = [];
     const seen = new Set<string>();
     for (const p of f.players) {
-      if (p.id === this.playerId) continue;
+      // Only people on foot get a figure: a driver is their vehicle's model.
+      if (p.id === this.playerId || !this.walker || p.vehicle) continue;
       const type = this.avatarType(p);
       let id = this.avatarIds.get(p.id);
       if (id === undefined) this.avatarIds.set(p.id, (id = -1 - this.avatarIds.size));
@@ -1047,9 +1089,14 @@ export class Runtime {
     this.tickDt += dt;
     if (this.server) {
       const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
-      // Predicting: move at once, and tell the server which input this was and how long it lasted.
-      if (this.predictor) this.link.send({ t: 'input', input, seq: this.predictor.step(input, dt), dt });
-      else this.link.send({ t: 'input', input });
+      // Numbered, with how long it lasted: walking and vehicles move at once here (prediction),
+      // and the server moves them input by input, the same way.
+      const seq = ++this.inputSeq;
+      this.inputTimes.set(seq, now / 1000);
+      this.inputTimes.delete(seq - 600);
+      this.predictor?.step(input, dt, seq);
+      this.vehicles.step(input, dt, seq);
+      this.link.send({ t: 'input', input, seq, dt });
     } else if (!this.ticking) {
       this.ticking = true;
       const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
@@ -1077,7 +1124,19 @@ export class Runtime {
     this.env.time = f.time;
     this.env.paused = true;
     this.env.update(dt);
-    if (this.walker) {
+    // Driving: the vehicle's camera, worked out here every frame from its (predicted) state.
+    const ride = me.camera.follow && this.vehicles.active ? this.vehicles.camera(dt) : null;
+    if (ride) {
+      this.camera.position.copy(ride.position);
+      this.camera.up.copy(ride.up);
+      this.camera.lookAt(ride.target);
+      this.camera.up.set(0, 1, 0);
+      if (this.camera.fov !== ride.fov) {
+        this.camera.fov = ride.fov;
+        this.camera.updateProjectionMatrix();
+      }
+      this.camera.updateMatrixWorld();
+    } else if (this.walker) {
       this.view.follow(dt, me);
       if (this.mode === 'title') {
         this.camera.position.y += 22;
@@ -1099,10 +1158,12 @@ export class Runtime {
     // A server's game runs on while this client is paused: its figures keep walking.
     this.entityView.sync(f.players.length > 1 ? [...f.entities, ...this.avatars(f)] : f.entities, f.projectiles, dt, this.server ? started : running);
     this.pickupView.sync(f.pickups, dt);
-    this.propView.sync(f.props, dt);
+    // Our own vehicle's model where prediction has it, not where the (older) frame does.
+    const own = this.vehicles.active && this.vehicles.prop !== null ? new Map([[this.vehicles.prop, this.vehicles.pose()]]) : undefined;
+    this.propView.sync(f.props, dt, { clock: f.clock, me: this.playerId, inputTime: (seq) => this.inputTimes.get(seq) ?? null, now: now / 1000, camera: this.camera.position }, own);
     this.showPlayer(me);
 
-    if (this.walker) {
+    if (this.walker && !ride) {
       this.view.viewDirection(this.dir);
       this.chunks.update(me.x, me.z, this.dir.x, this.dir.z);
     } else {
@@ -1144,7 +1205,7 @@ export class Runtime {
 
   private updateHand(dt: number, me: PlayerFrame) {
     // Nothing in hand while dead (someone out of the game watching sees only the game).
-    this.held.scene.visible = !me.dead;
+    this.held.scene.visible = !me.dead && !me.vehicle;
     this.held.draw = me.hand.drawing ? me.hand.charge : 0;
     const bobAmt = this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0;
     this.held.update(dt, {

@@ -119,7 +119,7 @@ At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing up
 Games are written so the same code works with one player or many:
 
 - **`game.players`** lists everyone playing. A single-player game has exactly one, and **`game.player`** is that player, which is why single-player games can keep using `game.player`, `game.hud`, `game.input` and `game.camera` as they are.
-- **Each player** has an `id`, a `name`, their own `inventory`, `health` and `viewModel`, and their own screen and controls: **`player.hud`** reaches only them (their wallet, their shop, their toasts), **`player.audio`** plays sounds only they hear, `player.input` is their keyboard and mouse, `player.camera` their camera. **`game.hud`** is everyone's screen (banners, the scoreboard), `game.audio` everyone's speakers.
+- **Each player** has an `id`, a `name`, their own `inventory`, `health` and `viewModel`, and their own screen and controls: **`player.hud`** reaches only them (their wallet, their shop, their toasts), **`player.audio`** plays sounds only they hear, **`player.fx`** shakes and flashes only their screen (they were hit), `player.input` is their keyboard and mouse, `player.camera` their camera. **`game.hud`** is everyone's screen (banners, the scoreboard), `game.audio` everyone's speakers.
 - **How others see them.** Each player appears to the others as a figure that walks, swings and holds what's in their hand. `player.setSkin([u, v], atlas)` dresses it (a Minecraft-layout skin in one of your atlases; their own first-person arm wears it too), and `player.color` colours their name above it (team colours).
 - **Who did it.** Damage sources, killers and block events are an `Actor`: an `Entity`, a `Player`, or `'world'`. Tell them apart with `kind` (`'entity'` or `'player'`): `if (killer !== 'world' && killer?.kind === 'player') kills++`.
 - **Callbacks name the player**: `use(game, player)`, `onPickup(game, count, player)`, command `run(args, game, player)`, the `pickup`, `playerDamage` and `playerDeath` events, and the kits' handlers. Use that player rather than `game.player`, and a potion heals whoever drank it.
@@ -297,37 +297,65 @@ game.player.viewModel.visible = false;                // cutscenes
 
 ![Starfighter](starfighter.png)
 
-With `player: { controller: 'none' }`, the world streams around wherever the camera is.
+With `player: { controller: 'none' }` there's no walking body: the game decides what the player controls and where the camera is, and the world streams around the camera.
 
-- **Camera:** `game.camera.set(position, lookAt, up?)`, or `setPose(position, quaternion)`, plus `fov`. Read `position` and `forward`. Set it in `update` and it's used that same frame.
+**Vehicles.** A ship, a car or a board is a vehicle: define it in the game's `vehicles`, and put a player in one with `player.drive(name, state, { prop })`. Its `step` moves it from their controls; the platform runs it input by input on the host, and on the player's own screen ahead of the host (client-side prediction, as walking has), so it answers at once however far away the server is. `pose` places its model (`prop`) on every screen, and `camera` gives the pilot a chase camera worked out on their screen every frame.
+
+```ts
+export default defineGame({
+  player: { controller: 'none' },
+  vehicles: {
+    ship: {
+      // Pure: reads the state, the controls and the world; changes only the state.
+      step(s, controls, dt, world) {
+        s.yaw -= controls.mouseX * 0.004;
+        s.speed = controls.isDown('KeyW') ? 60 : 30;
+        s.x -= Math.sin(s.yaw) * s.speed * dt;
+        s.z -= Math.cos(s.yaw) * s.speed * dt;
+      },
+      pose(s, position, quaternion) {
+        position.set(s.x, s.y, s.z);
+        quaternion.setFromEuler(new math.Euler(0, s.yaw, 0));
+      },
+      camera(s, cam, dt) {
+        cam.position.lerp(new math.Vector3(s.x + Math.sin(s.yaw) * 12, s.y + 4, s.z + Math.cos(s.yaw) * 12), cam.snap ? 1 : 1 - Math.exp(-dt * 8));
+        cam.target.set(s.x, s.y, s.z);
+      },
+    },
+  },
+  start(game) {
+    for (const p of game.players) p.drive('ship', { x: 0, y: 120, z: 0, yaw: 0, speed: 30 }, { prop: game.props.spawn(shipModel) });
+  },
+});
+```
+
+- The state is plain data (numbers, booleans, short lists): it goes to the pilot's screen as is. Anything with consequences (shots, damage, sounds) is your `update`'s job, reading `player.vehicle.state` and `player.input`; the game may change the state too (a knock-back), and the pilot's screen catches up smoothly.
+- `step` must be pure and the same everywhere: the host and the pilot's screen run it on the same inputs and the same blocks, and the pilot's screen starts again from the host's state whenever it arrives. `world` offers `raycast`, `getBlock`, `blockName`, `lineOfSight`, `surfaceY` and `seaLevel`.
+- While driving, their body goes with the vehicle (so `player.position` is the vehicle's), and a walking player's figure is hidden. `player.camera.set(...)` takes the camera over (a cutscene, watching after being shot down); `player.camera.follow()` gives it back. `player.leaveVehicle()` gets out.
+
+**Without a vehicle**, drive the camera yourself: `game.camera.set(position, lookAt, up?)` or `setPose(position, quaternion)`, plus `fov`. On a server that camera arrives a round trip late, which is why anything the player steers should be a vehicle.
+
 - **Input:** `game.input.isDown('KeyW')`, `pressed(code)`, `button(0)`, `buttonPressed(2)`, and `mouseX` / `mouseY` / `wheel` deltas while the mouse is captured. Everything reads as idle while paused, so games never need to check. `consume(button | key)` claims an input for the rest of the frame, so the built-in systems (which run after your `update`) ignore it.
 - **Math:** `import { math } from '@platform'` gives `Vector3`, `Quaternion`, `Euler`, `Matrix4` and `MathUtils`.
 - **Props** are movable objects:
   - `props.model(blueprint, { scale, pivot })` meshes a Blueprint once. The mesh uses the world's block textures, with ambient occlusion, sun shadows and glowing blocks. At `scale: 0.25`, each block is a quarter metre, which is how the Starfighter builds detailed X-wings.
-  - `props.spawn(model)` places a copy. Move it through its `position` and `quaternion` every frame; `flash(color)` tints it briefly for hits.
-  - `props.bolt({ color, length, width })` is a glowing streak along its -z, for lasers, tracers and engine flames.
-
-```ts
-const tie = game.props.model(tieBlueprint, { scale: 0.25 });
-const ship = game.props.spawn(tie, { position: { x: 0, y: 120, z: 0 } });
-// every frame:
-ship.position.addScaledVector(forward, speed * dt);
-ship.quaternion.setFromEuler(new math.Euler(pitch, yaw, roll, 'YXZ'));
-game.camera.set(behind, ship.position);
-```
+  - `props.spawn(model)` places a copy; move it through its `position` and `quaternion`. `flash(color)` tints it briefly for hits.
+  - `props.bolt({ color, length, width, flicker, far })` is a glowing streak along its -z, for lasers, tracers and engine flames. `flicker` makes it waver on its own; past `far` blocks from each player's camera it grows with the distance, so it stays visible.
+  - `prop.attach(parent)`: it rides on another prop (engine flames on a ship, a turret on a tank), its `position` and `quaternion` now on the parent. It goes wherever the parent goes without being moved each tick, and goes when the parent is removed.
+  - `prop.launch(from, velocity, { by })`: it flies in a straight line on its own on every screen, and nothing is sent while it does (moving it yourself stops that). `by` the player who fired it: on their screen it leaves their (predicted) guns when they fired.
 
 **HUD for vehicles:**
 - `hud.meter(id, label, 0..1, { color })` draws a bar (shields, boost).
-- `hud.marker(id, worldPos, { shape: 'box' | 'diamond' | 'ring' | 'reticle' | 'dot', color, size, label, edge, pulse })` draws target brackets and waypoints. With `edge`, off-screen targets become arrows on the screen edge; `size: { world: n }` scales the marker with distance.
-- `hud.radar({ center, heading, range, blips })` draws a round radar.
+- `hud.marker(id, at, { shape: 'box' | 'diamond' | 'ring' | 'reticle' | 'dot', color, size, label, edge, pulse, offset })` draws target brackets and waypoints. `at` is a spot, or something to follow: a prop, an entity or a player, placed by each screen every frame where it draws it (and sent only once). `offset` is in a prop's own space: `{ z: -30 }` is a reticle 30 blocks ahead of a ship's nose. With `edge`, off-screen targets become arrows on the screen edge; `size: { world: n }` scales the marker with distance.
+- `hud.radar({ center, heading?, range, blips })` draws a round radar; `center` and each blip's `at` can follow things too, and centred on a prop it turns with it.
 - `hud.crosshair(false)` hides the default crosshair.
 
 **Effects and sound:**
 - `fx.explosion(at, { size })` makes a fireball, smoke, sparks, a shockwave, sound, and a shake scaled by distance.
 - Sounds include `laser`, `laser_enemy`, `explosion`, `explosion_big`, `torpedo`, `lock`, `alarm`, `whoosh` and `flyby`.
-- `audio.loop('engine')` returns a handle whose `set({ volume, pitch })` follows the throttle.
+- `audio.loop('engine')` returns a handle whose `set({ volume, pitch })` follows the throttle (in steps: a steady engine sends nothing).
 
-`src/games/starfighter/` is the reference.
+`src/games/starfighter/` is the reference: the X-wing is a vehicle (`flight.ts`), the TIEs fly themselves with the same physics, and every pilot has their own HUD.
 
 ## Entities
 
@@ -451,7 +479,7 @@ game.commands.run('/give pike'); // run one from code
 | `hud.feed(text, { color })` | A line in the message feed at the top left (kill feeds, match events); lines stack and fade |
 | `hud.screen({ title, tone, stats, buttons })` | Modal victory / defeat / menu |
 | `hud.menu({ title, subtitle, sections: [{ title, entries }] })` | A panel of clickable entries (shops, upgrades, level select) while the game keeps running. Entries take an `icon` (a sprite or `{ block }`), `label`, `detail` (a price), `note`, `disabled`, `active` and `onSelect`; `update()` refreshes it after a purchase. Esc or E closes it |
-| `hud.meter`, `marker`, `radar`, `crosshair` | Vehicle HUD (see above) |
+| `hud.meter`, `marker`, `radar`, `crosshair` | Vehicle HUD (see above); markers and radar blips can follow props, entities and players |
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
@@ -510,11 +538,11 @@ export default function myGame() {
 Your game runs inside the **simulation**, and everything it does reaches players as plain data:
 
 - **Input in.** Each tick the simulation gets one `PlayerInput` per player: keys held and pressed, buttons, wheel and view angles. `player.input` reads that snapshot. The client owns mouse look. When the game turns a player (`teleport`, `camera.lookAt`), the view carries a sequence number, so a client's stale angles can't override it.
-- **Frames out.** After each tick the simulation produces a `SimFrame`: every player's position, pose, health, hotbar, held item and camera, plus entities, projectiles, pickups and props. The client draws only from frames.
+- **Frames out.** After each tick the simulation produces a `SimFrame`: every player's position, pose, health, hotbar, held item, camera and vehicle, plus entities, projectiles, pickups and props. The client draws only from frames.
 - **Presentation calls out.** `hud`, `fx`, `audio` and the view model are proxies. Each call becomes a `PresentCall` addressed to one player (`player.hud`) or to everyone (`game.hud`). Menu entries, buttons and other callbacks go out as ids and come back as `ClientMessage`s, which call your function inside the simulation.
 - **Content by name.** Sounds, atlases, animations, entity and item definitions, and prop models go into a shared `Content` registry, so a frame only has to name them.
 
-A `GameHost` runs the simulation on a world of its own, generated around the players (every player has a physics body in it, by slot), and answers each tick with a batch: the content your game defined since the last one, presentation calls, block edits, then the frame. In the browser the host runs in a Web Worker, so your game's logic never costs the renderer a frame. The page is only the client: it sends one tick per frame with the player's controls, draws the newest frame, and mirrors the host's block edits into its own world for meshing (and for saves). In Node, `Headless` (`src/platform/host/headless.ts`) wraps the same `GameHost` with no client at all; that's what the headless tests run on. The game server (`src/platform/host/server.ts`) hosts it too, for many clients over WebSockets: it keeps its own clock, merges each client's controls between steps, sends each client only the calls meant for everyone or for them, and catches late joiners up with the game's content, the world's edits and what's on everyone's screen. Clients play the server's frames back about two steps behind, blending positions, so movement is smooth although frames arrive unevenly. Their own player they predict instead: each input moves them at once, with the same movement step the server takes (`sim/movement.ts`), goes to the server numbered, and is moved again there input by input; frames say which input was applied last, so the client starts again from the server's state and replays the rest. Same code on the same blocks lands in the same place, so a correction only shows when the server did something the client couldn't know about. Game code that throws (a timer, `update`, an entity's AI) is reported to the players and the game carries on. Presentation calls that set something lasting (an objective, a stat, a marker, the block highlight) are only sent when they change, which is what keeps a game's traffic small. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
+A `GameHost` runs the simulation on a world of its own, generated around the players (every player has a physics body in it, by slot), and answers each tick with a batch: the content your game defined since the last one, presentation calls, block edits, then the frame. In the browser the host runs in a Web Worker, so your game's logic never costs the renderer a frame. The page is only the client: it sends one tick per frame with the player's controls, draws the newest frame, and mirrors the host's block edits into its own world for meshing (and for saves). In Node, `Headless` (`src/platform/host/headless.ts`) wraps the same `GameHost` with no client at all; that's what the headless tests run on. The game server (`src/platform/host/server.ts`) hosts it too, for many clients over WebSockets: it keeps its own clock, merges each client's controls between steps, sends each client only the calls meant for everyone or for them, and catches late joiners up with the game's content, the world's edits and what's on everyone's screen. Over a socket each frame goes as a patch on the one before (`net/delta.ts`: only the fields and records that changed, numbers rounded to a tenth of a millimetre), and the sockets are compressed, so a game costs each player a few kilobytes a second. Clients play the server's frames back about two steps behind, blending positions, so movement is smooth although frames arrive unevenly. Their own player they predict instead: each input moves them at once, with the same movement step the server takes (`sim/movement.ts`), goes to the server numbered, and is moved again there input by input; frames say which input was applied last, so the client starts again from the server's state and replays the rest. Same code on the same blocks lands in the same place, so a correction only shows when the server did something the client couldn't know about. Vehicles are predicted the same way, with the game's own `step`. The server plays each client's inputs at the pace they were made, keeping a few in hand so ones that arrive late don't make the player lurch on everyone else's screen, and says how far each player's state trails the step (whole inputs rarely fill one exactly) so other screens draw them where they are. Game code that throws (a timer, `update`, an entity's AI) is reported to the players and the game carries on. Presentation calls that set something lasting (an objective, a stat, a marker, the block highlight) are only sent when they change, which is what keeps a game's traffic small. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
 
 On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server can link the same crate and generate identical worlds from the same seed and blueprints. Entity state lives in flat `f64` buffers (layout documented in `entities.rs`) that serialise directly into snapshots. Rendering, chunk meshing, lighting and culling stay on the client.
 

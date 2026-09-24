@@ -1,5 +1,5 @@
 import * as engine from '@engine/voxel_engine.js';
-import type { Actor, BlockRef, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3 } from '../api/types';
+import type { Actor, Anchor, BlockRef, Entity, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3, VehicleWorld } from '../api/types';
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
@@ -9,7 +9,8 @@ import { EntitySim, type EntityFrame, type ProjectileFrame } from './entities';
 import { ItemSim, type PickupFrame } from './items';
 import { PlayerSim, type PlayerFrame } from './player';
 import { Presentation, type Sink } from './present';
-import { PropSim, type PropFrame } from './props';
+import { PropSim, PropState, type PropFrame } from './props';
+import { worldQuery } from './worldquery';
 import type { WorldHost } from './world';
 
 function mulberry32(seed: number): Rng {
@@ -119,6 +120,14 @@ export class Sim {
     const world = o.world.world;
     const emit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => this.emit(k, e);
     this.presentation = new Presentation(o.sink, o.content);
+    // Markers and radar blips follow props, entities and players by id.
+    this.presentation.anchor = (a: Anchor) => {
+      if (a instanceof PropState) return { $prop: a.id };
+      if ((a as Entity).kind === 'entity') return { $entity: (a as Entity).id };
+      if ((a as Player).kind === 'player') return { $player: (a as Player).id };
+      const v = a as Vec3;
+      return { x: v.x, y: v.y, z: v.z };
+    };
     this.entities = new EntitySim({
       world,
       content: o.content,
@@ -147,7 +156,13 @@ export class Sim {
       content: o.content,
       present: this.presentation,
     });
-    this.props = new PropSim(this.registry, (b) => this.blockId(b), o.content);
+    this.props = new PropSim(this.registry, (b) => this.blockId(b), o.content, {
+      clock: () => this.clockNow,
+      ack: (p) => {
+        const sim = this.players.find((x) => x.api === p);
+        return sim ? { id: sim.id, seq: sim.ack } : null;
+      },
+    });
     this.local = this.newPlayer(o.player?.id ?? 'local', o.player?.name ?? 'Player');
     this.players.push(this.local);
     this.roster.push(this.local.api);
@@ -251,6 +266,8 @@ export class Sim {
     if (p.vacant) {
       p.vacant = false;
       this.roster.unshift(p.api);
+      const sp = this.spawn;
+      p.fresh(sp.x, sp.y, sp.z, sp.yaw);
     } else {
       p = this.newPlayer(`p${this.nextPlayer++}`, name);
       this.players.push(p);
@@ -311,12 +328,17 @@ export class Sim {
     };
   }
 
+  /** Read-only world questions (what vehicles ask). */
+  private query: VehicleWorld | null = null;
+
   private newPlayer(id: string, name: string): PlayerSim {
     const p = new PlayerSim({
       id,
       name,
       world: this.host.world,
       options: this.def.player ?? {},
+      vehicles: this.def.vehicles ?? {},
+      query: (this.query ??= worldQuery(this.host.world, this.registry)),
       present: this.presentation,
       entities: this.entities,
       items: this.items,
@@ -348,6 +370,9 @@ export class Sim {
     for (const p of this.players) {
       p.inventory.clear();
       p.reset();
+      // Out of any vehicle (its model went with the props): `start` puts them back in.
+      p.vehicle = null;
+      p.followVehicle = false;
       p.health.configure(this.def.player ?? {});
       p.health.revive();
       p.place(sp.x, sp.y, sp.z, sp.yaw);

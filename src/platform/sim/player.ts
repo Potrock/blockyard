@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { CameraApi, GameContext, GameEvents, ItemStack, Player, PlayerOptions, Vec3 } from '../api/types';
+import type { CameraApi, GameContext, GameEvents, ItemStack, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
+import { IDLE_INPUT } from '../net/protocol';
 import { Combat } from './combat';
 import type { EntitySim } from './entities';
 import { PlayerHealth } from './health';
@@ -9,6 +10,8 @@ import { Inventory, type ItemSim } from './items';
 import type { Presentation } from './present';
 import type { CreativeBuild } from './creative';
 import { freshMemory, stepMovement, type MoveMemory } from './movement';
+import type { PropState } from './props';
+import { VehicleSim } from './vehicle';
 
 const EYE = 1.62;
 const SNEAK_EYE = 1.27;
@@ -45,8 +48,13 @@ export interface PlayerFrame {
   hotbar: { slots: (ItemStack | null)[]; selected: number } | null;
   /** The held weapon: bow draw, and melee readiness 0..1. */
   hand: { drawing: boolean; charge: number; strength: number };
-  /** The game's camera (`controller: 'none'`). */
-  camera: { p: [number, number, number]; q: [number, number, number, number]; fov: number };
+  /**
+   * The game's camera (`controller: 'none'`), or, `follow`ing, the vehicle's (the client works it
+   * out from the vehicle's state, every frame).
+   */
+  camera: { p: [number, number, number]; q: [number, number, number, number]; fov: number; follow: boolean };
+  /** Their vehicle (`player.drive`): which one, its state (their client predicts from it), its model. */
+  vehicle: { name: string; state: object; prop: number | null } | null;
   /** Creative building (`player.build`): the block hotbar. */
   creative: { hotbar: number[]; selected: number } | null;
   /** Physics is off (before play, dead, a game-driven camera). */
@@ -57,6 +65,11 @@ export interface PlayerFrame {
   /** For client-side prediction: the last input of theirs applied, and movement's memory then. */
   ack: number;
   move: MoveMemory;
+  /**
+   * Seconds their state trails the frame (a server plays whole inputs, and the time left over is
+   * owed to them): other screens draw them this much further on, at their velocity.
+   */
+  lead: number;
   /** Their figure's skin (`player.setSkin`), or null for the game's. */
   skin: { uv: [number, number]; atlas?: string } | null;
   /** Their name's colour above their figure. */
@@ -68,6 +81,9 @@ export interface PlayerSimParts {
   name: string;
   world: VoxelWorld;
   options: PlayerOptions;
+  /** The game's vehicles, and the world as they see it. */
+  vehicles: Record<string, VehicleDefinition>;
+  query: VehicleWorld;
   present: Presentation;
   entities: EntitySim;
   items: ItemSim;
@@ -103,6 +119,8 @@ export class PlayerSim {
   private memory = freshMemory();
   /** The last input applied, by the client's count (a predicting client replays what's after). */
   ack = -1;
+  /** Seconds their state trails the step (see `PlayerFrame.lead`). */
+  lead = 0;
   /** Swings and uses so far. */
   swings = 0;
   skin: { uv: [number, number]; atlas?: string } | null = null;
@@ -110,6 +128,10 @@ export class PlayerSim {
   readonly api: Player;
   /** Creative building's block hotbar and placing (games with `player.build`). */
   creative: CreativeBuild | null = null;
+  /** What they're driving (`drive`): their controls move it instead of their body. */
+  vehicle: VehicleSim | null = null;
+  /** Their client works the camera out from the vehicle (until the game sets one). */
+  followVehicle = false;
   /**
    * The first player's place while nobody holds it: their client left and the next to join
    * takes over (`game.player` stays the same object). Frozen, idle and not drawn meanwhile.
@@ -210,6 +232,28 @@ export class PlayerSim {
     this.cam.quat.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
   }
 
+  /**
+   * A new player in this place (the first player's, left by someone else): nothing of the last
+   * one's carries over (where they were, flying, health, what they held, their vehicle, their skin).
+   */
+  fresh(x: number, y: number, z: number, yaw: number) {
+    this.inventory.clear();
+    this.reset();
+    this.health.configure(this.p.options);
+    this.health.revive();
+    this.p.world.set_flying(this.slot, false);
+    this.vehicle = null;
+    this.followVehicle = false;
+    this.skin = null;
+    this.color = null;
+    this.ack = -1;
+    this.lead = 0;
+    this.swings = 0;
+    this.memory = freshMemory();
+    this.input.set(IDLE_INPUT);
+    this.place(x, y, z, yaw);
+  }
+
   /** Read the physics body back from WebAssembly. */
   syncState() {
     const st = this.p.world.player_state(this.slot);
@@ -229,9 +273,14 @@ export class PlayerSim {
     S.frozen = st[12] > 0.5;
   }
 
-  /** Walk, sprint, sneak, jump, swim and fly from this tick's controls. */
+  /** Walk, sprint, sneak, jump, swim and fly from this tick's controls (or drive). */
   move(dt: number) {
     const world = this.p.world;
+    if (this.vehicle) {
+      this.vehicle.def.step(this.vehicle.state, this.input, dt, this.p.query);
+      this.followBody();
+      return;
+    }
     if (!this.walker) {
       // No walking body: it stays put (games may teleport it, e.g. to follow a vehicle).
       world.set_frozen(this.slot, true);
@@ -248,6 +297,29 @@ export class PlayerSim {
     this.syncState();
     this.sneaking = sneak;
     this.sprinting = sprint && Math.hypot(this.state.vx, this.state.vz) > 4.5;
+  }
+
+  /**
+   * Their vehicle's model where it will be `seconds` on (a server owes them that much time): a
+   * step of the vehicle on a copy of its state, with the last controls. For other screens, which
+   * draw the model; the vehicle itself is untouched.
+   */
+  aheadVehicle(seconds: number) {
+    const v = this.vehicle;
+    if (!v?.prop || v.prop.removed || seconds < 1e-3) return;
+    const s = structuredClone(v.state);
+    v.def.step(s, this.input, seconds, this.p.query);
+    v.def.pose(s, v.prop.position, v.prop.quaternion);
+  }
+
+  /** The vehicle's model to where its state has it, and their (frozen) body with it. */
+  followBody() {
+    const v = this.vehicle;
+    if (!v) return;
+    const at = v.place();
+    this.p.world.player_reset(this.slot, at.x, at.y, at.z);
+    this.p.world.set_frozen(this.slot, true);
+    this.syncState();
   }
 
   /** Regeneration, fall damage, the death timer. */
@@ -296,13 +368,15 @@ export class PlayerSim {
       deathTime: h.deathTime,
       hotbar: this.itemMode ? { slots: this.inventory.slots.map((st) => (st ? { ...st } : null)), selected: this.inventory.selected } : null,
       hand: { drawing: c.isDrawing, charge: c.charge, strength: c.strength },
-      camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov },
+      camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov, follow: this.followVehicle && !!this.vehicle },
+      vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
       frozen: s.frozen,
       canFly: this.allowFlight,
       swings: this.swings,
       ack: this.ack,
       move: { ...this.memory },
+      lead: this.lead,
       skin: this.skin,
       color: this.color,
     };
@@ -333,12 +407,14 @@ export class PlayerSim {
         return me.look;
       },
       set(pos, target, up) {
+        me.followVehicle = false;
         const c = me.cam;
         c.pos.set(pos.x, pos.y, pos.z);
         const m = new THREE.Matrix4().lookAt(c.pos, new THREE.Vector3(target.x, target.y, target.z), new THREE.Vector3(up?.x ?? 0, up?.y ?? 1, up?.z ?? 0));
         c.quat.setFromRotationMatrix(m);
       },
       setPose(pos, q) {
+        me.followVehicle = false;
         me.cam.pos.set(pos.x, pos.y, pos.z);
         me.cam.quat.set(q.x, q.y, q.z, q.w).normalize();
       },
@@ -347,6 +423,9 @@ export class PlayerSim {
       },
       set fov(v: number) {
         me.cam.fov = Math.max(10, Math.min(150, v));
+      },
+      follow() {
+        me.followVehicle = true;
       },
     };
     return {
@@ -357,6 +436,7 @@ export class PlayerSim {
       },
       hud: present.hud(this.id),
       audio: present.audio(this.id),
+      fx: present.fx(this.id),
       setSkin: (skin, atlas) => {
         me.skin = { uv: [skin[0], skin[1]], atlas };
         present.send(me.id, 'view', 'setSkin', [skin, atlas]);
@@ -425,6 +505,21 @@ export class PlayerSim {
       revive: () => this.health.revive(),
       impulse: (x, y, z) => world.player_impulse(this.slot, x, y, z),
       freeze: (f) => world.set_frozen(this.slot, f),
+      drive: <S extends object>(name: string, state: S, opts: { prop?: Prop } = {}) => {
+        const def = this.p.vehicles[name];
+        if (!def) throw new Error(`player.drive: no vehicle "${name}" (add it to the game's \`vehicles\`)`);
+        this.vehicle = new VehicleSim(name, def, state, (opts.prop as PropState | undefined) ?? null);
+        this.followVehicle = true;
+        this.followBody();
+        return this.vehicle as unknown as import('../api/types').Vehicle<S>;
+      },
+      leaveVehicle: () => {
+        this.vehicle = null;
+        this.followVehicle = false;
+      },
+      get vehicle() {
+        return me.vehicle;
+      },
     };
   }
 }

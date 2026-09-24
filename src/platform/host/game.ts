@@ -129,10 +129,16 @@ interface Client {
   moves: { input: PlayerInput; dt: number; seq: number }[] | null;
   /** Seconds of movement the client may still spend: it earns the server's time, so it can't run faster. */
   bank: number;
+  /** Its inputs have started playing (after a cushion's worth came in). */
+  playing?: boolean;
 }
 
 /** Most movement time a client can save up (catching up after a hiccup). */
 const MAX_BANK = 0.25;
+/** Inputs kept in hand past this (seconds' worth) are played a little faster until it's worn down. */
+const CUSHION = 0.05;
+/** Inputs held back before a client's first is played: the cushion it starts with. */
+const PRIME = 0.04;
 
 /**
  * Hosts one game: its simulation, on a world of its own, driven by `ClientCommand`s and
@@ -487,16 +493,38 @@ export class GameHost {
    * is earned from the server's clock, so a client that sends too much waits; one that's fallen
    * far behind (a queue over 30) catches up at once rather than lagging for good.
    */
+  /**
+   * A predicting client's inputs, played at the pace they were made (the server's time, which
+   * they can't outrun). They arrive unevenly; played as they land, the player would move in fits
+   * and starts on everyone else's screen (none one step, two the next). So time without inputs
+   * isn't saved up to spend in a burst: the ones that arrive late queue up instead, and that queue
+   * is the cushion for the next late one (a client's first few are held back to start one). While
+   * arrivals are steady it's played down a little faster, so the cushion stays small. Steps take
+   * whole inputs, so a player's state trails the step by what's left over (see `lead`).
+   */
   private moveInputs(c: Client, p: PlayerSim, dt: number) {
     const moves = c.moves!;
-    c.bank = Math.min(MAX_BANK, c.bank + dt);
-    while (moves.length && (moves[0].dt <= c.bank || moves.length > 30)) {
+    let queued = 0;
+    for (const m of moves) queued += m.dt;
+    // Start with a cushion (then late arrivals are absorbed from the first).
+    if (!c.playing) {
+      if (queued < PRIME) return;
+      c.playing = true;
+    }
+    c.bank = Math.min(MAX_BANK, c.bank + dt * (queued > CUSHION + dt ? 1.05 : 1));
+    while (moves.length && (moves[0].dt <= c.bank + 1e-6 || moves.length > 30)) {
       const m = moves.shift()!;
       c.bank = Math.max(0, c.bank - m.dt);
       p.input.set(m.input);
       p.move(m.dt);
       p.ack = m.seq;
     }
+    if (!moves.length) c.bank = Math.min(c.bank, dt * 0.5);
+    // Whole inputs don't fill a step exactly: the time left over is how far their state trails
+    // this step's. Other screens draw them that much further on (so steps of one input, then
+    // three, still look like steady motion); their own screen predicts, and needs it as it is.
+    p.lead = c.bank;
+    p.aheadVehicle(c.bank);
   }
 
   /** Run game code; if it throws, the clients hear about it and the host carries on. */

@@ -1,4 +1,4 @@
-import { math, type GameContext, type Prop, type PropModel, type Vec3 } from '@platform';
+import { math, type GameContext, type Prop, type PropModel, type Vec3, type VehicleWorld } from '@platform';
 import { SHIP_SCALE, type ShipDesign } from './ships';
 
 const UP = new math.Vector3(0, 1, 0);
@@ -8,6 +8,106 @@ const _e = new math.Euler();
 const _f = new math.Vector3();
 const _a = new math.Vector3();
 const _b = new math.Vector3();
+
+/**
+ * What flies: where, heading (about world up), pitch, bank into turns (cosmetic) and a barrel
+ * roll's spin, speed along the nose, and a knock-back velocity that decays. The player's ships
+ * (vehicles, stepped on the host and on the pilot's screen) and the AI's fly the same way.
+ */
+export interface Body {
+  pos: math.Vector3;
+  yaw: number;
+  pitch: number;
+  bank: number;
+  spin: number;
+  speed: number;
+  knock: math.Vector3;
+}
+
+/** World orientation (cosmetic bank included). */
+export function orientationOf(b: Body, out: math.Quaternion): math.Quaternion {
+  _e.set(b.pitch, b.yaw, b.bank + b.spin, 'YXZ');
+  return out.setFromEuler(_e);
+}
+
+/** Where the nose points (no bank). */
+export function forwardOf(b: { yaw: number; pitch: number }, out: math.Vector3): math.Vector3 {
+  const cp = Math.cos(b.pitch);
+  return out.set(-Math.sin(b.yaw) * cp, Math.sin(b.pitch), -Math.cos(b.yaw) * cp);
+}
+
+/** Turn at these heading / pitch rates (rad/s), easing the bank toward `targetBank`. */
+export function steerBody(b: Body, dt: number, yawRate: number, pitchRate: number, targetBank: number) {
+  b.yaw += yawRate * dt;
+  b.pitch = math.MathUtils.clamp(b.pitch + pitchRate * dt, -1.35, 1.35);
+  b.bank += (targetBank - b.bank) * Math.min(1, dt * 5);
+}
+
+/**
+ * Fly one step and collide with the world: hull points (`probes`) sweep from where they were to
+ * where they are going. On contact the ship stops at the surface, bounces and slides off it (the
+ * heading is reflected, gently for glancing blows), loses speed, and gets knocked back.
+ */
+export function moveBody(b: Body, probes: math.Vector3[], dt: number, w: VehicleWorld): Impact | null {
+  const q = orientationOf(b, _q);
+  const step = forwardOf(b, _f).multiplyScalar(b.speed * dt).addScaledVector(b.knock, dt);
+  b.knock.multiplyScalar(Math.exp(-dt * 4));
+  let hit: Impact | null = null;
+  let best = 1;
+  for (const p of probes) {
+    const from = _a.copy(p).applyQuaternion(q).add(b.pos);
+    const len = step.length();
+    if (len > 1e-6) {
+      const r = w.raycast(from, step, len + 0.3);
+      if (r) {
+        // Fraction of the step before touching (voxel entry along the ray).
+        const d = Math.hypot(r.x + 0.5 - from.x, r.y + 0.5 - from.y, r.z + 0.5 - from.z) - 0.7;
+        const t = math.MathUtils.clamp(d / len, 0, 1);
+        if (t < best || !hit) {
+          best = t;
+          hit = { at: from.clone().addScaledVector(step, t), normal: new math.Vector3(r.normal.x, r.normal.y, r.normal.z), force: 0, water: false };
+        }
+      }
+    }
+    // The sea: skimming below its surface counts as hitting it.
+    const to = _b.copy(from).add(step);
+    if (!hit && to.y < w.seaLevel + 1.4 && w.blockName(w.getBlock(to.x, to.y, to.z)) === 'water') {
+      best = 0;
+      hit = { at: to.clone(), normal: new math.Vector3(0, 1, 0), force: 0, water: true };
+    }
+  }
+  if (!hit) {
+    b.pos.add(step);
+    return null;
+  }
+  const n = hit.normal;
+  if (n.lengthSq() < 0.5) n.set(0, 1, 0); // started inside a block: push up
+  // Move up to the surface, then out of it a little.
+  b.pos.addScaledVector(step, best).addScaledVector(n, 0.25);
+  const f = forwardOf(b, _f);
+  const into = -f.dot(n); // 1 = head-on
+  hit.force = Math.max(0, into);
+  if (into > 0) {
+    const slide = f.clone().addScaledVector(n, into);
+    if (slide.length() > 0.45 || Math.abs(n.y) > 0.7) {
+      // Glancing, or the ground / sea: slide along the surface, angled a little away from it.
+      if (slide.length() < 1e-3) slide.set(-Math.sin(b.yaw), 0, -Math.cos(b.yaw));
+      slide.normalize().addScaledVector(n, 0.25 + 0.25 * into).normalize();
+      // Turn with the surface, but never spin round (a near-vertical slide keeps the heading).
+      if (Math.hypot(slide.x, slide.z) > 0.3) {
+        const yaw = Math.atan2(-slide.x, -slide.z);
+        if (Math.abs(angleDiff(b.yaw, yaw)) < 1.75) b.yaw = yaw;
+      }
+      b.pitch = math.MathUtils.clamp(Math.asin(math.MathUtils.clamp(slide.y, -1, 1)), -1.35, 1.35);
+    } else {
+      // Nose into a wall: keep the heading and pull up; the knock-back carries you off it.
+      b.pitch = Math.max(b.pitch, 0.7);
+    }
+    b.speed *= 1 - 0.5 * into;
+  }
+  b.knock.addScaledVector(n, 5 + 14 * hit.force);
+  return hit;
+}
 
 /** Are any of `a`'s hull points (plus its centre) inside `b`'s box (shrunk a little)? */
 function pointsInside(a: Craft, b: Craft): boolean {
@@ -27,9 +127,8 @@ function pointsInside(a: Craft, b: Craft): boolean {
   return false;
 }
 
-/** A built ship type: the meshed model plus its design data in world units. */
-export interface ShipType {
-  model: PropModel;
+/** A ship's shape in world units, from its design alone (the pilot's screen needs it too). */
+export interface ShipGeometry {
   design: ShipDesign;
   /** Laser muzzles and engine points in ship space (world units). */
   guns: math.Vector3[];
@@ -41,7 +140,16 @@ export interface ShipType {
   probes: math.Vector3[];
 }
 
+/** A built ship type: its shape and its meshed model. */
+export interface ShipType extends ShipGeometry {
+  model: PropModel;
+}
+
 export function shipType(game: GameContext, design: ShipDesign): ShipType {
+  return { ...shipGeometry(design), model: game.props.model(design.blueprint, { scale: SHIP_SCALE }) };
+}
+
+export function shipGeometry(design: ShipDesign): ShipGeometry {
   const s = SHIP_SCALE;
   const box = new math.Box3();
   design.blueprint.forEach((x, y, z) => {
@@ -61,7 +169,6 @@ export function shipType(game: GameContext, design: ShipDesign): ShipType {
     new math.Vector3(c.x, min.y * k, c.z),
   ];
   return {
-    model: game.props.model(design.blueprint, { scale: s }),
     design,
     guns: design.guns.map((g) => new math.Vector3(g.x * s, g.y * s, g.z * s)),
     engines: design.engines.map((g) => new math.Vector3(g.x * s, g.y * s, g.z * s)),
@@ -80,11 +187,11 @@ export interface Impact {
 }
 
 /**
- * Arcade flight shared by the player and the AI: heading turns about world up, pitch about the
- * ship's right axis (clamped short of vertical), and bank is cosmetic (into turns, plus barrel
- * rolls). The ship always flies where its nose points.
+ * A ship in the battle, on the host: arcade flight (see `Body`), its model and engine flames, hit
+ * points. The AI's fighters fly themselves with it; a player's is their vehicle's, kept in step
+ * with its state.
  */
-export class Craft {
+export class Craft implements Body {
   readonly pos = new math.Vector3();
   yaw = 0;
   pitch = 0;
@@ -109,7 +216,14 @@ export class Craft {
   ) {
     this.hp = hp;
     this.prop = game.props.spawn(type.model);
-    for (let i = 0; i < type.engines.length; i++) this.flames.push(game.props.bolt({ color: flame, length: 1, width: 0.5, intensity: 3 }));
+    // Flames ride on the ship, pointing backward (+z in ship space), wavering on their own.
+    for (const e of type.engines) {
+      const fl = game.props.bolt({ color: flame, length: 1, width: 0.5, intensity: 3, flicker: 0.22 });
+      fl.attach(this.prop);
+      fl.position.copy(e);
+      fl.quaternion.setFromAxisAngle(UP, Math.PI);
+      this.flames.push(fl);
+    }
   }
 
   get radius(): number {
@@ -118,14 +232,12 @@ export class Craft {
 
   /** World orientation (cosmetic bank included). */
   orientation(out: math.Quaternion): math.Quaternion {
-    _e.set(this.pitch, this.yaw, this.bank + this.spin, 'YXZ');
-    return out.setFromEuler(_e);
+    return orientationOf(this, out);
   }
 
   /** Where the nose points (no bank). */
   forward(out: math.Vector3): math.Vector3 {
-    const cp = Math.cos(this.pitch);
-    return out.set(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp);
+    return forwardOf(this, out);
   }
 
   /** A point in ship space (world units) to world space. */
@@ -141,76 +253,12 @@ export class Craft {
   }
 
   steer(dt: number, yawRate: number, pitchRate: number, targetBank: number) {
-    this.yaw += yawRate * dt;
-    this.pitch = math.MathUtils.clamp(this.pitch + pitchRate * dt, -1.35, 1.35);
-    this.bank += (targetBank - this.bank) * Math.min(1, dt * 5);
+    steerBody(this, dt, yawRate, pitchRate, targetBank);
   }
 
-  /**
-   * Fly one step and collide with the world: hull points sweep from where they were to where
-   * they are going. On contact the ship stops at the surface, bounces and slides off it (the
-   * heading is reflected, gently for glancing blows), loses speed, and gets knocked back.
-   */
+  /** Fly one step, colliding with the world (see `moveBody`). */
   move(dt: number): Impact | null {
-    const q = this.orientation(_q);
-    const step = this.forward(_f).multiplyScalar(this.speed * dt).addScaledVector(this.knock, dt);
-    this.knock.multiplyScalar(Math.exp(-dt * 4));
-    const w = this.game.world;
-    let hit: Impact | null = null;
-    let best = 1;
-    for (const p of this.type.probes) {
-      const from = _a.copy(p).applyQuaternion(q).add(this.pos);
-      const len = step.length();
-      if (len > 1e-6) {
-        const r = w.raycast(from, step, len + 0.3);
-        if (r) {
-          // Fraction of the step before touching (voxel entry along the ray).
-          const d = Math.hypot(r.x + 0.5 - from.x, r.y + 0.5 - from.y, r.z + 0.5 - from.z) - 0.7;
-          const t = math.MathUtils.clamp(d / len, 0, 1);
-          if (t < best || !hit) {
-            best = t;
-            hit = { at: from.clone().addScaledVector(step, t), normal: new math.Vector3(r.normal.x, r.normal.y, r.normal.z), force: 0, water: false };
-          }
-        }
-      }
-      // The sea: skimming below its surface counts as hitting it.
-      const to = _b.copy(from).add(step);
-      if (!hit && to.y < w.seaLevel + 1.4 && w.blockName(w.getBlock(to.x, to.y, to.z)) === 'water') {
-        best = 0;
-        hit = { at: to.clone(), normal: new math.Vector3(0, 1, 0), force: 0, water: true };
-      }
-    }
-    if (!hit) {
-      this.pos.add(step);
-      return null;
-    }
-    const n = hit.normal;
-    if (n.lengthSq() < 0.5) n.set(0, 1, 0); // started inside a block: push up
-    // Move up to the surface, then out of it a little.
-    this.pos.addScaledVector(step, best).addScaledVector(n, 0.25);
-    const f = this.forward(_f);
-    const into = -f.dot(n); // 1 = head-on
-    hit.force = Math.max(0, into);
-    if (into > 0) {
-      const slide = f.clone().addScaledVector(n, into);
-      if (slide.length() > 0.45 || Math.abs(n.y) > 0.7) {
-        // Glancing, or the ground / sea: slide along the surface, angled a little away from it.
-        if (slide.length() < 1e-3) slide.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-        slide.normalize().addScaledVector(n, 0.25 + 0.25 * into).normalize();
-        // Turn with the surface, but never spin round (a near-vertical slide keeps the heading).
-        if (Math.hypot(slide.x, slide.z) > 0.3) {
-          const yaw = Math.atan2(-slide.x, -slide.z);
-          if (Math.abs(angleDiff(this.yaw, yaw)) < 1.75) this.yaw = yaw;
-        }
-        this.pitch = math.MathUtils.clamp(Math.asin(math.MathUtils.clamp(slide.y, -1, 1)), -1.35, 1.35);
-      } else {
-        // Nose into a wall: keep the heading and pull up; the knock-back carries you off it.
-        this.pitch = Math.max(this.pitch, 0.7);
-      }
-      this.speed *= 1 - 0.5 * into;
-    }
-    this.knock.addScaledVector(n, 5 + 14 * hit.force);
-    return hit;
+    return moveBody(this, this.type.probes, dt, this.game.world);
   }
 
   /** Oriented-box overlap with another craft (either's hull points inside the other's box). */
@@ -220,18 +268,17 @@ export class Craft {
     return pointsInside(this, o) || pointsInside(o, this);
   }
 
-  /** Push the model and engine flames to the current state. */
-  sync(throttle: number) {
-    this.prop.position.copy(this.pos);
-    this.orientation(this.prop.quaternion);
-    const q = this.prop.quaternion;
-    this.type.engines.forEach((e, i) => {
-      const fl = this.flames[i];
-      fl.position.copy(e).applyQuaternion(q).add(this.pos);
-      // Flames point backward (+z in ship space).
-      fl.quaternion.copy(q).multiply(_q.setFromAxisAngle(UP, Math.PI));
-      fl.scale = 0.5 + throttle * 1.2 + Math.random() * 0.25;
-    });
+  /**
+   * The model to the current state (`place`: a player's is placed by their vehicle), and the
+   * flames sized by the throttle (in steps, so a steady throttle sends nothing).
+   */
+  sync(throttle: number, place = true) {
+    if (place) {
+      this.prop.position.copy(this.pos);
+      this.orientation(this.prop.quaternion);
+    }
+    const scale = Math.round((0.6 + throttle * 1.2) * 10) / 10;
+    for (const fl of this.flames) fl.scale = scale;
   }
 
   remove() {

@@ -26,6 +26,20 @@ export interface PresentCall {
   args: unknown[];
 }
 
+/**
+ * An `Anchor` on the wire: a spot, or something to follow by id (each screen places it where it
+ * draws it, every frame).
+ */
+export type AnchorRef = { x: number; y: number; z: number } | { $prop: number } | { $entity: number } | { $player: string };
+
+/** `RadarData` on the wire. */
+export interface RadarWire {
+  center: AnchorRef;
+  heading?: number;
+  range: number;
+  blips: (({ x: number; z: number; y?: number } | { at: AnchorRef }) & { color: string; size?: number })[];
+}
+
 /** A callback in call arguments. */
 export interface CallbackRef {
   $cb: number;

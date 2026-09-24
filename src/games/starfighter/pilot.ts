@@ -1,130 +1,135 @@
-import { math, type GameContext, type LoopHandle } from '@platform';
-import { Craft, aimError, type ShipType } from './craft';
+import { math, type GameContext, type LoopHandle, type Player, type Vec3, type Vehicle } from '@platform';
+import { Craft, aimError, forwardOf, type ShipType } from './craft';
+import { BOOST, BRAKE, freshShip, fromBody, toBody, type ShipState } from './flight';
 import type { Target, Weapons } from './weapons';
 
-const CRUISE = 44;
-const BOOST = 82;
-const BRAKE = 22;
 const _v = new math.Vector3();
 const _w = new math.Vector3();
 
 /**
- * You: mouse steers (a virtual stick that re-centres), A/D bank, W / Shift boost, S brake,
- * Q / E barrel roll (deflects lasers), left mouse fires the wing cannons, right mouse fires a
- * proton torpedo at whatever you've locked.
+ * A player in the battle: their X-wing (a vehicle, so it flies at once on their own screen), and
+ * what the host does with it: wing cannons (left mouse), a proton torpedo at whatever they've
+ * locked (right mouse), lasers glancing off a barrel roll, shields that recharge, a hull that
+ * doesn't, and scraping into things.
  */
-export class Pilot {
-  readonly craft: Craft;
+export class Pilot implements Target {
+  readonly team = 'rebel' as const;
+  craft: Craft;
+  vehicle: Vehicle<ShipState>;
   shields = 100;
   hull = 100;
-  boost = 1;
   torpedoes = 6;
   kills = 0;
-  private stick = new math.Vector2();
-  private roll = 0;
-  private rollDir = 0;
+  /** Shot down: watching, back at `backAt` (game clock) if the fight's still on. */
+  down = false;
+  backAt = 0;
+  /** Heading for the battle's edge: when they were last told. */
+  warned = 0;
+  readonly vel = new math.Vector3();
+  lock: Target | null = null;
+  private lockCandidate: Target | null = null;
+  private lockTime = 0;
   private gunIndex = 0;
   private gunTimer = 0;
   private sinceHit = 99;
   private bump = 0;
   private tube = 1;
+  private rolled = 0;
   private engine: LoopHandle;
-  private camPos = new math.Vector3();
-  private camLook = new math.Vector3();
-  private fov = 75;
-  lock: Target | null = null;
-  private lockCandidate: Target | null = null;
-  private lockTime = 0;
+
+  constructor(
+    private game: GameContext,
+    readonly player: Player,
+    private type: ShipType,
+    private weapons: Weapons,
+    readonly callsign: string,
+    at: Vec3,
+    yaw: number,
+  ) {
+    this.craft = new Craft(game, type, 100, '#ff7a3a');
+    this.vehicle = player.drive('xwing', freshShip(at, yaw), { prop: this.craft.prop });
+    this.syncBody();
+    this.engine = player.audio.loop('engine', { volume: 0.5, pitch: 1 });
+  }
+
+  get id(): string {
+    return this.player.id;
+  }
+  get pos(): Vec3 {
+    return this.craft.pos;
+  }
+  get radius(): number {
+    return this.craft.radius * 0.8;
+  }
+  get alive(): boolean {
+    return !this.down && this.craft.alive && this.hull > 0;
+  }
+  /** Laser deflection window of a barrel roll. */
+  get rolling(): boolean {
+    return this.vehicle.state.rollDir !== 0;
+  }
+  get boost(): number {
+    return this.vehicle.state.boost;
+  }
   /** The target being acquired (not yet locked), for the HUD. */
   get locking(): Target | null {
     return this.lockCandidate && this.lockCandidate !== this.lock && this.lockTime > 0.1 ? this.lockCandidate : null;
   }
-  /** Laser deflection window of a barrel roll. */
-  get rolling(): boolean {
-    return this.rollDir !== 0;
+
+  /** Enemy fire: a barrel roll shrugs it off. */
+  hit(damage: number) {
+    if (!this.rolling) this.damage(damage);
   }
 
-  constructor(
-    private game: GameContext,
-    type: ShipType,
-    private weapons: Weapons,
-    at: math.Vector3,
-    yaw: number,
-  ) {
-    this.craft = new Craft(game, type, 100, '#ff7a3a');
-    this.craft.pos.copy(at);
-    this.craft.yaw = yaw;
-    this.craft.speed = CRUISE;
-    this.engine = game.audio.loop('engine', { volume: 0.5, pitch: 1 });
-    this.placeCamera(1, true);
-  }
-
-  get alive(): boolean {
-    return this.craft.alive && this.hull > 0;
-  }
-
-  /** Damage from enemy fire: shields first, then the hull. */
+  /** Damage: shields first, then the hull. */
   damage(amount: number) {
     if (!this.alive) return;
     this.sinceHit = 0;
-    const g = this.game;
+    const p = this.player;
     const soak = Math.min(this.shields, amount);
     this.shields -= soak;
     this.hull = Math.max(0, this.hull - (amount - soak));
-    g.fx.shake(0.12 + amount * 0.01, 0.25);
-    g.fx.flash(soak >= amount ? 'rgba(80, 170, 255, 1)' : 'rgba(255, 60, 30, 1)', 0.22, 0.35);
-    g.audio.play(soak >= amount ? 'hit' : 'hurt', { volume: 0.8 });
+    p.fx.shake(0.12 + amount * 0.01, 0.25);
+    p.fx.flash(soak >= amount ? 'rgba(80, 170, 255, 1)' : 'rgba(255, 60, 30, 1)', 0.22, 0.35);
+    p.audio.play(soak >= amount ? 'hit' : 'hurt', { volume: 0.8 });
     this.craft.prop.flash(soak >= amount ? '#7fc4ff' : '#ff5030', 0.15);
-    if (this.hull <= 25 && this.hull + amount > 25) g.audio.play('alarm');
+    if (this.hull <= 25 && this.hull + amount > 25) p.audio.play('alarm');
+  }
+
+  /** The craft (hit tests, guns, the AI's aim) to where the vehicle is. */
+  syncBody() {
+    toBody(this.vehicle.state, this.craft);
+    forwardOf(this.craft, this.vel).multiplyScalar(this.craft.speed).add(this.craft.knock);
+  }
+
+  /** The vehicle to where the craft was pushed (ramming). */
+  writeBack() {
+    fromBody(this.craft, this.vehicle.state);
   }
 
   update(dt: number, enemies: Target[]) {
-    const g = this.game;
-    const inp = g.input;
+    const p = this.player;
+    const s = this.vehicle.state;
     const c = this.craft;
+    this.syncBody();
     this.sinceHit += dt;
     if (this.sinceHit > 3) this.shields = Math.min(100, this.shields + 9 * dt);
 
-    // Virtual stick: mouse pushes it, it springs back to centre.
-    this.stick.x = math.MathUtils.clamp(this.stick.x + inp.mouseX * 0.0045, -1, 1);
-    this.stick.y = math.MathUtils.clamp(this.stick.y + inp.mouseY * 0.0045, -1, 1);
-    this.stick.multiplyScalar(Math.exp(-dt * 3.2));
-
-    // Throttle.
-    const boosting = (inp.isDown('KeyW') || inp.isDown('ShiftLeft')) && this.boost > 0.02;
-    const braking = inp.isDown('KeyS') || inp.isDown('ControlLeft');
-    const target = boosting ? BOOST : braking ? BRAKE : CRUISE;
-    c.speed += (target - c.speed) * Math.min(1, dt * (boosting ? 2.2 : 1.6));
-    this.boost = math.MathUtils.clamp(this.boost + (boosting ? -0.32 : 0.14) * dt, 0, 1);
-
-    // Barrel roll on Q / E (or a double-tap-free A/D quick roll).
-    if (this.rollDir === 0 && (inp.pressed('KeyQ') || inp.pressed('KeyE'))) {
-      this.rollDir = inp.pressed('KeyQ') ? 1 : -1;
-      this.roll = 0;
-      g.audio.play('whoosh', { volume: 0.7, pitch: 1.3 });
-    }
-    let strafe = 0;
-    if (this.rollDir !== 0) {
-      this.roll += dt * Math.PI * 2 * 1.9;
-      c.spin = this.rollDir * this.roll;
-      strafe = -this.rollDir * 14 * Math.sin(Math.min(this.roll, Math.PI * 2) / 2);
+    // A barrel roll: the whoosh, and enemy lasers near the ship glance off.
+    if (s.rollDir !== 0) {
+      if (this.rolled === 0) p.audio.play('whoosh', { volume: 0.7, pitch: 1.3 });
       this.weapons.deflect(c.pos, c.radius * 1.4, 'rebel');
-      if (this.roll >= Math.PI * 2) {
-        this.rollDir = 0;
-        c.spin = 0;
-      }
     }
-
-    const bankKeys = (inp.isDown('KeyA') ? 1 : 0) - (inp.isDown('KeyD') ? 1 : 0);
-    const yawRate = -this.stick.x * 1.5 + bankKeys * 0.55;
-    const pitchRate = -this.stick.y * 1.6;
-    c.steer(dt, yawRate, pitchRate, yawRate * 0.55 + bankKeys * 0.35);
-    if (strafe) c.knock.addScaledVector(_v.set(Math.cos(c.yaw), 0, -Math.sin(c.yaw)), strafe * dt * 4);
+    this.rolled = s.rollDir;
+    // What the ship hit since the last tick.
     this.bump -= dt;
-    const hit = c.move(dt);
-    if (hit) this.crash(hit.at, hit.force, hit.water);
+    if (s.hit > 0) {
+      this.crash(new math.Vector3(s.hx, s.hy, s.hz), s.hit, s.water);
+      s.hit = 0;
+    }
 
     // Guns: alternate pairs of wing cannons.
+    const inp = p.input;
     this.gunTimer -= dt;
     if (inp.button(0) && this.gunTimer <= 0) {
       this.gunTimer = 0.13;
@@ -144,7 +149,7 @@ export class Pilot {
       for (const gi of pairs[this.gunIndex % pairs.length]) {
         const from = c.toWorld(guns[gi], new math.Vector3());
         const dir = conv.clone().sub(from).normalize();
-        this.weapons.laser(from, dir, 'rebel', { inherit: c.forward(new math.Vector3()).multiplyScalar(c.speed) });
+        this.weapons.laser(from, dir, 'rebel', { inherit: c.forward(new math.Vector3()).multiplyScalar(c.speed), by: p });
       }
       this.gunIndex++;
     }
@@ -167,7 +172,7 @@ export class Pilot {
       this.lockTime += dt;
       if (this.lockTime > 0.55 && this.lock !== best) {
         this.lock = best;
-        g.audio.play('lock', { volume: 0.6 });
+        p.audio.play('lock', { volume: 0.6 });
       }
     } else {
       this.lockCandidate = best;
@@ -181,26 +186,25 @@ export class Pilot {
       const q = c.orientation(new math.Quaternion());
       const from = c.toWorld(new math.Vector3(this.tube * 1.2, -0.9, -2.5), new math.Vector3());
       const dir = new math.Vector3(this.tube * 0.22, -0.16, -1).normalize().applyQuaternion(q);
-      this.weapons.torpedo(from, dir, 'rebel', this.lock, c.speed);
-      if (!this.lock) g.hud.toast('No lock: torpedo fired straight');
+      this.weapons.torpedo(from, dir, 'rebel', this.lock, c.speed, p);
+      if (!this.lock) p.hud.toast('No lock: torpedo fired straight');
     }
 
     const throttle = (c.speed - BRAKE) / (BOOST - BRAKE);
-    c.sync(0.3 + throttle * 0.9);
-    this.engine.set({ volume: 0.35 + throttle * 0.3, pitch: 0.75 + throttle * 0.7 });
-    this.fov += ((boosting ? 90 : braking ? 70 : 76) - this.fov) * Math.min(1, dt * 3);
-    this.placeCamera(dt, false);
+    c.sync(0.3 + throttle * 0.9, false);
+    // In steps, so a steady engine sends nothing.
+    this.engine.set({ volume: Math.round((0.35 + throttle * 0.3) * 20) / 20, pitch: Math.round((0.75 + throttle * 0.7) * 20) / 20 });
   }
 
   /**
    * Scraping or slamming into something: sparks (or spray), a jolt, and damage that grows with
    * how head-on it was (at most once every 0.4 s, so a scrape isn't a death sentence).
    */
-  crash(at: math.Vector3, force: number, water = false) {
+  crash(at: Vec3, force: number, water = false) {
     const g = this.game;
     if (water) g.fx.burst(at, { color: '#d8f1ff', count: 26, speed: 6, size: 0.22, gravity: 14 });
     else g.fx.burst(at, { color: '#ffc27a', count: 14 + Math.round(force * 20), speed: 7, size: 0.12, gravity: 9 });
-    g.fx.shake(0.12 + force * 0.4, 0.3);
+    this.player.fx.shake(0.12 + force * 0.4, 0.3);
     if (this.bump > 0) return;
     this.bump = 0.4;
     g.audio.play(force > 0.5 ? 'explosion' : 'hit', { at, volume: 0.5 + force * 0.5, pitch: force > 0.5 ? 1.6 : 0.7 });
@@ -224,40 +228,30 @@ export class Pilot {
     return best;
   }
 
-  /** Chase camera: behind and above, lagging a little, looking past the nose. */
-  private placeCamera(dt: number, snap: boolean) {
-    const g = this.game;
-    const c = this.craft;
-    const f = c.forward(_w);
-    const want = _v.copy(c.pos).addScaledVector(f, -14);
-    want.y += 5.4;
-    // Stay above the ground.
-    const ground = g.world.surfaceY(want.x, want.z);
-    if (ground >= 0) want.y = Math.max(want.y, ground + 2);
-    const k = snap ? 1 : 1 - Math.exp(-dt * 9);
-    this.camPos.lerp(want, k);
-    const look = _w.copy(c.pos).addScaledVector(c.forward(new math.Vector3()), 40);
-    look.y += 0.5;
-    this.camLook.lerp(look, snap ? 1 : 1 - Math.exp(-dt * 14));
-    // Lean the horizon a little with the bank.
-    const up = new math.Vector3(Math.sin(c.bank) * -0.25 * Math.cos(c.yaw), 1, Math.sin(c.bank) * 0.25 * Math.sin(c.yaw)).normalize();
-    g.camera.set(this.camPos, this.camLook, up);
-    g.camera.fov = this.fov;
-  }
-
-  /** Where the reticles sit (for the HUD). */
-  reticle(distance: number) {
-    return this.craft.forward(new math.Vector3()).multiplyScalar(distance).add(this.craft.pos);
-  }
-
+  /** Shot down: a fireball, and out of the ship. */
   explode() {
     this.game.fx.explosion(this.craft.pos, { size: 2.5 });
-    this.engine.stop();
+    this.engine.set({ volume: 0 });
     this.craft.remove();
+    this.player.leaveVehicle();
+    this.down = true;
+    this.lock = this.lockCandidate = null;
+  }
+
+  /** Back in the fight: a new ship, shields and hull full. */
+  respawn(at: Vec3, yaw: number) {
+    this.craft = new Craft(this.game, this.type, 100, '#ff7a3a');
+    this.vehicle = this.player.drive('xwing', freshShip(at, yaw), { prop: this.craft.prop });
+    this.syncBody();
+    this.down = false;
+    this.shields = this.hull = 100;
+    this.torpedoes = Math.max(this.torpedoes, 2);
+    this.sinceHit = 99;
   }
 
   dispose() {
     this.engine.stop();
     if (this.craft.alive) this.craft.remove();
+    this.player.leaveVehicle();
   }
 }

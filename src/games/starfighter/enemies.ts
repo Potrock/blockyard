@@ -1,4 +1,4 @@
-import { math, type GameContext, type Vec3 } from '@platform';
+import { math, type GameContext, type Player, type Vec3 } from '@platform';
 import { Craft, aimError, angleDiff, headingTo, type ShipType } from './craft';
 import type { Target, Weapons } from './weapons';
 
@@ -15,6 +15,13 @@ export interface EnemyKind {
 
 type Mode = 'attack' | 'break' | 'extend' | 'return';
 
+/** A pilot as the Empire sees one: something to chase and shoot at. */
+export interface Quarry {
+  pos: Vec3;
+  vel: Vec3;
+  alive: boolean;
+}
+
 const _v = new math.Vector3();
 
 /** An Imperial fighter: pursues with lead, fires in bursts, breaks off when hit or too close. */
@@ -29,7 +36,10 @@ export class Enemy implements Target {
   private burst = 0;
   private flybyTimer = 0;
   private jink = Math.random() * 10;
-  onDeath: ((e: Enemy) => void) | null = null;
+  /** Who it's after, and for how much longer before it looks again. */
+  private quarry: Quarry | null = null;
+  private retarget = 0;
+  onDeath: ((e: Enemy, by?: Player) => void) | null = null;
 
   constructor(
     private game: GameContext,
@@ -57,7 +67,7 @@ export class Enemy implements Target {
     return this.craft.alive;
   }
 
-  hit(damage: number, at: Vec3) {
+  hit(damage: number, at: Vec3, _kind?: 'laser' | 'torpedo', shooter?: Player) {
     const c = this.craft;
     if (!c.alive) return;
     c.hp -= damage;
@@ -67,7 +77,7 @@ export class Enemy implements Target {
     if (c.hp <= 0) {
       this.game.fx.explosion(c.pos, { size: 1.3 });
       c.remove();
-      this.onDeath?.(this);
+      this.onDeath?.(this, shooter);
       return;
     }
     // Hit: break away.
@@ -81,9 +91,30 @@ export class Enemy implements Target {
     this.breakPitch = (Math.random() - 0.3) * 0.9;
   }
 
-  update(dt: number, player: { pos: Vec3; vel: Vec3; alive: boolean; hit(d: number): void; rolling: boolean }, arena: { center: Vec3; radius: number; ceiling: number }, others: Enemy[]) {
+  /** The nearest pilot still flying, kept for a few seconds (null: none). */
+  private pick(pilots: Quarry[], dt: number): Quarry | null {
+    this.retarget -= dt;
+    if (this.quarry?.alive && this.retarget > 0) return this.quarry;
+    let best: Quarry | null = null;
+    let bd = Infinity;
+    for (const p of pilots) {
+      if (!p.alive) continue;
+      const d = this.craft.pos.distanceToSquared(_v.set(p.pos.x, p.pos.y, p.pos.z));
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    this.quarry = best;
+    this.retarget = 3 + Math.random() * 3;
+    return best;
+  }
+
+  update(dt: number, pilots: Quarry[], arena: { center: Vec3; radius: number; ceiling: number }, others: Enemy[]) {
     const c = this.craft;
     if (!c.alive) return;
+    // Nobody to fight: circle where the last one was.
+    const player = this.pick(pilots, dt) ?? this.quarry ?? { pos: arena.center, vel: { x: 0, y: 0, z: 0 }, alive: false };
     const k = this.kind;
     c.hurt = Math.max(0, c.hurt - dt);
     this.modeTime -= dt;

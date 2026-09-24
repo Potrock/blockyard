@@ -2,6 +2,7 @@ import { Blueprint, math, type GameContext, type Prop, type PropModel, type Vec3
 import type { Destroyer } from './destroyer';
 import { headingTo } from './craft';
 import type { Target, Weapons } from './weapons';
+import type { Quarry } from './enemies';
 
 const _v = new math.Vector3();
 const _e = new math.Euler();
@@ -51,14 +52,25 @@ class Turret implements Target {
     }
   }
 
-  update(dt: number, player: { pos: Vec3; vel: Vec3; alive: boolean }, active: boolean) {
-    if (!this.alive) return;
-    const d = _v.set(player.pos.x - this.pos.x, player.pos.y - this.pos.y, player.pos.z - this.pos.z).length();
+  update(dt: number, pilots: Quarry[], active: boolean) {
+    if (!this.alive || !active) return;
+    // The nearest pilot still flying.
+    let player: Quarry | null = null;
+    let d = Infinity;
+    for (const p of pilots) {
+      if (!p.alive) continue;
+      const pd = _v.set(p.pos.x - this.pos.x, p.pos.y - this.pos.y, p.pos.z - this.pos.z).length();
+      if (pd < d) {
+        d = pd;
+        player = p;
+      }
+    }
+    if (!player || d > 260) return;
     const h = headingTo(this.pos, player.pos);
     _e.set(Math.max(-0.2, Math.min(0.9, h.pitch)) * 0.5, h.yaw, 0, 'YXZ');
     this.prop.quaternion.slerp(new math.Quaternion().setFromEuler(_e), Math.min(1, dt * 3));
     this.timer -= dt;
-    if (!active || !player.alive || d > 170 || this.timer > 0) return;
+    if (d > 170 || this.timer > 0) return;
     this.timer = 3 + Math.random() * 3.5;
     if (!this.game.world.lineOfSight(this.pos, player.pos)) return;
     // Lead the shot a little, with some spread.
@@ -167,8 +179,8 @@ export class Capital {
     }
   }
 
-  update(dt: number, player: { pos: Vec3; vel: Vec3; alive: boolean }) {
-    for (const t of this.turrets) t.update(dt, player, this.active);
+  update(dt: number, pilots: Quarry[]) {
+    for (const t of this.turrets) t.update(dt, pilots, this.active);
     for (const c of this.chain) {
       c.t -= dt;
       if (c.t <= 0 && c.t > -dt) {

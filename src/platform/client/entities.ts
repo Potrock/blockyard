@@ -104,6 +104,15 @@ export class EntityView {
     this.syncShots(projectiles);
   }
 
+  /** Where an entity is drawn now (its feet), plus `offset`; false if it isn't drawn. */
+  locate(id: number, offset: { x: number; y: number; z: number } | undefined, out: THREE.Vector3): boolean {
+    const root = this.shown.get(id)?.model.root;
+    if (!root || !root.visible) return false;
+    out.copy(root.position);
+    if (offset) out.set(out.x + offset.x, out.y + offset.y, out.z + offset.z);
+    return true;
+  }
+
   private draw(v: Shown, f: EntityFrame, dt: number, running: boolean) {
     const root = v.model.root;
     root.position.set(f.x, f.y, f.z);

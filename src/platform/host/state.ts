@@ -24,6 +24,8 @@ function keyOf(c: PresentCall): string | null {
     }
   }
   if (c.target === 'view' && (c.method === 'visible' || c.method === 'setSkin')) return `view.${c.method}`;
+  // A sound loop's volume and pitch (an engine): setting it the same again changes nothing.
+  if (c.target === 'audio' && c.method === 'loopSet') return `loopSet:${String(c.args[0])}`;
   return null;
 }
 

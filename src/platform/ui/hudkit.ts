@@ -1,13 +1,27 @@
 import * as THREE from 'three';
 import { h } from './dom';
-import type { HudApi, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, RadarData, ScreenOptions, Vec3 } from '../api/types';
+import type { HudApi, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3 } from '../api/types';
+import type { AnchorRef, RadarWire } from '../net/protocol';
 
 interface Marker {
   el: HTMLElement;
   label: HTMLElement;
+  at: AnchorRef;
   pos: THREE.Vector3;
   opts: MarkerOptions;
 }
+
+/**
+ * Where something a marker or radar blip follows is drawn now (with `offset` in a prop's own
+ * space, else the world's), into `out`; false if it isn't drawn. `heading`: which way a prop or
+ * player faces (radians, 0 toward -z).
+ */
+export interface Locator {
+  at(a: AnchorRef, offset: Vec3 | undefined, out: THREE.Vector3): boolean;
+  heading(a: AnchorRef): number | null;
+}
+
+const isSpot = (a: AnchorRef): a is { x: number; y: number; z: number } => 'x' in a;
 
 interface FloatingNumber {
   el: HTMLElement;
@@ -16,8 +30,11 @@ interface FloatingNumber {
   vy: number;
 }
 
-/** Game-facing HUD widgets layered over the base HUD. */
-export class GameHud implements HudApi {
+/**
+ * Game-facing HUD widgets layered over the base HUD. (Markers and the radar take anchors as they
+ * come over the wire, and place what they follow every frame with `locate`.)
+ */
+export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
   readonly root: HTMLElement;
   private hearts: HTMLElement;
   private heartEls: HTMLElement[] = [];
@@ -48,6 +65,20 @@ export class GameHud implements HudApi {
   private markersEl: HTMLElement;
   private markers = new Map<string, Marker>();
   private radarCanvas: HTMLCanvasElement;
+  private radarData: RadarWire | null = null;
+  /** The radar follows something: redrawn every frame. */
+  private radarLive = false;
+  /** Places what markers and radar blips follow (the runtime sets it). */
+  locate: Locator = {
+    at: (a, offset, out) => {
+      if (!isSpot(a)) return false;
+      out.set(a.x + (offset?.x ?? 0), a.y + (offset?.y ?? 0), a.z + (offset?.z ?? 0));
+      return true;
+    },
+    heading: () => null,
+  };
+  private radarPos = new THREE.Vector3();
+  private radarCenter = new THREE.Vector3();
   private screens: HTMLElement[] = [];
   /** An open menu's key listener, removed when it closes, however it closes. */
   private unhooks = new Map<HTMLElement, () => void>();
@@ -194,7 +225,7 @@ export class GameHud implements HudApi {
     el.classList.toggle('low', value < 0.25);
   }
 
-  marker(id: string, at: Vec3 | null, opts: MarkerOptions = {}) {
+  marker(id: string, at: AnchorRef | null, opts: MarkerOptions = {}) {
     let m = this.markers.get(id);
     if (!at) {
       m?.el.remove();
@@ -205,10 +236,10 @@ export class GameHud implements HudApi {
       const label = h('span.marker-label');
       const el = h('div.marker', {}, h('div.marker-shape'), label);
       this.markersEl.append(el);
-      m = { el, label, pos: new THREE.Vector3(), opts };
+      m = { el, label, at, pos: new THREE.Vector3(), opts };
       this.markers.set(id, m);
     }
-    m.pos.set(at.x, at.y, at.z);
+    m.at = at;
     m.opts = opts;
     m.el.className = `marker ${opts.shape ?? 'box'}${opts.pulse ? ' pulse' : ''}`;
     m.el.style.setProperty('--c', opts.color ?? '#ff5a4f');
@@ -219,14 +250,19 @@ export class GameHud implements HudApi {
     this.onCrosshair?.(visible);
   }
 
-  radar(data: RadarData | null) {
+  radar(data: RadarWire | null) {
     this.radarCanvas.style.display = data ? '' : 'none';
+    this.radarData = data;
+    this.radarLive = !!data && (!isSpot(data.center) || data.blips.some((b) => 'at' in b && !isSpot(b.at)));
     if (data) this.drawRadar(data);
   }
 
-  private drawRadar(d: RadarData) {
+  private drawRadar(d: RadarWire) {
     const c = this.radarCanvas.getContext('2d');
     if (!c) return;
+    const center = this.radarCenter;
+    if (!this.locate.at(d.center, undefined, center)) return;
+    const heading = d.heading ?? this.locate.heading(d.center) ?? 0;
     const W = this.radarCanvas.width;
     const R = W / 2 - 4;
     c.clearRect(0, 0, W, W);
@@ -252,12 +288,16 @@ export class GameHud implements HudApi {
     c.lineTo(R, 0);
     c.stroke();
     // Blips, rotated so the heading points up.
-    const sin = Math.sin(d.heading);
-    const cos = Math.cos(d.heading);
+    const sin = Math.sin(heading);
+    const cos = Math.cos(heading);
     const k = R / d.range;
+    const at = this.radarPos;
     for (const b of d.blips) {
-      const dx = b.x - d.center.x;
-      const dz = b.z - d.center.z;
+      if ('at' in b) {
+        if (!this.locate.at(b.at, undefined, at)) continue;
+      } else at.set(b.x, b.y ?? center.y, b.z);
+      const dx = at.x - center.x;
+      const dz = at.z - center.z;
       const right = dx * cos - dz * sin;
       const ahead = -dx * sin - dz * cos;
       let x = right * k;
@@ -272,9 +312,9 @@ export class GameHud implements HudApi {
       c.fillStyle = b.color;
       c.globalAlpha = out ? 0.6 : 1;
       c.fillRect(x - s / 2, y - s / 2, s, s);
-      if (b.y !== undefined && !out) {
+      if ((!('x' in b) || b.y !== undefined) && !out) {
         // Above / below: a tick.
-        const dy = b.y - d.center.y;
+        const dy = at.y - center.y;
         if (Math.abs(dy) > 8) c.fillRect(x - 0.5, dy > 0 ? y - s / 2 - 4 : y + s / 2, 1, 4);
       }
     }
@@ -296,6 +336,10 @@ export class GameHud implements HudApi {
     const cam = camera as THREE.PerspectiveCamera;
     const focal = height / 2 / Math.tan(((cam.fov ?? 70) * Math.PI) / 360);
     for (const m of this.markers.values()) {
+      if (!this.locate.at(m.at, m.opts.offset, m.pos)) {
+        m.el.style.display = 'none';
+        continue;
+      }
       const v = this.tmp.copy(m.pos).applyMatrix4(camera.matrixWorldInverse);
       const dist = v.length();
       const behind = v.z > -0.1;
@@ -504,6 +548,7 @@ export class GameHud implements HudApi {
   /** Per frame: project floating numbers and markers. */
   update(dt: number, camera: THREE.Camera, width: number, height: number) {
     if (this.markers.size) this.placeMarkers(camera, width, height);
+    if (this.radarLive && this.radarData) this.drawRadar(this.radarData);
     for (let i = this.numbers.length - 1; i >= 0; i--) {
       const n = this.numbers[i];
       n.age += dt;

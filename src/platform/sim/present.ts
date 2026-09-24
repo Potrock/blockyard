@@ -1,4 +1,5 @@
 import type {
+  Anchor,
   AudioApi,
   FxApi,
   HudApi,
@@ -14,7 +15,7 @@ import type {
   ViewModelApi,
 } from '../api/types';
 import type { Content } from '../content';
-import type { CallbackRef, ClientMessage, PresentCall, PresentTarget } from '../net/protocol';
+import type { AnchorRef, CallbackRef, ClientMessage, PresentCall, PresentTarget, RadarWire } from '../net/protocol';
 
 export type Sink = (call: PresentCall) => void;
 
@@ -63,6 +64,14 @@ export class Presentation {
   private nextId = 1;
   private callbacks = new Map<number, () => void>();
   readonly menus = new Map<number, MenuProxy>();
+  /**
+   * An anchor as data: a spot as it is, or what to follow by id. The simulation (which knows its
+   * props, entities and players) sets this.
+   */
+  anchor: (a: Anchor) => AnchorRef = (a) => {
+    const v = a as Vec3;
+    return { x: v.x, y: v.y, z: v.z };
+  };
 
   constructor(
     public sink: Sink,
@@ -123,9 +132,10 @@ export class Presentation {
       toast: (text: string) => send('toast', text),
       feed: (text: string, opts?: { color?: string }) => send('feed', text, opts),
       meter: (id: string, label: string, value: number | null, opts?: { color?: string; text?: string }) => send('meter', id, label, value, opts),
-      marker: (id: string, at: Vec3 | null, opts?: MarkerOptions) => send('marker', id, at && { x: at.x, y: at.y, z: at.z }, opts),
+      marker: (id: string, at: Anchor | null, opts?: MarkerOptions) =>
+        send('marker', id, at && this.anchor(at), opts?.offset ? { ...opts, offset: { x: opts.offset.x, y: opts.offset.y, z: opts.offset.z } } : opts),
       crosshair: (visible: boolean) => send('crosshair', visible),
-      radar: (data: RadarData | null) => send('radar', data),
+      radar: (data: RadarData | null) => send('radar', data && this.radarWire(data)),
       progress: (fraction: number | null, opts?: { color?: string }) => send('progress', fraction, opts),
       highlight: (at: Vec3 | null, opts?: { progress?: number }) => send('highlight', at && { x: at.x, y: at.y, z: at.z }, opts),
       screen: (opts: ScreenOptions) => {
@@ -144,6 +154,15 @@ export class Presentation {
         send('menu', m.id, this.encodeMenu(opts, m.cbs));
         return m;
       },
+    };
+  }
+
+  private radarWire(d: RadarData): RadarWire {
+    return {
+      center: this.anchor(d.center),
+      heading: d.heading,
+      range: d.range,
+      blips: d.blips.map((b) => ('at' in b ? { at: this.anchor(b.at), color: b.color, size: b.size } : { x: b.x, z: b.z, y: b.y, color: b.color, size: b.size })),
     };
   }
 
