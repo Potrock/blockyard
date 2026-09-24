@@ -181,11 +181,12 @@ export class Sim {
    * One tick: time of day, players move with their controls, then (while running) timers and the
    * game's `update`, health, entities, items and props, and finally the built-in hands.
    */
-  tick(dt: number, running: boolean, inputs: Record<string, PlayerInput>) {
+  tick(dt: number, running: boolean, inputs: Record<string, PlayerInput>, premoved?: ReadonlySet<string>) {
     if (!this.env.frozen) this.env.time = (this.env.time + dt / this.env.dayLength) % 1;
     for (const p of this.players) {
       p.input.set(inputs[p.id] ?? IDLE_INPUT);
-      p.move(dt);
+      // A predicting client's player moved already, input by input (see GameHost.step).
+      if (!premoved?.has(p.id)) p.move(dt);
     }
     if (running) {
       this.tickTimers(dt);

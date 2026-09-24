@@ -8,6 +8,7 @@ import { SimInput } from './input';
 import { Inventory, type ItemSim } from './items';
 import type { Presentation } from './present';
 import type { CreativeBuild } from './creative';
+import { freshMemory, stepMovement, type MoveMemory } from './movement';
 
 const EYE = 1.62;
 const SNEAK_EYE = 1.27;
@@ -48,6 +49,14 @@ export interface PlayerFrame {
   camera: { p: [number, number, number]; q: [number, number, number, number]; fov: number };
   /** Creative building (`player.build`): the block hotbar. */
   creative: { hotbar: number[]; selected: number } | null;
+  /** Physics is off (before play, dead, a game-driven camera). */
+  frozen: boolean;
+  canFly: boolean;
+  /** Swings and uses so far (a change swings the arm of their figure on other screens). */
+  swings: number;
+  /** For client-side prediction: the last input of theirs applied, and movement's memory then. */
+  ack: number;
+  move: MoveMemory;
 }
 
 export interface PlayerSimParts {
@@ -78,7 +87,7 @@ export class PlayerSim {
   allowFlight: boolean;
   sneaking = false;
   sprinting = false;
-  readonly state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: false, inWater: false, eyesInWater: false, inLava: false, flying: false, bob: 0 };
+  readonly state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: false, inWater: false, eyesInWater: false, inLava: false, flying: false, bob: 0, frozen: false };
   readonly input = new SimInput();
   readonly inventory: Inventory;
   readonly health: PlayerHealth;
@@ -86,10 +95,12 @@ export class PlayerSim {
   /** The game's camera, for `controller: 'none'`. */
   readonly cam = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 70 };
   private seq = 0;
-  private lastJumpTap = -1;
-  private lastForwardTap = -1;
-  private sprintLatched = false;
-  private time = 0;
+  /** Double-tap state for sprinting and flying. */
+  private memory = freshMemory();
+  /** The last input applied, by the client's count (a predicting client replays what's after). */
+  ack = -1;
+  /** Swings and uses so far. */
+  swings = 0;
   readonly api: Player;
   /** Creative building's block hotbar and placing (games with `player.build`). */
   creative: CreativeBuild | null = null;
@@ -140,7 +151,10 @@ export class PlayerSim {
           const s = me.state;
           return !s.onGround && s.vy < -1 && !s.inWater;
         },
-        view: (method, power) => present.send(this.id, 'view', method, [power ?? 1]),
+        view: (method, power) => {
+          if (method === 'swing' || method === 'use') this.swings++;
+          present.send(this.id, 'view', method, [power ?? 1]);
+        },
         audio: present.audio(this.id),
         fx: present.fx(this.id),
         hud: present.hud(this.id),
@@ -205,6 +219,7 @@ export class PlayerSim {
     S.inLava = st[9] > 0.5;
     S.flying = st[10] > 0.5;
     S.bob = st[11];
+    S.frozen = st[12] > 0.5;
   }
 
   /** Walk, sprint, sneak, jump, swim and fly from this tick's controls. */
@@ -216,52 +231,13 @@ export class PlayerSim {
       this.syncState();
       return;
     }
-    this.time += dt;
     const inp = this.input;
-    const active = inp.active;
     // The client's view, once it has caught up with any the simulation set.
-    if (active && inp.viewSeq === this.viewSeq) {
+    if (inp.active && inp.viewSeq === this.viewSeq) {
       this.yaw = inp.yaw;
       this.pitch = inp.pitch;
     }
-    let f = 0;
-    let s = 0;
-    let jump = false;
-    let sneak = false;
-    let sprint = false;
-    if (active) {
-      if (inp.isDown('KeyW') || inp.isDown('ArrowUp')) f += 1;
-      if (inp.isDown('KeyS') || inp.isDown('ArrowDown')) f -= 1;
-      if (inp.isDown('KeyD') || inp.isDown('ArrowRight')) s += 1;
-      if (inp.isDown('KeyA') || inp.isDown('ArrowLeft')) s -= 1;
-      jump = inp.isDown('Space');
-      sneak = inp.isDown('ShiftLeft') || inp.isDown('ShiftRight');
-      if (inp.pressed('KeyW')) {
-        if (this.time - this.lastForwardTap < 0.3) this.sprintLatched = true;
-        this.lastForwardTap = this.time;
-      }
-      if (f <= 0) this.sprintLatched = false;
-      sprint = (inp.isDown('ControlLeft') || inp.isDown('ControlRight') || this.sprintLatched) && f > 0 && !sneak;
-      if (inp.pressed('Space') && this.allowFlight) {
-        if (this.time - this.lastJumpTap < 0.3) {
-          world.set_flying(this.slot, !this.state.flying);
-          this.lastJumpTap = -1;
-        } else {
-          this.lastJumpTap = this.time;
-        }
-      }
-      if (inp.pressed('KeyF') && this.allowFlight) world.set_flying(this.slot, !this.state.flying);
-    }
-    const sy = Math.sin(this.yaw);
-    const cy = Math.cos(this.yaw);
-    let wx = -sy * f + cy * s;
-    let wz = -cy * f - sy * s;
-    const len = Math.hypot(wx, wz);
-    if (len > 1) {
-      wx /= len;
-      wz /= len;
-    }
-    world.player_step(this.slot, wx, wz, jump, sneak, sprint, dt);
+    const { sneak, sprint } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt);
     this.syncState();
     this.sneaking = sneak;
     this.sprinting = sprint && Math.hypot(this.state.vx, this.state.vz) > 4.5;
@@ -315,6 +291,11 @@ export class PlayerSim {
       hand: { drawing: c.isDrawing, charge: c.charge, strength: c.strength },
       camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
+      frozen: s.frozen,
+      canFly: this.allowFlight,
+      swings: this.swings,
+      ack: this.ack,
+      move: { ...this.memory },
     };
   }
 

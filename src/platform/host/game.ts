@@ -108,7 +108,14 @@ interface Client {
   /** Their controls since the last step: held keys as they are now, presses and clicks added up. */
   input: PlayerInput;
   radius: number;
+  /** Numbered inputs from a client predicting its own movement, waiting for the next step. */
+  moves: { input: PlayerInput; dt: number; seq: number }[] | null;
+  /** Seconds of movement the client may still spend: it earns the server's time, so it can't run faster. */
+  bank: number;
 }
+
+/** Most movement time a client can save up (catching up after a hiccup). */
+const MAX_BANK = 0.25;
 
 /**
  * Hosts one game: its simulation, on a world of its own, driven by `ClientCommand`s and
@@ -212,7 +219,7 @@ export class GameHost {
     this.events.push({ t: 'ready' });
     // One client from the start, or none yet: the first to connect takes the first player's place.
     if (o.remote) this.sim.leave(me.id);
-    else this.clients.set(me.id, { player: me, input: { ...IDLE_INPUT }, radius: this.radius });
+    else this.clients.set(me.id, { player: me, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 });
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -245,7 +252,7 @@ export class GameHost {
    */
   connect(name: string): { id: string; batch: HostBatch } {
     const player = this.sim.join(name);
-    this.clients.set(player.id, { player, input: { ...IDLE_INPUT }, radius: this.radius });
+    this.clients.set(player.id, { player, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 });
     const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }];
     for (const call of this.state.snapshot(player.id)) events.push({ t: 'call', call });
     events.push({ t: 'ready' });
@@ -287,8 +294,15 @@ export class GameHost {
         this.budget,
       );
       const inputs: Record<string, PlayerInput> = {};
-      for (const [id, c] of this.clients) inputs[id] = c.input;
-      sim.tick(dt, running && sim.started, inputs);
+      const premoved = new Set<string>();
+      for (const [id, c] of this.clients) {
+        inputs[id] = c.input;
+        if (c.moves) {
+          premoved.add(id);
+          this.moveInputs(c, dt);
+        }
+      }
+      sim.tick(dt, running && sim.started, inputs, premoved);
     });
     // Presses and clicks were used; what's held stays held until the client says otherwise.
     for (const c of this.clients.values()) {
@@ -332,6 +346,7 @@ export class GameHost {
         i.wheel += n.wheel;
         i.mouseX += n.mouseX;
         i.mouseY += n.mouseY;
+        if (c.seq !== undefined && c.dt !== undefined) (client.moves ??= []).push({ input: n, dt: Math.max(0, Math.min(0.1, c.dt)), seq: c.seq });
         return;
       }
       case 'message':
@@ -357,6 +372,25 @@ export class GameHost {
       case 'complete':
         this.events.push({ t: 'reply', id: c.id, player: me.id, value: sim.commands.complete(c.line) });
         return;
+    }
+  }
+
+  /**
+   * Move a predicting client's player through their inputs one by one, each for as long as it
+   * lasted on the client: the same steps the client took, so its prediction holds. Movement time
+   * is earned from the server's clock, so a client that sends too much waits; one that's fallen
+   * far behind (a queue over 30) catches up at once rather than lagging for good.
+   */
+  private moveInputs(c: Client, dt: number) {
+    const p = c.player;
+    const moves = c.moves!;
+    c.bank = Math.min(MAX_BANK, c.bank + dt);
+    while (moves.length && (moves[0].dt <= c.bank || moves.length > 30)) {
+      const m = moves.shift()!;
+      c.bank = Math.max(0, c.bank - m.dt);
+      p.input.set(m.input);
+      p.move(m.dt);
+      p.ack = m.seq;
     }
   }
 

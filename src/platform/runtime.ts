@@ -4,6 +4,7 @@ import { WorkerPool } from './workers/pool';
 import { worldGenConfig } from './host/spawn';
 import { PageLink, SocketLink, WorkerLink, type SimLink } from './host/link';
 import { FrameBuffer } from './client/interp';
+import { Predictor } from './client/predict';
 import { Models, Skins } from './api/models';
 import { LAYER_CHUNKS, Renderer, type FrameHooks } from './render/pipeline';
 import { Environment } from './render/environment';
@@ -107,8 +108,11 @@ export class Runtime {
   private playerId: string;
   /** A server's frames, played back smoothly (a server only). */
   private playback: FrameBuffer | null = null;
-  /** Other players drawn as figures: their stable entity ids, and name tags shown. */
+  /** This client's own movement, predicted ahead of the server (a server, walking games). */
+  private predictor: Predictor | null = null;
+  /** Other players drawn as figures: their stable entity ids, hurt flashes, and name tags shown. */
   private avatarIds = new Map<string, number>();
+  private avatarHurt = new Map<string, { health: number; flash: number }>();
   private tags = new Set<string>();
   private nextRequest = 1;
   private commandBar!: CommandBar;
@@ -310,6 +314,7 @@ export class Runtime {
       // Two steps behind the newest frame: smooth, and about 70 ms behind the server at 30 steps a second.
       this.playback = new FrameBuffer(2 / this.server.welcome.tickRate);
       this.server.onClose = () => this.disconnected();
+      if (this.walker) this.predictor = new Predictor(this.chunks.world);
     } else {
       this.link = inPage || !this.makeWorker ? new PageLink(def, { ...opts, engine: module, budget: 2 }) : new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts });
     }
@@ -467,6 +472,8 @@ export class Runtime {
       this.frameData = b.frame;
       this.ticking = false;
       this.playback?.push(b.frame, (b as TimedBatch).time);
+      const me = this.predictor && this.mine(b.frame);
+      if (me) this.predictor!.reconcile(me);
     }
   }
 
@@ -491,6 +498,12 @@ export class Runtime {
       if (id === undefined) this.avatarIds.set(p.id, (id = -1 - this.avatarIds.size));
       const cp = Math.cos(p.view.pitch);
       const eye = { x: p.x, y: p.y + 1.62, z: p.z };
+      // A red flash when their health drops.
+      const h = this.avatarHurt.get(p.id) ?? { health: p.health, flash: 0 };
+      if (p.health < h.health) h.flash = 1;
+      h.health = p.health;
+      h.flash = Math.max(0, h.flash - 0.05);
+      this.avatarHurt.set(p.id, h);
       out.push({
         id,
         type: '$player',
@@ -501,11 +514,11 @@ export class Runtime {
         vz: p.vz,
         yaw: p.view.yaw,
         look: { x: eye.x - Math.sin(p.view.yaw) * cp * 4, y: eye.y + Math.sin(p.view.pitch) * 4, z: eye.z - Math.cos(p.view.yaw) * cp * 4 },
-        attacks: 0,
+        attacks: p.swings,
         raised: false,
         casting: false,
         glow: null,
-        hurt: 0,
+        hurt: h.flash,
         dying: p.dead ? p.deathTime : -1,
       });
       const tag = `$name:${p.id}`;
@@ -831,7 +844,10 @@ export class Runtime {
     // answer is immediate; from a worker it arrives before the next frame.
     this.tickDt += dt;
     if (this.server) {
-      this.link.send({ t: 'input', input: this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq) });
+      const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
+      // Predicting: move at once, and tell the server which input this was and how long it lasted.
+      if (this.predictor) this.link.send({ t: 'input', input, seq: this.predictor.step(input, dt), dt });
+      else this.link.send({ t: 'input', input });
     } else if (!this.ticking) {
       this.ticking = true;
       const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
@@ -846,7 +862,10 @@ export class Runtime {
     }
     const f = this.playback?.sample() ?? this.frameData;
     this.updateReadiness();
-    const me = this.mine(f);
+    const played = this.mine(f);
+    // Our own player where prediction has them (a server), else as the frame says.
+    const predicted = this.predictor?.shown();
+    const me = played && predicted ? { ...played, ...predicted } : played;
     if (!f || !me) {
       // The host is still starting: nothing to draw yet but the sky.
       this.present(dt, playing, t0);
@@ -875,7 +894,8 @@ export class Runtime {
       this.camera.updateMatrixWorld();
       if (this.mode !== 'title') this.titleSpin = 0;
     }
-    this.entityView.sync(f.players.length > 1 ? [...f.entities, ...this.avatars(f)] : f.entities, f.projectiles, dt, running);
+    // A server's game runs on while this client is paused: its figures keep walking.
+    this.entityView.sync(f.players.length > 1 ? [...f.entities, ...this.avatars(f)] : f.entities, f.projectiles, dt, this.server ? started : running);
     this.pickupView.sync(f.pickups, dt);
     this.propView.sync(f.props, dt);
     this.showPlayer(me);

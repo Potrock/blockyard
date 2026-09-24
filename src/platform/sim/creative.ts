@@ -43,6 +43,7 @@ export class CreativeBuild {
   }
 
   private swing() {
+    this.player.swings++;
     this.present.send(this.player.id, 'view', 'use', [1]);
   }
 

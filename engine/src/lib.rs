@@ -281,7 +281,7 @@ impl VoxelWorld {
         }
     }
 
-    /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob]
+    /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob, frozen]
     pub fn player_state(&self, i: u32) -> Vec<f64> {
         let p = self.player(i);
         vec![
@@ -297,7 +297,23 @@ impl VoxelWorld {
             p.in_lava as u8 as f64,
             p.flying as u8 as f64,
             p.bob,
+            p.frozen as u8 as f64,
         ]
+    }
+
+    /// Put a player's body back exactly as `player_state` described it (client-side prediction
+    /// starts again from the server's word).
+    pub fn player_restore(&mut self, i: u32, s: &[f64]) {
+        let p = self.player_mut(i);
+        p.pos = [s[0], s[1], s[2]];
+        p.vel = [s[3], s[4], s[5]];
+        p.on_ground = s[6] > 0.5;
+        p.in_water = s[7] > 0.5;
+        p.eyes_in_water = s[8] > 0.5;
+        p.in_lava = s[9] > 0.5;
+        p.flying = s[10] > 0.5;
+        p.bob = s[11];
+        p.frozen = s.get(12).is_some_and(|f| *f > 0.5);
     }
 
     /// [sky, block] light estimate (0..1) at a block position.

@@ -121,8 +121,12 @@ export interface HostBatch {
 export type ClientCommand =
   /** Advance the simulation `dt` seconds with this player's controls (idle without); `running` once play began. */
   | { t: 'tick'; dt: number; running: boolean; input?: PlayerInput }
-  /** A server's client: the player's controls now (the server keeps its own clock). */
-  | { t: 'input'; input: PlayerInput }
+  /**
+   * A server's client: the player's controls now (the server keeps its own clock). A client that
+   * predicts its own movement numbers each input (`seq`) and says how long it lasted (`dt`): the
+   * server moves the player once per input, the way the client did, and reports the last applied.
+   */
+  | { t: 'input'; input: PlayerInput; seq?: number; dt?: number }
   | { t: 'message'; msg: ClientMessage }
   /** Play begins (the title screen was clicked). */
   | { t: 'start' }
