@@ -12,6 +12,8 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 
 ![Starfighter: the opening shot, a dogfight by the Star Destroyer, a strafing run on a shield generator, the break-up](docs/starfighter.png)
 
+![Bed Wars: the sky-island map, and the view from the red base with a full hotbar](docs/bedwars.png)
+
 ![First-person view: diamond sword mid-slash, battle axe, two-handed pike, health potion](docs/viewmodel.png)
 
 ## Games
@@ -20,6 +22,7 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 | --- | --- | --- |
 | **Arena** | `?game=arena` | Six waves of zombies, skeleton archers, spiders and brutes in a colosseum, then the Warden boss. Weapons drop on the dais between waves: bow, stone/iron/diamond swords, a two-handed pike, battle axe and potions. About 560 lines, including the colosseum and the boss AI. |
 | **Starfighter** | `?game=starfighter` | A Star Fox-style dogfighter with block-built X-wing, TIE fighter and TIE interceptor. Fight two waves of TIEs over the sea, then take on a 200-block Star Destroyer built into the world: knock out its two shield generators and blow up the bridge. Mouse to fly, W/S boost and brake, Q/E barrel roll (deflects lasers), right-click proton torpedoes. Uses `player.controller: 'none'` and flies the camera itself. |
+| **Bed Wars** | `?game=bedwars` | Hypixel-style Bed Wars against three bots on sky islands. Collect iron and gold from your generator (diamonds and emeralds on the outer and middle islands), buy blocks, swords, armour, tools, fireballs and team upgrades from the shopkeeper, bridge across the void and break the other beds. You respawn only while your bed stands. The bots fortify, shop, bridge, dig through defences and fight each other as well as you. |
 | **Sandbox** | `?game=sandbox` | Creative building in an endless world. Edits are saved per seed. 17 lines. |
 | **Heart Hunt** | `?game=heart-hunt` | The tutorial: find ten hearts. About 70 lines. |
 
@@ -99,8 +102,8 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 | Space | Jump. In Sandbox, double-tap to toggle flight and hold to rise while flying |
 | Shift | Sneak (won't walk off edges). Descend while flying |
 | Ctrl or double-tap W | Sprint |
-| Left mouse | Attack; hold to draw a bow (Arena). Break a block (Sandbox) |
-| Right mouse | Use: drink a potion (Arena). Place a block (Sandbox) |
+| Left mouse | Attack; hold to draw a bow (Arena, Bed Wars). Break a block (Sandbox); hold to mine one (Bed Wars) |
+| Right mouse | Use: drink a potion (Arena), eat, throw a fireball (Bed Wars). Place a block (Sandbox, Bed Wars). Open the shop by right-clicking the shopkeeper (Bed Wars) |
 | Middle mouse | Pick block (Sandbox) |
 | 1-9, mouse wheel | Select hotbar slot |
 | E | Block picker (Sandbox) |

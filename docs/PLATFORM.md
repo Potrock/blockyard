@@ -21,6 +21,14 @@ src/games/
     sounds.ts           lasers, torpedoes, the TIE howl (audio.define)
     layout.ts           where the battle is
     previews/           dev-only previews of the ships and the capital ship
+  bedwars/              Bed Wars against three bots: sky islands, mining, building, a shop
+    index.ts            rules: generators, beds, deaths and respawns, the timeline, win/lose
+    map.ts              the islands, as Blueprints in a void world
+    state.ts            teams, the match, block rules and mining times
+    bots.ts nav.ts      bot players: route-finding that bridges and digs, fighting, raiding
+    shop.ts items.ts    the shopkeeper's menu and everything it sells
+    fireballs.ts        thrown fireballs that blast wool and wood
+    art/ sounds.ts      team skins, item sprites, sounds
 ```
 
 ## Hello, game
@@ -90,20 +98,21 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 - `structures: Blueprint[]`: voxel structures stamped **during generation** in the Rust workers. They are there from the first frame, cost nothing at runtime, and survive chunk reloads. Cells you never write keep the natural terrain; write `'air'` to carve.
 - `terraform`: flatten terrain around a point (`radius` fully flat, `blend` back to natural). Terraformed and blueprint areas get no caves, trees or plants. The ground keeps the local biome's surface (grass, podzol, sand, snow), so if the floor matters, write it into your blueprint (the arena stamps a sand floor) or fix `seed`.
 - `terrain: 'flat'` plus `flatHeight`: a flat world.
+- `terrain: 'void'`: nothing but your structures, floating in an open sky (Bed Wars and SkyWars islands). The sky wraps all the way round below the horizon, so there's no floor to see.
 - `spawn`, `spawnYaw`, `time` (0 = midnight, 0.5 = noon), `freezeTime`, `seed`, `persist` (save block edits and position; Sandbox uses it).
 - `viewDistance`: a minimum view distance in chunks for games that see far (flight). The player's own setting wins if it's higher.
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` do what a player does: they check your block rules, won't place a block inside anyone, show debris, and fire the `blockBreak` / `blockPlace` events (next section). `setBlock` is the raw version that skips all of that. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four team beds…).
 
 ## Player
 
-`player` options: `build` (break and place blocks), `fly`, `health` (half-hearts; `false` = invulnerable), `regen`, `fallDamage`, `hotbar: 'blocks' | 'items'`, `skin` (a Minecraft-layout skin, default `Skins.player`; it's also the first-person arm), and `controller`:
+`player` options: `build` (creative: break and place blocks from a block hotbar), `mining` (survival: see the next section), `fly`, `health` (half-hearts; `false` = invulnerable), `regen`, `fallDamage`, `hotbar: 'blocks' | 'items'`, `skin` (a Minecraft-layout skin, default `Skins.player`; it's also the first-person arm), and `controller`:
 - `'walk'` (default) is the first-person player.
 - `'none'` removes the walking body, hand and hotbar. The game drives the camera and reads the controls itself, which is what vehicles, flight and top-down games need (next section). `player.position` then stays wherever you last `teleport` it: that's the point mobs chase and pickups fly to, so move it with your vehicle if you use those, and ignore it if you don't.
 
-`game.player` gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
+`game.player` gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
 
 ## Items
 
@@ -130,6 +139,30 @@ Built-in starter sprites: `wooden_sword`, `stone_sword`, `iron_sword`, `diamond_
 - Potions and trinkets stand upright.
 
 Art drawn another way works too: set `hold.grip` (and `hold.rotation`) to match it.
+
+## Blocks, mining and building
+
+Survival-style building is part of the platform: blocks are items, the player mines and places them, and the game decides what's allowed.
+
+```ts
+game.items.define('wool', { kind: 'block', name: 'Wool', block: 'red_wool' }); // icon: the block itself
+game.player.inventory.give('wool', 64);
+```
+
+- **Block items** stack to 64, show the block as their hotbar icon, are held as a little cube, and drop as small spinning cubes of the block.
+- **`player: { hotbar: 'items', mining: true }`**: hold left-click on a block to mine it (a progress ring fills; the arm swings), right-click with a block item to place it against the face you're aiming at. Aiming at a mob attacks it instead, and right-clicking a mob with `onInteract` talks to it.
+- **Block rules** decide what can be broken and placed, by whom, and how long mining takes. They apply to the player, to `world.breakBlock` / `placeBlock` (so bots follow them too) and to explosions (`by: 'world'`):
+
+```ts
+blocks: {
+  canBreak: (game, at, block, by) => placedThisMatch.has(key(at)) || block.endsWith('_bed'),
+  canPlace: (game, at, block, by) => at.y < 110,
+  breakTime: (game, block, held) => (block.endsWith('_wool') && held?.item === 'shears' ? 0.1 : 0.6),
+},
+```
+
+  Without `breakTime`, mining takes a Minecraft-like time by material (plants instantly, wool and glass fast, wood medium, stone slow, obsidian very slow). Bedrock and liquids never break.
+- **Events:** `blockBreak` and `blockPlace` fire with `{ x, y, z, block, by }` for the player, entities, explosions and `world.breakBlock` / `placeBlock`. Bed Wars uses them to track which blocks were placed during the match (the only ones that can be broken) and to notice a bed going.
 
 ## First-person view model
 
@@ -273,6 +306,8 @@ const z = game.entities.spawn('zombie', { x: 10, y: 71, z: 0 });
 - Custom AI is a function `(self, game, dt) => void`. It can call `self.moveTo('player' | point)`, `moveDirection(x, z)`, `stop`, `jump`, `lookAt`, `canSeePlayer`, `distanceToPlayer`, `animate('attack' | 'raise' | 'cast')`, `glow(color)`, `shoot(projectile, target, { lead })`, `impulse`, `setSpeed` and `damage`, and keep state in `self.data`. The Warden in `src/games/arena/content.ts` is a complete boss state machine: telegraphed slams, fireballs, summons and an enrage phase.
 - `boss: true` shows a boss bar automatically. Hurt flashes, damage numbers, blood particles, death animations, drops and positional sounds are handled for you.
 - Queries: `entities.all(type?)`, `count(type?)`, `near(point, radius)`, `clear()`.
+- `onInteract(self, game)` runs when the player right-clicks it (shopkeepers, quest givers). `invulnerable: true` ignores all damage. `entity.armor` (0..20) reduces damage like the player's.
+- Mobs can fight each other and build: `other.damage(n, { source: self })` hurts another entity with the right knockback and kill credit, and `world.placeBlock(x, y, z, 'red_wool', { by: self })` / `breakBlock` let them bridge and dig under the game's block rules. The Bed Wars bots (`src/games/bedwars/bots.ts`) are built that way: they fortify their bed, gather and shop, find routes across the void (bridging as they go) and through defences (digging), and fight.
 
 Box models use the Minecraft skin UV layout, so any 64×64 humanoid skin works. The only built-in skin is `Skins.player`; mobs come from your own atlas. `extras` adds parts of your own to a humanoid (the Warden's crown is one, with `parent: 'head'`).
 
@@ -285,7 +320,17 @@ The platform ships only generic basics. A game brings its own look and sound, an
 - `game.items.atlas('mine', { width, height, pixels, emissive })` takes raw sRGB RGBA pixels and an optional glow map (one byte per texel). Glow is how eyes, fire and crystals shine in the dark.
 - Use `{ atlas: 'mine', x, y }` as a sprite, or `Models.humanoid({ skin: [x, y], atlas: 'mine' })` for a skin.
 
-The Arena paints its whole atlas in code (`src/games/arena/art/`): five mob skins, weapon sprites and the pike's texture, with bevelled pixel-art shading, in about 50 ms at startup.
+**Painting in code.** `@platform/art` is a small pixel-art toolkit: a 256×256 `Canvas` with `paintBox` (a Minecraft box-UV region with per-face shading), `px` / `part`, noise helpers and an emissive channel, finished into the raw pixels `items.atlas` takes:
+
+```ts
+import { Canvas, ATLAS } from '@platform/art';
+const cv = new Canvas();
+// … paint skins at their origins and 16×16 sprites in their cells …
+const { albedo, emissive } = cv.finish();
+game.items.atlas('mine', { width: ATLAS, height: ATLAS, pixels: albedo, emissive });
+```
+
+The Arena paints its whole atlas this way (`src/games/arena/art/`): five mob skins, weapon sprites and the pike's texture, with bevelled pixel-art shading, in about 50 ms at startup. Bed Wars paints four team skins, a shopkeeper and its item sprites the same way.
 
 **Sound.** `game.audio.define(name, voice)` adds a sound; play it like any other with `audio.play(name, { at })`. Voices are synthesised on each play:
 
@@ -340,13 +385,15 @@ game.commands.run('/give pike'); // run one from code
 | `hud.objective(text)` | Status pill at the top |
 | `hud.stat(id, label, value)` | Corner chips (kills, timers) |
 | `hud.bossBar(name, fraction)` | Manual boss bar |
-| `hud.toast(text)` | Small toast |
+| `hud.toast(text)` | Small toast (one at a time) |
+| `hud.feed(text, { color })` | A line in the message feed at the top left (kill feeds, match events); lines stack and fade |
 | `hud.screen({ title, tone, stats, buttons })` | Modal victory / defeat / menu |
+| `hud.menu({ title, subtitle, sections: [{ title, entries }] })` | A panel of clickable entries (shops, upgrades, level select) while the game keeps running. Entries take an `icon` (a sprite or `{ block }`), `label`, `detail` (a price), `note`, `disabled`, `active` and `onSelect`; `update()` refreshes it after a purchase. Esc or E closes it |
 | `hud.meter`, `marker`, `radar`, `crosshair` | Vehicle HUD (see above) |
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
-| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup', fn)` | Events |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace', fn)` | Events |
 | `rng` | Seeded random numbers |
 
 ## Architecture and the road to multiplayer
