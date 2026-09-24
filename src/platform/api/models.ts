@@ -1,0 +1,71 @@
+import type { ModelPart, ModelSpec } from './types';
+
+/** Origins of the built-in skins in the `builtin` entity atlas. Games bring their own (`items.atlas`). */
+export const Skins = {
+  /** The default player: tunic, sash, bracers. Also the first-person arm. */
+  player: [0, 0] as [number, number],
+};
+
+type Build = 'normal' | 'thin' | 'large';
+
+const add = (a: [number, number], b: [number, number]): [number, number] => [a[0] + b[0], a[1] + b[1]];
+
+/**
+ * Box-model builders. Sizes are in texels (16 per block) and follow the Minecraft skin UV
+ * layout, so any 64x64 humanoid skin painted in that layout works.
+ */
+export const Models = {
+  /**
+   * Two legs, body, two arms and a head. `normal` = the standard 64x64 skin (8x8 head, 4-wide
+   * limbs), `thin` = 2-wide limbs, `large` = 10x10 head and 14-wide body (big mobs, bosses).
+   * `extras` adds parts of your own (hats, crowns, gear): UVs are relative to the skin origin,
+   * and `parent: 'head'` makes a part follow the head.
+   */
+  humanoid(opts: { skin: [number, number]; atlas?: string; scale?: number; build?: Build; extras?: ModelPart[] }): ModelSpec {
+    const o = opts.skin;
+    const build = opts.build ?? 'normal';
+    let parts: ModelPart[];
+    if (build === 'large') {
+      parts = [
+        { name: 'legR', size: [6, 12, 6], uv: add(o, [0, 42]), pivot: [-3.5, 12, 0], offset: [-3, -12, -3] },
+        { name: 'legL', size: [6, 12, 6], uv: add(o, [0, 42]), pivot: [3.5, 12, 0], offset: [-3, -12, -3], mirror: true },
+        { name: 'body', size: [14, 14, 8], uv: add(o, [0, 20]), pivot: [0, 12, 0], offset: [-7, 0, -4] },
+        { name: 'head', size: [10, 10, 10], uv: add(o, [0, 0]), pivot: [0, 26, 0], offset: [-5, 0, -5] },
+        { name: 'armR', size: [5, 15, 5], uv: add(o, [44, 20]), pivot: [-9.5, 24, 0], offset: [-2.5, -13, -2.5] },
+        { name: 'armL', size: [5, 15, 5], uv: add(o, [44, 20]), pivot: [9.5, 24, 0], offset: [-2.5, -13, -2.5], mirror: true },
+      ];
+    } else {
+      const limb = build === 'thin' ? 2 : 4;
+      const h = limb / 2;
+      const armX = build === 'thin' ? 5 : 6;
+      parts = [
+        { name: 'legR', size: [limb, 12, limb], uv: add(o, [0, 16]), pivot: [-2, 12, 0], offset: [-h, -12, -h] },
+        { name: 'legL', size: [limb, 12, limb], uv: add(o, [0, 16]), pivot: [2, 12, 0], offset: [-h, -12, -h], mirror: true },
+        { name: 'body', size: [8, 12, 4], uv: add(o, [16, 16]), pivot: [0, 12, 0], offset: [-4, 0, -2] },
+        { name: 'head', size: [8, 8, 8], uv: add(o, [0, 0]), pivot: [0, 24, 0], offset: [-4, 0, -4] },
+        { name: 'armR', size: [limb, 12, limb], uv: add(o, [40, 16]), pivot: [-armX, 22, 0], offset: [-h, -10, -h] },
+        { name: 'armL', size: [limb, 12, limb], uv: add(o, [40, 16]), pivot: [armX, 22, 0], offset: [-h, -10, -h], mirror: true },
+      ];
+    }
+    for (const e of opts.extras ?? []) parts.push({ ...e, uv: add(o, e.uv) });
+    return { rig: 'humanoid', parts, atlas: opts.atlas ?? 'builtin', scale: opts.scale ?? 1 };
+  },
+
+  /** Eight legs (the Minecraft spider layout: head, thorax, abdomen, 16x2x2 legs). */
+  spider(opts: { skin: [number, number]; atlas?: string; scale?: number }): ModelSpec {
+    const o = opts.skin;
+    const parts: ModelPart[] = [
+      { name: 'thorax', size: [6, 6, 6], uv: add(o, [0, 0]), pivot: [0, 9, 0], offset: [-3, -3, -3] },
+      { name: 'abdomen', size: [10, 8, 12], uv: add(o, [0, 12]), pivot: [0, 9, -3], offset: [-5, -4, -12] },
+      { name: 'head', size: [8, 8, 8], uv: add(o, [32, 4]), pivot: [0, 9, 3], offset: [-4, -4, 0] },
+    ];
+    const zs = [1.5, 0.5, -0.5, -1.5];
+    const yaws = [0.7, 0.3, -0.3, -0.7];
+    zs.forEach((z, i) => {
+      parts.push({ name: `legR${i}`, size: [16, 2, 2], uv: add(o, [18, 0]), pivot: [-3, 9, z], offset: [-15, -1, -1], rotation: [0, -yaws[i], -0.6] });
+      parts.push({ name: `legL${i}`, size: [16, 2, 2], uv: add(o, [18, 0]), pivot: [3, 9, z], offset: [-1, -1, -1], rotation: [0, yaws[i], 0.6], mirror: true });
+    });
+    return { rig: 'spider', parts, atlas: opts.atlas ?? 'builtin', scale: opts.scale ?? 1 };
+  },
+};
+

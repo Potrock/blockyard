@@ -1,0 +1,25 @@
+{
+  "name": "voxel-platform",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "wasm": "wasm-pack build engine --target web --release --out-dir pkg --out-name voxel_engine",
+    "wasm:dev": "wasm-pack build engine --target web --profiling --out-dir pkg --out-name voxel_engine",
+    "dev": "npm run wasm && vite",
+    "build": "npm run wasm && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test:engine": "cargo test --release --manifest-path engine/Cargo.toml"
+  },
+  "dependencies": {
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "wasm-pack": "^0.15.0"
+  }
+}

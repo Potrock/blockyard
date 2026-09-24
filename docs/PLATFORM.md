@@ -1,0 +1,366 @@
+# Building games on the Voxel platform
+
+The platform is a complete voxel engine: an endless procedural world, lighting, rendering, physics, streaming, entities, items, combat, audio and UI. You write the *game*: rules, content and moments. A game is one `defineGame({...})` object in `src/games/<name>/` that imports only from `@platform`.
+
+```
+src/games/
+  index.ts              the list of registered games
+  heart-hunt/index.ts   ~70 lines: the tutorial below
+  sandbox/index.ts      ~17 lines: creative building
+  arena/                waves of monsters, weapons, a boss
+    index.ts            rules: waves, rewards, win/lose
+    content.ts          items, monsters, boss AI
+    structure.ts        the colosseum, as a Blueprint
+    art/                the mob skins and weapon sprites, painted in code into the 'arena' atlas
+    sounds.ts           creature voices (audio.define)
+  starfighter/          a Star Fox-style dogfighter: no walking, the game flies the camera
+    index.ts            waves, HUD, win/lose
+    ships.ts            the fighters, as Blueprints (meshed into movable props)
+    destroyer.ts        the capital ship, as a world structure
+    craft.ts pilot.ts enemies.ts weapons.ts capital.ts   flight, collisions, AI, lasers, the boss
+    sounds.ts           lasers, torpedoes, the TIE howl (audio.define)
+    layout.ts           where the battle is
+    previews/           dev-only previews of the ships and the capital ship
+```
+
+## Hello, game
+
+`src/games/heart-hunt/index.ts` is a complete game in about 70 lines. It builds a pedestal as a blueprint, flattens the land around it, scatters ten glowing hearts, counts pickups and shows a victory screen:
+
+```ts
+import { defineGame, Blueprint } from '@platform';
+
+let found = 0;
+
+const pedestal = new Blueprint({ x: -2, y: 70, z: -2 }, { x: 5, y: 3, z: 5 })
+  .fill({ x: -2, y: 70, z: -2 }, { x: 2, y: 70, z: 2 }, 'stone_bricks')
+  .set(0, 71, 0, 'glowstone');
+
+export default defineGame({
+  id: 'heart-hunt',
+  title: 'Heart Hunt',
+  world: {
+    structures: [pedestal],
+    terraform: [{ x: 0, z: 0, radius: 12, blend: 16, height: 69.5 }],
+    spawn: { x: 0.5, y: 72, z: 3.5 },
+  },
+  player: { health: 20, hotbar: 'items' },
+
+  setup(game) {
+    game.items.define('heart', {
+      kind: 'misc', name: 'Heart', icon: 'heart',
+      onPickup: (g) => (found++, g.audio.play('pickup'), true), // consume on touch
+    });
+  },
+
+  start(game) {
+    found = 0;
+    for (let i = 0; i < 10; i++) {
+      const a = game.rng.range(0, Math.PI * 2), r = game.rng.range(8, 36);
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      game.items.spawnPickup('heart', { x, y: game.world.surfaceY(x, z) + 1.5, z }, { beam: '#ff5a7a', despawn: 1e9 });
+    }
+  },
+
+  update(game) {
+    game.hud.objective(`Hearts: ${found} / 10`);
+    // ... show game.hud.screen({ title: 'You win!', ... }) at 10
+  },
+});
+```
+
+Register it in `src/games/index.ts` and open `?game=heart-hunt`. The launcher lists every registered game.
+
+## Lifecycle
+
+| Hook | When | Use it to |
+| --- | --- | --- |
+| `setup(game)` | once, after the engine loads, before the world streams | define items and entity types, subscribe to events |
+| `start(game)` | when the player first clicks play, and after `game.restart()` | reset state, give the starting kit, schedule the first beat |
+| `update(game, dt)` | every frame while running (not paused) | rules, spawning, HUD |
+
+`game.restart()` clears entities, props, pickups, timers, the inventory and HUD, puts back any blocks broken or placed this session (unless the game sets `world.persist`), revives the player at the spawn point and calls `start` again. Keep your game state in plain module variables and reset it in `start`.
+
+Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it over `setTimeout`.
+
+## World
+
+`world` options on the definition:
+
+- `structures: Blueprint[]`: voxel structures stamped **during generation** in the Rust workers. They are there from the first frame, cost nothing at runtime, and survive chunk reloads. Cells you never write keep the natural terrain; write `'air'` to carve.
+- `terraform`: flatten terrain around a point (`radius` fully flat, `blend` back to natural). Terraformed and blueprint areas get no caves, trees or plants. The ground keeps the local biome's surface (grass, podzol, sand, snow), so if the floor matters, write it into your blueprint (the arena stamps a sand floor) or fix `seed`.
+- `terrain: 'flat'` plus `flatHeight`: a flat world.
+- `spawn`, `spawnYaw`, `time` (0 = midnight, 0.5 = noon), `freezeTime`, `seed`, `persist` (save block edits and position; Sandbox uses it).
+- `viewDistance`: a minimum view distance in chunks for games that see far (flight). The player's own setting wins if it's higher.
+
+`Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
+
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`…).
+
+## Player
+
+`player` options: `build` (break and place blocks), `fly`, `health` (half-hearts; `false` = invulnerable), `regen`, `fallDamage`, `hotbar: 'blocks' | 'items'`, `skin` (a Minecraft-layout skin, default `Skins.player`; it's also the first-person arm), and `controller`:
+- `'walk'` (default) is the first-person player.
+- `'none'` removes the walking body, hand and hotbar. The game drives the camera and reads the controls itself, which is what vehicles, flight and top-down games need (next section).
+
+`game.player` gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
+
+## Items
+
+```ts
+game.items.define('iron_sword', { kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42, reach: 3.5, rank: 3 });
+game.items.define('bow', { kind: 'bow', name: 'Bow', icon: 'bow', drawIcon: 'bow_pulling', ammo: 'arrow', damage: [2, 9], drawTime: 0.9, speed: 42 });
+game.items.define('potion', { kind: 'consumable', name: 'Potion', icon: 'health_potion', stack: 4, use: (g) => (g.player.heal(10), true) });
+game.items.spawnPickup('iron_sword', pos, { beam: '#ffd36b' });
+```
+
+The platform implements everything around them:
+- **Melee:** swing animation, hit detection through walls, knockback, crits while falling, and sweep attacks.
+- **Bows:** draw charge, ammo, and ballistic arrows that stick in walls.
+- **Consumables:** right-click to use.
+- **Pickups:** physics, magnet pull, collection and toasts.
+- **Held items:** a first-person arm holds an extruded 3D model of the sprite (next section).
+
+Built-in starter sprites: `wooden_sword`, `stone_sword`, `iron_sword`, `diamond_sword`, `bow`, `bow_pulling`, `arrow`, `health_potion` and `heart`. Everything else a game brings itself (see "Your own art and sound").
+
+## First-person view model
+
+![View model](viewmodel.png)
+
+The first-person view is built from Minecraft's own transforms:
+- The arm is posed exactly like Minecraft's bare first-person arm.
+- Items sit upright in the fist, turned the way Minecraft shows them (`display.firstperson_righthand`).
+- The attack swing is Minecraft's arm swing, with the blade chopping forward.
+- The bow uses Java's first-person pose, held at your side and swung up to aim as you draw.
+- After each hit the item dips and rises again as the attack recharges, like Minecraft's attack-strength cooldown.
+
+Walk bob, breathing, look sway, the landing dip, recoil when you're hit, and the lower-and-raise when you switch items all come for free.
+
+| Style | Default for | Held | Use animation |
+| --- | --- | --- | --- |
+| `sword` | melee | Gripped at the handle, blade up | `swing` |
+| `axe` | | Gripped low on the haft | `swing` |
+| `bow` | bows | At your side; drawing brings it up to aim | `release` |
+| `item` | everything else | Upright in the fist | `drink` |
+| `block` | Sandbox blocks | A small cube on the fist | `swing` |
+| `polearm` | | Two hands on the shaft, low at the right, tip just under the crosshair | `jab` |
+
+The empty hand uses `punch`. Change a pose per item with `hold`, in the same numbers as a Minecraft model's `firstperson_righthand`. Every field is optional:
+
+```ts
+game.items.define('spear', {
+  kind: 'melee', name: 'Spear', icon: { atlas: 'mine', x: 0, y: 0 }, damage: 7, cooldown: 0.6,
+  hold: {
+    style: 'sword',
+    grip: [3, 12],          // sprite pixel that sits in the fist
+    rotation: [0, -90, 25], // degrees about X, Y, Z (Minecraft's handheld default)
+    translation: [0, 0, 0], // pixels
+    scale: 1.3,
+    hand: 'right',          // or 'left' (shields, torches, off-hand trinkets)
+    use: 'stab',            // built-in, registered, or inline keyframes
+  },
+});
+```
+
+Built-in animations are `swing`, `punch`, `jab` (a two-handed thrust along the shaft), `drink`, `release`, `chop` (a heavy overhead blow) and `stab`. Custom animations are keyframes offset from the rest pose:
+- `move` shifts the hand, in blocks.
+- `hand` turns the hand, item and forearm together about the fist.
+- `wrist` turns only the item.
+- Rotations are `[pitch, yaw, roll]` in radians.
+- `t` runs from 0 to 1, and `ease` shapes the segment that ends at that key.
+- They're written for the right hand and mirrored automatically for the left.
+
+For procedural motion, pass `sample(t)` instead of `keys`.
+
+**3D held items.** Anything a 16×16 sprite can't show, like a pike, a staff or a shield, can be a box model (`HeldModelSpec`) in the same UV layout as mobs, with its length along +z and hand positions marked. The Arena's pike is one (`src/games/arena/art/`):
+
+```ts
+const PIKE: HeldModelSpec = {
+  atlas: 'arena',
+  parts: [
+    { size: [2, 2, 30], uv: [0, 160], offset: [-1, -1, 0] },  // shaft
+    { size: [0, 7, 14], uv: [88, 160], offset: [0, -3.5, 32] }, // blade
+    // …
+  ],
+  grip: [0, 0, 5],   // rear hand
+  grip2: [0, 0, 19], // front hand
+};
+game.items.define('pike', {
+  kind: 'melee', name: 'Pike', icon: { atlas: 'arena', x: 208, y: 128 }, damage: 7.5, cooldown: 0.7, reach: 5,
+  hold: { style: 'polearm', model: PIKE },
+});
+```
+
+With two hands, the forearms pivot toward their elbows as an animation moves the fists, so a jab looks like both arms reaching.
+
+```ts
+game.player.viewModel.define('stab', {
+  duration: 0.3,
+  keys: [
+    { t: 0 },
+    { t: 0.3, wrist: [-1.1, 0, 0], move: [-0.12, 0.08, -0.3], ease: 'out' },
+    { t: 1, ease: 'inOut' },
+  ],
+});
+game.player.viewModel.play('stab', { power: 1.5 });   // e.g. a scripted finisher
+game.player.viewModel.kick(1);                        // recoil
+game.player.viewModel.setSkin([0, 0], 'mine');        // any skin in any atlas; null hides the arm
+game.player.viewModel.visible = false;                // cutscenes
+```
+
+## Vehicles, flight and custom cameras
+
+![Starfighter](starfighter.png)
+
+With `player: { controller: 'none' }`, the world streams around wherever the camera is.
+
+- **Camera:** `game.camera.set(position, lookAt, up?)`, or `setPose(position, quaternion)`, plus `fov`. Read `position` and `forward`. Set it in `update` and it's used that same frame.
+- **Input:** `game.input.isDown('KeyW')`, `pressed(code)`, `button(0)`, `buttonPressed(2)`, and `mouseX` / `mouseY` / `wheel` deltas while the mouse is captured. Everything reads as idle while paused, so games never need to check.
+- **Math:** `import { math } from '@platform'` gives `Vector3`, `Quaternion`, `Euler`, `Matrix4` and `MathUtils`.
+- **Props** are movable objects:
+  - `props.model(blueprint, { scale, pivot })` meshes a Blueprint once. The mesh uses the world's block textures, with ambient occlusion, sun shadows and glowing blocks. At `scale: 0.25`, each block is a quarter metre, which is how the Starfighter builds detailed X-wings.
+  - `props.spawn(model)` places a copy. Move it through its `position` and `quaternion` every frame; `flash(color)` tints it briefly for hits.
+  - `props.bolt({ color, length, width })` is a glowing streak along its -z, for lasers, tracers and engine flames.
+
+```ts
+const tie = game.props.model(tieBlueprint, { scale: 0.25 });
+const ship = game.props.spawn(tie, { position: { x: 0, y: 120, z: 0 } });
+// every frame:
+ship.position.addScaledVector(forward, speed * dt);
+ship.quaternion.setFromEuler(new math.Euler(pitch, yaw, roll, 'YXZ'));
+game.camera.set(behind, ship.position);
+```
+
+**HUD for vehicles:**
+- `hud.meter(id, label, 0..1, { color })` draws a bar (shields, boost).
+- `hud.marker(id, worldPos, { shape: 'box' | 'diamond' | 'ring' | 'reticle' | 'dot', color, size, label, edge, pulse })` draws target brackets and waypoints. With `edge`, off-screen targets become arrows on the screen edge; `size: { world: n }` scales the marker with distance.
+- `hud.radar({ center, heading, range, blips })` draws a round radar.
+- `hud.crosshair(false)` hides the default crosshair.
+
+**Effects and sound:**
+- `fx.explosion(at, { size })` makes a fireball, smoke, sparks, a shockwave, sound, and a shake scaled by distance.
+- Sounds include `laser`, `laser_enemy`, `explosion`, `explosion_big`, `torpedo`, `lock`, `alarm`, `whoosh` and `flyby`.
+- `audio.loop('engine')` returns a handle whose `set({ volume, pitch })` follows the throttle.
+
+`src/games/starfighter/` is the reference.
+
+## Entities
+
+```ts
+game.entities.define('zombie', {
+  name: 'Zombie',
+  model: Models.humanoid({ skin: [0, 0], atlas: 'mine' }), // or Models.spider(...); build: 'thin' | 'large', scale, extras
+  hitbox: { width: 0.6, height: 1.95 },
+  health: 20,
+  speed: 3.2,
+  ai: Behaviors.melee({ damage: 3, reach: 1.9, cooldown: 1.1, windup: 0.25 }),
+  drops: [{ item: 'heart', chance: 0.2 }],
+  sounds: { ambient: 'zombie' },
+});
+const z = game.entities.spawn('zombie', { x: 10, y: 71, z: 0 });
+```
+
+- Physics, collision, knockback, flow-field path-finding to the player (around walls, up steps, down drops), line of sight and projectiles run in Rust/WebAssembly for all entities at once.
+- Built-in behaviours: `Behaviors.melee`, `Behaviors.ranged` (kites and strafes, leads its shots), `Behaviors.leaper` (pounces) and `Behaviors.all(...)`. They are written against the public `Entity` API (`src/platform/api/behaviors.ts`), so copy one and change it.
+- Custom AI is a function `(self, game, dt) => void`. It can call `self.moveTo('player' | point)`, `moveDirection(x, z)`, `stop`, `jump`, `lookAt`, `canSeePlayer`, `distanceToPlayer`, `animate('attack' | 'raise' | 'cast')`, `glow(color)`, `shoot(projectile, target, { lead })`, `impulse`, `setSpeed` and `damage`, and keep state in `self.data`. The Warden in `src/games/arena/content.ts` is a complete boss state machine: telegraphed slams, fireballs, summons and an enrage phase.
+- `boss: true` shows a boss bar automatically. Hurt flashes, damage numbers, blood particles, death animations, drops and positional sounds are handled for you.
+- Queries: `entities.all(type?)`, `count(type?)`, `near(point, radius)`, `clear()`.
+
+Box models use the Minecraft skin UV layout, so any 64×64 humanoid skin works. The only built-in skin is `Skins.player`; mobs come from your own atlas. `extras` adds parts of your own to a humanoid (the Warden's crown is one, with `parent: 'head'`).
+
+## Your own art and sound
+
+The platform ships only generic basics. A game brings its own look and sound, and nothing about it goes into the core.
+
+**Art.** Register an atlas, then refer to it anywhere a sprite, skin or held model is expected:
+- `game.items.atlas('mine', canvas)` takes any canvas (draw with Canvas 2D, or load an image into it).
+- `game.items.atlas('mine', { width, height, pixels, emissive })` takes raw sRGB RGBA pixels and an optional glow map (one byte per texel). Glow is how eyes, fire and crystals shine in the dark.
+- Use `{ atlas: 'mine', x, y }` as a sprite, or `Models.humanoid({ skin: [x, y], atlas: 'mine' })` for a skin.
+
+The Arena paints its whole atlas in code (`src/games/arena/art/`): five mob skins, weapon sprites and the pike's texture, with bevelled pixel-art shading, in about 50 ms at startup.
+
+**Sound.** `game.audio.define(name, voice)` adds a sound; play it like any other with `audio.play(name, { at })`. Voices are synthesised on each play:
+
+```ts
+game.audio.define('laser', (s) => {
+  s.tone({ wave: 'square', from: 2400 * s.pitch, to: 260 * s.pitch, duration: 0.17, volume: 0.22, lowpass: 3800 });
+  s.noise({ duration: 0.03, filter: 'highpass', from: 5000, to: 3000, volume: 0.15 });
+});
+```
+
+- `s.tone` is an oscillator sweep with an envelope and optional lowpass, bandpass or vibrato.
+- `s.noise` is filtered noise with a sweeping filter.
+- `s.ctx`, `s.out` and `s.t` give raw WebAudio for anything else. Starfighter's TIE howl shares one sweeping filter across three detuned oscillators this way.
+- The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers).
+
+## Commands
+
+Press `/` or `T` in any game to open the command bar. Tab completes command names, item ids and entity types, Up and Down walk the history, and the game pauses while it's open.
+
+The built-in cheats are available in development builds, or in production if the game sets `cheats: true`:
+
+| Command | |
+| --- | --- |
+| `/give <item> [count]` | Put an item in your hand |
+| `/spawn <entity> [count]` | Spawn creatures in front of you |
+| `/tp <x> <y> <z>` | Teleport (`~` is relative, e.g. `~ ~10 ~`) |
+| `/time <day\|noon\|dusk\|night\|midnight\|0..1>` | Set the time of day |
+| `/heal`, `/kill`, `/fly` | Full health, kill every creature, toggle flight |
+| `/help` | List commands |
+
+Games add their own (they're always available, including in production):
+
+```ts
+game.commands.register('wave', {
+  usage: '<n>',
+  help: 'Skip to a wave',
+  complete: () => ['1', '2', '3', '4', '5', '6'],
+  run: ([n]) => {
+    if (!n) throw new Error('Which wave?'); // shown in red, with the usage
+    startWave(Number(n));
+    return `Wave ${n}`;
+  },
+});
+game.commands.run('/give pike'); // run one from code
+```
+
+## Presentation
+
+| API | What |
+| --- | --- |
+| `hud.banner(title, sub?)` | Big centred title |
+| `hud.objective(text)` | Status pill at the top |
+| `hud.stat(id, label, value)` | Corner chips (kills, timers) |
+| `hud.bossBar(name, fraction)` | Manual boss bar |
+| `hud.toast(text)` | Small toast |
+| `hud.screen({ title, tone, stats, buttons })` | Modal victory / defeat / menu |
+| `hud.meter`, `marker`, `radar`, `crosshair` | Vehicle HUD (see above) |
+| `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
+| `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
+| `env.time`, `env.frozen` | Time of day |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup', fn)` | Events |
+| `rng` | Seeded random numbers |
+
+## Architecture and the road to multiplayer
+
+```
+┌──────────── games (TypeScript, only @platform) ────────────┐
+│ rules · content · AI behaviours · HUD choreography          │
+└──────────────────────── GameContext ───────────────────────┘
+┌──────────── platform runtime (TypeScript + three.js) ──────┐
+│ lifecycle · entity/item/combat systems · HUD · audio · FX  │
+│ renderer (WebGL2) · chunk streaming · input                │
+└─────────────── flat buffers / wasm-bindgen ────────────────┘
+┌──────────── engine (Rust → WebAssembly) ───────────────────┐
+│ worldgen + blueprints · lighting · meshing · culling        │
+│ world store · player + entity physics · path-finding        │
+│ projectiles · raycasts                                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+The seams are chosen so a server can take over simulation later without changing games:
+
+- The simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server binary can link the same crate and produce identical worlds from the same seed and blueprints.
+- Entity state lives in flat `f64` buffers (layout documented in `entities.rs`), which serialise trivially into network snapshots.
+- Games only talk to `GameContext`. On a server, `hud` / `fx` / `audio` calls become messages sent to clients, and `world` / `entities` / `player` map onto the authoritative simulation. The game file itself doesn't change.
+- Rendering, chunk meshing, lighting and culling stay client-side.
