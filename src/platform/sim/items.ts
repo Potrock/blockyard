@@ -1,25 +1,28 @@
+import type { AtlasPixels, GameContext, GameEvents, ItemApi, ItemDefinition, ItemStack, InventoryApi, Pickup, Player, Vec3 } from '../api/types';
 import type { Content } from '../content';
-import * as THREE from 'three';
-import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { AtlasPixels, GameContext, GameEvents, InventoryApi, ItemApi, ItemDefinition, ItemStack, Pickup, Vec3 } from '../api/types';
-import type { EntityGraphics } from '../render/entities';
-import type { Sfx } from '../audio/sfx';
-import { Shaders } from '../render/shaders';
+import type { Presentation } from './present';
 
 export interface ItemServices {
-  world: VoxelWorld;
-  graphics: EntityGraphics;
-  scene: THREE.Scene;
-  fxScene: THREE.Scene;
-  sfx: Sfx;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
-  playerPos(): Vec3;
+  players(): readonly Player[];
   isSolid(x: number, y: number, z: number): boolean;
-  /** Where the game's atlases go (the client picks them up from there). */
+  /** Item definitions and atlases, for the client's icons and meshes. */
   content: Content;
-  /** A small lit cube of a block, placed in the scene (block items lying on the ground). */
-  blockModel(block: string, size: number): { object: THREE.Object3D; remove(): void };
+  /** Sounds and toasts for the player who picks something up. */
+  present: Presentation;
+}
+
+/** One pickup as the client draws it. */
+export interface PickupFrame {
+  id: number;
+  item: string;
+  x: number;
+  y: number;
+  z: number;
+  /** Resting on the ground (it bobs). */
+  settled: boolean;
+  beam?: string;
 }
 
 export class Inventory implements InventoryApi {
@@ -116,7 +119,7 @@ export class Inventory implements InventoryApi {
 }
 
 class PickupImpl implements Pickup {
-  vel: THREE.Vector3;
+  readonly vel: Vec3;
   age = 0;
   settled = false;
   removed = false;
@@ -125,15 +128,13 @@ class PickupImpl implements Pickup {
     readonly id: number,
     readonly item: string,
     readonly count: number,
-    readonly pos: THREE.Vector3,
-    readonly group: THREE.Object3D,
-    readonly fx: THREE.Object3D[],
-    readonly dispose: (() => void) | null,
+    readonly pos: Vec3,
     readonly despawn: number,
+    readonly beam: string | undefined,
     velocity: Vec3 | undefined,
     private onRemove: (p: PickupImpl) => void,
   ) {
-    this.vel = new THREE.Vector3(velocity?.x ?? 0, velocity?.y ?? 0, velocity?.z ?? 0);
+    this.vel = { x: velocity?.x ?? 0, y: velocity?.y ?? 0, z: velocity?.z ?? 0 };
   }
   get position(): Vec3 {
     return { x: this.pos.x, y: this.pos.y, z: this.pos.z };
@@ -149,28 +150,16 @@ class PickupImpl implements Pickup {
   }
 }
 
-function fxMaterial(color: string, mode: number, intensity: number) {
-  return new THREE.RawShaderMaterial({
-    vertexShader: Shaders.fx.vertex,
-    fragmentShader: Shaders.fx.fragment,
-    glslVersion: THREE.GLSL3,
-    uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: intensity }, uTime: { value: 0 }, uMode: { value: mode } },
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-  });
-}
-
-export class ItemSystem implements ItemApi {
+/**
+ * Items on the simulation side: definitions, pickups falling, settling, pulling toward the
+ * nearest player and being collected. The client draws them from `frame()`.
+ */
+export class ItemSim implements ItemApi {
   readonly defs = new Map<string, ItemDefinition>();
+  /** The local player's hotbar (a server keeps one per player). */
   readonly inventory: Inventory;
   private pickups: PickupImpl[] = [];
   private nextId = 1;
-  private materials = new Map<string, THREE.RawShaderMaterial>();
-  private beamGeo = new THREE.PlaneGeometry(0.9, 7).translate(0, 3.5, 0);
-  private haloGeo = new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2);
-  private time = 0;
 
   constructor(private s: ItemServices) {
     this.inventory = new Inventory(this.defs);
@@ -178,6 +167,7 @@ export class ItemSystem implements ItemApi {
 
   define(id: string, def: ItemDefinition) {
     this.defs.set(id, def);
+    this.s.content.defineItem(id, def);
   }
 
   get(id: string): ItemDefinition | undefined {
@@ -193,63 +183,13 @@ export class ItemSystem implements ItemApi {
     this.s.content.defineAtlas(name, source);
   }
 
-  private material(atlas: string): THREE.RawShaderMaterial {
-    let m = this.materials.get(atlas);
-    if (!m) {
-      m = this.s.graphics.material(atlas);
-      this.materials.set(atlas, m);
-    }
-    return m;
-  }
-
   spawnPickup(item: string, at: Vec3, opts: { count?: number; velocity?: Vec3; beam?: string; despawn?: number } = {}): Pickup {
-    const def = this.defs.get(item);
-    if (!def) throw new Error(`items.spawnPickup: unknown item "${item}"`);
-    let group: THREE.Object3D;
-    let dispose: (() => void) | null = null;
-    const icon = def.icon;
-    if (typeof icon === 'object' && 'block' in icon) {
-      // Items that look like a block drop as little cubes of it.
-      const cube = this.s.blockModel(icon.block, 0.3);
-      group = cube.object;
-      dispose = cube.remove;
-    } else {
-      const { geometry, atlas } = this.s.graphics.spriteGeometry(icon);
-      const mesh = new THREE.Mesh(geometry, this.material(atlas));
-      mesh.customDepthMaterial = this.s.graphics.shadowMaterial(atlas);
-      mesh.scale.setScalar(0.62);
-      group = new THREE.Group();
-      group.add(mesh);
-      this.s.scene.add(group);
-    }
-    group.position.set(at.x, at.y, at.z);
-    const fx: THREE.Object3D[] = [];
-    const halo = new THREE.Mesh(this.haloGeo, fxMaterial(opts.beam ?? '#fff3c4', 2, opts.beam ? 1.6 : 0.6));
-    halo.frustumCulled = false;
-    this.s.fxScene.add(halo);
-    fx.push(halo);
-    if (opts.beam) {
-      for (let k = 0; k < 2; k++) {
-        const beam = new THREE.Mesh(this.beamGeo, fxMaterial(opts.beam, 0, 1.3));
-        beam.rotation.y = k * Math.PI * 0.5;
-        beam.frustumCulled = false;
-        this.s.fxScene.add(beam);
-        fx.push(beam);
-      }
-    }
-    const p = new PickupImpl(this.nextId++, item, opts.count ?? 1, new THREE.Vector3(at.x, at.y, at.z), group, fx, dispose, opts.despawn ?? 90, opts.velocity, (x) => this.drop(x));
+    if (!this.defs.has(item)) throw new Error(`items.spawnPickup: unknown item "${item}"`);
+    const p = new PickupImpl(this.nextId++, item, opts.count ?? 1, { x: at.x, y: at.y, z: at.z }, opts.despawn ?? 90, opts.beam, opts.velocity, (x) =>
+      this.pickups.splice(this.pickups.indexOf(x), 1),
+    );
     this.pickups.push(p);
     return p;
-  }
-
-  private drop(p: PickupImpl) {
-    if (p.dispose) p.dispose();
-    else p.group.removeFromParent();
-    for (const f of p.fx) {
-      f.removeFromParent();
-      ((f as THREE.Mesh).material as THREE.Material).dispose();
-    }
-    this.pickups.splice(this.pickups.indexOf(p), 1);
   }
 
   clearPickups() {
@@ -257,62 +197,77 @@ export class ItemSystem implements ItemApi {
   }
 
   update(dt: number, running: boolean) {
-    this.time += dt;
-    const pl = this.s.playerPos();
+    if (!running) return;
     const ctx = this.s.ctx();
+    const players = this.s.players();
     for (const p of [...this.pickups]) {
-      if (running) p.age += dt;
+      p.age += dt;
       if (p.age > p.despawn) {
         p.remove();
         continue;
       }
       // Fall and settle 0.3 above the ground.
-      if (running && !p.settled) {
+      if (!p.settled) {
         p.vel.y -= 22 * dt;
-        p.pos.addScaledVector(p.vel, dt);
+        p.pos.x += p.vel.x * dt;
+        p.pos.y += p.vel.y * dt;
+        p.pos.z += p.vel.z * dt;
         p.vel.x *= Math.exp(-2 * dt);
         p.vel.z *= Math.exp(-2 * dt);
         if (this.s.isSolid(Math.floor(p.pos.x), Math.floor(p.pos.y - 0.3), Math.floor(p.pos.z))) {
           p.pos.y = Math.floor(p.pos.y - 0.3) + 1.3;
-          p.vel.set(0, 0, 0);
+          p.vel.x = p.vel.y = p.vel.z = 0;
           p.settled = true;
         }
       }
-      const dx = pl.x - p.pos.x;
-      const dy = pl.y + 0.9 - p.pos.y;
-      const dz = pl.z - p.pos.z;
-      const d = Math.hypot(dx, dy, dz);
-      if (running && p.age > 0.5 && d < 3.2 && p.collectT < 0) {
-        // Magnet toward the player, then collect.
-        p.pos.x += (dx / d) * Math.min(d, dt * 9);
-        p.pos.y += (dy / d) * Math.min(d, dt * 9);
-        p.pos.z += (dz / d) * Math.min(d, dt * 9);
-        p.settled = false;
-        p.vel.set(0, 0, 0);
-        if (d < 1.1) this.collect(p, ctx);
-        if (p.removed) continue;
+      if (p.age <= 0.5 || p.collectT >= 0) continue;
+      // Pulled toward the nearest living player in reach, then collected.
+      let who: Player | null = null;
+      let d = 3.2;
+      let dx = 0;
+      let dy = 0;
+      let dz = 0;
+      for (const pl of players) {
+        if (!pl.alive) continue;
+        const q = pl.position;
+        const ex = q.x - p.pos.x;
+        const ey = q.y + 0.9 - p.pos.y;
+        const ez = q.z - p.pos.z;
+        const e = Math.hypot(ex, ey, ez);
+        if (e < d) {
+          d = e;
+          who = pl;
+          dx = ex;
+          dy = ey;
+          dz = ez;
+        }
       }
-      const bob = p.settled ? Math.sin(this.time * 2.5 + p.id) * 0.1 : 0;
-      p.group.position.set(p.pos.x, p.pos.y + bob, p.pos.z);
-      p.group.rotation.y = this.time * 1.8 + p.id;
-      for (const f of p.fx) {
-        f.position.set(p.pos.x, p.pos.y - 0.28, p.pos.z);
-        ((f as THREE.Mesh).material as THREE.RawShaderMaterial).uniforms.uTime.value = this.time;
-      }
+      if (!who) continue;
+      const step = Math.min(d, dt * 9);
+      p.pos.x += (dx / d) * step;
+      p.pos.y += (dy / d) * step;
+      p.pos.z += (dz / d) * step;
+      p.settled = false;
+      p.vel.x = p.vel.y = p.vel.z = 0;
+      if (d < 1.1) this.collect(p, ctx, who);
     }
   }
 
-  private collect(p: PickupImpl, ctx: GameContext) {
+  private collect(p: PickupImpl, ctx: GameContext, player: Player) {
     const def = this.defs.get(p.item);
     if (!def) return p.remove();
     // Consumed on touch: the item's `onPickup` does its own thing (and sound).
-    if (!def.onPickup?.(ctx, p.count, ctx.player)) {
-      const left = this.inventory.give(p.item, p.count);
+    if (!def.onPickup?.(ctx, p.count, player)) {
+      const left = player.inventory.give(p.item, p.count);
       if (left === p.count) return; // inventory full: leave it
-      this.s.sfx.play('pickup');
-      ctx.hud.toast(`+${p.count > 1 ? `${p.count} ` : ''}${def.name}`);
+      this.s.present.audio(player.id).play('pickup');
+      player.hud.toast(`+${p.count > 1 ? `${p.count} ` : ''}${def.name}`);
     }
-    this.s.emit('pickup', { player: ctx.player, item: p.item, count: p.count });
+    this.s.emit('pickup', { player, item: p.item, count: p.count });
     p.remove();
+  }
+
+  frame(): PickupFrame[] {
+    return this.pickups.map((p) => ({ id: p.id, item: p.item, x: p.pos.x, y: p.pos.y, z: p.pos.z, settled: p.settled, beam: p.beam }));
   }
 }

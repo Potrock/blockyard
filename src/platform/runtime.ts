@@ -20,7 +20,8 @@ import { PlayerHealth } from './player/health';
 import { Combat } from './player/combat';
 import { EntitySim } from './sim/entities';
 import { EntityView } from './client/entities';
-import { ItemSystem } from './items/items';
+import { ItemSim } from './sim/items';
+import { PickupView } from './client/pickups';
 import { Effects } from './fx/effects';
 import { Sfx } from './audio/sfx';
 import { Hud } from './ui/hud';
@@ -112,7 +113,8 @@ export class Runtime {
   private graphics!: EntityGraphics;
   private entities!: EntitySim;
   private entityView!: EntityView;
-  private items!: ItemSystem;
+  private items!: ItemSim;
+  private pickupView!: PickupView;
   private combat!: Combat;
   private health!: PlayerHealth;
   private fx!: Effects;
@@ -325,19 +327,21 @@ export class Runtime {
       players: () => this.ctx.players,
     });
     this.entityView = new EntityView(this.graphics, this.renderer.entityScene, world, this.content);
-    this.items = new ItemSystem({
-      world,
-      graphics: this.graphics,
-      scene: this.renderer.entityScene,
-      fxScene: this.renderer.fxScene,
-      sfx: this.sfx,
+    this.items = new ItemSim({
       ctx: () => this.ctx,
       emit,
-      playerPos: () => this.playerPos(),
+      players: () => this.ctx.players,
       isSolid: (x, y, z) => {
         const id = world.get_block(x, y, z);
         return id !== 255 && (this.registry.blocks[id]?.solid ?? false);
       },
+      content: this.content,
+      present: this.presentation,
+    });
+    this.pickupView = new PickupView({
+      graphics: this.graphics,
+      scene: this.renderer.entityScene,
+      fxScene: this.renderer.fxScene,
       content: this.content,
       blockModel: (block, size) => {
         let model = this.blockModels.get(block);
@@ -794,6 +798,7 @@ export class Runtime {
     // saves the world (Sandbox keeps your builds).
     if (!this.def.world?.persist) this.chunks.revertEdits();
     this.items.clearPickups();
+    this.pickupView.clear();
     this.items.inventory.clear();
     this.timers = [];
     this.clockNow = 0;
@@ -1270,6 +1275,7 @@ export class Runtime {
     const ef = this.entities.frame();
     this.entityView.sync(ef.entities, ef.projectiles, dt, running);
     this.items.update(dt, running);
+    this.pickupView.sync(this.items.frame(), dt);
     this.props.update(dt);
     if (this.itemMode) this.updateHands(dt, active);
 
