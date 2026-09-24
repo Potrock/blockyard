@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { h } from './dom';
-import type { HudApi, MarkerOptions, RadarData, ScreenOptions, Vec3 } from '../api/types';
+import type { HudApi, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, RadarData, ScreenOptions, Vec3 } from '../api/types';
 
 interface Marker {
   el: HTMLElement;
@@ -42,13 +42,14 @@ export class GameHud implements HudApi {
   /** Shows / hides the base HUD's crosshair. */
   onCrosshair: ((visible: boolean) => void) | null = null;
   private metersEl: HTMLElement;
+  private feedEl: HTMLElement;
   private meterEls = new Map<string, HTMLElement>();
   private markersEl: HTMLElement;
   private markers = new Map<string, Marker>();
   private radarCanvas: HTMLCanvasElement;
   private screens: HTMLElement[] = [];
 
-  constructor(parent: HTMLElement, private iconFor: (ref: import('../api/types').SpriteRef) => string) {
+  constructor(parent: HTMLElement, private iconFor: (ref: IconRef) => string) {
     this.hearts = h('div.hearts');
     this.bannerEl = h('div.banner');
     this.objectiveEl = h('div.objective');
@@ -60,6 +61,7 @@ export class GameHud implements HudApi {
     this.flashEl = h('div.screen-flash');
     this.hitEl = h('div.hitmarker');
     this.metersEl = h('div.meters');
+    this.feedEl = h('div.feed');
     this.markersEl = h('div.markers');
     this.radarCanvas = h('canvas.radar', { width: 150, height: 150 }) as HTMLCanvasElement;
     this.radarCanvas.style.display = 'none';
@@ -75,6 +77,7 @@ export class GameHud implements HudApi {
       this.statsEl,
       this.boss,
       this.toastEl,
+      this.feedEl,
       this.metersEl,
       this.radarCanvas,
     );
@@ -329,6 +332,15 @@ export class GameHud implements HudApi {
     this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), 1800);
   }
 
+  feed(text: string, opts: { color?: string } = {}) {
+    const line = h('div.feed-line', {}, text);
+    if (opts.color) line.style.color = opts.color;
+    this.feedEl.append(line);
+    while (this.feedEl.childElementCount > 6) this.feedEl.firstElementChild!.remove();
+    window.setTimeout(() => line.classList.add('fade'), 6000);
+    window.setTimeout(() => line.remove(), 6600);
+  }
+
   screen(opts: ScreenOptions): () => void {
     const buttons = h('div.result-buttons');
     let closed = false;
@@ -356,6 +368,77 @@ export class GameHud implements HudApi {
     this.screens.push(el);
     this.onScreen?.(true);
     return close;
+  }
+
+  menu(opts: MenuOptions): MenuHandle {
+    let current = { ...opts };
+    let open = true;
+    const body = h('div.menu-body');
+    const title = h('h2.menu-title');
+    const sub = h('div.menu-sub');
+    const closeBtn = h('button.menu-close', { title: 'Close (Esc)' }, '×');
+    const card = h('div.menu-card', {}, h('div.menu-head', {}, h('div', {}, title, sub), closeBtn), body);
+    const el = h('div.screen.menu-screen', {}, card);
+    const entry = (e: MenuEntry) => {
+      const icon = e.icon ? h('img.menu-icon', { src: this.iconFor(e.icon), alt: '' }) : h('span.menu-icon');
+      const b = h(
+        `button.menu-entry${e.disabled ? '.disabled' : ''}${e.active ? '.active' : ''}`,
+        {
+          onclick: () => {
+            if (!e.disabled) e.onSelect?.();
+          },
+        },
+        icon,
+        h('span.menu-text', {}, h('span.menu-label', {}, e.label), e.note ? h('span.menu-note', {}, e.note) : null),
+        e.detail ? h('span.menu-detail', {}, e.detail) : null,
+      );
+      return b;
+    };
+    const render = () => {
+      title.textContent = current.title;
+      sub.textContent = current.subtitle ?? '';
+      sub.style.display = current.subtitle ? '' : 'none';
+      body.replaceChildren(
+        ...current.sections.map((sec) =>
+          h('div.menu-section', {}, sec.title ? h('div.menu-section-title', {}, sec.title) : null, h('div.menu-grid', {}, ...sec.entries.map(entry))),
+        ),
+      );
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape' || ev.code === 'KeyE') {
+        ev.stopPropagation();
+        close();
+      }
+    };
+    const close = () => {
+      if (!open) return;
+      open = false;
+      window.removeEventListener('keydown', onKey, true);
+      el.classList.add('closing');
+      window.setTimeout(() => el.remove(), 150);
+      this.screens = this.screens.filter((x) => x !== el);
+      if (this.screens.length === 0) this.onScreen?.(false);
+      current.onClose?.();
+    };
+    closeBtn.onclick = close;
+    el.onclick = (ev) => {
+      if (ev.target === el) close();
+    };
+    render();
+    window.addEventListener('keydown', onKey, true);
+    this.root.parentElement!.append(el);
+    this.screens.push(el);
+    this.onScreen?.(true);
+    return {
+      update: (o) => {
+        current = { ...current, ...o };
+        if (open) render();
+      },
+      close,
+      get open() {
+        return open;
+      },
+    };
   }
 
   closeScreens() {
@@ -429,6 +512,7 @@ export class GameHud implements HudApi {
     this.crosshair(true);
     this.hideBossBar();
     this.bannerEl.classList.remove('show');
+    this.feedEl.replaceChildren();
     for (const n of this.numbers) n.el.remove();
     this.numbers = [];
     this.closeScreens();

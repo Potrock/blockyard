@@ -17,6 +17,8 @@ export class PlayerHealth {
   private fallDamage = false;
   private prevVy = 0;
   private prevGround = true;
+  /** Armour points (0..20), each blocking 4% of damage. */
+  armor = 0;
 
   constructor(
     private world: VoxelWorld,
@@ -42,6 +44,7 @@ export class PlayerHealth {
 
   damage(amount: number, opts: DamageOptions = {}): boolean {
     if (!this.enabled || this.dead || this.invuln > 0 || amount <= 0) return false;
+    amount *= 1 - Math.min(20, Math.max(0, this.armor)) * 0.04;
     this.health = Math.max(0, this.health - amount);
     this.invuln = 0.45;
     this.sinceHurt = 0;

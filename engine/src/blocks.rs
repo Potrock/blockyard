@@ -76,8 +76,17 @@ pub mod tex {
     pub const BLACK_CONCRETE: u16 = 69;
     pub const RED_CONCRETE: u16 = 70;
     pub const IRON_BLOCK: u16 = 71;
+    pub const END_STONE: u16 = 72;
+    pub const RED_BED_TOP: u16 = 73;
+    pub const RED_BED_SIDE: u16 = 74;
+    pub const BLUE_BED_TOP: u16 = 75;
+    pub const BLUE_BED_SIDE: u16 = 76;
+    pub const GREEN_BED_TOP: u16 = 77;
+    pub const GREEN_BED_SIDE: u16 = 78;
+    pub const YELLOW_BED_TOP: u16 = 79;
+    pub const YELLOW_BED_SIDE: u16 = 80;
 
-    pub const COUNT: usize = 72;
+    pub const COUNT: usize = 81;
 
     pub const NAMES: [&str; COUNT] = [
         "stone", "grass_top", "grass_side", "dirt", "cobblestone", "oak_planks", "bedrock", "sand",
@@ -91,6 +100,8 @@ pub mod tex {
         "white_wool", "red_wool", "yellow_wool", "green_wool", "blue_wool", "black_wool",
         "sea_lantern", "spruce_planks", "birch_planks", "brown_mushroom", "red_mushroom",
         "white_concrete", "light_gray_concrete", "gray_concrete", "black_concrete", "red_concrete", "iron_block",
+        "end_stone", "red_bed_top", "red_bed_side", "blue_bed_top", "blue_bed_side", "green_bed_top", "green_bed_side",
+        "yellow_bed_top", "yellow_bed_side",
     ];
 }
 
@@ -263,8 +274,13 @@ pub const GRAY_CONCRETE_B: u8 = 61;
 pub const BLACK_CONCRETE_B: u8 = 62;
 pub const RED_CONCRETE_B: u8 = 63;
 pub const IRON_BLOCK_B: u8 = 64;
+pub const END_STONE_B: u8 = 65;
+pub const RED_BED_B: u8 = 66;
+pub const BLUE_BED_B: u8 = 67;
+pub const GREEN_BED_B: u8 = 68;
+pub const YELLOW_BED_B: u8 = 69;
 
-pub const BLOCK_COUNT: usize = 65;
+pub const BLOCK_COUNT: usize = 70;
 
 pub static BLOCKS: [Block; BLOCK_COUNT] = [
     Block {
@@ -363,6 +379,11 @@ pub static BLOCKS: [Block; BLOCK_COUNT] = [
     cube("black_concrete", "Black Concrete", T::BLACK_CONCRETE),
     cube("red_concrete", "Red Concrete", T::RED_CONCRETE),
     cube("iron_block", "Block of Iron", T::IRON_BLOCK),
+    cube("end_stone", "End Stone", T::END_STONE),
+    cube3("red_bed", "Red Bed", T::RED_BED_TOP, T::RED_BED_SIDE, T::OAK_PLANKS),
+    cube3("blue_bed", "Blue Bed", T::BLUE_BED_TOP, T::BLUE_BED_SIDE, T::OAK_PLANKS),
+    cube3("green_bed", "Green Bed", T::GREEN_BED_TOP, T::GREEN_BED_SIDE, T::OAK_PLANKS),
+    cube3("yellow_bed", "Yellow Bed", T::YELLOW_BED_TOP, T::YELLOW_BED_SIDE, T::OAK_PLANKS),
 ];
 
 const fn table<const F: u8>() -> [u8; 256] {
@@ -479,5 +500,7 @@ mod tests {
         assert_eq!(tex::NAMES[tex::RED_MUSHROOM as usize], "red_mushroom");
         assert_eq!(BLOCKS[IRON_BLOCK_B as usize].name, "iron_block");
         assert_eq!(tex::NAMES[tex::IRON_BLOCK as usize], "iron_block");
+        assert_eq!(BLOCKS[YELLOW_BED_B as usize].name, "yellow_bed");
+        assert_eq!(tex::NAMES[tex::YELLOW_BED_SIDE as usize], "yellow_bed_side");
     }
 }

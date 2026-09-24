@@ -3,7 +3,7 @@
  * faces are cut out to a leaf shape) and its hotbar icon. Ported from the engine's
  * `entitytex.rs`.
  */
-import { type Canvas, clamp, paintBox, part, px, type Px, type S, SpriteCanvas, remEuclid, within } from './canvas';
+import { type Canvas, clamp, paintBox, part, px, type Px, type S, SpriteCanvas, remEuclid, within } from '@platform/art';
 import { iron, IRON, LEATHER, pLeather } from './shared';
 
 /**

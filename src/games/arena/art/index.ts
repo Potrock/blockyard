@@ -9,7 +9,7 @@
  * - (0,160): the pike, a held 3D model; (0,208): the battle axe, likewise.
  */
 import type { HeldModelSpec } from '@platform';
-import { ATLAS, Canvas, type Part } from './canvas';
+import { ATLAS, Canvas, type Part } from '@platform/art';
 import { ITEM_X, ITEM_Y, items } from './items';
 import { brute, BRUTE, skeleton, SKELETON, spider, SPIDER, warden, WARDEN, zombie, ZOMBIE } from './mobs';
 import { pike, PIKE, PIKE_BUTT, PIKE_COLLAR, PIKE_HEAD, PIKE_HEAD2, PIKE_SHAFT } from './pike';

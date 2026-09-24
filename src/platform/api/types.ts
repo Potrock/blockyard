@@ -35,6 +35,8 @@ export interface GameDefinition {
    * in production builds. They're always available in development.
    */
   cheats?: boolean;
+  /** Rules for breaking and placing blocks (the player, `world.breakBlock` / `placeBlock`, and explosions). */
+  blocks?: BlockRules;
   world?: WorldOptions;
   player?: PlayerOptions;
   /**
@@ -52,7 +54,8 @@ export interface WorldOptions {
   /** Fixed seed. Default: `?seed=` from the URL, else random. */
   seed?: number;
   /** `natural` (default) or a `flat` world at `flatHeight`. */
-  terrain?: 'natural' | 'flat';
+  /** `natural` (default), `flat` (at `flatHeight`), or `void`: nothing but your structures (sky islands). */
+  terrain?: 'natural' | 'flat' | 'void';
   flatHeight?: number;
   /** Voxel structures stamped into the world while it generates (see `Blueprint`). */
   structures?: BlueprintLike[];
@@ -89,6 +92,12 @@ export interface PlayerOptions {
    * vehicles, flight or strategy games. The world streams around the camera.
    */
   controller?: 'walk' | 'none';
+  /**
+   * With an items hotbar: holding left-click on a block mines it (see `GameDefinition.blocks` for
+   * which blocks and how long), and block items (`kind: 'block'`) are placed with right-click.
+   * Default false (block items can still be placed).
+   */
+  mining?: boolean;
   /**
    * Player skin (Minecraft layout, origin in `skinAtlas`). Used for the first-person arm.
    * Default `Skins.player`.
@@ -243,6 +252,13 @@ export interface WorldApi {
   readonly seaLevel: number;
   /** Blow a ragged sphere out of the world (bedrock survives) with debris and an explosion. Returns blocks removed. */
   explode(center: Vec3, radius: number, opts?: { effect?: boolean }): number;
+  /**
+   * Break a block the way the player does: checks `blocks.canBreak`, shows debris and fires
+   * `blockBreak`. Returns false if nothing was broken. (`setBlock` is the raw version.)
+   */
+  breakBlock(x: number, y: number, z: number, opts?: { by?: Entity | 'player' | 'world' }): boolean;
+  /** Place a block the way the player does: checks `blocks.canPlace` and that nobody is standing there, and fires `blockPlace`. */
+  placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Entity | 'player' | 'world' }): boolean;
 }
 
 /** Anything that can be packed into generator data (the `Blueprint` class). */
@@ -296,6 +312,8 @@ export interface PlayerApi {
   impulse(x: number, y: number, z: number): void;
   /** Freeze movement (cutscenes, countdowns). */
   freeze(frozen: boolean): void;
+  /** Armour points, 0..20: each blocks 4% of incoming damage (Minecraft-style). Default 0. */
+  armor: number;
   /** The first-person arm and held item. */
   readonly viewModel: ViewModelApi;
 }
@@ -492,13 +510,41 @@ export interface MiscItem extends ItemBase {
   kind: 'misc';
 }
 
-export type ItemDefinition = MeleeItem | BowItem | ConsumableItem | MiscItem;
+/** A placeable block, carried in the inventory like any item. */
+export interface BlockItem extends Omit<ItemBase, 'icon'> {
+  kind: 'block';
+  /** The block it places. */
+  block: string;
+  /** Hotbar icon (default: the block itself). */
+  icon?: SpriteRef;
+}
+
+export type ItemDefinition = MeleeItem | BowItem | ConsumableItem | MiscItem | BlockItem;
+
+/** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
+export type IconRef = SpriteRef | { block: string };
+
+/** Block positions are whole numbers (the block's minimum corner). */
+export interface BlockRules {
+  /** May this block be broken? `by` is who's breaking it. Default: anything but bedrock. */
+  canBreak?(game: GameContext, at: Vec3, block: string, by: Entity | 'player' | 'world'): boolean;
+  /** May this block be placed here? Default: yes. */
+  canPlace?(game: GameContext, at: Vec3, block: string, by: Entity | 'player' | 'world'): boolean;
+  /**
+   * Seconds for the player to mine it with what they're holding (0 = instant). Default: a
+   * Minecraft-like time by material (wool and plants fast, wood medium, stone slow, obsidian very
+   * slow), so tools are yours to add here.
+   */
+  breakTime?(game: GameContext, block: string, held: ItemStack | null): number;
+}
 
 export interface Pickup {
   readonly id: number;
   readonly item: string;
   readonly count: number;
   readonly position: Vec3;
+  /** False once collected, despawned or removed. */
+  readonly alive: boolean;
   remove(): void;
 }
 
@@ -575,6 +621,10 @@ export interface EntityDefinition {
   sounds?: { hurt?: SoundName; death?: SoundName; ambient?: SoundName };
   /** Particle colour for hits and death puffs. */
   bloodColor?: string;
+  /** Right-clicking it (shopkeepers, quest givers, levers…). */
+  onInteract?(self: Entity, game: GameContext): void;
+  /** Ignores all damage (shopkeepers, scenery). */
+  invulnerable?: boolean;
 }
 
 export interface ProjectileSpec {
@@ -597,6 +647,8 @@ export interface Entity {
   readonly velocity: Vec3;
   health: number;
   readonly maxHealth: number;
+  /** Armour points, 0..20: each blocks 4% of incoming damage, like the player's. Default 0. */
+  armor: number;
   readonly alive: boolean;
   readonly onGround: boolean;
   /** Seconds since spawn. */
@@ -643,6 +695,35 @@ export interface EntityApi {
 // HUD, effects, audio, environment
 // ---------------------------------------------------------------------------------------------
 
+export interface MenuEntry {
+  icon?: IconRef;
+  label: string;
+  /** Shown on the right (a price, a level). */
+  detail?: string;
+  /** A second line under the label. */
+  note?: string;
+  /** Greyed out and not clickable (can't afford, locked). */
+  disabled?: boolean;
+  /** Highlighted (owned, selected). */
+  active?: boolean;
+  onSelect?(): void;
+}
+
+export interface MenuOptions {
+  title: string;
+  subtitle?: string;
+  sections: { title?: string; entries: MenuEntry[] }[];
+  /** Called when the menu closes (Esc, the close button, or `close()`). */
+  onClose?(): void;
+}
+
+export interface MenuHandle {
+  /** Replace its contents (e.g. after a purchase). */
+  update(opts: Partial<MenuOptions>): void;
+  close(): void;
+  readonly open: boolean;
+}
+
 export interface ScreenOptions {
   title: string;
   subtitle?: string;
@@ -662,6 +743,11 @@ export interface HudApi {
   bossBar(name: string, fraction: number, color?: string): void;
   hideBossBar(): void;
   toast(text: string): void;
+  /**
+   * A line in the message feed (top left): kill feeds, match events, chat. Lines stack, newest at
+   * the bottom, and fade after a few seconds. `color` tints the line.
+   */
+  feed(text: string, opts?: { color?: string }): void;
   /** Modal screen with buttons; releases the mouse. Returns a function that closes it. */
   screen(opts: ScreenOptions): () => void;
   /** A labelled bar at the bottom left (shields, fuel, boost); `null` removes it. */
@@ -675,6 +761,8 @@ export interface HudApi {
   crosshair(visible: boolean): void;
   /** A round radar in the bottom-right corner; `null` hides it. */
   radar(data: RadarData | null): void;
+  /** A panel of clickable entries (shops, upgrade trees, level select); releases the mouse while open. The game keeps running. */
+  menu(opts: MenuOptions): MenuHandle;
 }
 
 export interface MarkerOptions {
@@ -797,6 +885,9 @@ export interface GameEvents {
   playerDamage: { amount: number; source: DamageOptions['source'] };
   playerDeath: { source: DamageOptions['source'] };
   pickup: { item: string; count: number };
+  /** A block was broken by the player, an entity, an explosion or `world.breakBlock`. */
+  blockBreak: { x: number; y: number; z: number; block: string; by: Entity | 'player' | 'world' };
+  blockPlace: { x: number; y: number; z: number; block: string; by: Entity | 'player' | 'world' };
 }
 
 export interface EventApi {

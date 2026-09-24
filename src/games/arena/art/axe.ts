@@ -3,7 +3,7 @@
  * and butt cap, and two flared bits (1 px plates whose faces are cut out to the blade shape,
  * like the pike's head). Part-space z = 0 is the top end of each box.
  */
-import { type Canvas, clamp, paintBox, part, px, type Px, type S } from './canvas';
+import { type Canvas, clamp, paintBox, part, px, type Px, type S } from '@platform/art';
 import { iron, pLeather } from './shared';
 import type { HeldModelSpec } from '@platform';
 

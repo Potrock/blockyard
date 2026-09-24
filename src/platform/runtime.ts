@@ -11,7 +11,7 @@ import { Particles } from './render/particles';
 import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
-import { loadRegistry, type Registry } from './world/registry';
+import { DEFAULT_TINT, loadRegistry, type Registry } from './world/registry';
 import { Input } from './player/input';
 import { PlayerController } from './player/controller';
 import { Interaction } from './player/interaction';
@@ -26,11 +26,13 @@ import { GameHud } from './ui/hudkit';
 import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
 import { Commands } from './commands';
-import { PropSystem } from './props/props';
+import { PropSystem, propObject } from './props/props';
+import { Blueprint } from './api/blueprint';
+import { Mining, defaultBreakTime, type MiningTarget } from './player/mining';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
-import type { BlockRef, GameContext, GameDefinition, GameEvents, Rng, Vec3 } from './api/types';
+import type { BlockRef, Entity, GameContext, GameDefinition, GameEvents, ItemDefinition, PropModel, Rng, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -90,6 +92,10 @@ export class Runtime {
   private input: Input;
   private controller!: PlayerController;
   private interaction: Interaction | null = null;
+  /** Survival mining and block placing (item games). */
+  private mining: Mining | null = null;
+  private blockIcons = new Map<number, string>();
+  private blockModels = new Map<string, PropModel>();
   private particles!: Particles;
   private hud!: Hud;
   private gameHud!: GameHud;
@@ -190,6 +196,7 @@ export class Runtime {
     const resolve = (b: BlockRef) => this.blockId(b);
     return {
       flat: w.terrain === 'flat' ? (w.flatHeight ?? 64) : undefined,
+      void: w.terrain === 'void',
       terraforms: w.terraform ?? [],
       blueprints: (w.structures ?? []).map((s) => s.build(resolve)),
     };
@@ -227,6 +234,7 @@ export class Runtime {
     this.textures = createBlockTextures(this.renderer.gl);
     const biome = new BiomeMap(this.renderer.gl);
     this.renderer.setTextures(this.textures.albedo, this.textures.material, biome.texture);
+    this.renderer.uniforms.uVoid.value = def.world?.terrain === 'void' ? 1 : 0;
     this.graphics = new EntityGraphics(this.renderer.uniforms);
     this.loadEntityAtlas();
 
@@ -243,8 +251,9 @@ export class Runtime {
 
     const icons = new Map<number, string>();
     for (const b of this.registry.blocks) if (b.id !== 0) icons.set(b.id, blockIcon(b, this.textures.albedoData));
+    this.blockIcons = icons;
     this.hud = new Hud(this.ui, this.registry, icons);
-    this.gameHud = new GameHud(this.ui, (ref) => this.graphics.spriteIcon(ref, 96));
+    this.gameHud = new GameHud(this.ui, (ref) => (typeof ref === 'object' && 'block' in ref ? this.blockIcons.get(this.blockId(ref.block)) ?? '' : this.graphics.spriteIcon(ref, 96)));
     this.gameHud.onScreen = (open) => {
       if (open) this.input.unlock();
       // Closed by a button click: grab the mouse again (needs a user gesture).
@@ -268,7 +277,6 @@ export class Runtime {
     this.controller = new PlayerController(world, this.camera, this.input);
     this.controller.allowFlight = def.player?.fly ?? false;
     this.held = new ViewModel(this.textures.albedo, this.textures.material, this.graphics);
-    if (def.player?.skin) this.held.setSkin(def.player.skin, def.player.skinAtlas);
     this.renderer.overlay = { scene: this.held.scene, camera: this.held.camera };
 
     const emit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => this.emit(k, e);
@@ -309,12 +317,32 @@ export class Runtime {
         const id = world.get_block(x, y, z);
         return id !== 255 && (this.registry.blocks[id]?.solid ?? false);
       },
+      blockModel: (block, size) => {
+        let model = this.blockModels.get(block);
+        if (!model) {
+          model = this.props.model(new Blueprint({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }).set(0, 0, 0, block), { pivot: { x: 0.5, y: 0.5, z: 0.5 } });
+          this.blockModels.set(block, model);
+        }
+        const prop = this.props.spawn(model, { scale: size });
+        return { object: propObject(prop), remove: () => prop.remove() };
+      },
     });
     this.items.inventory.onChange = () => this.syncInventory(true);
     this.combat = new Combat(world, this.entities, this.items, this.camera, this.sfx, this.fx, this.gameHud, this.held, () => this.ctx, () => {
       const s = this.controller.state;
       return !s.onGround && s.vy < -1 && !s.inWater;
     });
+
+    if (this.itemMode) {
+      this.mining = new Mining(world, this.registry, {
+        breakTime: (t) => this.miningTime(t),
+        breakBlock: (t) => this.breakBlockAt(t.x, t.y, t.z, 'player'),
+        place: (x, y, z, id) => this.placeBlockAt(x, y, z, this.registry.blocks[id].name, 'player') && this.items.inventory.takeHeld(1),
+        swing: () => this.held.swing(),
+        progress: (f) => this.hud.setMining(f),
+      });
+      this.renderer.opaqueScene.add(this.mining.outline);
+    }
 
     if (def.player?.build) {
       this.interaction = new Interaction(this.chunks, world, this.registry, this.particles, this.textures.albedoData);
@@ -387,6 +415,8 @@ export class Runtime {
     this.ctx = this.createContext();
     this.registerCommands();
     def.setup?.(this.ctx);
+    // After setup: the skin may live in an atlas the game registers there.
+    if (def.player?.skin) this.held.setSkin(def.player.skin, def.player.skinAtlas);
 
     this.applySettings(this.settings, false);
     this.resize();
@@ -449,6 +479,8 @@ export class Runtime {
         lineOfSight: (a, b) => world.line_clear(a.x, a.y, a.z, b.x, b.y, b.z),
         surfaceY: (x, z) => rt.surfaceY(Math.floor(x), Math.floor(z)),
         explode: (c, r, opts) => rt.explode(c, r, opts),
+        breakBlock: (x, y, z, opts) => rt.breakBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), opts?.by ?? 'world'),
+        placeBlock: (x, y, z, block, opts) => rt.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world'),
         seaLevel: engine.sea_level(),
       },
       player: {
@@ -507,6 +539,12 @@ export class Runtime {
         freeze: (f) => world.set_frozen(f),
         get viewModel() {
           return rt.held;
+        },
+        get armor() {
+          return rt.health.armor;
+        },
+        set armor(v: number) {
+          rt.health.armor = v;
         },
       },
       entities: this.entities,
@@ -647,10 +685,12 @@ export class Runtime {
           if (id === 0 || id === 255) continue;
           const def = this.registry.blocks[id];
           if (!def || def.name === 'bedrock' || def.shape === 'liquid') continue;
+          if (this.def.blocks?.canBreak && !this.def.blocks.canBreak(this.ctx, { x, y, z }, def.name, 'world')) continue;
           cells.push([x, y, z, 0]);
           removed.push([x, y, z, id]);
         }
     const n = this.chunks.editBlocks(cells);
+    for (const [x, y, z, id] of removed) this.emit('blockBreak', { x, y, z, block: this.registry.blocks[id].name, by: 'world' });
     // Debris from a sample of what was destroyed.
     for (let i = 0; i < Math.min(12, removed.length); i++) {
       const [x, y, z, id] = removed[Math.floor(Math.random() * removed.length)];
@@ -661,6 +701,59 @@ export class Runtime {
     if (opts.effect !== false) this.fx.explosion(c, { size: Math.max(1, r / 2) });
     return n;
   }
+
+  /** Break a block the way the player does: rules, debris, the plant on top, the event. */
+  private breakBlockAt(x: number, y: number, z: number, by: Entity | 'player' | 'world'): boolean {
+    const world = this.chunks.world;
+    const id = world.get_block(x, y, z);
+    if (id === 0 || id === 255) return false;
+    const def = this.registry.blocks[id];
+    if (!def || def.name === 'bedrock' || def.shape === 'liquid') return false;
+    if (this.def.blocks?.canBreak && !this.def.blocks.canBreak(this.ctx, { x, y, z }, def.name, by)) return false;
+    if (!this.chunks.editBlock(x, y, z, 0)) return false;
+    const face = def.tex[0];
+    this.particles.burst(x, y, z, this.textures.albedoData.subarray(face * 1024, face * 1024 + 1024), def.tint ? DEFAULT_TINT : null);
+    this.sfx.play('hit', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.45, pitch: 1.6 });
+    const above = world.get_block(x, y + 1, z);
+    if (this.registry.blocks[above]?.shape === 'cross') this.chunks.editBlock(x, y + 1, z, 0);
+    this.emit('blockBreak', { x, y, z, block: def.name, by });
+    return true;
+  }
+
+  /** Place a block the way the player does: rules, nobody standing in it, support for plants, the event. */
+  private placeBlockAt(x: number, y: number, z: number, block: BlockRef, by: Entity | 'player' | 'world'): boolean {
+    const world = this.chunks.world;
+    const id = this.blockId(block);
+    const def = this.registry.blocks[id];
+    if (!def || y < 0 || y > 255) return false;
+    const cur = world.get_block(x, y, z);
+    if (cur === 255 || !(this.registry.blocks[cur]?.replaceable ?? false)) return false;
+    if (def.solid) {
+      if (this.walker && world.player_overlaps(x, y, z)) return false;
+      for (const e of this.entities.near({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, 3)) {
+        const p = e.position;
+        const box = this.entities.hitbox(e);
+        const hw = box.width / 2;
+        // A little slack so a body standing on the block's top face (or brushing its side) doesn't count.
+        if (Math.abs(p.x - (x + 0.5)) < 0.49 + hw && Math.abs(p.z - (z + 0.5)) < 0.49 + hw && p.y < y + 0.98 && p.y + box.height > y + 0.02) return false;
+      }
+    }
+    if (def.shape === 'cross' && !this.registry.blocks[world.get_block(x, y - 1, z)]?.solid) return false;
+    if (this.def.blocks?.canPlace && !this.def.blocks.canPlace(this.ctx, { x, y, z }, def.name, by)) return false;
+    if (!this.chunks.editBlock(x, y, z, id)) return false;
+    this.sfx.play('click', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.5, pitch: 0.7 });
+    this.emit('blockPlace', { x, y, z, block: def.name, by });
+    return true;
+  }
+
+  /** The mob under the crosshair within `reach`, if any. */
+  private aimedEntity(reach: number) {
+    const c = this.camera.position;
+    const d = this.camera.getWorldDirection(this.aimDir);
+    const hit = this.chunks.world.pick_body(c.x, c.y, c.z, d.x, d.y, d.z, reach, 0.2);
+    return hit[0] >= 0 ? this.entities.byBody(hit[0]) : null;
+  }
+  private aimDir = new THREE.Vector3();
 
   private surfaceY(x: number, z: number): number {
     const w = this.chunks.world;
@@ -1019,7 +1112,7 @@ export class Runtime {
       inv.slots.map((s) => {
         if (!s) return null;
         const d = this.items.get(s.item);
-        return d ? { icon: this.graphics.spriteIcon(d.icon, 48), count: s.count, label: d.name } : null;
+        return d ? { icon: this.itemIcon(d, 48), count: s.count, label: d.name } : null;
       }),
       inv.selected,
       announce,
@@ -1027,11 +1120,55 @@ export class Runtime {
     this.updateHeldItem();
   }
 
+  /** The icon an item shows: its sprite, or a block item's block. */
+  private itemIcon(d: ItemDefinition, size: number): string {
+    if (d.kind === 'block' && !d.icon) return this.blockIcons.get(this.blockId(d.block)) ?? '';
+    return this.graphics.spriteIcon(d.icon!, size);
+  }
+
+  /**
+   * Item games, per frame: right-click talks to the mob you aim at, left-click hits a mob if you
+   * aim at one and otherwise mines (when the game allows mining), block items place.
+   */
+  private updateHands(dt: number, active: boolean) {
+    const stack = this.items.inventory.held;
+    const def = stack ? this.items.get(stack.item) : undefined;
+    const aimed = active ? this.aimedEntity(4) : null;
+    let rightUsed = false;
+    if (active && aimed?.alive && aimed.def.onInteract && this.input.buttonPressed(2)) {
+      aimed.def.onInteract(aimed, this.ctx);
+      rightUsed = true;
+    }
+    let mining = false;
+    if (this.mining) {
+      const canMine = (this.def.player?.mining ?? false) && !aimed && def?.kind !== 'bow';
+      const placeId = !rightUsed && def?.kind === 'block' ? this.blockId(def.block) : null;
+      this.mining.aim(this.camera);
+      this.mining.update(dt, this.input, active, { mine: canMine, placeId, showOutline: canMine || placeId !== null });
+      mining = canMine && this.mining.target !== null;
+    }
+    this.combat.update(dt, this.input, active, { melee: !mining, use: !rightUsed });
+    this.held.draw = this.combat.isDrawing ? this.combat.charge : 0;
+    this.updateHeldItem();
+  }
+
+  private miningTime(t: MiningTarget): number {
+    const def = this.registry.blocks[t.id];
+    if (!def) return Infinity;
+    const rules = this.def.blocks;
+    if (def.name === 'bedrock' || (rules?.canBreak && !rules.canBreak(this.ctx, { x: t.x, y: t.y, z: t.z }, def.name, 'player'))) return Infinity;
+    return rules?.breakTime?.(this.ctx, def.name, this.items.inventory.held) ?? defaultBreakTime(def.name, def.shape);
+  }
+
   private updateHeldItem() {
     const stack = this.items.inventory.held;
     const def = stack ? this.items.get(stack.item) : undefined;
     if (!def) {
       this.held.setEmpty();
+      return;
+    }
+    if (def.kind === 'block') {
+      this.held.setBlock(this.registry.blocks[this.blockId(def.block)]);
       return;
     }
     const drawn = def.kind === 'bow' && this.combat.isDrawing && this.combat.charge > 0.25;
@@ -1134,11 +1271,7 @@ export class Runtime {
     this.entities.update(dt, running);
     this.items.update(dt, running);
     this.props.update(dt);
-    if (this.itemMode) {
-      this.combat.update(dt, this.input, active);
-      this.held.draw = this.combat.isDrawing ? this.combat.charge : 0;
-      this.updateHeldItem();
-    }
+    if (this.itemMode) this.updateHands(dt, active);
 
     if (this.walker) {
       this.controller.viewDirection(this.dir);

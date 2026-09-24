@@ -90,6 +90,7 @@ class EntityImpl implements Entity {
   readonly data: Record<string, unknown> = {};
   health: number;
   readonly maxHealth: number;
+  armor = 0;
   alive = true;
   dyingTime = -1;
   age = 0;
@@ -141,7 +142,8 @@ class EntityImpl implements Entity {
   }
 
   damage(amount: number, opts: DamageOptions = {}) {
-    if (!this.alive || amount <= 0) return;
+    if (!this.alive || amount <= 0 || this.def.invulnerable) return;
+    amount *= 1 - Math.min(20, Math.max(0, this.armor)) * 0.04;
     this.health = Math.max(0, this.health - amount);
     this.hurt = 1;
     const pos = this.position;
@@ -415,6 +417,11 @@ export class EntityManager implements EntityApi {
       const p = e.position;
       return (p.x - center.x) ** 2 + (p.y - center.y) ** 2 + (p.z - center.z) ** 2 <= r2;
     });
+  }
+
+  /** An entity's hitbox (from its definition). */
+  hitbox(e: Entity): { width: number; height: number } {
+    return (e as EntityImpl).def.hitbox;
   }
 
   byBody(slot: number): EntityImpl | null {

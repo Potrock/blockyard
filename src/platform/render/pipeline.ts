@@ -37,6 +37,7 @@ export interface SharedUniforms {
   uBlockLight: Uniform<THREE.Vector3>;
   uMinLight: Uniform<THREE.Vector3>;
   uFog: Uniform<THREE.Vector4>;
+  uVoid: Uniform<number>;
   uShadowParams: Uniform<THREE.Vector4>;
   uShadowFromView: Uniform<THREE.Matrix4>;
   uShadowMap: Uniform<THREE.Texture | null>;
@@ -150,6 +151,7 @@ export class Renderer {
       uBlockLight: { value: new THREE.Vector3(1.0, 0.6, 0.28).multiplyScalar(0.95) },
       uMinLight: { value: new THREE.Vector3(0.006, 0.007, 0.011) },
       uFog: { value: new THREE.Vector4(0.0015, 150, 190, 0) },
+      uVoid: { value: 0 },
       uShadowParams: { value: new THREE.Vector4(1 / 2048, 96, 0.08, 0) },
       uShadowFromView: { value: new THREE.Matrix4() },
       uShadowMap: { value: null },

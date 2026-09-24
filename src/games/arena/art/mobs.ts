@@ -6,7 +6,7 @@
  * top two rows and the top/bottom faces are transparent inside a thin gold rim, so the head
  * shows through whether the crown sits on or around the head.
  */
-import { type Canvas, f32, glyph, hash3, paintBox, part, px, type Px, remEuclid, type S, unit, within } from './canvas';
+import { type Canvas, f32, glyph, hash3, paintBox, part, px, type Px, remEuclid, type S, unit, within } from '@platform/art';
 import { GOLD, iron, IRON, IVORY, LEATHER, VOID } from './shared';
 
 // ============================================================================

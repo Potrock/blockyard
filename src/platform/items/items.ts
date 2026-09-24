@@ -15,6 +15,8 @@ export interface ItemServices {
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   playerPos(): Vec3;
   isSolid(x: number, y: number, z: number): boolean;
+  /** A small lit cube of a block, placed in the scene (block items lying on the ground). */
+  blockModel(block: string, size: number): { object: THREE.Object3D; remove(): void };
 }
 
 export class Inventory implements InventoryApi {
@@ -89,6 +91,16 @@ export class Inventory implements InventoryApi {
     return true;
   }
 
+  /** Use up `count` of the held stack (placing a block, eating). */
+  takeHeld(count = 1): boolean {
+    const s = this.slots[this.selected];
+    if (!s || s.count < count) return false;
+    s.count -= count;
+    if (s.count === 0) this.slots[this.selected] = null;
+    this.onChange?.();
+    return true;
+  }
+
   count(item: string): number {
     let n = 0;
     for (const s of this.slots) if (s && s.item === item) n += s.count;
@@ -118,8 +130,9 @@ class PickupImpl implements Pickup {
     readonly item: string,
     readonly count: number,
     readonly pos: THREE.Vector3,
-    readonly group: THREE.Group,
+    readonly group: THREE.Object3D,
     readonly fx: THREE.Object3D[],
+    readonly dispose: (() => void) | null,
     readonly despawn: number,
     velocity: Vec3 | undefined,
     private onRemove: (p: PickupImpl) => void,
@@ -128,6 +141,9 @@ class PickupImpl implements Pickup {
   }
   get position(): Vec3 {
     return { x: this.pos.x, y: this.pos.y, z: this.pos.z };
+  }
+  get alive(): boolean {
+    return !this.removed;
   }
   remove() {
     if (!this.removed) {
@@ -194,14 +210,23 @@ export class ItemSystem implements ItemApi {
   spawnPickup(item: string, at: Vec3, opts: { count?: number; velocity?: Vec3; beam?: string; despawn?: number } = {}): Pickup {
     const def = this.defs.get(item);
     if (!def) throw new Error(`items.spawnPickup: unknown item "${item}"`);
-    const { geometry, atlas } = this.s.graphics.spriteGeometry(def.icon);
-    const mesh = new THREE.Mesh(geometry, this.material(atlas));
-    mesh.customDepthMaterial = this.s.graphics.shadowMaterial(atlas);
-    mesh.scale.setScalar(0.62);
-    const group = new THREE.Group();
-    group.add(mesh);
+    let group: THREE.Object3D;
+    let dispose: (() => void) | null = null;
+    if (def.kind === 'block' && !def.icon) {
+      // Block items drop as little cubes of the block.
+      const cube = this.s.blockModel(def.block, 0.3);
+      group = cube.object;
+      dispose = cube.remove;
+    } else {
+      const { geometry, atlas } = this.s.graphics.spriteGeometry(def.icon!);
+      const mesh = new THREE.Mesh(geometry, this.material(atlas));
+      mesh.customDepthMaterial = this.s.graphics.shadowMaterial(atlas);
+      mesh.scale.setScalar(0.62);
+      group = new THREE.Group();
+      group.add(mesh);
+      this.s.scene.add(group);
+    }
     group.position.set(at.x, at.y, at.z);
-    this.s.scene.add(group);
     const fx: THREE.Object3D[] = [];
     const halo = new THREE.Mesh(this.haloGeo, fxMaterial(opts.beam ?? '#fff3c4', 2, opts.beam ? 1.6 : 0.6));
     halo.frustumCulled = false;
@@ -216,13 +241,14 @@ export class ItemSystem implements ItemApi {
         fx.push(beam);
       }
     }
-    const p = new PickupImpl(this.nextId++, item, opts.count ?? 1, new THREE.Vector3(at.x, at.y, at.z), group, fx, opts.despawn ?? 90, opts.velocity, (x) => this.drop(x));
+    const p = new PickupImpl(this.nextId++, item, opts.count ?? 1, new THREE.Vector3(at.x, at.y, at.z), group, fx, dispose, opts.despawn ?? 90, opts.velocity, (x) => this.drop(x));
     this.pickups.push(p);
     return p;
   }
 
   private drop(p: PickupImpl) {
-    p.group.removeFromParent();
+    if (p.dispose) p.dispose();
+    else p.group.removeFromParent();
     for (const f of p.fx) {
       f.removeFromParent();
       ((f as THREE.Mesh).material as THREE.Material).dispose();

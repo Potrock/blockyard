@@ -1,4 +1,4 @@
-import { px, type Px, type S } from './canvas';
+import { px, type Px, type S } from '@platform/art';
 
 // ============================================================================
 // Shared palettes

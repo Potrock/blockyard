@@ -1,6 +1,7 @@
 /** Generator configuration shared by every worker (game structures, terraforming). */
 export interface WorldGenConfig {
   flat?: number;
+  void?: boolean;
   terraforms: { x: number; z: number; radius: number; blend: number; height: number }[];
   blueprints: { origin: { x: number; y: number; z: number }; size: { x: number; y: number; z: number }; data: Uint8Array }[];
 }

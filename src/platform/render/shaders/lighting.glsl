@@ -12,6 +12,7 @@ uniform vec3 uAmbientGround;
 uniform vec3 uBlockLight;   // colour of torch / lava light
 uniform vec3 uMinLight;     // floor so caves are never pitch black
 uniform vec4 uFog;          // x: haze density, y: fade start, z: fade end, w: underwater
+uniform float uVoid;        // 1 = no ground below the horizon (sky islands): the sky fades into a deep abyss
 uniform vec4 uShadowParams; // x: texel size (uv), y: radius (blocks), z: normal offset, w: enabled
 uniform vec4 uCloud;        // x: coverage, yz: uv scroll, w: cloud altitude
 
@@ -33,6 +34,12 @@ float cloudShadow(vec3 worldPos) {
 }
 
 vec3 skyRadiance(vec3 dir) {
+  if (uVoid > 0.5 && dir.y < 0.02) {
+    // Below the horizon of a void world: the horizon haze deepening into a dusky abyss.
+    vec3 hz = texture(uSkyLut, skyLutUV(normalize(vec3(dir.x, 0.02, dir.z)))).rgb;
+    vec3 deep = uAmbientSky * 0.28 + hz * 0.08;
+    return mix(hz, deep, smoothstep(0.0, 0.7, -dir.y + 0.02));
+  }
   return texture(uSkyLut, skyLutUV(dir)).rgb;
 }
 
@@ -40,7 +47,7 @@ vec3 skyRadiance(vec3 dir) {
 vec3 applyFog(vec3 color, vec3 rel, float worldY, float skyVis) {
   float dist = length(rel);
   vec3 dir = rel / max(dist, 1e-4);
-  vec3 fogCol = skyRadiance(vec3(dir.x, max(dir.y, -0.2), dir.z));
+  vec3 fogCol = skyRadiance(vec3(dir.x, max(dir.y, uVoid > 0.5 ? -1.0 : -0.2), dir.z));
   fogCol *= mix(0.06, 1.0, smoothstep(0.0, 0.55, skyVis));
   float heightF = exp(-max(worldY - 63.0, 0.0) * 0.011);
   float haze = 1.0 - exp(-dist * uFog.x * heightF);

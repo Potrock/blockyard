@@ -99,6 +99,8 @@ pub struct Generator {
     blueprints: Vec<Blueprint>,
     terraforms: Vec<Terraform>,
     flat: Option<f32>,
+    /// No terrain at all: only game structures (sky islands over the void).
+    void_world: bool,
     n_cont: Noise,
     n_ero: Noise,
     n_pv: Noise,
@@ -147,6 +149,7 @@ impl Generator {
             blueprints: Vec::new(),
             terraforms: Vec::new(),
             flat: None,
+            void_world: false,
             n_cont: Noise::new(s(1)),
             n_ero: Noise::new(s(2)),
             n_pv: Noise::new(s(3)),
@@ -184,6 +187,11 @@ impl Generator {
     /// Replace the natural height model with a flat world at `height`.
     pub fn set_flat(&mut self, height: f32) {
         self.flat = Some(height);
+    }
+
+    /// No terrain, water or plants: only game structures, over the void.
+    pub fn set_void(&mut self) {
+        self.void_world = true;
     }
 
     /// Weight (0..1) of terraforming at a column and the target height.
@@ -520,6 +528,12 @@ impl Generator {
                 let c = self.column(x0 - M + ax, z0 - M + az);
                 self.cols[az as usize * A + ax as usize] = c;
             }
+        }
+
+        if self.void_world {
+            self.blocks.fill(AIR);
+            self.stamp_blueprints(x0, z0);
+            return self.pack(cx, cz);
         }
 
         // 2. Coarse 3D density noise grid (world aligned: x0 - DM is a multiple of 4).
@@ -1186,6 +1200,17 @@ mod tests {
             // Both must at least decode.
             assert!(a.len() >= HEADER_BYTES && b.len() >= HEADER_BYTES);
         }
+    }
+
+    #[test]
+    fn void_world_has_only_structures() {
+        let mut g = Generator::new(7);
+        g.set_void();
+        let empty = g.generate(0, 0);
+        assert_eq!(u16::from_le_bytes([empty[0], empty[1]]), 0, "no sections in an empty void chunk");
+        g.add_blueprint(Blueprint { origin: [2, 100, 3], size: [1, 1, 1], data: vec![STONE] });
+        let data = g.generate(0, 0);
+        assert_eq!(u16::from_le_bytes([data[0], data[1]]), 1 << (100 / 16));
     }
 
     #[test]

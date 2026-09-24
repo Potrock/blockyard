@@ -96,6 +96,10 @@ impl TerrainGen {
         self.inner.set_flat(height);
     }
 
+    pub fn set_void(&mut self) {
+        self.inner.set_void();
+    }
+
     /// [x, y, z] of a pleasant spawn column.
     pub fn find_spawn(&self) -> Vec<i32> {
         let (x, y, z) = self.inner.find_spawn();

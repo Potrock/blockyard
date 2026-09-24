@@ -4,6 +4,7 @@ import type { Registry } from '../world/registry';
 /** Crosshair, hotbar and the block-name toast. */
 export class Hud {
   private crosshairEl: HTMLElement;
+  private miningEl: HTMLElement;
   private hotbarEl: HTMLElement;
   readonly root: HTMLElement;
   private slots: HTMLElement[] = [];
@@ -21,8 +22,9 @@ export class Hud {
     }
     this.waterTint = h('div.water-tint');
     this.crosshairEl = h('div.crosshair');
+    this.miningEl = h('div.mining-ring');
     this.hotbarEl = bar;
-    this.root = h('div.hud', {}, this.waterTint, this.crosshairEl, this.toast, bar);
+    this.root = h('div.hud', {}, this.waterTint, this.crosshairEl, this.miningEl, this.toast, bar);
     parent.append(this.root);
   }
 
@@ -60,6 +62,12 @@ export class Hud {
     this.toast.classList.add('show');
     window.clearTimeout(this.toastTimer);
     this.toastTimer = window.setTimeout(() => this.toast.classList.remove('show'), 1400);
+  }
+
+  /** Mining progress (0..1) as a ring around the crosshair; null hides it. */
+  setMining(f: number | null) {
+    this.miningEl.style.display = f === null ? 'none' : 'block';
+    if (f !== null) this.miningEl.style.setProperty('--p', `${Math.round(f * 100)}%`);
   }
 
   setCrosshair(v: boolean) {

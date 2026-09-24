@@ -24,6 +24,9 @@
       "@platform": [
         "./src/platform/index.ts"
       ],
+      "@platform/art": [
+        "./src/platform/art/index.ts"
+      ],
       "@engine/*": [
         "./engine/pkg/*"
       ]

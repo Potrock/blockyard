@@ -1,7 +1,11 @@
 /**
- * The machinery behind the Arena's procedural pixel art: a port of the canvas, box painting and
- * sprite code of the engine's `entitytex.rs`. Nothing comes from an image file; the whole atlas
- * is painted from fixed seeds.
+ * Pixel-art toolkit for painting a game's own atlas in code (mob skins, item sprites, held
+ * models), the same way the engine paints its built-in art. Import it from `@platform/art`:
+ *
+ *   const cv = new Canvas();                        // a 256x256 atlas
+ *   paintBox(cv, 0, 0, part(0, 0, 8, 8, 8), (s) => px(MY_PALETTE, 3 + s.rnd(1)));
+ *   const { albedo, emissive } = cv.finish();
+ *   game.items.atlas('mine', { width: ATLAS, height: ATLAS, pixels: albedo, emissive });
  *
  * Technique: every model part is a box with Minecraft skin UVs. Each face texel is mapped back
  * to a point on the box surface, so painters work in 3D (part-local x, y, z) and patterns such

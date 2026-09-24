@@ -115,6 +115,15 @@ fn make(id: u16) -> Tx {
         T::BLACK_CONCRETE => concrete(0x08090e, 691),
         T::RED_CONCRETE => concrete(0x8e2121, 701),
         T::IRON_BLOCK => iron_block(),
+        T::END_STONE => speckled(&END_STONE_PAL, 721, 0.55),
+        T::RED_BED_TOP => bed_top(0xa32b26, 731),
+        T::RED_BED_SIDE => bed_side(0xa32b26, 733),
+        T::BLUE_BED_TOP => bed_top(0x353d9c, 735),
+        T::BLUE_BED_SIDE => bed_side(0x353d9c, 737),
+        T::GREEN_BED_TOP => bed_top(0x587a22, 739),
+        T::GREEN_BED_SIDE => bed_side(0x587a22, 741),
+        T::YELLOW_BED_TOP => bed_top(0xe9b52a, 743),
+        T::YELLOW_BED_SIDE => bed_side(0xe9b52a, 745),
         _ => stone(),
     }
 }
@@ -1850,6 +1859,77 @@ fn iron_block() -> Tx {
             (brush, 0.85)
         };
         t.c[i] = if k < 0.0 { mixc(base, mulc(base, 0.45), -k) } else { mixc(base, [255.0; 3], k) };
+        t.h[i] = h;
+    }
+    t
+}
+
+const END_STONE_PAL: [u32; 7] = [0x9c9a6a, 0xb3b27c, 0xc6c58c, 0xd6d69a, 0xdfdea5, 0xe8e8b2, 0xf1f1c2];
+
+/// Blanket fabric: soft mottling around `c`, darkened toward the edges of the bed.
+fn blanket(c: Col, x: i32, y: i32, seed: u32) -> Col {
+    let n = 0.6 * fbm(x as f32 / 16.0, y as f32 / 16.0, 4, 4, 2, seed) + 0.4 * rnd(x, y, seed + 1);
+    let k = (n - 0.5) * 0.3;
+    if k < 0.0 {
+        mixc(c, mulc(c, 0.55), -k)
+    } else {
+        mixc(c, [255.0; 3], k * 0.5)
+    }
+}
+
+/// A bed seen from above: a white pillow at the head (top rows) on a blanket in the team colour,
+/// with a turned-down sheet between them and a darker frame line around the edge.
+fn bed_top(base: u32, seed: u32) -> Tx {
+    let mut t = Tx::new(20, 0.6);
+    t.wrap = false;
+    let c = hexc(base);
+    let sheet = hexc(0xe9e6de);
+    for i in 0..P {
+        let (x, y) = xy(i);
+        let edge = x == 0 || x == 15 || y == 0 || y == 15;
+        let pillow = (1..=5).contains(&y) && (2..=13).contains(&x);
+        let fold = y == 6 || y == 7;
+        let (col, h) = if edge {
+            (mulc(blanket(c, x, y, seed), 0.62), 0.2)
+        } else if pillow {
+            // Plump: brighter in the middle, a crease line.
+            let d = ((x as f32 - 7.5).abs() / 6.5).max((y as f32 - 3.0).abs() / 2.5);
+            let crease = x == 7 || x == 8;
+            let v = 1.0 - 0.14 * d * d - if crease { 0.06 } else { 0.0 } - 0.03 * rnd(x, y, seed + 3);
+            (mulc(sheet, v), 0.9 - 0.3 * d)
+        } else if fold {
+            (mulc(sheet, if y == 6 { 0.95 } else { 0.8 }), 0.7)
+        } else {
+            (blanket(c, x, y, seed), 0.5)
+        };
+        t.c[i] = col;
+        t.h[i] = h;
+    }
+    t
+}
+
+/// A bed from the side: blanket hanging over the top (rows 0..9, a lit top edge), then the
+/// wooden frame, with darker legs at the corners.
+fn bed_side(base: u32, seed: u32) -> Tx {
+    let mut t = Tx::new(25, 0.7);
+    t.wrap = false;
+    let c = hexc(base);
+    for i in 0..P {
+        let (x, y) = xy(i);
+        let (col, h) = if y <= 1 {
+            (mixc(blanket(c, x, y, seed), [255.0; 3], if y == 0 { 0.18 } else { 0.08 }), 0.8)
+        } else if y <= 9 {
+            // Folds in the hanging blanket.
+            let fold = (x % 5 == 2) as i32 as f32;
+            (mulc(blanket(c, x, y, seed), 0.93 - 0.08 * fold - 0.015 * y as f32), 0.6 - 0.1 * fold)
+        } else if y == 10 {
+            (mulc(hexc(0x896a3d), 0.9), 0.4)
+        } else {
+            let leg = x <= 2 || x >= 13;
+            let wood = pick(&OAK_PLANK_PAL, (2.0 + 2.0 * rnd(x / 3, y, seed + 5)) as i32);
+            (if leg { mulc(wood, 0.85) } else { mulc(wood, 0.62 - 0.03 * (y - 11) as f32) }, if leg { 0.6 } else { 0.2 })
+        };
+        t.c[i] = col;
         t.h[i] = h;
     }
     t

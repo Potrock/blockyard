@@ -50,7 +50,8 @@ export class Combat {
     return 1 - this.cooldown / this.cooldownMax;
   }
 
-  update(dt: number, input: Input, active: boolean) {
+  /** `melee: false` while left-click is mining instead; `use: false` when right-click was taken (talking to a mob). */
+  update(dt: number, input: Input, active: boolean, opts: { melee?: boolean; use?: boolean } = {}) {
     this.cooldown = Math.max(0, this.cooldown - dt);
     const inv = this.items.inventory;
     if (active) {
@@ -69,12 +70,12 @@ export class Combat {
     } else {
       this.drawing = false;
       this.charge = 0;
-      if (input.buttonPressed(0) || (input.button(0) && this.cooldown <= 0)) {
+      if (opts.melee !== false && (input.buttonPressed(0) || (input.button(0) && this.cooldown <= 0))) {
         // Weapons and the bare fist use their own animation; anything else just swings.
         if (this.cooldown <= 0) this.melee(def?.kind === 'melee' ? def : FIST, !def || def.kind === 'melee');
       }
     }
-    if (def?.kind === 'consumable' && input.buttonPressed(2)) {
+    if (def?.kind === 'consumable' && opts.use !== false && input.buttonPressed(2)) {
       if (def.use(this.ctx())) {
         inv.take(stack!.item, 1);
         this.held.use();

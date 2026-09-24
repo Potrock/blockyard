@@ -3,7 +3,7 @@
  * `entitytex.rs`. They sit in a row at y = `ITEM_Y`, in the same cells as in the engine's
  * built-in atlas.
  */
-import { type Canvas, rnd, remEuclid, SpriteCanvas } from './canvas';
+import { type Canvas, rnd, remEuclid, SpriteCanvas } from '@platform/art';
 import { pikeIcon } from './pike';
 
 export const ITEM_Y = 128;

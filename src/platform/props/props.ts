@@ -86,6 +86,11 @@ class PropImpl implements Prop {
   }
 }
 
+/** The scene object behind a prop (platform-internal). */
+export function propObject(p: Prop): THREE.Object3D {
+  return (p as PropImpl).object;
+}
+
 /** Movable objects: block builds drawn with the world's textures, and glowing bolts. */
 export class PropSystem implements PropApi {
   private props: PropImpl[] = [];
