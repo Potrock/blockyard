@@ -1,21 +1,27 @@
 import { readFileSync } from 'node:fs';
 import { serveGame } from '../../src/platform/host/server';
 import { decode, encode } from '../../src/platform/net/codec';
-import type { ClientCommand, ServerWelcome, TimedBatch } from '../../src/platform/net/protocol';
+import { FrameReader } from '../../src/platform/net/delta';
+import type { ClientCommand, ServerWelcome, TimedBatch, WireBatch } from '../../src/platform/net/protocol';
+import type { SimFrame } from '../../src/platform/sim/sim';
 import { check, games } from './_harness';
 
 /** A client as the browser is one: a socket, the welcome (watching), then `start` to join as `name`. */
 async function join(port: number, name: string) {
   const ws = new WebSocket(`ws://localhost:${port}/`);
   const batches: TimedBatch[] = [];
+  const frames = new FrameReader<SimFrame>();
+  const read = (w: WireBatch): TimedBatch => ({ events: w.events, frame: w.f === undefined ? null : frames.read(w.f), time: w.time });
   const welcome = await new Promise<ServerWelcome>((resolve, reject) => {
     ws.onerror = () => reject(new Error('socket error'));
     ws.onmessage = (e) => {
-      const m = decode<ServerWelcome | TimedBatch>(String(e.data));
+      const m = decode<ServerWelcome | WireBatch>(String(e.data));
       if ('t' in m && m.t === 'welcome') resolve(m);
-      else batches.push(m as TimedBatch);
+      else batches.push(read(m as WireBatch));
     };
   });
+  // The catch-up batch (the frame, whole) comes right after the welcome.
+  for (let i = 0; i < 50 && !batches.some((b) => b.frame); i++) await new Promise((r) => setTimeout(r, 10));
   const watching = batches.at(-1)?.frame?.players.length ?? -1;
   ws.send(encode({ t: 'start', name } satisfies ClientCommand));
   // Joined: the server says which player is ours.

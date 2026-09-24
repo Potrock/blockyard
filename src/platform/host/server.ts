@@ -2,7 +2,9 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { GameDefinition } from '../api/types';
 import { decode, encode } from '../net/codec';
-import type { ServerWelcome, TimedBatch } from '../net/protocol';
+import { FrameWriter, quantize } from '../net/delta';
+import type { HostBatch, ServerWelcome, WireBatch } from '../net/protocol';
+import type { SimFrame } from '../sim/sim';
 import { sanitizeCommand } from '../net/validate';
 import { GameHost } from './game';
 import type { Store } from './store';
@@ -64,6 +66,9 @@ export interface GameServer {
 class Room {
   host: GameHost | null = null;
   readonly sockets = new Map<string, WebSocket>();
+  /** The frame each client has (patches go from there). */
+  readonly had = new Map<string, SimFrame>();
+  private frames = new FrameWriter<SimFrame>();
   time = 0;
   emptySince = 0;
   private savedAt = 0;
@@ -115,6 +120,7 @@ class Room {
     if (this.store) this.host.persist();
     this.host.dispose();
     this.host = null;
+    this.frames = new FrameWriter<SimFrame>();
     this.log(`stopped${this.store ? ' and saved' : ''}`);
   }
 
@@ -125,14 +131,33 @@ class Room {
     this.store = undefined;
   }
 
-  /** One step for everyone in it, plus saving now and then. */
+  /** A client's first batch: the frame whole (rounded, like every one after). */
+  catchUp(id: string, b: HostBatch): string {
+    const frame = b.frame ? quantize(b.frame) : undefined;
+    if (frame) this.had.set(id, frame);
+    return encode({ events: b.events, f: frame, time: this.time } satisfies WireBatch);
+  }
+
+  /**
+   * One step for everyone in it, plus saving now and then. Each client gets the frame as a patch
+   * on the one it had (worked out once for everyone who had the same).
+   */
   step(dt: number, now: number) {
     const host = this.host;
     if (!host || !this.sockets.size) return;
     this.time += dt;
-    for (const [id, b] of host.step(dt)) {
+    const batches = host.step(dt);
+    const frame = batches.values().next().value?.frame;
+    if (frame) this.frames.next(frame);
+    for (const [id, b] of batches) {
       const ws = this.sockets.get(id);
-      if (ws?.readyState === ws?.OPEN) ws!.send(encode({ ...b, time: this.time } satisfies TimedBatch));
+      if (ws?.readyState !== ws?.OPEN) continue;
+      let f: unknown;
+      if (b.frame) {
+        f = this.frames.patchFor(this.had.get(id));
+        this.had.set(id, this.frames.current!);
+      }
+      ws!.send(encode({ events: b.events, f, time: this.time } satisfies WireBatch));
     }
     if (this.store && now - this.savedAt > (this.o.saveEvery ?? 30)) {
       this.savedAt = now;
@@ -178,7 +203,13 @@ export function serve(o: ServeOptions): Promise<GameServer> {
     }
   });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxMessage });
+  // Compressed (permessage-deflate, which every browser speaks): one step's patch looks much like
+  // the last, so keeping the compressor's window between messages shrinks them a few times over.
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: limits.maxMessage,
+    perMessageDeflate: { threshold: 64, serverMaxWindowBits: 13, zlibDeflateOptions: { level: 3, memLevel: 7 } },
+  });
   http.on('upgrade', (req, socket, head) => {
     socket.on('error', () => socket.destroy());
     wss.handleUpgrade(req, socket, head, (ws) => join(ws, req));
@@ -202,7 +233,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
     room.log(`${id} connected from ${address} (${room.players} here)`);
     const sp = host.sim.spawn;
     ws.send(encode({ t: 'welcome', game: room.def.id, seed: host.seed, player: null, spawn: { x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw }, tickRate: rate } satisfies ServerWelcome));
-    ws.send(encode({ ...batch, time: room.time } satisfies TimedBatch));
+    ws.send(room.catchUp(id, batch));
 
     // A bucket of messages, refilled each second; a client far over it is disconnected.
     let allowance = limits.messagesPerSecond;
@@ -234,6 +265,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
       perAddress.set(address, (perAddress.get(address) ?? 1) - 1);
       if (!perAddress.get(address)) perAddress.delete(address);
       room.sockets.delete(id);
+      room.had.delete(id);
       room.host?.disconnect(id);
       if (!room.players) room.emptySince = clock();
       room.log(`${id} left (${room.players} here)`);

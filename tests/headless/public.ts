@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { CLOSE_FULL, CLOSE_LIMIT, serve } from '../../src/platform/host/server';
 import { MemoryStore } from '../../src/platform/host/store';
 import { decode, encode } from '../../src/platform/net/codec';
-import type { ClientCommand, ServerWelcome, TimedBatch } from '../../src/platform/net/protocol';
+import { FrameReader } from '../../src/platform/net/delta';
+import type { ClientCommand, ServerWelcome, TimedBatch, WireBatch } from '../../src/platform/net/protocol';
+import type { SimFrame } from '../../src/platform/sim/sim';
 import { check, games } from './_harness';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -11,16 +13,18 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function client(port: number, path: string, name: string) {
   const ws = new WebSocket(`ws://localhost:${port}/${path}?name=${encodeURIComponent(name)}`);
   const batches: TimedBatch[] = [];
+  const frames = new FrameReader<SimFrame>();
+  const read = (w: WireBatch): TimedBatch => ({ events: w.events, frame: w.f === undefined ? null : frames.read(w.f), time: w.time });
   let welcome: ServerWelcome | null = null;
   const closed = new Promise<{ code: number; reason: string }>((resolve) => (ws.onclose = (e) => resolve({ code: e.code, reason: e.reason })));
   const opened = new Promise<void>((resolve) => (ws.onopen = () => resolve()));
   ws.onmessage = (e) => {
-    const m = decode<ServerWelcome | TimedBatch>(String(e.data));
+    const m = decode<ServerWelcome | WireBatch>(String(e.data));
     if ('t' in m && m.t === 'welcome') {
       welcome = m;
       // Watching; press Play.
       ws.send(encode({ t: 'start', name } satisfies ClientCommand));
-    } else batches.push(m as TimedBatch);
+    } else batches.push(read(m as WireBatch));
   };
   return {
     ws,
@@ -40,6 +44,7 @@ export default async function publicServer() {
   const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
   const defs = ['sandbox', 'bedwars'].map((id) => games.find((g) => g.id === id)!);
   const stores = new Map<string, MemoryStore>();
+  const logs: string[] = [];
   const srv = await serve({
     games: defs,
     port: 0,
@@ -48,6 +53,7 @@ export default async function publicServer() {
     idleStop: 0.5,
     store: (g) => stores.get(g) ?? stores.set(g, new MemoryStore()).get(g)!,
     limits: { playersPerGame: 2, perAddress: 3, messagesPerSecond: 60, maxMessage: 4096 },
+    log: (line) => logs.push(line),
   });
   const base = `http://localhost:${srv.port}`;
   try {
@@ -80,8 +86,10 @@ export default async function publicServer() {
 
     // Too big a message closes that one connection.
     bob.send(JSON.stringify({ t: 'exec', id: 2, line: 'x'.repeat(10000) }));
+    // (1009 says why; Node's own client, busy inflating the compressed batches still coming,
+    // reports the close as 1006. Browsers see 1009.)
     const big = await bob.closed;
-    check(big.code === 1009, `oversized message: ${big.code}`);
+    check((big.code === 1009 || big.code === 1006) && logs.some((l) => l.includes('Max payload size exceeded')), `oversized message closed it: ${big.code}`);
 
     // A flood is cut off.
     for (let i = 0; i < 400; i++) cat.send({ t: 'input', input: { active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: 0 } });

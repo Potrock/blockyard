@@ -184,3 +184,14 @@ export interface ServerWelcome {
 export interface TimedBatch extends HostBatch {
   time: number;
 }
+
+/**
+ * A batch as a server sends it: the frame as a patch on the one before (`net/delta`), not whole.
+ * A `FrameReader` turns it back into a `TimedBatch`.
+ */
+export interface WireBatch {
+  events: HostEvent[];
+  /** The frame's patch (absent: no frame this batch). */
+  f?: unknown;
+  time: number;
+}

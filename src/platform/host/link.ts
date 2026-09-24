@@ -1,6 +1,8 @@
 import type { GameDefinition } from '../api/types';
 import { decode, encode } from '../net/codec';
-import type { ClientCommand, HostBatch, HostInit, ServerWelcome, TimedBatch } from '../net/protocol';
+import { FrameReader } from '../net/delta';
+import type { ClientCommand, HostBatch, HostInit, ServerWelcome, TimedBatch, WireBatch } from '../net/protocol';
+import type { SimFrame } from '../sim/sim';
 import { GameHost, type GameHostOptions } from './game';
 
 /** A client's connection to wherever its game is hosted. */
@@ -80,6 +82,8 @@ export class SocketLink implements SimLink {
   onClose: (() => void) | null = null;
   private handler: ((b: HostBatch) => void) | null = null;
   private waiting: TimedBatch[] = [];
+  /** Frames arrive as patches on the one before. */
+  private frames = new FrameReader<SimFrame>();
 
   private constructor(
     private ws: WebSocket,
@@ -94,8 +98,8 @@ export class SocketLink implements SimLink {
       const ws = new WebSocket(url);
       let link: SocketLink | null = null;
       ws.onmessage = (e: MessageEvent<string>) => {
-        const m = decode<ServerWelcome | TimedBatch>(e.data);
-        if (link) link.deliver(m as TimedBatch);
+        const m = decode<ServerWelcome | WireBatch>(e.data);
+        if (link) link.deliver(m as WireBatch);
         else if ('t' in m && m.t === 'welcome') resolve((link = new SocketLink(ws, m, url)));
       };
       // Turned away (full, too many connections) or unreachable: the server's reason, if it gave one.
@@ -128,7 +132,8 @@ export class SocketLink implements SimLink {
     this.ws.close();
   }
 
-  private deliver(b: TimedBatch) {
+  private deliver(w: WireBatch) {
+    const b: TimedBatch = { events: w.events, frame: w.f === undefined ? null : this.frames.read(w.f), time: w.time };
     if (this.handler) this.handler(b);
     else this.waiting.push(b);
   }
