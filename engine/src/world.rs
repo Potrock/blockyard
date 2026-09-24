@@ -8,6 +8,9 @@ use crate::blocks::*;
 use crate::gen::HEADER_BYTES;
 use crate::mesher::REGION_HEADER;
 
+/// The original block of an edit mirrored before its column loaded (filled in when it loads).
+const UNKNOWN: u8 = 255;
+
 /// Small, fast hasher for integer keys.
 #[derive(Default)]
 pub struct FxHasher(u64);
@@ -106,6 +109,16 @@ impl World {
         }
         let k = key(cx, cz);
         self.cols.insert(k, col);
+        // Edits mirrored while this column was away don't know what they replaced: it's this.
+        if let Some(orig) = self.originals.get_mut(&k) {
+            let col = &self.cols[&k];
+            for (&i, b) in orig.iter_mut() {
+                if *b == UNKNOWN {
+                    let (x, y, z) = ((i & 15) as usize, (i >> 8) as usize, ((i >> 4) & 15) as usize);
+                    *b = col.sections[y >> 4].as_ref().map_or(AIR, |sec| sec[((y & 15) << 8) | (z << 4) | x]);
+                }
+            }
+        }
         if let Some(edits) = self.edits.get(&k) {
             let list: Vec<(u32, u8)> = edits.iter().map(|(&i, &b)| (i, b)).collect();
             for (i, b) in list {
@@ -210,6 +223,23 @@ impl World {
         self.edits.entry(k).or_default().insert(local, b);
         self.originals.entry(k).or_default().entry(local).or_insert(before);
         true
+    }
+
+    /// An edit made in another copy of the world (the simulation's, in a worker or on a server):
+    /// written now if its column is loaded, else kept to apply when it loads. Returns whether
+    /// the block changed now.
+    pub fn mirror(&mut self, x: i32, y: i32, z: i32, b: u8) -> bool {
+        if self.set(x, y, z, b) {
+            return true;
+        }
+        if !(0..256).contains(&y) {
+            return false;
+        }
+        let local = (((y & 255) << 8) | ((z & 15) << 4) | (x & 15)) as u32;
+        let k = key(x >> 4, z >> 4);
+        self.edits.entry(k).or_default().insert(local, b);
+        self.originals.entry(k).or_default().entry(local).or_insert(UNKNOWN);
+        false
     }
 
     /// Undo every edit made this session: loaded columns get their original blocks back, and
@@ -728,6 +758,27 @@ mod tests {
         w.remove_column(0, 0);
         w.insert_column(0, 0, &data);
         assert_eq!(before, (0..256).map(|y| w.get(5, y, 5)).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn mirrored_edits_wait_for_their_column() {
+        let mut g = Generator::new(7);
+        let data = g.generate(0, 0);
+        let mut w = World::new();
+        assert!(!w.mirror(5, 200, 5, GLOWSTONE_B), "column not loaded yet");
+        assert!(!w.mirror(6, 30, 6, AIR));
+        w.insert_column(0, 0, &data);
+        assert_eq!(w.get(5, 200, 5), GLOWSTONE_B);
+        assert_eq!(w.get(6, 30, 6), AIR);
+        assert!(w.mirror(7, 200, 7, GLOWSTONE_B), "loaded now");
+        // Reverting restores what the generator put there, learned when the column loaded.
+        let mut clean = World::new();
+        clean.insert_column(0, 0, &data);
+        w.revert_edits();
+        for (x, y, z) in [(5, 200, 5), (6, 30, 6), (7, 200, 7)] {
+            assert_eq!(w.get(x, y, z), clean.get(x, y, z));
+        }
+        assert_eq!(w.edit_count(), 0);
     }
 
     #[test]

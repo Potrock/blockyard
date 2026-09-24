@@ -1,9 +1,8 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 
 /**
- * Where the simulation's blocks live and how edits land. In the browser the chunk streamer
- * provides it (an edit also remeshes and relights what it touches); headless, it's a plain block
- * store with columns generated around the players.
+ * Where the simulation's blocks live and how edits land: the host's own world (columns generated
+ * around the players), which also tells the clients about each edit so they can mirror it.
  */
 export interface WorldHost {
   readonly world: VoxelWorld;

@@ -41,6 +41,8 @@ interface Timer {
 export interface SimFrame {
   /** Game clock (seconds since `start`). */
   clock: number;
+  /** Play has begun (`start`). */
+  started: boolean;
   /** Time of day, 0..1. */
   time: number;
   players: PlayerFrame[];
@@ -207,6 +209,7 @@ export class Sim {
     const e = this.entities.frame();
     return {
       clock: this.clockNow,
+      started: this.started,
       time: this.env.time,
       players: this.players.map((p) => p.frame()),
       entities: e.entities,

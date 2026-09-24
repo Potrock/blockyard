@@ -174,9 +174,6 @@ function tone(ctx: AudioContext, out: AudioNode, type: OscillatorType, f0: numbe
 /** The toolkit handed to game-defined sounds. */
 function synthKit(self: Sfx, ctx: AudioContext, out: AudioNode, t: number, pitch: number): SynthKit {
   return {
-    ctx,
-    out,
-    t,
     pitch,
     tone(o) {
       const start = t + (o.delay ?? 0);
@@ -193,7 +190,14 @@ function synthKit(self: Sfx, ctx: AudioContext, out: AudioNode, t: number, pitch
       }
       let chain: AudioNode = node;
       if (o.lowpass) chain = chain.connect(filter(ctx, 'lowpass', o.lowpass));
-      if (o.bandpass) chain = chain.connect(filter(ctx, 'bandpass', o.bandpass.freq, o.bandpass.q ?? 1));
+      if (o.bandpass) {
+        const bp = filter(ctx, 'bandpass', o.bandpass.freq, o.bandpass.q ?? 1);
+        if (o.bandpass.to) {
+          bp.frequency.setValueAtTime(o.bandpass.freq, start);
+          bp.frequency.exponentialRampToValueAtTime(o.bandpass.to, start + dur);
+        }
+        chain = chain.connect(bp);
+      }
       chain.connect(env(ctx, start, o.attack ?? 0.008, dur, o.volume ?? 0.5)).connect(out);
     },
     noise(o) {

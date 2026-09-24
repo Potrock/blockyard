@@ -171,6 +171,12 @@ impl VoxelWorld {
         self.inner.set(x, y, z, b)
     }
 
+    /// An edit from the simulation's copy of the world: applied now if loaded, else when the
+    /// column loads. True if the block changed now.
+    pub fn mirror_block(&mut self, x: i32, y: i32, z: i32, b: u8) -> bool {
+        self.inner.mirror(x, y, z, b)
+    }
+
     pub fn extract_region(&self, cx: i32, cz: i32) -> Vec<u8> {
         self.inner.extract_region(cx, cz)
     }

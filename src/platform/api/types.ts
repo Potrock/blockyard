@@ -887,10 +887,12 @@ export interface LoopHandle {
  * the start of the sound; `pitch` is the play call's pitch multiplier (apply it yourself).
  * `ctx` / `out` / `t` are there for anything the helpers don't cover (raw WebAudio into `out`).
  */
+/**
+ * What a voice makes its sound from. A voice is recorded as the layers it makes and sent to each
+ * player's client, so it's built only from `tone` and `noise` (no raw Web Audio).
+ */
 export interface SynthKit {
-  readonly ctx: AudioContext;
-  readonly out: AudioNode;
-  readonly t: number;
+  /** The play's pitch (1 = as written): multiply frequencies by it. */
   readonly pitch: number;
   /** An oscillator sweeping `from` -> `to` (exponential), with an attack / decay envelope. */
   tone(o: {
@@ -902,7 +904,8 @@ export interface SynthKit {
     delay?: number;
     attack?: number;
     lowpass?: number;
-    bandpass?: { freq: number; q?: number };
+    /** A bandpass filter, sweeping from `freq` to `to` over the duration if given. */
+    bandpass?: { freq: number; to?: number; q?: number };
     vibrato?: { rate: number; depth: number };
   }): void;
   /** Filtered white noise, the filter sweeping `from` -> `to`. */

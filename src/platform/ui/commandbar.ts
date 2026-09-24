@@ -2,6 +2,8 @@ import { h } from './dom';
 
 type Kind = 'info' | 'ok' | 'error' | 'echo';
 
+type Completion = { start: number; options: string[] };
+
 /**
  * Minecraft-style command line: opens at the bottom left, keeps a short log that fades after it
  * closes, Tab completes, Up / Down walk the history.
@@ -18,7 +20,8 @@ export class CommandBar {
 
   onSubmit: ((line: string) => void) | null = null;
   onClose: (() => void) | null = null;
-  complete: ((line: string) => { start: number; options: string[] }) | null = null;
+  /** Completions for a line (the game's host answers, so it may take a moment). */
+  complete: ((line: string) => Completion | Promise<Completion>) | null = null;
 
   constructor(parent: HTMLElement) {
     this.log = h('div.cmd-log');
@@ -43,18 +46,18 @@ export class CommandBar {
         this.close();
       } else if (e.key === 'Tab') {
         e.preventDefault();
-        this.tab();
+        void this.tab();
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
         const n = this.history.length;
         if (!n) return;
         this.historyAt = Math.max(-1, Math.min(n - 1, this.historyAt + (e.key === 'ArrowUp' ? 1 : -1)));
         this.input.value = this.historyAt < 0 ? '/' : this.history[this.historyAt];
-        this.suggest();
+        void this.suggest();
       }
     });
     this.input.addEventListener('keyup', (e) => e.stopPropagation());
-    this.input.addEventListener('input', () => this.suggest());
+    this.input.addEventListener('input', () => void this.suggest());
   }
 
   open(prefill = '/') {
@@ -63,7 +66,7 @@ export class CommandBar {
     window.clearTimeout(this.fadeTimer);
     this.root.classList.add('open', 'recent');
     this.input.value = prefill;
-    this.suggest();
+    void this.suggest();
     // Focus after the key that opened us has been handled.
     requestAnimationFrame(() => {
       this.input.focus();
@@ -95,22 +98,25 @@ export class CommandBar {
     this.fadeTimer = window.setTimeout(() => this.root.classList.remove('recent'), 6000);
   }
 
-  private suggest() {
-    const c = this.complete?.(this.input.value);
+  private async suggest() {
+    const line = this.input.value;
+    const c = await this.complete?.(line);
+    // Typed on in the meantime: a newer suggestion is on its way.
+    if (this.input.value !== line) return;
     const opts = c?.options ?? [];
     this.hint.replaceChildren(...opts.slice(0, 8).map((o) => h('span.cmd-option', {}, o)));
     if (opts.length > 8) this.hint.append(h('span.cmd-more', {}, `+${opts.length - 8}`));
   }
 
   /** Complete the current word: the only match, or as far as all matches agree. */
-  private tab() {
+  private async tab() {
     const line = this.input.value;
-    const c = this.complete?.(line);
-    if (!c || !c.options.length) return;
+    const c = await this.complete?.(line);
+    if (!c || !c.options.length || this.input.value !== line) return;
     let common = c.options[0];
     for (const o of c.options) while (!o.startsWith(common)) common = common.slice(0, -1);
     const done = c.options.length === 1;
     this.input.value = line.slice(0, c.start) + (done ? c.options[0] + ' ' : common || line.slice(c.start));
-    this.suggest();
+    void this.suggest();
   }
 }

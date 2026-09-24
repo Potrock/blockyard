@@ -20,10 +20,13 @@ export async function loadEngine(): Promise<WebAssembly.Module> {
   return module;
 }
 
-/** Headless (Node, tests): instantiate from the `.wasm` file's bytes, synchronously. */
-export function loadEngineSync(bytes: BufferSource): WebAssembly.Module {
+/**
+ * Instantiate synchronously: in a worker from the page's compiled module, or in Node from the
+ * `.wasm` file's bytes. Does nothing if this thread already has the engine.
+ */
+export function loadEngineSync(source: WebAssembly.Module | BufferSource): WebAssembly.Module {
   if (module) return module;
-  module = new WebAssembly.Module(bytes);
+  module = source instanceof WebAssembly.Module ? source : new WebAssembly.Module(source);
   memory = initSync({ module }).memory;
   return module;
 }

@@ -130,9 +130,10 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 │ src/platform/sim        Sim: players, entities, items,      │
 │                         combat, props, commands, rules      │
 │ src/platform/net        protocol: inputs, frames, calls     │
-│ src/platform/host       hosts: spawn, headless (Node)       │
+│ src/platform/host       GameHost; in a worker, the page,    │
+│                         or Node (headless tests)            │
 ├──────────── platform client (TypeScript + three.js) ───────┤
-│ src/platform/runtime.ts game loop, client + local host      │
+│ src/platform/runtime.ts the client: game loop, host link    │
 │ client/                   camera, entity/pickup/prop views, │
 │                           presenter (HUD/FX/audio calls)    │
 │ render/                   WebGL2 pipeline, first-person arm │
@@ -150,7 +151,7 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Simulation and client are separate.** The `Sim` (`src/platform/sim`) runs the game: the game's own code, players, entities, items, combat and block edits. It touches no DOM and no WebGL, and talks to the client only in plain data. Each tick it takes a `PlayerInput` snapshot per player and produces a `SimFrame` (positions, poses, health, hotbars, pickups, props). HUD, effects and sound calls become `PresentCall` messages addressed to one player or to everyone. Menu and button callbacks become ids that come back as `ClientMessage`s. The browser runtime is both the client (camera, views, presenter, rendering) and, for now, the local host running the `Sim` in the same page. `src/platform/host/headless.ts` hosts the same `Sim` in Node, with no browser at all. Because nothing crosses that boundary except data, the same `Sim` can move to a Worker or a server without changing games. On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types, so a native build generates identical worlds from the same seed and blueprints. See [docs/PLATFORM.md](docs/PLATFORM.md#architecture-and-the-road-to-multiplayer).
+**Simulation and client are separate.** The `Sim` (`src/platform/sim`) runs the game: the game's own code, players, entities, items, combat and block edits. It touches no DOM and no WebGL, and talks to the client only in plain data. Each tick it takes a `PlayerInput` snapshot per player and produces a `SimFrame` (positions, poses, health, hotbars, pickups, props). HUD, effects and sound calls become `PresentCall` messages addressed to one player or to everyone. Menu and button callbacks become ids that come back as `ClientMessage`s. A `GameHost` (`src/platform/host`) runs the `Sim` on its own copy of the world, generated around the players, and answers each tick with a batch: content definitions, presentation calls, block edits, then the frame. In the browser it runs in a Web Worker (`src/sim.worker.ts`), so game logic, physics and path-finding never compete with rendering; the page is only the client (camera, views, presenter, rendering), and its world mirrors the host's edits. `?host=page` runs the host in the page instead, for debugging. In Node the same `GameHost` runs headless for tests, and a server can host it the same way. On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types, so a native build generates identical worlds from the same seed and blueprints. See [docs/PLATFORM.md](docs/PLATFORM.md#architecture-and-the-road-to-multiplayer).
 
 **Threads.** Terrain generation and meshing run in a pool of Web Workers (hardware threads minus two). They share one `WebAssembly.Module` that is compiled once on the main thread. The main thread keeps its own wasm instance holding the authoritative block data and entity state. Physics, raycasts, edits, entity simulation and per-frame culling all use it synchronously.
 

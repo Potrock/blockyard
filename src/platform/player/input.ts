@@ -9,9 +9,14 @@ export class Input {
   /** Buttons and keys claimed this frame (`consume`): they read as idle until the frame ends. */
   private consumedButtons = 0;
   private consumedKeys = new Set<string>();
+  /** Mouse movement this frame (mouse look). */
   mouseDX = 0;
   mouseDY = 0;
   wheel = 0;
+  /** Mouse movement from frames that sent no `snapshot` (the host was still busy), for the next. */
+  private carryDX = 0;
+  private carryDY = 0;
+  private sent = false;
   locked = false;
   onLockChange: ((locked: boolean) => void) | null = null;
   onKey: ((code: string, e: KeyboardEvent) => void) | null = null;
@@ -96,21 +101,31 @@ export class Input {
     return (this.buttonsPressed & ~this.consumedButtons & (1 << b)) !== 0;
   }
 
-  /** This frame's controls as plain data, for the simulation. */
+  /**
+   * The controls for the simulation's next tick, as plain data: what's held now, and the presses,
+   * clicks, wheel and mouse movement since the last snapshot (which this starts over).
+   */
   snapshot(active: boolean, yaw: number, pitch: number, viewSeq: number): PlayerInput {
-    return {
+    const s: PlayerInput = {
       active,
       down: [...this.down],
       pressed: [...this.pressedThisFrame],
       buttons: this.buttonsDown,
       clicked: this.buttonsPressed,
-      mouseX: this.mouseDX,
-      mouseY: this.mouseDY,
+      mouseX: this.carryDX + this.mouseDX,
+      mouseY: this.carryDY + this.mouseDY,
       wheel: this.wheel,
       yaw,
       pitch,
       viewSeq,
     };
+    this.pressedThisFrame.clear();
+    this.buttonsPressed = 0;
+    this.carryDX = 0;
+    this.carryDY = 0;
+    this.wheel = 0;
+    this.sent = true;
+    return s;
   }
 
   /** Claim a mouse button or key for the rest of this frame. */
@@ -119,14 +134,17 @@ export class Input {
     else this.consumedKeys.add(what);
   }
 
+  /** The frame is drawn: mouse look starts over (presses and clicks wait for the next snapshot). */
   endFrame() {
-    this.pressedThisFrame.clear();
-    this.buttonsPressed = 0;
     this.consumedButtons = 0;
     this.consumedKeys.clear();
+    if (!this.sent) {
+      this.carryDX += this.mouseDX;
+      this.carryDY += this.mouseDY;
+    }
+    this.sent = false;
     this.mouseDX = 0;
     this.mouseDY = 0;
-    this.wheel = 0;
   }
 }
 

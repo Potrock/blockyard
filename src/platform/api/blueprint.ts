@@ -1,5 +1,14 @@
 import type { BlockRef, Vec3 } from './types';
 
+/** A `Blueprint` as plain data. */
+export interface BlueprintData {
+  origin: Vec3;
+  size: Vec3;
+  /** Palette index per cell (x fastest, then z, then y); -1 leaves the terrain. */
+  cells: Int16Array;
+  palette: BlockRef[];
+}
+
 /**
  * A voxel structure stamped into the world as it generates (in the Rust workers), so it is
  * there from the first frame, costs nothing at runtime, and survives chunk reloads.
@@ -18,6 +27,18 @@ export class Blueprint {
     this.origin = { x: Math.floor(origin.x), y: Math.floor(origin.y), z: Math.floor(origin.z) };
     this.size = { x: Math.floor(size.x), y: Math.floor(size.y), z: Math.floor(size.z) };
     this.cells = new Int16Array(this.size.x * this.size.y * this.size.z).fill(-1);
+  }
+
+  /** As plain data, to send it to a client or a worker (`Blueprint.fromData` on the other side). */
+  toData(): BlueprintData {
+    return { origin: this.origin, size: this.size, cells: this.cells.slice(), palette: [...this.palette] };
+  }
+
+  static fromData(d: BlueprintData): Blueprint {
+    const b = new Blueprint(d.origin, d.size);
+    b.cells.set(d.cells);
+    for (const block of d.palette) b.ref(block);
+    return b;
   }
 
   /** Box centred on (cx, cz) horizontally, spanning y0..y1 inclusive. */

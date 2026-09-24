@@ -25,35 +25,10 @@ export function defineSounds(game: GameContext) {
     s.noise({ duration: 1.4, filter: 'lowpass', from: 600, to: 120, volume: 0.2 });
   });
   // The TIE howl: detuned saws with a fast wobble through a bandpass sweeping down as it passes.
-  // (Raw WebAudio: the helpers don't do filter sweeps shared by several oscillators.)
   a.define('flyby', (s) => {
-    const { ctx, out, t, pitch: p } = s;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.Q.value = 1.4;
-    bp.frequency.setValueAtTime(1900 * p, t);
-    bp.frequency.exponentialRampToValueAtTime(500 * p, t + 0.9);
-    const env = ctx.createGain();
-    env.gain.setValueAtTime(0.0001, t);
-    env.gain.exponentialRampToValueAtTime(0.5, t + 0.12);
-    env.gain.exponentialRampToValueAtTime(0.0001, t + 0.97);
-    bp.connect(env).connect(out);
-    for (const f of [170, 176, 340]) {
-      const o = ctx.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.setValueAtTime(f * p, t);
-      o.frequency.exponentialRampToValueAtTime(f * 0.55 * p, t + 1);
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 23;
-      const depth = ctx.createGain();
-      depth.gain.value = f * 0.06;
-      lfo.connect(depth).connect(o.frequency);
-      o.connect(bp);
-      for (const n of [o, lfo]) {
-        n.start(t);
-        n.stop(t + 1.05);
-      }
-    }
+    const p = s.pitch;
+    for (const f of [170, 176, 340])
+      s.tone({ wave: 'sawtooth', from: f * p, to: f * 0.55 * p, duration: 0.85, attack: 0.12, volume: 0.5, vibrato: { rate: 23, depth: f * 0.06 }, bandpass: { freq: 1900 * p, to: 500 * p, q: 1.4 } });
     s.noise({ duration: 0.9, from: 2400 * p, to: 700 * p, q: 1.2, volume: 0.35 });
   });
 }

@@ -1,55 +1,8 @@
-import { TerrainGen, VoxelWorld } from '@engine/voxel_engine.js';
-import type { BlockRef, GameContext, GameDefinition } from '../api/types';
-import { Content } from '../content';
-import { loadEngineSync } from '../engine/wasm';
-import { IDLE_INPUT, type ClientMessage, type PlayerInput, type PresentCall } from '../net/protocol';
+import type { GameContext, GameDefinition } from '../api/types';
+import type { ClientMessage, HostBatch, PlayerInput, PresentCall, SaveState } from '../net/protocol';
 import type { PlayerSim } from '../sim/player';
-import { Sim } from '../sim/sim';
-import type { WorldHost } from '../sim/world';
-import { applyWorldConfig } from '../workers/config';
-import type { WorldGenConfig } from '../workers/protocol';
-import { loadRegistry } from '../world/registry';
-import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
-
-/** A block store whose columns are generated on the spot around the players: no workers, no meshes. */
-export class GeneratedWorld implements WorldHost {
-  readonly world = new VoxelWorld();
-  private gen: TerrainGen;
-
-  constructor(seed: number, cfg: WorldGenConfig) {
-    this.gen = new TerrainGen(seed);
-    applyWorldConfig(this.gen, cfg);
-  }
-
-  /** Make sure every column within `radius` columns of (x, z) exists; returns how many were generated. */
-  around(x: number, z: number, radius: number): number {
-    const cx = Math.floor(x / 16);
-    const cz = Math.floor(z / 16);
-    let n = 0;
-    for (let dz = -radius; dz <= radius; dz++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        if (this.world.has_column(cx + dx, cz + dz)) continue;
-        this.world.insert_column(cx + dx, cz + dz, this.gen.generate(cx + dx, cz + dz));
-        n++;
-      }
-    }
-    return n;
-  }
-
-  edit(x: number, y: number, z: number, id: number): boolean {
-    return this.world.set_block(x, y, z, id);
-  }
-
-  editMany(cells: [number, number, number, number][]): number {
-    let n = 0;
-    for (const [x, y, z, id] of cells) if (this.world.set_block(x, y, z, id)) n++;
-    return n;
-  }
-
-  revert(): number {
-    return this.world.revert_edits().length / 2;
-  }
-}
+import type { Sim } from '../sim/sim';
+import { GameHost, type GeneratedWorld } from './game';
 
 export interface HeadlessOptions {
   /** The engine's compiled `.wasm` (engine/pkg/voxel_engine_bg.wasm). */
@@ -59,82 +12,73 @@ export interface HeadlessOptions {
   radius?: number;
   /** Chat commands like `/give` (default on). */
   cheats?: boolean;
+  /** Continue a saved world. */
+  save?: SaveState;
+  /**
+   * Put every batch through `structuredClone`, as a worker or a socket would: a definition or a
+   * call that can't cross to a client fails here, in Node, instead of in the browser.
+   */
+  wire?: boolean;
 }
 
 /** What drives the local player each tick: any part of `PlayerInput` (keys held, clicks, view). */
 export type Pilot = (h: Headless) => Partial<PlayerInput> | null;
 
 /**
- * A game with no browser: its simulation, a world generated on the spot, and a record of the
- * presentation calls it makes, stepped as fast as the CPU allows. Tests and bots drive it; a
- * server hosts games the same way, with clients instead of a pilot.
+ * A game with no browser: a `GameHost` with no client, stepped as fast as the CPU allows. A pilot
+ * plays; everything the host sends is kept (`calls`, `batches`) for the test to look at.
  */
 export class Headless {
-  readonly sim: Sim;
-  readonly world: GeneratedWorld;
+  readonly host: GameHost;
   /** Every presentation call so far, in order (banners, screens, sounds…). */
   readonly calls: PresentCall[] = [];
   /** Simulated seconds since `start`. */
   time = 0;
   /** The game called `exit()`. */
   exited = false;
-  private radius: number;
+  private wire: boolean;
 
   constructor(def: GameDefinition, o: HeadlessOptions) {
-    loadEngineSync(o.wasm);
-    const registry = loadRegistry();
-    const seed = (def.world?.seed ?? o.seed ?? 1) >>> 0;
-    this.radius = o.radius ?? 4;
-    const blockId = (b: BlockRef) => {
-      if (typeof b === 'number') return b;
-      const d = registry.byName.get(b);
-      if (!d) throw new Error(`unknown block "${b}"`);
-      return d.id;
-    };
-    const cfg = worldGenConfig(def, blockId);
-    this.world = new GeneratedWorld(seed, cfg);
-    this.sim = new Sim({
-      def,
-      seed,
-      registry,
-      world: this.world,
-      content: new Content(),
-      sink: (c) => this.calls.push(c),
-      exit: () => (this.exited = true),
-      cheats: o.cheats ?? true,
-    });
-    this.sim.setup();
+    this.host = new GameHost(def, { engine: o.wasm, seed: o.seed ?? 1, radius: o.radius ?? 4, budget: Infinity, cheats: o.cheats ?? true, save: o.save });
+    this.wire = o.wire ?? false;
+  }
 
-    const { fixed, ...sp } = startSpawn(def, seed, cfg);
-    this.world.around(sp.x, sp.z, this.radius);
-    const ground = fixed ? null : groundSpawn(this.world.world, registry, (x, z) => this.sim.surfaceY(x, z), sp.x, sp.z);
-    this.sim.spawn = { ...sp, ...ground };
-    this.sim.local.place(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z, sp.yaw);
+  get sim(): Sim {
+    return this.host.sim;
+  }
+
+  get world(): GeneratedWorld {
+    return this.host.world;
   }
 
   get ctx(): GameContext {
-    return this.sim.ctx;
+    return this.host.sim.ctx;
   }
 
   get me(): PlayerSim {
-    return this.sim.local;
+    return this.host.sim.local;
   }
 
   /** Play begins (the browser's click on the title screen). */
   start() {
-    this.world.world.set_frozen(false);
-    this.sim.start();
+    this.host.handle({ t: 'start' });
   }
 
   /** One tick. `input` is the local player's controls (idle when absent). */
-  step(dt: number, input?: Partial<PlayerInput> | null) {
-    for (const p of this.sim.players) this.world.around(p.state.x, p.state.z, this.radius);
-    const me = this.sim.local;
-    const full: PlayerInput = input
-      ? { ...IDLE_INPUT, active: true, yaw: me.yaw, pitch: me.pitch, viewSeq: me.viewSeq, ...input }
-      : IDLE_INPUT;
-    this.sim.tick(dt, this.sim.started, { [me.id]: full });
+  step(dt: number, input?: Partial<PlayerInput> | null): HostBatch {
+    const me = this.me;
+    const full: PlayerInput | undefined = input
+      ? { active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: me.yaw, pitch: me.pitch, viewSeq: me.viewSeq, ...input }
+      : undefined;
+    let b = this.host.handle({ t: 'tick', dt, running: true, input: full })!;
+    if (this.wire) b = structuredClone(b);
+    for (const e of b.events) {
+      if (e.t === 'call') this.calls.push(e.call);
+      else if (e.t === 'exit') this.exited = true;
+      else if (e.t === 'error') throw new Error(`the game threw: ${e.text}`);
+    }
     this.time += dt;
+    return b;
   }
 
   /**
@@ -153,7 +97,7 @@ export class Headless {
 
   /** Something the player did on their client (a menu entry, a button). */
   send(m: ClientMessage) {
-    this.sim.receive(m);
+    this.host.handle({ t: 'message', msg: m });
   }
 
   /** The calls to one `target.method` so far, newest last. */

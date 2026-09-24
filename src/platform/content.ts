@@ -1,18 +1,21 @@
 import type { AtlasPixels, EntityDefinition, ItemDefinition, SynthVoice, Vec3, ViewAnimation } from './api/types';
-import type { Blueprint } from './api/blueprint';
+import { Blueprint } from './api/blueprint';
+import type { ContentDef } from './net/protocol';
+import { playRecorded, recordVoice } from './audio/voice';
 
 type Listener<T> = (name: string, value: T) => void;
+type AtlasSource = HTMLCanvasElement | OffscreenCanvas | AtlasPixels;
 
 /**
- * What a game defines for its look and sound in `setup`: synthesised voices, texture atlases and
- * first-person animations. These are code and pixels, not messages, so they don't travel with
- * the per-frame presentation calls: the client gets them from here, and calls refer to them by
- * name. (Running in one page, both sides share this object; a remote client builds its own by
- * running the game's `setup`.)
+ * What a game defines for its look and sound in `setup`: synthesised voices, texture atlases,
+ * first-person animations, entity and item types, prop models. These don't travel with the
+ * per-frame presentation calls: calls refer to them by name. The simulation's copy has
+ * everything (functions too); a host forwards each definition as data (`forward`) and the
+ * client's copy takes it in with `apply`.
  */
 export class Content {
   readonly sounds = new Map<string, SynthVoice>();
-  readonly atlases = new Map<string, HTMLCanvasElement | OffscreenCanvas | AtlasPixels>();
+  readonly atlases = new Map<string, AtlasSource>();
   readonly animations = new Map<string, ViewAnimation>();
   /** Entity types: their models, for the client to draw. */
   readonly entities = new Map<string, EntityDefinition>();
@@ -20,36 +23,48 @@ export class Content {
   readonly items = new Map<string, ItemDefinition>();
   /** Prop models (`props.model`): the blueprint to mesh. */
   readonly models = new Map<number, { blueprint: Blueprint; opts: { scale?: number; pivot?: Vec3 } }>();
+  /** Set by a host: each definition, as data for its clients. */
+  forward: ((def: ContentDef) => void) | null = null;
   private soundListeners: Listener<SynthVoice>[] = [];
-  private atlasListeners: Listener<HTMLCanvasElement | OffscreenCanvas | AtlasPixels>[] = [];
+  private atlasListeners: Listener<AtlasSource>[] = [];
   private animationListeners: Listener<ViewAnimation>[] = [];
   private inline = 0;
 
   defineSound(name: string, voice: SynthVoice) {
     this.sounds.set(name, voice);
     for (const l of this.soundListeners) l(name, voice);
+    if (!this.forward) return;
+    // A voice is code: it goes as the layers it makes (see `recordVoice`).
+    const recorded = recordVoice(voice);
+    if (recorded) this.forward({ kind: 'sound', name, voice: recorded });
+    else console.warn(`audio.define: sound "${name}" uses Web Audio directly (s.ctx / s.out / s.t), so it can't be sent to players; use s.tone and s.noise`);
   }
 
-  defineAtlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels) {
+  defineAtlas(name: string, source: AtlasSource) {
     this.atlases.set(name, source);
     for (const l of this.atlasListeners) l(name, source);
+    this.forward?.({ kind: 'atlas', name, source: pixelsOf(source) });
   }
 
   defineModel(id: number, blueprint: Blueprint, opts: { scale?: number; pivot?: Vec3 }) {
     this.models.set(id, { blueprint, opts });
+    this.forward?.({ kind: 'model', id, blueprint: blueprint.toData(), opts: wire(opts) });
   }
 
   defineItem(id: string, def: ItemDefinition) {
     this.items.set(id, def);
+    this.forward?.({ kind: 'item', name: id, def: wire(def) });
   }
 
   defineEntity(type: string, def: EntityDefinition) {
     this.entities.set(type, def);
+    this.forward?.({ kind: 'entity', name: type, def: wire(def) });
   }
 
   defineAnimation(name: string, anim: ViewAnimation) {
     this.animations.set(name, anim);
     for (const l of this.animationListeners) l(name, anim);
+    this.forward?.({ kind: 'animation', name, anim: 'sample' in anim ? bake(anim) : wire(anim) });
   }
 
   /** An animation passed inline to `viewModel.play`: stored under a generated name. */
@@ -59,13 +74,31 @@ export class Content {
     return name;
   }
 
+  /** A definition forwarded by the host. */
+  apply(d: ContentDef) {
+    switch (d.kind) {
+      case 'sound':
+        return this.defineSound(d.name, playRecorded(d.voice));
+      case 'atlas':
+        return this.defineAtlas(d.name, d.source);
+      case 'animation':
+        return this.defineAnimation(d.name, d.anim);
+      case 'entity':
+        return this.defineEntity(d.name, d.def);
+      case 'item':
+        return this.defineItem(d.name, d.def);
+      case 'model':
+        return this.defineModel(d.id, Blueprint.fromData(d.blueprint), d.opts);
+    }
+  }
+
   /** Get everything defined so far, then each new definition as it comes. */
   onSound(fn: Listener<SynthVoice>) {
     for (const [n, v] of this.sounds) fn(n, v);
     this.soundListeners.push(fn);
   }
 
-  onAtlas(fn: Listener<HTMLCanvasElement | OffscreenCanvas | AtlasPixels>) {
+  onAtlas(fn: Listener<AtlasSource>) {
     for (const [n, v] of this.atlases) fn(n, v);
     this.atlasListeners.push(fn);
   }
@@ -74,4 +107,53 @@ export class Content {
     for (const [n, v] of this.animations) fn(n, v);
     this.animationListeners.push(fn);
   }
+}
+
+/** A procedural animation (`sample(t)`, code) as keyframes, closely enough to look the same. */
+function bake(anim: Extract<ViewAnimation, { sample(t: number): unknown }>): ViewAnimation {
+  const steps = 24;
+  const keys = Array.from({ length: steps + 1 }, (_, i) => ({ ...wire(anim.sample(i / steps)), t: i / steps, ease: 'linear' as const }));
+  return { duration: anim.duration, keys };
+}
+
+/** A canvas atlas read back to pixels (a worker or a server can't send a canvas). */
+function pixelsOf(source: AtlasSource): AtlasPixels {
+  if ('pixels' in source) return source;
+  const ctx = (source as OffscreenCanvas).getContext('2d') as OffscreenCanvasRenderingContext2D;
+  const img = ctx.getImageData(0, 0, source.width, source.height);
+  return { width: source.width, height: source.height, pixels: new Uint8Array(img.data.buffer) };
+}
+
+/**
+ * A deep copy of a definition with only what can cross to a client: functions (behaviours,
+ * callbacks) are left out, class instances become plain objects, typed arrays are copied.
+ */
+export function wire<T>(v: T): T {
+  return copy(v, new Map()) as T;
+}
+
+function copy(v: unknown, seen: Map<object, unknown>): unknown {
+  if (v === null || typeof v !== 'object') return typeof v === 'function' || typeof v === 'symbol' ? undefined : v;
+  if (seen.has(v)) return seen.get(v);
+  if (ArrayBuffer.isView(v)) return (v as unknown as { slice(): unknown }).slice();
+  if (v instanceof Blueprint) return v.toData();
+  if (Array.isArray(v)) {
+    const out: unknown[] = [];
+    seen.set(v, out);
+    for (const x of v) out.push(copy(x, seen));
+    return out;
+  }
+  if (v instanceof Map) {
+    const out = new Map();
+    seen.set(v, out);
+    for (const [k, x] of v) if (typeof x !== 'function') out.set(k, copy(x, seen));
+    return out;
+  }
+  const out: Record<string, unknown> = {};
+  seen.set(v, out);
+  for (const [k, x] of Object.entries(v)) {
+    if (typeof x === 'function') continue;
+    out[k] = copy(x, seen);
+  }
+  return out;
 }

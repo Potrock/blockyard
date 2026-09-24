@@ -10,6 +10,11 @@
  * sent as `{ $cb: id }` and the client answers with a `callback` message.
  */
 
+import type { AtlasPixels, EntityDefinition, ItemDefinition, Vec3, ViewAnimation } from '../api/types';
+import type { RecordedVoice } from '../audio/voice';
+import type { BlueprintData } from '../api/blueprint';
+import type { SimFrame } from '../sim/sim';
+
 /** Where a presentation call goes on the client. */
 export type PresentTarget = 'hud' | 'fx' | 'audio' | 'view' | 'client';
 
@@ -64,3 +69,87 @@ export interface PlayerInput {
 }
 
 export const IDLE_INPUT: PlayerInput = { active: false, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: -1 };
+
+// -------------------------------------------------------------------------------------------------
+// Host and client
+//
+// A host runs a game's simulation on a world of its own; a client draws it. The client sends one
+// `tick` per frame with the player's controls and gets back a `HostBatch`: what happened, in
+// order, then the frame to draw. The same messages go to a worker in the page or, later, over a
+// socket to a server.
+// -------------------------------------------------------------------------------------------------
+
+/**
+ * Something the game defined for its look and sound, as data: the client's copy of `Content`.
+ * Entity and item definitions arrive without their functions (behaviours and callbacks stay with
+ * the simulation).
+ */
+export type ContentDef =
+  | { kind: 'sound'; name: string; voice: RecordedVoice }
+  | { kind: 'atlas'; name: string; source: AtlasPixels }
+  | { kind: 'animation'; name: string; anim: ViewAnimation }
+  | { kind: 'entity'; name: string; def: EntityDefinition }
+  | { kind: 'item'; name: string; def: ItemDefinition }
+  | { kind: 'model'; id: number; blueprint: BlueprintData; opts: { scale?: number; pivot?: Vec3 } };
+
+/** What a host tells a client, in the order it happened. */
+export type HostEvent =
+  /** The game defined content (in `setup`, or later). */
+  | { t: 'content'; def: ContentDef }
+  /** A presentation call. */
+  | { t: 'call'; call: PresentCall }
+  /** Blocks changed: [x, y, z, block id]. */
+  | { t: 'edits'; cells: [number, number, number, number][] }
+  /** Every edit this session was undone (a restart). */
+  | { t: 'revert' }
+  /** Set up and placed: play can begin. */
+  | { t: 'ready' }
+  /** The game called `exit()`. */
+  | { t: 'exit' }
+  /** The answer to a request (`exec`, `complete`). */
+  | { t: 'reply'; id: number; value: unknown }
+  /** The game threw (the host carries on). */
+  | { t: 'error'; text: string };
+
+export interface HostBatch {
+  events: HostEvent[];
+  /** After a tick: the state to draw. */
+  frame: SimFrame | null;
+}
+
+/** What a client tells its host. */
+export type ClientCommand =
+  /** Advance the simulation `dt` seconds with this player's controls (idle without); `running` once play began. */
+  | { t: 'tick'; dt: number; running: boolean; input?: PlayerInput }
+  | { t: 'message'; msg: ClientMessage }
+  /** Play begins (the title screen was clicked). */
+  | { t: 'start' }
+  | { t: 'restart' }
+  /** Time of day (the pause menu, `[` `]`), and the day length (settings). */
+  | { t: 'env'; time?: number; dayLength?: number }
+  /** How many columns around the player the host keeps (the client's view distance). */
+  | { t: 'radius'; columns: number }
+  /** Requests answered with a `reply`: run a typed command, complete one. */
+  | { t: 'exec'; id: number; line: string }
+  | { t: 'complete'; id: number; line: string };
+
+/** A saved world, handed to the host at start. */
+export interface SaveState {
+  edits: Uint8Array;
+  player: [number, number, number, number, number];
+  flying: boolean;
+  time: number;
+}
+
+/** Starting a host in a worker: the first message it gets. */
+export interface HostInit {
+  t: 'init';
+  /** The compiled engine, shared with the page. */
+  module: WebAssembly.Module;
+  game: string;
+  seed: number;
+  save: SaveState | null;
+  cheats: boolean;
+  radius: number;
+  dayLength: number | null;
+}

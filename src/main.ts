@@ -5,7 +5,7 @@ const canvas = document.getElementById('view') as HTMLCanvasElement;
 const ui = document.getElementById('ui') as HTMLElement;
 
 devGames()
-  .then((previews) => Runtime.start(canvas, ui, games, previews))
+  .then((previews) => Runtime.start(canvas, ui, games, previews, () => new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' })))
   .then((rt) => {
     if (import.meta.env.DEV) (window as unknown as { __game: Runtime }).__game = rt;
   })

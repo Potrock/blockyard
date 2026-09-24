@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { engine, loadEngine } from './engine/wasm';
 import { WorkerPool } from './workers/pool';
-import { groundSpawn, startSpawn, worldGenConfig } from './host/spawn';
-import type { WorldGenConfig } from './workers/protocol';
+import { worldGenConfig } from './host/spawn';
+import { PageLink, WorkerLink, type SimLink } from './host/link';
 import { LAYER_CHUNKS, Renderer, type FrameHooks } from './render/pipeline';
 import { Environment } from './render/environment';
 import { BiomeMap, createBlockTextures, createNoiseTexture, type TextureSet } from './render/textures';
@@ -25,9 +25,9 @@ import { PlayerCamera } from './client/camera';
 import { EntityView } from './client/entities';
 import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
-import { Sim, type SimFrame } from './sim/sim';
+import type { Sim, SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
-import type { WorldHost } from './sim/world';
+import type { HostBatch, SaveState } from './net/protocol';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -51,9 +51,10 @@ const fromB64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 /**
  * The browser runtime: the client (renderer, streaming world, HUD, audio, input, first-person
- * view) with the simulation (`Sim`) running in the same page. Each frame it sends the player's
- * controls to the simulation, ticks it, and draws the `SimFrame` it returns; presentation calls
- * arrive through the `Presenter`. One `GameDefinition` runs per page.
+ * view). The game itself runs in a `GameHost`, in a worker (or in this page with `?host=page`).
+ * Each frame the client sends the player's controls as a tick and draws the newest `SimFrame`;
+ * the host's content, presentation calls and block edits arrive in the same batches. One
+ * `GameDefinition` runs per page.
  */
 export class Runtime {
   mode: Mode = 'title';
@@ -89,13 +90,19 @@ export class Runtime {
   /** The game's sounds, atlases, animations, entity and item types. */
   private content = new Content();
   private presenter!: Presenter;
-  /** The simulation: the game's rules and world. */
-  private sim!: Sim;
+  /** Where the game runs (its rules, its world): a worker, or this page with `?host=page`. */
+  private link!: SimLink;
+  /** The newest frame from the host. */
   private frameData: SimFrame | null = null;
+  /** A tick is on its way to the host; frame time adds up until it answers. */
+  private ticking = false;
+  private tickDt = 0;
+  /** The host has set the game up and placed the player. */
+  private hostReady = false;
+  private requests = new Map<number, (value: unknown) => void>();
+  private nextRequest = 1;
   private commandBar!: CommandBar;
   private last = performance.now();
-  private spawnPending = true;
-  private hasSave = false;
   private worldReady = false;
   /** First-person walker (default) or a game-driven camera (`player.controller: 'none'`). */
   private walker = true;
@@ -118,6 +125,7 @@ export class Runtime {
     private def: GameDefinition,
     games: GameDefinition[],
     private seed: number,
+    private makeWorker: (() => Worker) | null,
   ) {
     this.settings = loadSettings();
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.1, 400);
@@ -128,14 +136,17 @@ export class Runtime {
     this.title = new TitleScreen(ui, seed, () => this.play(), games, def.id, (id) => this.switchGame(id), def.controls, this.walker);
   }
 
-  /** Boot the game selected by `?game=` (default: the first registered game). */
-  static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[] = []): Promise<Runtime> {
+  /**
+   * Boot the game selected by `?game=` (default: the first registered game). `worker` starts the
+   * app's game host worker; without it (or with `?host=page`) the game runs in this page.
+   */
+  static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[] = [], worker?: () => Worker): Promise<Runtime> {
     const url = new URL(location.href);
     const id = url.searchParams.get('game');
     // Hidden games (dev previews) open by id but aren't listed in the launcher.
     const def = [...games, ...hidden].find((g) => g.id === id) ?? games[0];
     const seed = Runtime.chooseSeed(def);
-    const rt = new Runtime(canvas, ui, def, games, seed);
+    const rt = new Runtime(canvas, ui, def, games, seed, worker ?? null);
     await rt.init();
     return rt;
   }
@@ -255,37 +266,35 @@ export class Runtime {
       else this.graphics.addCanvasAtlas(name, source);
     });
 
-    // The simulation, and the presentation boundary between it and this client. In this page the
-    // calls go straight across; a worker or a server would carry the same messages.
+    // The presentation calls the host sends run here; callbacks go back as messages.
     this.presenter = new Presenter('local', {
       hud: this.gameHud,
       fx: this.fx,
       sfx: this.sfx,
       view: this.held,
-      send: (m) => this.sim.receive(m),
+      send: (m) => this.link.send({ t: 'message', msg: m }),
       client: (method, args) => this.clientCall(method, args),
     });
-    const host: WorldHost = {
-      world,
-      edit: (x, y, z, id) => this.chunks.editBlock(x, y, z, id),
-      editMany: (cells) => this.chunks.editBlocks(cells),
-      revert: () => this.chunks.revertEdits(),
-    };
-    this.sim = new Sim({
-      def,
+
+    // The game's host: a worker by default, this page for development and tests (`?host=page`).
+    // It sets the game up, places the player and answers each tick with a batch.
+    const save = this.load();
+    const opts = {
       seed: this.seed,
-      registry: this.registry,
-      world: host,
-      content: this.content,
-      sink: (c) => this.presenter.apply(c),
-      exit: () => this.exit(),
+      save,
       cheats: import.meta.env.DEV || !!def.cheats,
-    });
+      radius: this.hostRadius(this.settings),
+      dayLength: this.settings.dayMinutes * 60,
+      fov: this.settings.fov,
+    };
+    const inPage = new URL(location.href).searchParams.get('host') === 'page';
+    this.link = inPage || !this.makeWorker ? new PageLink(def, { ...opts, engine: module, budget: 2 }) : new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts });
+    this.link.onBatch = (b) => this.receive(b);
 
     if (def.player?.build) {
       this.picker = new BlockPicker(this.ui, this.registry, icons, () => this.closePicker());
       this.picker.onPick = (id) => {
-        this.sim.receive({ t: 'creativePick', player: 'local', block: id });
+        this.link.send({ t: 'message', msg: { t: 'creativePick', player: 'local', block: id } });
         this.hud.showToast(this.registry.blocks[id]?.label ?? '');
       };
     }
@@ -294,7 +303,7 @@ export class Runtime {
     this.held.scene.visible = false;
 
     this.pause = new PauseMenu(this.ui, this.settings, (s) => this.applySettings(s), () => this.input.lock());
-    this.pause.onTime = (t) => (this.sim.env.time = t);
+    this.pause.onTime = (t) => this.link.send({ t: 'env', time: t });
     this.pause.onNewWorld = (seed) => this.newWorld(seed);
     this.pause.onRestart = () => {
       this.pause.hide();
@@ -325,7 +334,7 @@ export class Runtime {
     document.addEventListener('visibilitychange', () => document.hidden && this.save());
 
     this.commandBar = new CommandBar(this.ui);
-    this.commandBar.complete = (line) => this.sim.commands.complete(line);
+    this.commandBar.complete = (line) => this.request<{ start: number; options: string[] }>({ t: 'complete', line });
     this.commandBar.onClose = () => {
       if (this.mode !== 'console') return;
       this.mode = 'playing';
@@ -333,17 +342,11 @@ export class Runtime {
     };
     this.commandBar.onSubmit = (line) => {
       this.commandBar.print(`/${line.replace(/^\/+/, '')}`, 'echo');
-      const r = this.sim.exec(line);
-      this.commandBar.print(r.text, r.ok ? 'ok' : 'error');
+      void this.request<{ ok: boolean; text: string }>({ t: 'exec', line }).then((r) => this.commandBar.print(r.text, r.ok ? 'ok' : 'error'));
     };
-
-    this.sim.setup();
-    // After setup: the skin may live in an atlas the game registers there.
-    if (def.player?.skin) this.held.setSkin(def.player.skin, def.player.skinAtlas);
 
     this.applySettings(this.settings, false);
     this.resize();
-    this.load(worldCfg);
     this.renderer.warmup(this.camera);
     this.title.progress(0.1, 'Generating terrain…');
     requestAnimationFrame((t) => this.frame(t));
@@ -397,7 +400,55 @@ export class Runtime {
 
   /** Reset game state and call `start` again. */
   restart() {
-    this.sim.restart();
+    this.link.send({ t: 'restart' });
+  }
+
+  /** A batch from the host: what happened, in order, then the frame to draw. */
+  private receive(b: HostBatch) {
+    for (const e of b.events) {
+      switch (e.t) {
+        case 'content':
+          this.content.apply(e.def);
+          break;
+        case 'call':
+          this.presenter.apply(e.call);
+          break;
+        case 'edits':
+          this.chunks.mirrorEdits(e.cells);
+          break;
+        case 'revert':
+          this.chunks.revertEdits();
+          break;
+        case 'ready':
+          this.hostReady = true;
+          // The skin may live in an atlas the game registered in `setup`, which has arrived by now.
+          if (this.def.player?.skin) this.held.setSkin(this.def.player.skin, this.def.player.skinAtlas);
+          break;
+        case 'exit':
+          this.exit();
+          break;
+        case 'reply':
+          this.requests.get(e.id)?.(e.value);
+          this.requests.delete(e.id);
+          break;
+        case 'error':
+          console.error(`[game] ${e.text}`);
+          break;
+      }
+    }
+    if (b.frame) {
+      this.frameData = b.frame;
+      this.ticking = false;
+    }
+  }
+
+  /** Ask the host something; the answer comes in a later batch. */
+  private request<T>(cmd: { t: 'exec' | 'complete'; line: string }): Promise<T> {
+    const id = this.nextRequest++;
+    return new Promise<T>((resolve) => {
+      this.requests.set(id, resolve as (v: unknown) => void);
+      this.link.send({ ...cmd, id });
+    });
   }
 
   exit() {
@@ -424,48 +475,38 @@ export class Runtime {
     return `voxel.${this.def.id}.world.${this.seed}`;
   }
 
-  private load(cfg: WorldGenConfig) {
-    const w = this.chunks.world;
-    const me = this.sim.local;
+  /** The saved world, if the game keeps one. Its edits go into this client's world too. */
+  private load(): SaveState | null {
+    if (!this.def.world?.persist) return null;
     let save: SaveData | null = null;
-    if (this.def.world?.persist) {
-      try {
-        const raw = localStorage.getItem(this.saveKey);
-        if (raw) save = JSON.parse(raw) as SaveData;
-      } catch {
-        save = null;
-      }
+    try {
+      const raw = localStorage.getItem(this.saveKey);
+      if (raw) save = JSON.parse(raw) as SaveData;
+    } catch {
+      save = null;
     }
-    if (save) {
-      try {
-        w.import_edits(fromB64(save.edits));
-      } catch {
-        // Corrupt edits are ignored.
-      }
-      const [x, y, z, yaw, pitch] = save.player;
-      this.sim.env.time = save.time;
-      this.sim.spawn = { x, y, z, yaw };
-      w.set_flying(save.flying && (this.def.player?.fly ?? false));
-      me.place(x, y, z, yaw, pitch);
-      this.hasSave = true;
-    } else {
-      const { fixed, ...sp } = startSpawn(this.def, this.seed, cfg);
-      this.sim.spawn = sp;
-      me.place(sp.x, sp.y, sp.z, sp.yaw);
-      this.hasSave = fixed;
+    if (!save) return null;
+    let edits = new Uint8Array(0);
+    try {
+      edits = fromB64(save.edits);
+      this.chunks.world.import_edits(edits);
+    } catch {
+      // Corrupt edits are ignored.
+      edits = new Uint8Array(0);
     }
-    w.set_frozen(true);
-    me.cam.fov = this.settings.fov;
+    return { edits, player: save.player, flying: save.flying, time: save.time };
   }
 
   private save() {
-    if (!this.chunks || !this.def.world?.persist) return;
-    const s = this.sim.local.state;
+    const f = this.frameData;
+    const s = f?.players[0];
+    if (!this.chunks || !this.def.world?.persist || !f || !s) return;
+    // This client's world has every edit the host made (mirrored), loaded or not.
     const data: SaveData = {
       edits: toB64(this.chunks.world.export_edits()),
       player: [s.x, s.y, s.z, this.view.yaw, this.view.pitch],
       flying: s.flying,
-      time: this.sim.env.time,
+      time: f.time,
     };
     try {
       localStorage.setItem(this.saveKey, JSON.stringify(data));
@@ -483,26 +524,15 @@ export class Runtime {
     location.href = url.toString();
   }
 
-  private updateSpawn() {
-    const w = this.chunks.world;
-    const sp = this.sim.spawn;
-    if (this.spawnPending && w.has_column(Math.floor(sp.x / 16), Math.floor(sp.z / 16))) {
-      const g = this.hasSave ? null : groundSpawn(w, this.registry, (x, z) => this.sim.surfaceY(x, z), sp.x, sp.z);
-      if (g) {
-        this.sim.spawn = { ...sp, ...g };
-        w.player_reset(g.x, g.y, g.z);
-        this.sim.local.syncState();
-      }
-      this.spawnPending = false;
-    }
-    const s = this.sim.local.state;
+  /** The title screen's progress: the terrain around the player (the host placed them) meshed. */
+  private updateReadiness() {
+    const s = this.frameData?.players[0];
+    if (this.worldReady || !s || !this.hostReady) return;
     const ready = this.chunks.readiness(s.x, s.z, Math.min(this.settings.renderDistance, 6));
-    if (!this.worldReady) {
-      this.title.progress(0.1 + 0.9 * ready, ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : 'Ready');
-      if (ready >= 0.999 && !this.spawnPending) {
-        this.worldReady = true;
-        this.title.setReady();
-      }
+    this.title.progress(0.1 + 0.9 * ready, ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : 'Ready');
+    if (ready >= 0.999) {
+      this.worldReady = true;
+      this.title.setReady();
     }
   }
 
@@ -520,12 +550,8 @@ export class Runtime {
     this.hud.setVisible(this.hudVisible);
     this.gameHud.setVisible(this.hudVisible);
     this.held.scene.visible = this.hudVisible;
-    this.chunks.world.set_frozen(this.sim.local.health.dead);
-    // Face where the player was placed (a save, the spawn), not where the title screen turned.
-    const me = this.sim.local;
-    me.setView(me.yaw, me.pitch);
     this.mode = 'playing';
-    this.sim.start();
+    this.link.send({ t: 'start' });
   }
 
   private onLockChange(locked: boolean) {
@@ -536,7 +562,7 @@ export class Runtime {
       this.mode = 'playing';
     } else if (this.mode === 'playing' && !this.gameHud.screenOpen) {
       this.mode = 'paused';
-      this.pause.show(this.sim.env.time);
+      this.pause.show(this.frameData?.time ?? 0);
       this.save();
     }
   }
@@ -570,9 +596,9 @@ export class Runtime {
       }
     }
     if (this.mode === 'playing' && this.def.player?.build) {
-      const env = this.sim.env;
-      if (code === 'BracketLeft') env.time = (env.time - 1 / 24 + 1) % 1;
-      if (code === 'BracketRight') env.time = (env.time + 1 / 24) % 1;
+      const t = this.frameData?.time ?? 0;
+      if (code === 'BracketLeft') this.link.send({ t: 'env', time: (t - 1 / 24 + 1) % 1 });
+      if (code === 'BracketRight') this.link.send({ t: 'env', time: (t + 1 / 24) % 1 });
     }
   }
 
@@ -656,6 +682,11 @@ export class Runtime {
     this.held.setItem(geometry, a.albedo, a.emissive, def.hold ?? {}, style);
   }
 
+  /** Columns the host keeps around the player: what this client shows, within reason. */
+  private hostRadius(s: Settings): number {
+    return Math.min(12, this.viewDistance(s));
+  }
+
   /** The player's render distance, raised to the game's minimum (`world.viewDistance`). */
   private viewDistance(s: Settings): number {
     return Math.max(s.renderDistance, Math.min(24, this.def.world?.viewDistance ?? 0));
@@ -670,7 +701,8 @@ export class Runtime {
     this.view.sensitivity = s.sensitivity;
     this.view.baseFov = s.fov;
     this.view.viewBobbing = s.viewBobbing;
-    if (!this.def.world?.freezeTime) this.sim.env.dayLength = s.dayMinutes * 60;
+    this.link.send({ t: 'env', dayLength: s.dayMinutes * 60 });
+    this.link.send({ t: 'radius', columns: this.hostRadius(s) });
     this.camera.far = Math.max(256, (rd + 1.5) * 16 * 1.08);
     this.camera.updateProjectionMatrix();
     this.renderer.fogEnd = (rd - 0.35) * 16;
@@ -698,12 +730,13 @@ export class Runtime {
     const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
     this.last = now;
     const playing = this.mode === 'playing';
-    const running = playing && this.sim.started;
+    const started = this.frameData?.started ?? false;
+    const running = playing && started;
     const dead = this.frameData?.players[0]?.dead ?? false;
     const active = playing && (this.input.locked || this.debugActive) && !dead && !this.gameHud.screenOpen;
-    this.sfx.hold(this.sim.started && (this.mode === 'paused' || this.mode === 'console'));
+    this.sfx.hold(started && (this.mode === 'paused' || this.mode === 'console'));
 
-    // Mouse look is the client's; the controls and the view go to the simulation.
+    // Mouse look is the client's; the controls and the view go to the host.
     if (this.walker) {
       if (this.mode === 'title') {
         this.view.yaw += dt * 0.03;
@@ -712,11 +745,29 @@ export class Runtime {
         this.view.look(this.input, active);
       }
     }
-    this.sim.tick(dt, running, { local: this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq) });
-    const f = this.sim.frame();
-    this.frameData = f;
+    // One tick at a time: while one is on its way, frame time (and input) adds up for the next.
+    // In this page the answer is immediate; from a worker it arrives before the next frame.
+    this.tickDt += dt;
+    if (!this.ticking) {
+      this.ticking = true;
+      const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
+      const tickDt = Math.min(0.1, this.tickDt);
+      this.tickDt = 0;
+      try {
+        this.link.send({ t: 'tick', dt: tickDt, running, input });
+      } catch (err) {
+        this.ticking = false;
+        throw err;
+      }
+    }
+    const f = this.frameData;
+    this.updateReadiness();
+    if (!f) {
+      // The host is still starting: nothing to draw yet but the sky.
+      this.present(dt, playing, t0);
+      return;
+    }
     const me = f.players[0];
-    this.updateSpawn();
 
     this.env.time = f.time;
     this.env.paused = true;
@@ -832,7 +883,9 @@ export class Runtime {
   }
 
   private updateDebug() {
-    const s = this.sim.local.state;
+    const f = this.frameData;
+    const s = f?.players[0];
+    if (!f || !s) return;
     const c = this.chunks.stats();
     const r = this.renderer;
     const yawDeg = ((((-this.view.yaw * 180) / Math.PI) % 360) + 360) % 360;
@@ -848,7 +901,7 @@ export class Runtime {
       `Facing   ${facing}   pitch ${((this.view.pitch * 180) / Math.PI).toFixed(1)}°`,
       `Motion   ${s.flying ? 'flying' : s.inWater ? 'swimming' : s.onGround ? 'grounded' : 'airborne'}   ${Math.hypot(s.vx, s.vz).toFixed(2)} m/s`,
       `Time     ${this.env.clock()}   game clock ${(this.frameData?.clock ?? 0).toFixed(1)} s`,
-      `Entities ${this.sim.entities.count()} alive`,
+      `Entities ${f.entities.length} alive   host ${this.link.local ? 'in page' : 'worker'}`,
       '',
       `Columns  ${c.loaded} loaded · ${c.meshed} meshed · ${c.pending} pending upload`,
       `Workers  ${this.pool.size} · gen ${c.generating} (${c.genMs.toFixed(2)} ms) · mesh ${c.meshing} (${c.meshMs.toFixed(2)} ms)`,
@@ -865,11 +918,18 @@ export class Runtime {
 
   debugPlay() {
     this.beginPlay();
-    this.chunks.world.set_frozen(false);
   }
 
+  /** The simulation, when the game runs in this page (`?host=page`). */
+  get sim(): Sim | undefined {
+    return this.link.local?.sim;
+  }
+
+  /** The game's context, when it runs in this page (`?host=page`). */
   get context(): GameContext {
-    return this.sim.ctx;
+    const sim = this.sim;
+    if (!sim) throw new Error('the game runs in a worker: open with ?host=page to reach its context');
+    return sim.ctx;
   }
 
   /** The first-person view (tests steer it through `yaw` / `pitch`). */
@@ -882,9 +942,10 @@ export class Runtime {
       game: this.def.id,
       mode: this.mode,
       ready: this.worldReady,
-      state: { ...this.sim.local.state },
-      health: this.sim.local.health.health,
-      entities: this.sim.entities.count(),
+      host: this.link.local ? 'page' : 'worker',
+      state: this.frameData?.players[0] ?? null,
+      health: this.frameData?.players[0]?.health ?? 0,
+      entities: this.frameData?.entities.length ?? 0,
       chunks: this.chunks.stats(),
       render: { ...this.renderer.stats },
       time: this.env.time,
@@ -899,7 +960,7 @@ export class Runtime {
   }
 
   debugSetTime(t: number) {
-    this.sim.env.time = t;
+    this.link.send({ t: 'env', time: t });
   }
 
   debugToggle(key: string) {

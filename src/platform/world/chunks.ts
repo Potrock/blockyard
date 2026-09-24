@@ -385,9 +385,28 @@ export class ChunkManager {
     }
   }
 
-  /** Apply a block edit and remesh every column whose lighting could change, atomically. */
-  editBlock(x: number, y: number, z: number, id: number): boolean {
-    if (!this.world.set_block(x, y, z, id)) return false;
+  /**
+   * Edits made in the simulation's copy of the world (a worker, a server): applied and remeshed
+   * where this client has the column, kept for when it loads where it doesn't.
+   */
+  mirrorEdits(cells: [number, number, number, number][]) {
+    if (cells.length === 1) {
+      const [x, y, z, id] = cells[0];
+      if (this.world.mirror_block(x, y, z, id)) this.remeshNear(x, z);
+      return;
+    }
+    const touched = new Map<number, [number, number]>();
+    for (const [x, y, z, id] of cells) {
+      if (!this.world.mirror_block(x, y, z, id)) continue;
+      const cx = Math.floor(x / 16);
+      const cz = Math.floor(z / 16);
+      touched.set(keyOf(cx, cz), [cx, cz]);
+    }
+    if (touched.size) this.remeshAround(touched.values());
+  }
+
+  /** After one block changed: remesh every column whose lighting could change, atomically. */
+  private remeshNear(x: number, z: number) {
     const cx = Math.floor(x / 16);
     const cz = Math.floor(z / 16);
     const batch: Batch = { need: new Map(), ready: new Map(), created: performance.now() };
@@ -411,25 +430,6 @@ export class ChunkManager {
       }
     }
     if (batch.need.size > 0) this.batches.push(batch);
-    return true;
-  }
-
-  /**
-   * Many edits at once (explosions): set them all, then remesh each affected column once in a
-   * single batch so they appear together. Returns how many changed.
-   */
-  editBlocks(cells: [number, number, number, number][]): number {
-    let n = 0;
-    const touched = new Map<number, [number, number]>();
-    for (const [x, y, z, id] of cells) {
-      if (!this.world.set_block(x, y, z, id)) continue;
-      n++;
-      const cx = Math.floor(x / 16);
-      const cz = Math.floor(z / 16);
-      touched.set(keyOf(cx, cz), [cx, cz]);
-    }
-    if (n) this.remeshAround(touched.values());
-    return n;
   }
 
   /** Undo every block edit made this session (restart) and remesh what changed together. */

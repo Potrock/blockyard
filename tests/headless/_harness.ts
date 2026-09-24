@@ -13,7 +13,7 @@ export function launch(id: string, o: Partial<HeadlessOptions> = {}): Headless {
   const def = games.find((g) => g.id === id);
   if (!def) throw new Error(`no game "${id}"`);
   Math.random = mulberry32((o.seed ?? 1) ^ 0x5bd1e995);
-  const h = new Headless(def, { wasm, ...o });
+  const h = new Headless(def, { wasm, wire: true, ...o });
   h.start();
   return h;
 }

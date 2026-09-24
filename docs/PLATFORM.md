@@ -361,7 +361,7 @@ game.items.atlas('mine', { width: ATLAS, height: ATLAS, pixels: albedo, emissive
 
 The Arena paints its whole atlas this way (`src/games/arena/art/`): five mob skins, weapon sprites and the pike's texture, with bevelled pixel-art shading, in about 50 ms at startup. Bed Wars paints four team skins, a shopkeeper and its item sprites the same way.
 
-**Sound.** `game.audio.define(name, voice)` adds a sound; play it like any other with `audio.play(name, { at })`. Voices are synthesised on each play:
+**Sound.** `game.audio.define(name, voice)` adds a sound; play it like any other with `audio.play(name, { at })`. Voices are synthesised on each play, on each player's machine:
 
 ```ts
 game.audio.define('laser', (s) => {
@@ -370,9 +370,10 @@ game.audio.define('laser', (s) => {
 });
 ```
 
-- `s.tone` is an oscillator sweep with an envelope and optional lowpass, bandpass or vibrato.
+- `s.tone` is an oscillator sweep with an envelope and optional lowpass, bandpass (which can sweep: `bandpass: { freq, to, q }`) or vibrato. Starfighter's TIE howl is three detuned, wavering sawtooths through a sweeping bandpass.
 - `s.noise` is filtered noise with a sweeping filter.
-- `s.ctx`, `s.out` and `s.t` give raw WebAudio for anything else. Starfighter's TIE howl shares one sweeping filter across three detuned oscillators this way.
+- `s.pitch` is the play's pitch: multiply frequencies by it.
+- Your game runs away from the player's speakers (in a worker, or on a server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
 - The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers).
 
 ## Commands
@@ -462,9 +463,10 @@ export default function myGame() {
 ├──────────── kits + art toolkit (optional, only @platform) ──┤
 │ survival building · interactions · pixel-art painter        │
 └──────────────────────── GameContext ───────────────────────┘
-┌──────────── simulation: Sim (headless, no DOM / WebGL) ─────┐
-│ players · entities · items · combat · props · commands      │
-└──── PlayerInput in ▲   ▼ SimFrame + PresentCalls out ───────┘
+┌──────────── host: GameHost (a Web Worker; Node; a server) ──┐
+│ Sim: players · entities · items · combat · props · commands │
+│ its own world, generated around the players                 │
+└──── PlayerInput in ▲   ▼ content · calls · edits · frame ───┘
 ┌──────────── client (TypeScript + three.js) ────────────────┐
 │ camera · entity / pickup / prop views · presenter           │
 │ HUD · audio · FX · renderer (WebGL2) · chunk streaming      │
@@ -483,12 +485,13 @@ Your game runs inside the **simulation**, and everything it does reaches players
 - **Presentation calls out.** `hud`, `fx`, `audio` and the view model are proxies. Each call becomes a `PresentCall` addressed to one player (`player.hud`) or to everyone (`game.hud`). Menu entries, buttons and other callbacks go out as ids and come back as `ClientMessage`s, which call your function inside the simulation.
 - **Content by name.** Sounds, atlases, animations, entity and item definitions, and prop models go into a shared `Content` registry, so a frame only has to name them.
 
-In the browser today, the runtime is both the client and the host: it runs the `Sim` in the same page and passes frames and calls straight through. In Node, `Headless` (`src/platform/host/headless.ts`) hosts the same `Sim` with a world generated around the players and no client at all; that's what the headless tests run on. Nothing crosses that boundary except data, so the same `Sim` can move into a Web Worker or onto a server, with clients streaming frames, without changing your game. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
+A `GameHost` runs the simulation on a world of its own, generated around the players, and answers each tick with a batch: the content your game defined since the last one, presentation calls, block edits, then the frame. In the browser the host runs in a Web Worker, so your game's logic never costs the renderer a frame. The page is only the client: it sends one tick per frame with the player's controls, draws the newest frame, and mirrors the host's block edits into its own world for meshing (and for saves). In Node, `Headless` (`src/platform/host/headless.ts`) wraps the same `GameHost` with no client at all; that's what the headless tests run on. A server will host it the same way, with clients over a socket instead of a worker, without changing your game. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
 
 On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server can link the same crate and generate identical worlds from the same seed and blueprints. Entity state lives in flat `f64` buffers (layout documented in `entities.rs`) that serialise directly into snapshots. Rendering, chunk meshing, lighting and culling stay on the client.
 
 What this means when you write a game:
 
-- Keep state in the game module or on entities, not in the DOM. Draw on screen only through `hud`, `fx`, `audio` and models.
+- Your game runs in a worker: there is no `document` or `window`, and nothing to draw on directly. Keep state in the game module or on entities, and put things on screen only through `hud`, `fx`, `audio` and models. Paint atlases with `@platform/art` (pixels), not a canvas.
+- `console.log` from your game shows in the browser's console as usual. To poke at your game from the console, open it with `?host=page`: the host runs in the page and `__game.context` is your `GameContext`.
 - Use `player.hud` for things only that player should see, such as a shop, a wallet or a death screen. Use `game.hud` for match-wide banners and objectives.
 - Write for any number of players: iterate `game.players`, target `entity.nearestPlayer()`, and use the `player` passed to callbacks and events. `game.player` is only a convenience for single-player games.
