@@ -107,8 +107,23 @@ export interface PlayerOptions {
 // Context
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Data a game keeps across restarts: all-time stats, leaderboards, unlocks, settings. On a game
+ * server it lives in the server's database; in single-player, in the browser. Values are anything
+ * JSON can hold, copied in and out.
+ */
+export interface StoreApi {
+  get<T = unknown>(key: string): T | undefined;
+  set(key: string, value: unknown): void;
+  delete(key: string): void;
+  /** The keys saved, or those starting with `prefix` (`'stats:'`). */
+  keys(prefix?: string): string[];
+}
+
 export interface GameContext {
   readonly world: WorldApi;
+  /** Data kept across restarts (see `StoreApi`). Key per player by name: `stats:${player.name}`. */
+  readonly store: StoreApi;
   /**
    * Everyone playing. A single-player game has exactly one; in a multiplayer game players join
    * and leave (`playerJoin` / `playerLeave` events). Players already here when `start` runs are

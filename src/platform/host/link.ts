@@ -27,21 +27,25 @@ export class PageLink implements SimLink {
   }
 }
 
-/** What a host worker posts back: a batch, or an error it caught. */
-export type WorkerReply = HostBatch | { error: string };
+/** What a host worker posts back: a batch, an error it caught, or a change to `game.store`. */
+export type WorkerReply = HostBatch | { error: string } | { store: [string, unknown] };
 
 /** The host in a worker (the default): commands and batches are messages. */
 export class WorkerLink implements SimLink {
   onBatch: ((b: HostBatch) => void) | null = null;
   readonly local = null;
+  /** The game changed `game.store`: keep it (the page's localStorage). */
+  onStore: ((key: string, value: unknown) => void) | null = null;
 
   constructor(
     private worker: Worker,
     init: HostInit,
   ) {
     worker.onmessage = (e: MessageEvent<WorkerReply>) => {
-      if ('error' in e.data) console.error(`[game host] ${e.data.error}`);
-      else this.onBatch?.(e.data);
+      const m = e.data;
+      if ('error' in m) console.error(`[game host] ${m.error}`);
+      else if ('store' in m) this.onStore?.(m.store[0], m.store[1]);
+      else this.onBatch?.(m);
     };
     worker.onerror = (e) => console.error(`[game host] ${e.message}`);
     worker.postMessage(init);

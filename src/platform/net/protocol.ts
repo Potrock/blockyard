@@ -158,6 +158,8 @@ export interface HostInit {
   cheats: boolean;
   radius: number;
   dayLength: number | null;
+  /** What the game kept in `game.store` on this device. */
+  store: Record<string, unknown>;
 }
 
 /** A server's first message to a client: which game, which world, and who they are in it. */

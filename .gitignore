@@ -4,3 +4,4 @@ engine/target
 engine/pkg
 .DS_Store
 *.local
+data

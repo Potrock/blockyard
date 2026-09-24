@@ -1,5 +1,5 @@
 import * as engine from '@engine/voxel_engine.js';
-import type { Actor, BlockRef, GameContext, GameDefinition, GameEvents, Player, Rng, Vec3 } from '../api/types';
+import type { Actor, BlockRef, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3 } from '../api/types';
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
@@ -67,6 +67,8 @@ export interface SimOptions {
   cheats: boolean;
   /** The first player (`game.player`): 'local' and 'Player' unless a server names them. */
   player?: { id: string; name: string };
+  /** Where `game.store` keeps its data (default: nowhere past this session). */
+  store?: { data(): Map<string, unknown>; put(key: string, value: unknown): void };
   /**
    * Game code threw (a timer, `update`, an entity's AI): report it and carry on with the tick,
    * so one bug doesn't stop the whole game. Without it, errors are thrown.
@@ -288,6 +290,26 @@ export class Sim {
     this.start();
   }
 
+  /** `game.store`: values copied through JSON, so nothing the game holds on to changes them. */
+  private makeStore(): StoreApi {
+    const backing = this.o.store;
+    const data = backing?.data() ?? new Map<string, unknown>();
+    const copy = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T));
+    return {
+      get: <T>(key: string) => copy(data.get(key)) as T | undefined,
+      set: (key, value) => {
+        const v = copy(value);
+        data.set(key, v);
+        backing?.put(key, v);
+      },
+      delete: (key) => {
+        data.delete(key);
+        backing?.put(key, undefined);
+      },
+      keys: (prefix = '') => [...data.keys()].filter((k) => k.startsWith(prefix)).sort(),
+    };
+  }
+
   private newPlayer(id: string, name: string): PlayerSim {
     const p = new PlayerSim({
       id,
@@ -493,6 +515,7 @@ export class Sim {
       },
       players,
       player: local,
+      store: this.makeStore(),
       entities: this.entities,
       items: this.items,
       hud: this.presentation.hud(null),

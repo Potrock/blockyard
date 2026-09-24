@@ -43,6 +43,33 @@ let nextBotSkill = 0;
 /** The match is on (`start` ran): players who join now take over a bot's team. */
 let playing = false;
 
+/** A player's all-time numbers, kept by name in `game.store` (the server's database). */
+interface AllTime {
+  games: number;
+  wins: number;
+  kills: number;
+  finals: number;
+  beds: number;
+}
+/** Players whose match has been counted (once each, when it ends for them). */
+const recorded = new Set<Player>();
+
+/** Count this match into a player's all-time numbers (once), and return them. */
+function record(game: GameContext, p: Player, t: Team, won: boolean): AllTime {
+  const key = `stats:${p.name}`;
+  const r: AllTime = { games: 0, wins: 0, kills: 0, finals: 0, beds: 0, ...game.store.get<AllTime>(key) };
+  if (!recorded.has(p)) {
+    recorded.add(p);
+    r.games++;
+    if (won) r.wins++;
+    r.kills += t.kills;
+    r.finals += t.finals;
+    r.beds += t.beds;
+    game.store.set(key, r);
+  }
+  return r;
+}
+
 const BOT_SKILL = [0.8, 0.95, 0.88];
 const BOT_NAMES: Record<string, string> = { blue: 'Blue', green: 'Green', yellow: 'Yellow', red: 'Red' };
 
@@ -126,7 +153,7 @@ function eliminate(game: GameContext, t: Team) {
       title: 'ELIMINATED',
       subtitle: 'Your team is out. Watch the others fight it out.',
       tone: 'defeat',
-      stats: stats(t),
+      stats: stats(t, record(game, p, t, false)),
       buttons: [
         { label: 'Watch', primary: true, onClick: () => {} },
         { label: 'Exit', onClick: () => game.exit() },
@@ -256,11 +283,13 @@ function applyGear() {
 // End of the match
 // ---------------------------------------------------------------------------------------------
 
-const stats = (t: Team): [string, string][] => [
+const stats = (t: Team, all: AllTime): [string, string][] => [
   ['Kills', String(t.kills)],
   ['Final kills', String(t.finals)],
   ['Beds broken', String(t.beds)],
   ['Time', clock(match.now)],
+  ['All-time wins', `${all.wins} of ${all.games}`],
+  ['All-time kills', String(all.kills)],
 ];
 
 /** The match is over: `winner` is the last team standing (null: no one's left playing). */
@@ -272,13 +301,14 @@ function finish(game: GameContext, winner: Team | null) {
   for (const p of game.players) {
     const t = match.seatOf(p);
     const won = !!t && t === winner;
+    const all = t ? record(game, p, t, won) : null;
     p.audio.play(won ? 'victory' : 'defeat');
     game.clock.after(won ? 1.8 : 1.4, () =>
       p.hud.screen({
         title: won ? 'VICTORY!' : 'GAME OVER',
         subtitle: won ? 'Your team is the last one standing' : winner ? `${who(winner)} (${winner.name}) wins` : 'Your team has been eliminated',
         tone: won ? 'victory' : 'defeat',
-        stats: t ? stats(t) : [['Time', clock(match.now)]],
+        stats: t && all ? stats(t, all) : [['Time', clock(match.now)]],
         buttons: [
           { label: 'Play again', primary: true, onClick: () => game.restart() },
           { label: 'Exit', onClick: () => game.exit() },
@@ -511,6 +541,7 @@ export default defineGame({
     fireballs.clear();
     shop.closeAll();
     alarms.clear();
+    recorded.clear();
     nextBotSkill = 0;
     Object.assign(hud, { refresh: 0, diamondIn: match.diamondEvery, emeraldIn: match.emeraldEvery });
 

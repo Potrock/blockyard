@@ -11,6 +11,7 @@ import type { WorldGenConfig } from '../workers/protocol';
 import { loadRegistry } from '../world/registry';
 import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
 import { PresentState } from './state';
+import { MemoryStore, type SavedPlayer, type Store } from './store';
 
 /** Columns generated straight away around the spawn, before the first tick. */
 const CORE = 4;
@@ -100,6 +101,11 @@ export interface GameHostOptions {
   remote?: boolean;
   /** The first player's id and name (default 'local', 'Player'). */
   player?: { id: string; name: string };
+  /**
+   * What's kept across restarts: `game.store`, and for games that keep their world
+   * (`world.persist`) its edits and each player's place, by name. Default: memory only.
+   */
+  store?: Store;
 }
 
 /** A connected client. */
@@ -128,6 +134,7 @@ export class GameHost {
   /** The world's seed (the game's own, if it fixes one). */
   readonly seed: number;
   radius: number;
+  readonly store: Store;
   private budget: number;
   private events: HostEvent[] = [];
   private clients = new Map<string, Client>();
@@ -145,6 +152,7 @@ export class GameHost {
     loadEngineSync(o.engine);
     const registry = loadRegistry();
     const seed = (this.seed = (def.world?.seed ?? o.seed) >>> 0);
+    const store = (this.store = o.store ?? new MemoryStore());
     this.radius = o.radius ?? 8;
     this.budget = o.budget ?? 4;
     const blockId = (b: BlockRef) => {
@@ -192,10 +200,18 @@ export class GameHost {
       exit: () => this.events.push({ t: 'exit', player: this.acting }),
       cheats: o.cheats ?? false,
       player: o.player,
+      store,
       error: (err) => this.events.push({ t: 'error', text: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) }),
     });
     if (o.dayLength && !def.world?.freezeTime) this.sim.env.dayLength = o.dayLength;
     this.sim.setup();
+
+    // A kept world picks up where it was: its builds, its time of day.
+    const kept = this.keeps ? store.world() : null;
+    if (kept?.edits && !o.save) {
+      w.import_edits(kept.edits);
+      this.sim.env.time = kept.time;
+    }
 
     // Where the player starts: the save, the game's spawn, or open ground near the generator's pick.
     const me = this.sim.local;
@@ -253,6 +269,14 @@ export class GameHost {
    */
   connect(name: string): { id: string; batch: HostBatch } {
     const player = this.sim.join(name);
+    // Back in a kept world: where they left off.
+    const was = this.keeps ? this.store.player(name) : null;
+    if (was) {
+      this.world.update([was], 4, Infinity);
+      this.world.world.set_flying(player.slot, was.flying && player.allowFlight);
+      player.place(was.x, was.y, was.z, was.yaw, was.pitch);
+      if (was.hotbar && player.creative) player.creative.hotbar.splice(0, was.hotbar.length, ...was.hotbar);
+    }
     this.clients.set(player.id, { player, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 });
     // Ready (the game's defaults applied) before what's on screen, which may change them (a skin).
     const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }, { t: 'ready' }];
@@ -263,9 +287,34 @@ export class GameHost {
   disconnect(id: string) {
     const c = this.clients.get(id);
     if (!c) return;
+    this.guard(() => this.keepPlayer(c.player));
     this.clients.delete(id);
     this.guard(() => this.sim.leave(id));
     if (c.player !== this.sim.local) this.state.forget(id);
+  }
+
+  /** Whether this game keeps its world (and players' places) across restarts. */
+  private get keeps(): boolean {
+    return !!this.def.world?.persist;
+  }
+
+  private keepPlayer(p: PlayerSim) {
+    if (!this.keeps || p.vacant) return;
+    const s = p.state;
+    const saved: SavedPlayer = { x: s.x, y: s.y, z: s.z, yaw: p.yaw, pitch: p.pitch, flying: s.flying, hotbar: p.creative ? [...p.creative.hotbar] : undefined };
+    this.store.savePlayer(p.name, saved);
+  }
+
+  /**
+   * Save what's kept: the world (its seed always; its edits and time of day if the game keeps its
+   * world), everyone connected, and the game's data. A server calls this every so often and when
+   * it stops.
+   */
+  persist() {
+    const w = this.world.world;
+    this.store.saveWorld({ game: this.def.id, seed: this.seed, edits: this.keeps ? w.export_edits() : null, time: this.sim.env.time });
+    for (const c of this.clients.values()) this.keepPlayer(c.player);
+    this.store.flush();
   }
 
   /** How many clients are connected. */

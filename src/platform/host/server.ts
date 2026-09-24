@@ -3,6 +3,7 @@ import type { GameDefinition } from '../api/types';
 import { decode, encode } from '../net/codec';
 import type { ClientCommand, ServerWelcome, TimedBatch } from '../net/protocol';
 import { GameHost } from './game';
+import type { Store } from './store';
 
 export interface ServeOptions {
   port: number;
@@ -13,6 +14,13 @@ export interface ServeOptions {
   tickRate?: number;
   /** Chat commands like `/give` (default off on a server). */
   cheats?: boolean;
+  /**
+   * What's kept across restarts (a `SqliteStore`): with a world in it, the server carries on that
+   * world (its seed; its builds and players' places if the game keeps its world), whatever `seed`
+   * says. Saved every `saveEvery` seconds (default 30) and when the server closes.
+   */
+  store?: Store;
+  saveEvery?: number;
   log?: (line: string) => void;
 }
 
@@ -32,7 +40,12 @@ export function serveGame(def: GameDefinition, o: ServeOptions): Promise<GameSer
   const log = o.log ?? (() => {});
   const rate = o.tickRate ?? 30;
   const dt = 1 / rate;
-  const host = new GameHost(def, { engine: o.wasm, seed: o.seed, remote: true, cheats: o.cheats ?? false, player: { id: 'p1', name: 'Player' }, radius: 8 });
+  const kept = o.store?.world();
+  const host = new GameHost(def, { engine: o.wasm, seed: kept?.seed ?? o.seed, remote: true, cheats: o.cheats ?? false, player: { id: 'p1', name: 'Player' }, radius: 8, store: o.store });
+  if (o.store) {
+    host.persist();
+    log(kept ? `carrying on the saved world (seed ${host.seed})` : `new world (seed ${host.seed})`);
+  }
   const sockets = new Map<string, WebSocket>();
   let time = 0;
   const send = (ws: WebSocket, msg: unknown) => {
@@ -42,7 +55,11 @@ export function serveGame(def: GameDefinition, o: ServeOptions): Promise<GameSer
   const wss = new WebSocketServer({ port: o.port });
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url ?? '/', 'http://server');
-    const name = (url.searchParams.get('name') ?? '').trim().slice(0, 24) || 'Player';
+    // Names are who you are here (a kept world remembers your place by name): one of each at a time.
+    const asked = (url.searchParams.get('name') ?? '').trim().slice(0, 24) || 'Player';
+    const taken = new Set(host.sim.players.filter((p) => !p.vacant).map((p) => p.name));
+    let name = asked;
+    for (let n = 2; taken.has(name); n++) name = `${asked} ${n}`;
     const { id, batch } = host.connect(name);
     sockets.set(id, ws);
     log(`${name} joined as ${id} (${host.connected} playing)`);
@@ -65,6 +82,7 @@ export function serveGame(def: GameDefinition, o: ServeOptions): Promise<GameSer
     });
   });
 
+  const saver = o.store ? setInterval(() => host.persist(), (o.saveEvery ?? 30) * 1000) : null;
   const timer = setInterval(() => {
     if (!host.connected) return;
     time += dt;
@@ -84,8 +102,15 @@ export function serveGame(def: GameDefinition, o: ServeOptions): Promise<GameSer
         close: () =>
           new Promise<void>((done) => {
             clearInterval(timer);
+            if (saver) clearInterval(saver);
             for (const ws of wss.clients) ws.terminate();
-            wss.close(() => done());
+            wss.close(() => {
+              if (o.store) {
+                host.persist();
+                o.store.close();
+              }
+              done();
+            });
           }),
       });
     });

@@ -1,6 +1,7 @@
 import type { GameDefinition } from '../api/types';
 import type { ClientCommand, HostInit } from '../net/protocol';
 import { GameHost } from './game';
+import { MemoryStore } from './store';
 import type { WorkerReply } from './link';
 
 /**
@@ -22,7 +23,9 @@ export function serveWorker(find: (id: string) => GameDefinition | undefined | P
         if (m.t === 'init') {
           const def = await find(m.game);
           if (!def) throw new Error(`no game "${m.game}"`);
-          host = new GameHost(def, { engine: m.module, seed: m.seed, save: m.save, cheats: m.cheats, radius: m.radius, dayLength: m.dayLength });
+          // `game.store` changes go to the page, which keeps them.
+          const store = new MemoryStore(m.store, (key, value) => scope.postMessage({ store: [key, value] }));
+          host = new GameHost(def, { engine: m.module, seed: m.seed, save: m.save, cheats: m.cheats, radius: m.radius, dayLength: m.dayLength, store });
           return;
         }
         const b = host?.handle(m);

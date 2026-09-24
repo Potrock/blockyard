@@ -3,6 +3,7 @@ import { engine, loadEngine } from './engine/wasm';
 import { WorkerPool } from './workers/pool';
 import { worldGenConfig } from './host/spawn';
 import { PageLink, SocketLink, WorkerLink, type SimLink } from './host/link';
+import { MemoryStore } from './host/store';
 import { FrameBuffer } from './client/interp';
 import { Predictor } from './client/predict';
 import { Models, Skins } from './api/models';
@@ -309,6 +310,9 @@ export class Runtime {
       fov: this.settings.fov,
     };
     const inPage = new URL(location.href).searchParams.get('host') === 'page';
+    // `game.store` in single-player: this device's localStorage.
+    const kept = this.loadStore();
+    const keep = (key: string, value: unknown) => this.keepStore(kept, key, value);
     if (this.server) {
       this.link = this.server;
       // Two steps behind the newest frame: smooth, and about 70 ms behind the server at 30 steps a second.
@@ -316,7 +320,13 @@ export class Runtime {
       this.server.onClose = () => this.disconnected();
       if (this.walker) this.predictor = new Predictor(this.chunks.world);
     } else {
-      this.link = inPage || !this.makeWorker ? new PageLink(def, { ...opts, engine: module, budget: 2 }) : new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts });
+      if (inPage || !this.makeWorker) {
+        this.link = new PageLink(def, { ...opts, engine: module, budget: 2, store: new MemoryStore(kept, keep) });
+      } else {
+        const link = new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts, store: kept });
+        link.onStore = keep;
+        this.link = link;
+      }
     }
 
     this.link.onBatch = (b) => this.receive(b);
@@ -579,6 +589,29 @@ export class Runtime {
 
   private get saveKey() {
     return `voxel.${this.def.id}.world.${this.seed}`;
+  }
+
+  private get storeKey() {
+    return `voxel.${this.def.id}.store`;
+  }
+
+  /** What the game kept in `game.store` on this device. */
+  private loadStore(): Record<string, unknown> {
+    try {
+      return JSON.parse(localStorage.getItem(this.storeKey) ?? '{}') as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+
+  private keepStore(data: Record<string, unknown>, key: string, value: unknown) {
+    if (value === undefined) delete data[key];
+    else data[key] = value;
+    try {
+      localStorage.setItem(this.storeKey, JSON.stringify(data));
+    } catch {
+      // Full or blocked: the game carries on, unsaved.
+    }
   }
 
   /** The saved world, if the game keeps one. Its edits go into this client's world too. */

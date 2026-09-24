@@ -92,7 +92,7 @@ Other scripts:
 | `npm run typecheck` | TypeScript only |
 | `npm run test:engine` | Rust unit tests: generation, blueprints, meshing, lighting, culling, physics, entities, path-finding, textures |
 | `npm run test:headless` | Games in Node, no browser (`tests/headless`): every game runs 30 s, a bot beats the Arena, bots play out a Bed Wars match, several players share a host and a real server. About 8 s in total |
-| `npm run server -- <game> --port 8787` | Host a game for several players; they open `/?server=ws://localhost:8787&name=Ann` |
+| `npm run server -- <game> --port 8787` | Host a game for several players; they open `/?server=ws://localhost:8787&name=Ann`. The world, players' places and the game's data are kept in `data/<game>.sqlite` (`--db` to choose, `--new` for a fresh world) |
 
 URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for games that don't fix their own seed. `?server=ws://host:port&name=Ann` joins a game server instead. `?host=page` runs the game in the page rather than a worker (for debugging).
 

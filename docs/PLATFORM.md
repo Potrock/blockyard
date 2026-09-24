@@ -130,12 +130,14 @@ Games are written so the same code works with one player or many:
 **Playing together.** Any game can be hosted by the game server, and players join from their browsers:
 
 ```sh
-npm run server -- sandbox --port 8787          # add --cheats for /tp, /give…, --seed to pick the world
+npm run server -- sandbox --port 8787          # add --cheats for /tp, /give…, --seed to pick a new world's seed
 # then each player opens:
 http://localhost:5173/?server=ws://localhost:8787&name=Ann
 ```
 
-The server runs the game at 30 steps a second whether or not anyone's watching a given frame. The first to join is `game.player`; everyone else arrives at the spawn and the game hears `playerJoin`. When the first player leaves, the next to join takes their place, so `game.player` always works. Everyone sees everyone else as a figure with their name above it, wearing the game's player skin (or their own, `player.setSkin`). Your own movement is predicted: it happens the moment you press a key, and the server's word only corrects it when something you couldn't know about happened (a knockback, a teleport). The server doesn't save worlds yet, and a restart (from any player's pause menu or a "Play again" button) restarts the game for everyone. `game.exit()` sends back to the launcher only the player whose button or command called it.
+The server runs the game at 30 steps a second whether or not anyone's watching a given frame. The first to join is `game.player`; everyone else arrives at the spawn and the game hears `playerJoin`. When the first player leaves, the next to join takes their place, so `game.player` always works. Everyone sees everyone else as a figure with their name above it, wearing the game's player skin (or their own, `player.setSkin`). Your own movement is predicted: it happens the moment you press a key, and the server's word only corrects it when something you couldn't know about happened (a knockback, a teleport). A restart (from any player's pause menu or a "Play again" button) restarts the game for everyone. `game.exit()` sends back to the launcher only the player whose button or command called it.
+
+**What a server keeps.** Each server has a SQLite database (`data/<game>.sqlite`, or `--db path`). It holds the world's seed, so restarting the server carries on the same world; for games that keep their world (`world.persist`, like Sandbox) its builds and time of day, and each player's place by name (where they stood, which way they faced, whether they were flying, their block hotbar); and your game's `game.store`. It's saved every 30 seconds, when a player leaves, and when the server stops (Ctrl-C). `--new` starts a fresh world and sets the old database aside. Names aren't checked yet: whoever joins as Ann gets Ann's place, and a second Ann at the same time becomes "Ann 2".
 
 How a single-player game behaves with company depends on how it's written: a game that only talks to `game.player` gives the others a world to walk around in, while one that uses `game.players`, `player.hud` and the named player in callbacks works for everyone.
 
@@ -387,6 +389,20 @@ game.audio.define('laser', (s) => {
 - `s.pitch` is the play's pitch: multiply frequencies by it.
 - Your game runs away from the player's speakers (in a worker, or on a server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
 - The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers).
+
+## Keeping data
+
+`game.store` keeps values across restarts: all-time stats, leaderboards, unlocks. On a game server it's in the server's database; in single-player, in the browser. Values are anything JSON can hold, and they're copies (changing an object you got doesn't change what's kept until you `set` it again). Keep per-player values under the player's name:
+
+```ts
+const key = `stats:${player.name}`;
+const s = game.store.get<{ wins: number }>(key) ?? { wins: 0 };
+s.wins++;
+game.store.set(key, s);
+game.store.keys('stats:'); // everyone's, for a leaderboard
+```
+
+Bed Wars counts each player's games, wins, kills, final kills and beds this way and shows the all-time numbers on its result screen.
 
 ## Commands
 
