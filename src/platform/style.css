@@ -330,6 +330,45 @@ kbd {
   color: var(--text);
 }
 
+/* Play online: a name and a button, or who you are online. */
+.online {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 12px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+}
+.online-name {
+  width: 150px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font: 500 13px var(--sans);
+  outline: none;
+}
+.online-name:focus {
+  border-color: rgba(134, 221, 112, 0.7);
+}
+.online-count {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 500;
+}
+.online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6fe36b;
+  box-shadow: 0 0 8px #6fe36b;
+  margin-right: 4px;
+}
+.online-leave {
+  color: rgba(255, 255, 255, 0.6);
+}
+
 .seed {
   margin-top: 16px;
   font: 10px var(--pixel);

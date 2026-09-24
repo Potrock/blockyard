@@ -1,0 +1,89 @@
+import type { ClientCommand, ClientMessage, PlayerInput } from './protocol';
+
+/**
+ * A client's command as a server should take it: checked field by field, numbers finite and in
+ * range, lists short, text trimmed. Anything malformed is null (the server drops it). A browser
+ * never sends such a thing; this is for everything else that can open a socket.
+ */
+export function sanitizeCommand(raw: unknown): ClientCommand | null {
+  if (!isObject(raw) || typeof raw.t !== 'string') return null;
+  switch (raw.t) {
+    case 'input': {
+      const input = sanitizeInput(raw.input);
+      if (!input) return null;
+      if (raw.seq === undefined && raw.dt === undefined) return { t: 'input', input };
+      const seq = int(raw.seq, 0, Number.MAX_SAFE_INTEGER);
+      const dt = num(raw.dt, 0, 0.1);
+      return seq === null || dt === null ? null : { t: 'input', input, seq, dt };
+    }
+    case 'message': {
+      const msg = sanitizeMessage(raw.msg);
+      return msg ? { t: 'message', msg } : null;
+    }
+    case 'start':
+    case 'restart':
+      return { t: raw.t };
+    case 'env': {
+      const time = raw.time === undefined ? undefined : num(raw.time, 0, 1);
+      const dayLength = raw.dayLength === undefined ? undefined : num(raw.dayLength, 10, 24 * 3600);
+      return time === null || dayLength === null ? null : { t: 'env', time: time ?? undefined, dayLength: dayLength ?? undefined };
+    }
+    case 'radius': {
+      const columns = int(raw.columns, 2, 12);
+      return columns === null ? null : { t: 'radius', columns };
+    }
+    case 'exec':
+    case 'complete': {
+      const id = int(raw.id, 0, Number.MAX_SAFE_INTEGER);
+      if (id === null || typeof raw.line !== 'string' || raw.line.length > 200) return null;
+      return { t: raw.t, id, line: raw.line };
+    }
+    default:
+      return null;
+  }
+}
+
+function sanitizeInput(raw: unknown): PlayerInput | null {
+  if (!isObject(raw)) return null;
+  const keys = (v: unknown) => (Array.isArray(v) && v.length <= 32 && v.every((k) => typeof k === 'string' && k.length <= 24) ? (v as string[]) : null);
+  const down = keys(raw.down);
+  const pressed = keys(raw.pressed);
+  const buttons = int(raw.buttons, 0, 31);
+  const clicked = int(raw.clicked, 0, 31);
+  const mouseX = num(raw.mouseX, -1e5, 1e5);
+  const mouseY = num(raw.mouseY, -1e5, 1e5);
+  const wheel = int(raw.wheel, -100, 100);
+  const yaw = num(raw.yaw, -1e6, 1e6);
+  const pitch = num(raw.pitch, -Math.PI / 2, Math.PI / 2);
+  const viewSeq = int(raw.viewSeq, -1, Number.MAX_SAFE_INTEGER);
+  if (typeof raw.active !== 'boolean' || !down || !pressed || buttons === null || clicked === null || mouseX === null || mouseY === null || wheel === null || yaw === null || pitch === null || viewSeq === null) return null;
+  return { active: raw.active, down, pressed, buttons, clicked, mouseX, mouseY, wheel, yaw, pitch, viewSeq };
+}
+
+function sanitizeMessage(raw: unknown): ClientMessage | null {
+  if (!isObject(raw)) return null;
+  // The player is whoever's socket it came on; the host fills it in.
+  if (raw.t === 'callback') {
+    const id = int(raw.id, 0, Number.MAX_SAFE_INTEGER);
+    return id === null ? null : { t: 'callback', player: '', id };
+  }
+  if (raw.t === 'menuClosed') {
+    const menu = int(raw.menu, 0, Number.MAX_SAFE_INTEGER);
+    return menu === null ? null : { t: 'menuClosed', player: '', menu };
+  }
+  if (raw.t === 'creativePick') {
+    const block = int(raw.block, 0, 254);
+    return block === null ? null : { t: 'creativePick', player: '', block };
+  }
+  return null;
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function num(v: unknown, min: number, max: number): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : null;
+}
+
+function int(v: unknown, min: number, max: number): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : null;
+}

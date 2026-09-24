@@ -151,7 +151,30 @@ export class Runtime {
     this.input = new Input(canvas);
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
-    this.title = new TitleScreen(ui, seed, () => this.play(), games, def.id, (id) => this.switchGame(id), def.controls, this.walker);
+    // Online: this build's game server (VITE_GAME_SERVER, e.g. wss://voxel-games.fly.dev), if any.
+    const gameServer = (import.meta.env.VITE_GAME_SERVER as string | undefined)?.replace(/\/+$/, '') ?? null;
+    const url = new URL(location.href);
+    const online = {
+      server: gameServer,
+      game: def.id,
+      joined: server ? { name: url.searchParams.get('name') ?? 'Player' } : null,
+      join: (name: string) => {
+        const to = new URL(location.href);
+        to.searchParams.set('server', `${gameServer}/${def.id}`);
+        to.searchParams.set('name', name);
+        to.searchParams.delete('seed');
+        to.searchParams.delete('game');
+        location.href = to.toString();
+      },
+      leave: () => {
+        const to = new URL(location.href);
+        to.searchParams.delete('server');
+        to.searchParams.delete('name');
+        to.searchParams.set('game', def.id);
+        location.href = to.toString();
+      },
+    };
+    this.title = new TitleScreen(ui, seed, () => this.play(), games, def.id, (id) => this.switchGame(id), def.controls, this.walker, online);
   }
 
   /**
@@ -572,6 +595,8 @@ export class Runtime {
     const url = new URL(location.href);
     url.searchParams.delete('game');
     url.searchParams.delete('seed');
+    url.searchParams.delete('server');
+    url.searchParams.delete('name');
     location.href = url.toString();
   }
 
@@ -580,6 +605,9 @@ export class Runtime {
     const url = new URL(location.href);
     url.searchParams.set('game', id);
     url.searchParams.delete('seed');
+    // Another game: played alone (join it online from its title screen).
+    url.searchParams.delete('server');
+    url.searchParams.delete('name');
     location.href = url.toString();
   }
 

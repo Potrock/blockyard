@@ -256,6 +256,7 @@ export default defineGame({
   setup(game) {
     defineSounds(game);
     game.commands.register('wave', {
+      cheat: true,
       usage: '<1-3>',
       help: 'Jump to a wave',
       complete: () => ['1', '2', '3'],

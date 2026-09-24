@@ -34,7 +34,7 @@ export default async function server() {
   try {
     const ann = await join(srv.port, 'Ann');
     const bob = await join(srv.port, 'Bob');
-    check(ann.welcome.game === 'sandbox' && ann.welcome.seed === srv.host.seed && ann.welcome.player === 'p1' && bob.welcome.player === 'p2', `welcomes: ${JSON.stringify([ann.welcome, bob.welcome])}`);
+    check(ann.welcome.game === 'sandbox' && ann.welcome.seed === srv.host('sandbox')!.seed && ann.welcome.player === 'p1' && bob.welcome.player === 'p2', `welcomes: ${JSON.stringify([ann.welcome, bob.welcome])}`);
     ann.send({ t: 'start' });
     bob.send({ t: 'start' });
     await wait(300);
@@ -60,7 +60,7 @@ export default async function server() {
     console.log(`  2 players over sockets · ${ann.batches.length} batches to Ann at ${rate.toFixed(0)}/s of host time · Bob walked ${moved.toFixed(1)} blocks`);
     bob.close();
     await wait(200);
-    check(srv.host.connected === 1, `Bob's leaving was noticed: ${srv.host.connected}`);
+    check(srv.host('sandbox')?.connected === 1, `Bob's leaving was noticed: ${srv.host('sandbox')?.connected}`);
     ann.close();
   } finally {
     await srv.close();

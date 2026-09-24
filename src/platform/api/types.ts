@@ -242,6 +242,12 @@ export interface CommandSpec {
   run(args: string[], game: GameContext, player: Player): string | void;
   /** Tab-completion candidates for the last argument (filtered by what's typed). */
   complete?(args: string[], game: GameContext): string[];
+  /**
+   * A developer tool (win now, fill the wallet, skip a wave): it only exists where cheats are on
+   * (development, a server started with `--cheats`, or a game with `cheats: true`). Public
+   * servers don't have it.
+   */
+  cheat?: boolean;
 }
 
 export interface CommandApi {

@@ -3,6 +3,63 @@ import type { Settings, ShadowQuality } from '../settings';
 import type { Registry } from '../world/registry';
 
 /** Title / loading screen shown until the spawn area is ready and the player clicks. */
+/** Playing on a game server, from the title screen. */
+export interface OnlineOptions {
+  /** This build's game server (`wss://…`), if it has one. */
+  server: string | null;
+  /** The game on show (to ask the server whether it hosts it). */
+  game: string;
+  /** Already on a server: as whom. */
+  joined: { name: string } | null;
+  /** Join the game on the server as `name`. */
+  join(name: string): void;
+  /** Back to playing alone. */
+  leave(): void;
+}
+
+/** The online row: a name and "Play online" (with how many are playing), or who you are online. */
+function onlineRow(o: OnlineOptions): HTMLElement | null {
+  if (o.joined) {
+    const off = h('a.online-leave', { href: '#', onclick: (e: Event) => (e.preventDefault(), o.leave()) }, 'Play offline');
+    return h('div.online', {}, h('span.online-dot', {}), h('span', {}, 'Online as '), h('b', {}, o.joined.name), h('span', {}, ' · '), off);
+  }
+  if (!o.server) return null;
+  let saved = '';
+  try {
+    saved = localStorage.getItem('voxel.name') ?? '';
+  } catch {
+    // no storage: no remembered name
+  }
+  const name = h('input.online-name', { type: 'text', maxlength: '20', placeholder: 'Your name', value: saved, spellcheck: false }) as HTMLInputElement;
+  const count = h('span.online-count', {}, '');
+  const go = () => {
+    const n = name.value.trim().slice(0, 20) || 'Player';
+    try {
+      localStorage.setItem('voxel.name', n);
+    } catch {
+      // not remembered
+    }
+    o.join(n);
+  };
+  name.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') go();
+  });
+  const row = h('div.online', { style: 'display: none' }, name, h('button.btn.online-play', { onclick: go }, 'Play online', count));
+  // Show it once the server says it hosts this game (and how many are in it).
+  const http = o.server.replace(/^ws/, 'http').replace(/\/+$/, '');
+  fetch(`${http}/games`)
+    .then((r) => r.json() as Promise<{ games: { id: string; players: number }[] }>)
+    .then(({ games }) => {
+      const g = games.find((x) => x.id === o.game);
+      if (!g) return;
+      row.style.display = '';
+      count.textContent = g.players ? ` · ${g.players} playing` : '';
+    })
+    .catch(() => {});
+  return row;
+}
+
 export class TitleScreen {
   readonly root: HTMLElement;
   private bar: HTMLElement;
@@ -19,6 +76,7 @@ export class TitleScreen {
     onPick: (id: string) => void = () => {},
     controls: [string, string][] = [['LMB', 'break'], ['RMB', 'place'], ['E', 'blocks']],
     walks = true,
+    online: OnlineOptions | null = null,
   ) {
     this.bar = h('div.progress-fill');
     const cards = games.length > 1
@@ -49,6 +107,7 @@ export class TitleScreen {
         h('div.progress', {}, this.bar),
         this.label,
         this.button,
+        online ? onlineRow(online) : null,
         h(
           'div.controls-hint',
           {},

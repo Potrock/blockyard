@@ -92,9 +92,19 @@ Other scripts:
 | `npm run typecheck` | TypeScript only |
 | `npm run test:engine` | Rust unit tests: generation, blueprints, meshing, lighting, culling, physics, entities, path-finding, textures |
 | `npm run test:headless` | Games in Node, no browser (`tests/headless`): every game runs 30 s, a bot beats the Arena, bots play out a Bed Wars match, several players share a host and a real server. About 8 s in total |
-| `npm run server -- <game> --port 8787` | Host a game for several players; they open `/?server=ws://localhost:8787&name=Ann`. The world, players' places and the game's data are kept in `data/<game>.sqlite` (`--db` to choose, `--new` for a fresh world) |
+| `npm run server -- [games…] --port 8787` | Host games for several players (all of them by default, each at `ws://localhost:8787/<game>`); they open `/?server=ws://localhost:8787/sandbox&name=Ann`. Each game's world, players' places and data are kept in `data/<game>.sqlite` (`--data dir`, `--new` for fresh worlds, `--cheats` for developer commands) |
+| `npm run build:server` / `npm start` | Bundle the game server (games included) into `dist-server/` / run it with plain Node |
+| `npm run deploy:server` | Deploy the game server to Fly.io (`fly.toml`, `Dockerfile`) |
+| `npm run deploy:site` | Build the site pointed at the game server (`GAME_SERVER`, default the Fly app) and deploy it to Vercel |
 
 URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for games that don't fix their own seed. `?server=ws://host:port&name=Ann` joins a game server instead. `?host=page` runs the game in the page rather than a worker (for debugging).
+
+## Online
+
+The site is at **https://voxel-platform-roan.vercel.app** and the game server at **https://voxel-games.fly.dev** (`/games` lists what's on and who's playing). On a game's title screen, type a name and press **Play online**.
+
+- **Game server:** Fly.io app `voxel-games` in `iad`, one machine (shared CPU, 512 MB) that sleeps when nobody's connected and wakes on the next visit, with a 1 GB volume at `/data` for the SQLite worlds (snapshotted daily). `fly logs -a voxel-games` shows joins, leaves and game errors. Public servers run without cheats: developer commands (`cheat: true`) don't exist, and players can't restart the game for everyone or change the time. Each game starts when its first player arrives and is saved and stopped five minutes after its last leaves. Limits: 16 players per game, 6 connections per address, 300 messages a second per connection, 16 KB per message; every message is checked before the game sees it.
+- **Website:** Vercel project `voxel-platform` (Pat's projects), a static build made locally (Vercel's builders don't have Rust) with `VITE_GAME_SERVER` baked in; that's what makes **Play online** appear.
 
 ## Controls
 

@@ -505,6 +505,7 @@ export default defineGame({
 
     game.commands.register('bw', {
       help: 'Bed Wars tools',
+      cheat: true,
       usage: 'rich | bed <team> | win | lose | time <seconds>',
       run(args, g, player) {
         const [cmd, arg] = args;

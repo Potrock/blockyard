@@ -1,7 +1,8 @@
 /**
  * Messages over a socket: JSON, with typed arrays (atlas pixels, blueprint cells, saved edits)
- * carried as base64 and Infinity / NaN kept (plain JSON makes them null). Works the same in the
- * browser and in Node.
+ * carried as base64, and Infinity, NaN and `undefined` in lists kept (plain JSON makes them all
+ * null, and `play('hit', undefined)` must not arrive as `play('hit', null)`). Works the same in
+ * the browser and in Node.
  */
 
 type Typed = Uint8Array | Int8Array | Uint16Array | Int16Array | Uint32Array | Int32Array | Float32Array | Float64Array;
@@ -36,7 +37,8 @@ function fromBase64(s: string): Uint8Array {
 }
 
 export function encode(msg: unknown): string {
-  return JSON.stringify(msg, (_k, v: unknown) => {
+  return JSON.stringify(msg, function (this: unknown, _k, v: unknown) {
+    if (v === undefined && Array.isArray(this)) return { $u: 1 };
     if (typeof v === 'number' && !Number.isFinite(v)) return { $n: String(v) };
     if (ArrayBuffer.isView(v) && !(v instanceof DataView)) {
       const t = v as Typed;
@@ -48,6 +50,8 @@ export function encode(msg: unknown): string {
 
 export function decode<T>(text: string): T {
   return JSON.parse(text, (_k, v: unknown) => {
+    // Returning undefined leaves the list with a hole there, which reads as undefined.
+    if (v && typeof v === 'object' && (v as { $u?: unknown }).$u === 1) return undefined;
     if (v && typeof v === 'object' && typeof (v as { $n?: unknown }).$n === 'string') return Number((v as { $n: string }).$n);
     if (v && typeof v === 'object' && typeof (v as { $t?: unknown }).$t === 'string' && typeof (v as { b?: unknown }).b === 'string') {
       const { $t, b } = v as { $t: string; b: string };

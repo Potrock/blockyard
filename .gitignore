@@ -5,3 +5,6 @@ engine/pkg
 .DS_Store
 *.local
 data
+dist-server
+.vercel
+.env*

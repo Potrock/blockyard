@@ -35,6 +35,12 @@ export class GeneratedWorld {
     applyWorldConfig(this.gen, cfg);
   }
 
+  /** Give the engine its memory back (the world, its entities, the generator). */
+  dispose() {
+    this.world.free();
+    this.gen.free();
+  }
+
   /**
    * Generate up to `budget` missing columns within `radius` of the given points, nearest first,
    * and now and then drop those beyond reach. Returns how many were generated.
@@ -106,6 +112,11 @@ export interface GameHostOptions {
    * (`world.persist`) its edits and each player's place, by name. Default: memory only.
    */
   store?: Store;
+  /**
+   * Game code threw: where the details go. By default the clients get the whole error (stack and
+   * all, handy in development); a public server logs it here and tells players only the message.
+   */
+  onError?: (err: unknown) => void;
 }
 
 /** A connected client. */
@@ -135,6 +146,7 @@ export class GameHost {
   readonly seed: number;
   radius: number;
   readonly store: Store;
+  private onError?: (err: unknown) => void;
   private budget: number;
   private events: HostEvent[] = [];
   private clients = new Map<string, Client>();
@@ -153,6 +165,7 @@ export class GameHost {
     const registry = loadRegistry();
     const seed = (this.seed = (def.world?.seed ?? o.seed) >>> 0);
     const store = (this.store = o.store ?? new MemoryStore());
+    this.onError = o.onError;
     this.radius = o.radius ?? 8;
     this.budget = o.budget ?? 4;
     const blockId = (b: BlockRef) => {
@@ -201,7 +214,7 @@ export class GameHost {
       cheats: o.cheats ?? false,
       player: o.player,
       store,
-      error: (err) => this.events.push({ t: 'error', text: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) }),
+      error: (err) => this.report(err),
     });
     if (o.dayLength && !def.world?.freezeTime) this.sim.env.dayLength = o.dayLength;
     this.sim.setup();
@@ -449,8 +462,23 @@ export class GameHost {
     try {
       fn();
     } catch (err) {
-      this.events.push({ t: 'error', text: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) });
+      this.report(err);
     }
+  }
+
+  private report(err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (this.onError) {
+      this.onError(err);
+      this.events.push({ t: 'error', text: message });
+    } else {
+      this.events.push({ t: 'error', text: err instanceof Error ? `${message}\n${err.stack ?? ''}` : message });
+    }
+  }
+
+  /** Done with this game: give the engine its memory back. The host can't be used after. */
+  dispose() {
+    this.world.dispose();
   }
 
   /** The events since the last batch (and forget them). */

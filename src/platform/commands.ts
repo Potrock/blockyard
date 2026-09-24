@@ -13,9 +13,15 @@ function tokenize(line: string): string[] {
 export class Commands implements CommandApi {
   private cmds = new Map<string, CommandSpec>();
 
-  constructor(private ctx: () => GameContext) {}
+  constructor(
+    private ctx: () => GameContext,
+    /** Cheats are on: developer tools (`cheat: true`) exist. */
+    private cheats = true,
+  ) {}
 
   register(name: string, spec: CommandSpec) {
+    // Without cheats, a developer tool isn't there at all.
+    if (spec.cheat && !this.cheats) return;
     this.cmds.set(name.toLowerCase().replace(/^\/+/, ''), spec);
   }
 

@@ -83,10 +83,11 @@ export class SocketLink implements SimLink {
         if (link) link.deliver(m as TimedBatch);
         else if ('t' in m && m.t === 'welcome') resolve((link = new SocketLink(ws, m)));
       };
-      ws.onerror = () => {
-        if (!link) reject(new Error(`Can't reach the game server at ${url}.`));
+      // Turned away (full, too many connections) or unreachable: the server's reason, if it gave one.
+      ws.onclose = (e: CloseEvent) => {
+        if (link) link.onClose?.();
+        else reject(new Error(e.reason || `Can't reach the game server at ${url}.`));
       };
-      ws.onclose = () => link?.onClose?.();
     });
   }
 

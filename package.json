@@ -13,7 +13,11 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "test:engine": "cargo test --release --manifest-path engine/Cargo.toml",
     "test:headless": "node --disable-warning=ExperimentalWarning scripts/headless.mjs",
-    "server": "node --disable-warning=ExperimentalWarning scripts/server.mjs"
+    "server": "node --disable-warning=ExperimentalWarning scripts/server.mjs",
+    "build:server": "vite build --ssr src/serve.ts --outDir dist-server",
+    "start": "node --disable-warning=ExperimentalWarning dist-server/serve.js",
+    "deploy:server": "npm run wasm && fly deploy --remote-only",
+    "deploy:site": "node scripts/deploy-site.mjs"
   },
   "dependencies": {
     "three": "^0.186.0",

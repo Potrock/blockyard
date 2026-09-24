@@ -153,7 +153,7 @@ export class Sim {
     this.roster.push(this.local.api);
     this.env.time = o.def.world?.time ?? 0.3;
     this.env.frozen = o.def.world?.freezeTime ?? false;
-    this.commands = new Commands(() => this.ctx);
+    this.commands = new Commands(() => this.ctx, o.cheats);
     this.ctx = this.createContext();
     this.registerCommands();
   }
