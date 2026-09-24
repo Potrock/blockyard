@@ -2,13 +2,15 @@ import { TerrainGen, VoxelWorld } from '@engine/voxel_engine.js';
 import type { BlockRef, GameDefinition } from '../api/types';
 import { Content } from '../content';
 import { loadEngineSync } from '../engine/wasm';
-import { IDLE_INPUT, type ClientCommand, type HostBatch, type HostEvent, type SaveState } from '../net/protocol';
+import { IDLE_INPUT, type ClientCommand, type HostBatch, type HostEvent, type PlayerInput, type SaveState } from '../net/protocol';
+import type { PlayerSim } from '../sim/player';
 import { Sim } from '../sim/sim';
 import type { WorldHost } from '../sim/world';
 import { applyWorldConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
 import { loadRegistry } from '../world/registry';
 import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
+import { PresentState } from './state';
 
 /** Columns generated straight away around the spawn, before the first tick. */
 const CORE = 4;
@@ -90,6 +92,22 @@ export interface GameHostOptions {
   dayLength?: number | null;
   /** Field of view a game-driven camera starts with (the player's setting). */
   fov?: number;
+  /**
+   * Clients connect and leave (`connect`, `disconnect`) and the host keeps its own clock
+   * (`step`): a server. Otherwise one client, the first player, is there from the start and its
+   * ticks drive the clock (`handle`): a worker, the page, a test.
+   */
+  remote?: boolean;
+  /** The first player's id and name (default 'local', 'Player'). */
+  player?: { id: string; name: string };
+}
+
+/** A connected client. */
+interface Client {
+  player: PlayerSim;
+  /** Their controls since the last step: held keys as they are now, presses and clicks added up. */
+  input: PlayerInput;
+  radius: number;
 }
 
 /**
@@ -103,6 +121,11 @@ export class GameHost {
   radius: number;
   private budget: number;
   private events: HostEvent[] = [];
+  private clients = new Map<string, Client>();
+  /** What's on screen, to skip calls that change nothing and to catch late joiners up. */
+  private state = new PresentState();
+  /** Every content definition so far, for clients that join later. */
+  private contentLog: HostEvent[] = [];
 
   constructor(
     readonly def: GameDefinition,
@@ -141,16 +164,23 @@ export class GameHost {
       },
     };
     const content = new Content();
-    content.forward = (def) => this.events.push({ t: 'content', def });
+    content.forward = (def) => {
+      const e: HostEvent = { t: 'content', def };
+      this.events.push(e);
+      this.contentLog.push(e);
+    };
     this.sim = new Sim({
       def,
       seed,
       registry,
       world: host,
       content,
-      sink: (call) => this.events.push({ t: 'call', call }),
+      sink: (call) => {
+        if (this.state.admit(call)) this.events.push({ t: 'call', call });
+      },
       exit: () => this.events.push({ t: 'exit' }),
       cheats: o.cheats ?? false,
+      player: o.player,
     });
     if (o.dayLength && !def.world?.freezeTime) this.sim.env.dayLength = o.dayLength;
     this.sim.setup();
@@ -164,7 +194,7 @@ export class GameHost {
       this.sim.env.time = save.time;
       this.sim.spawn = { x, y, z, yaw };
       gw.update([{ x, z }], CORE, Infinity);
-      w.set_flying(save.flying && (def.player?.fly ?? false));
+      w.set_flying(me.slot, save.flying && (def.player?.fly ?? false));
       me.place(x, y, z, yaw, pitch);
     } else {
       const { fixed, ...sp } = startSpawn(def, seed, cfg);
@@ -174,63 +204,162 @@ export class GameHost {
       me.place(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z, sp.yaw);
     }
     if (o.fov) me.cam.fov = o.fov;
-    w.set_frozen(true);
+    w.set_frozen(me.slot, true);
     this.events.push({ t: 'ready' });
+    // One client from the start, or none yet: the first to connect takes the first player's place.
+    if (o.remote) this.sim.leave(me.id);
+    else this.clients.set(me.id, { player: me, input: { ...IDLE_INPUT }, radius: this.radius });
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // One client driving the clock (a worker, the page, tests)
+  // -----------------------------------------------------------------------------------------------
+
+  /**
+   * Run one command from the only client; a tick answers with everything that happened since
+   * the last batch. If the game throws, the error goes to the client as an event and the host
+   * carries on (a tick still answers, so the client never waits on it).
+   */
+  handle(c: ClientCommand): HostBatch | null {
+    const me = this.sim.local.id;
+    if (c.t !== 'tick') {
+      this.command(me, c);
+      return null;
+    }
+    const client = this.clients.get(me);
+    if (client) client.input = c.input ?? { ...IDLE_INPUT };
+    return this.step(c.dt, c.running).get(me) ?? null;
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // Many clients, the host's own clock (a server)
+  // -----------------------------------------------------------------------------------------------
+
+  /**
+   * A client connects: they join the game as a player. Returns their player id and the batch
+   * that catches them up (the game's content, the world's edits, what's on everyone's screen).
+   */
+  connect(name: string): { id: string; batch: HostBatch } {
+    const player = this.sim.join(name);
+    this.clients.set(player.id, { player, input: { ...IDLE_INPUT }, radius: this.radius });
+    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }];
+    for (const call of this.state.snapshot(player.id)) events.push({ t: 'call', call });
+    events.push({ t: 'ready' });
+    return { id: player.id, batch: { events, frame: this.sim.frame() } };
+  }
+
+  disconnect(id: string) {
+    const c = this.clients.get(id);
+    if (!c) return;
+    this.clients.delete(id);
+    this.guard(() => this.sim.leave(id));
+    if (c.player !== this.sim.local) this.state.forget(id);
+  }
+
+  /** How many clients are connected. */
+  get connected(): number {
+    return this.clients.size;
+  }
+
+  /** A command from a client. Its messages act as this client's player, whatever they claim. */
+  command(id: string, c: ClientCommand) {
+    const client = this.clients.get(id);
+    if (!client) return;
+    this.guard(() => this.run(client, c));
   }
 
   /**
-   * Run one command; a tick answers with everything that happened since the last batch. If the
-   * game throws, the error goes to the client as an event and the host carries on (a tick still
-   * answers, so the client never waits on it).
+   * Advance the game `dt` seconds with everyone's controls; each client gets their batch: the
+   * calls for everyone and for them, their replies, the rest, and the frame.
    */
-  handle(c: ClientCommand): HostBatch | null {
-    try {
-      return this.run(c);
-    } catch (err) {
-      this.events.push({ t: 'error', text: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) });
-      return c.t === 'tick' ? { events: this.flush(), frame: this.sim.frame() } : null;
+  step(dt: number, running = true): Map<string, HostBatch> {
+    const sim = this.sim;
+    this.guard(() => {
+      this.world.update(
+        sim.players.filter((p) => !p.vacant).map((p) => p.state),
+        this.radius,
+        this.budget,
+      );
+      const inputs: Record<string, PlayerInput> = {};
+      for (const [id, c] of this.clients) inputs[id] = c.input;
+      sim.tick(dt, running && sim.started, inputs);
+    });
+    // Presses and clicks were used; what's held stays held until the client says otherwise.
+    for (const c of this.clients.values()) {
+      const i = c.input;
+      i.pressed = [];
+      i.clicked = 0;
+      i.wheel = 0;
+      i.mouseX = 0;
+      i.mouseY = 0;
     }
+    const events = this.flush();
+    const frame = sim.frame();
+    const out = new Map<string, HostBatch>();
+    for (const id of this.clients.keys()) {
+      out.set(id, {
+        events: events.filter((e) => (e.t === 'call' ? e.call.to === null || e.call.to === id : e.t === 'reply' ? e.player === id : true)),
+        frame,
+      });
+    }
+    return out;
   }
 
-  private run(c: ClientCommand): HostBatch | null {
+  private run(client: Client, c: ClientCommand) {
     const sim = this.sim;
+    const me = client.player;
     switch (c.t) {
-      case 'tick': {
-        this.world.update(
-          sim.players.map((p) => p.state),
-          this.radius,
-          this.budget,
-        );
-        sim.tick(c.dt, c.running && sim.started, { [sim.local.id]: c.input ?? IDLE_INPUT });
-        return { events: this.flush(), frame: sim.frame() };
+      case 'tick':
+        return;
+      case 'input': {
+        // Held state is the newest; presses, clicks, wheel and mouse movement add up until a step.
+        const i = client.input;
+        const n = c.input;
+        i.active = n.active;
+        i.down = n.down;
+        i.buttons = n.buttons;
+        i.yaw = n.yaw;
+        i.pitch = n.pitch;
+        i.viewSeq = n.viewSeq;
+        for (const k of n.pressed) if (!i.pressed.includes(k)) i.pressed.push(k);
+        i.clicked |= n.clicked;
+        i.wheel += n.wheel;
+        i.mouseX += n.mouseX;
+        i.mouseY += n.mouseY;
+        return;
       }
       case 'message':
-        sim.receive(c.msg);
-        return null;
-      case 'start': {
-        const me = sim.local;
-        this.world.world.set_frozen(me.health.dead);
-        // The client's camera turned on the title screen: face where the player was placed.
-        me.setView(me.yaw, me.pitch);
-        sim.start();
-        return null;
-      }
+        sim.receive({ ...c.msg, player: me.id });
+        return;
+      case 'start':
+        sim.play(me);
+        return;
       case 'restart':
         sim.restart();
-        return null;
+        return;
       case 'env':
         if (c.time !== undefined) sim.env.time = c.time;
         if (c.dayLength !== undefined && !this.def.world?.freezeTime) sim.env.dayLength = c.dayLength;
-        return null;
+        return;
       case 'radius':
-        this.radius = c.columns;
-        return null;
+        client.radius = c.columns;
+        this.radius = Math.max(...[...this.clients.values()].map((x) => x.radius));
+        return;
       case 'exec':
-        this.events.push({ t: 'reply', id: c.id, value: sim.exec(c.line) });
-        return null;
+        this.events.push({ t: 'reply', id: c.id, player: me.id, value: sim.exec(c.line, me) });
+        return;
       case 'complete':
-        this.events.push({ t: 'reply', id: c.id, value: sim.commands.complete(c.line) });
-        return null;
+        this.events.push({ t: 'reply', id: c.id, player: me.id, value: sim.commands.complete(c.line) });
+        return;
+    }
+  }
+
+  /** Run game code; if it throws, the clients hear about it and the host carries on. */
+  private guard(fn: () => void) {
+    try {
+      fn();
+    } catch (err) {
+      this.events.push({ t: 'error', text: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) });
     }
   }
 
@@ -240,4 +369,22 @@ export class GameHost {
     this.events = [];
     return out;
   }
+}
+
+/** The engine's exported edits ([cx, cz, count, (local, block)*]…) as cells. */
+function decodeEdits(data: Uint8Array): [number, number, number, number][] {
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const cells: [number, number, number, number][] = [];
+  let o = 0;
+  while (o + 12 <= data.byteLength) {
+    const cx = v.getInt32(o, true);
+    const cz = v.getInt32(o + 4, true);
+    const n = v.getUint32(o + 8, true);
+    o += 12;
+    for (let i = 0; i < n; i++, o += 5) {
+      const local = v.getUint32(o, true);
+      cells.push([cx * 16 + (local & 15), local >> 8, cz * 16 + ((local >> 4) & 15), data[o + 4]]);
+    }
+  }
+  return cells;
 }

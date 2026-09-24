@@ -1,5 +1,5 @@
 import * as engine from '@engine/voxel_engine.js';
-import type { Actor, BlockRef, GameContext, GameDefinition, GameEvents, Rng, Vec3 } from '../api/types';
+import type { Actor, BlockRef, GameContext, GameDefinition, GameEvents, Player, Rng, Vec3 } from '../api/types';
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
@@ -51,7 +51,6 @@ export interface SimFrame {
   pickups: PickupFrame[];
   props: PropFrame[];
   /** Creative building's hotbar (`player.build`). */
-  creative: { hotbar: number[]; selected: number } | null;
 }
 
 export interface SimOptions {
@@ -66,6 +65,8 @@ export interface SimOptions {
   exit(): void;
   /** The built-in cheat commands (development builds, or the game allows them). */
   cheats: boolean;
+  /** The first player (`game.player`): 'local' and 'Player' unless a server names them. */
+  player?: { id: string; name: string };
 }
 
 /**
@@ -85,9 +86,11 @@ export class Sim {
   readonly items: ItemSim;
   readonly props: PropSim;
   readonly players: PlayerSim[] = [];
+  /** `game.players`: everyone in the game now, one array kept up to date as players come and go. */
+  private roster: Player[] = [];
+  private nextPlayer = 2;
   /** The player on this machine (the engine's built-in body). */
   readonly local: PlayerSim;
-  readonly creative: CreativeBuild | null = null;
   readonly commands: Commands;
   readonly ctx: GameContext;
   readonly rng: Rng;
@@ -120,7 +123,8 @@ export class Sim {
       dropItem: (item, at, count) => {
         if (this.items.get(item)) this.items.spawnPickup(item, at, { count, velocity: { x: this.rng.range(-2, 2), y: 4, z: this.rng.range(-2, 2) } });
       },
-      localPlayer: () => this.local.api,
+      slotOf: (p) => this.players.find((x) => x.api === p)?.slot ?? -1,
+      bySlot: (slot) => this.players.find((x) => x.slot === slot)?.api,
       players: () => this.ctx.players,
     });
     this.items = new ItemSim({
@@ -135,19 +139,9 @@ export class Sim {
       present: this.presentation,
     });
     this.props = new PropSim(this.registry, (b) => this.blockId(b), o.content);
-    this.local = new PlayerSim({
-      id: 'local',
-      name: 'Player',
-      world,
-      options: o.def.player ?? {},
-      present: this.presentation,
-      entities: this.entities,
-      items: this.items,
-      ctx: () => this.ctx,
-      emit,
-    });
+    this.local = this.newPlayer(o.player?.id ?? 'local', o.player?.name ?? 'Player');
     this.players.push(this.local);
-    if (o.def.player?.build) this.creative = new CreativeBuild(o.world, world, this.registry, this.presentation, this.local, (x, y, z) => this.breakBlockAt(x, y, z, this.local.api));
+    this.roster.push(this.local.api);
     this.env.time = o.def.world?.time ?? 0.3;
     this.env.frozen = o.def.world?.freezeTime ?? false;
     this.commands = new Commands(() => this.ctx);
@@ -201,8 +195,10 @@ export class Sim {
     this.entities.update(dt, running);
     this.items.update(dt, running);
     this.props.update(dt);
-    for (const p of this.players) p.updateHands(dt, running);
-    this.creative?.update(dt);
+    for (const p of this.players) {
+      p.updateHands(dt, running);
+      p.creative?.update(dt);
+    }
   }
 
   frame(): SimFrame {
@@ -211,19 +207,83 @@ export class Sim {
       clock: this.clockNow,
       started: this.started,
       time: this.env.time,
-      players: this.players.map((p) => p.frame()),
+      players: this.players.filter((p) => !p.vacant).map((p) => p.frame()),
       entities: e.entities,
       projectiles: e.projectiles,
       pickups: this.items.frame(),
       props: this.props.frame(),
-      creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
     };
   }
 
   /** Something a player did on their client (menus, callbacks, the block picker). */
   receive(m: ClientMessage) {
-    if (m.t === 'creativePick') this.creative?.pick(m.block);
+    if (m.t === 'creativePick') this.players.find((p) => p.id === m.player)?.creative?.pick(m.block);
     else this.presentation.receive(m);
+  }
+
+  /**
+   * A player joins (a client connected), frozen until their client starts playing. The first
+   * player's place (`game.player`) is taken first if it's vacant; anyone else is new, at the
+   * spawn. The game hears `playerJoin`.
+   */
+  join(name = 'Player'): PlayerSim {
+    let p = this.local;
+    if (p.vacant) {
+      p.vacant = false;
+      this.roster.unshift(p.api);
+    } else {
+      p = this.newPlayer(`p${this.nextPlayer++}`, name);
+      this.players.push(p);
+      this.roster.push(p.api);
+      const sp = this.spawn;
+      p.place(sp.x, sp.y, sp.z, sp.yaw);
+    }
+    p.name = name;
+    this.host.world.set_frozen(p.slot, true);
+    this.emit('playerJoin', { player: p.api });
+    return p;
+  }
+
+  /**
+   * A player leaves: the game hears `playerLeave`, then they're gone. The first player stays as
+   * a vacant place for the next to join, so `game.player` keeps working.
+   */
+  leave(id: string) {
+    const p = this.players.find((x) => x.id === id);
+    if (!p || p.vacant) return;
+    this.emit('playerLeave', { player: p.api });
+    this.roster.splice(this.roster.indexOf(p.api), 1);
+    if (p === this.local) {
+      p.vacant = true;
+      this.host.world.set_frozen(p.slot, true);
+      return;
+    }
+    this.players.splice(this.players.indexOf(p), 1);
+    p.remove();
+  }
+
+  /** A player's client started playing (clicked Play): their body wakes up, and the game starts. */
+  play(p: PlayerSim) {
+    this.host.world.set_frozen(p.slot, p.health.dead);
+    // Their client's camera turned on the title screen: face where they were placed.
+    p.setView(p.yaw, p.pitch);
+    this.start();
+  }
+
+  private newPlayer(id: string, name: string): PlayerSim {
+    const p = new PlayerSim({
+      id,
+      name,
+      world: this.host.world,
+      options: this.def.player ?? {},
+      present: this.presentation,
+      entities: this.entities,
+      items: this.items,
+      ctx: () => this.ctx,
+      emit: (k, e) => this.emit(k, e),
+    });
+    if (this.def.player?.build) p.creative = new CreativeBuild(this.host, this.host.world, this.registry, this.presentation, p, (x, y, z) => this.breakBlockAt(x, y, z, p.api));
+    return p;
   }
 
   /** A command typed by a player. */
@@ -243,16 +303,14 @@ export class Sim {
     this.clockNow = 0;
     this.presentation.reset();
     this.presentation.send(null, 'client', 'reset', []);
-    const world = this.host.world;
+    const sp = this.spawn;
     for (const p of this.players) {
       p.inventory.clear();
       p.reset();
       p.health.configure(this.def.player ?? {});
       p.health.revive();
+      p.place(sp.x, sp.y, sp.z, sp.yaw);
     }
-    world.player_reset(this.spawn.x, this.spawn.y, this.spawn.z);
-    this.local.syncState();
-    this.local.setView(this.spawn.yaw, 0);
     this.env.time = this.def.world?.time ?? this.env.time;
     this.def.start?.(this.ctx);
   }
@@ -354,7 +412,7 @@ export class Sim {
     const cur = world.get_block(x, y, z);
     if (cur === 255 || !(this.registry.blocks[cur]?.replaceable ?? false)) return false;
     if (def.solid) {
-      if (this.local.walker && world.player_overlaps(x, y, z)) return false;
+      if (world.player_overlaps(x, y, z)) return false;
       for (const e of this.entities.near({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, 3)) {
         const p = e.position;
         const box = this.entities.hitbox(e);
@@ -390,7 +448,7 @@ export class Sim {
     const world = this.host.world;
     const reg = this.registry;
     const local = this.local.api;
-    const players = this.players.map((p) => p.api);
+    const players = this.roster;
     return {
       world: {
         getBlock: (x, y, z) => {
@@ -566,7 +624,7 @@ export class Sim {
       run: (_, _g, player) => {
         const p = simOf(player.id);
         p.allowFlight = !p.allowFlight;
-        if (!p.allowFlight) this.host.world.set_flying(false);
+        if (!p.allowFlight) this.host.world.set_flying(p.slot, false);
         return p.allowFlight ? 'Flight on' : 'Flight off';
       },
     });

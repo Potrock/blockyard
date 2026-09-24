@@ -106,8 +106,8 @@ export type HostEvent =
   | { t: 'ready' }
   /** The game called `exit()`. */
   | { t: 'exit' }
-  /** The answer to a request (`exec`, `complete`). */
-  | { t: 'reply'; id: number; value: unknown }
+  /** The answer to a request (`exec`, `complete`), for the player who asked. */
+  | { t: 'reply'; id: number; value: unknown; player?: string }
   /** The game threw (the host carries on). */
   | { t: 'error'; text: string };
 
@@ -121,6 +121,8 @@ export interface HostBatch {
 export type ClientCommand =
   /** Advance the simulation `dt` seconds with this player's controls (idle without); `running` once play began. */
   | { t: 'tick'; dt: number; running: boolean; input?: PlayerInput }
+  /** A server's client: the player's controls now (the server keeps its own clock). */
+  | { t: 'input'; input: PlayerInput }
   | { t: 'message'; msg: ClientMessage }
   /** Play begins (the title screen was clicked). */
   | { t: 'start' }

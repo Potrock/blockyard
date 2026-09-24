@@ -22,6 +22,8 @@ export class PlayerHealth {
 
   constructor(
     private world: VoxelWorld,
+    /** The player's physics body in the world. */
+    private slot: number,
     /** This player's own sound and screen effects. */
     private audio: AudioApi,
     private fx: FxApi,
@@ -58,7 +60,7 @@ export class PlayerHealth {
       const dx = p.x - from.x;
       const dz = p.z - from.z;
       const l = Math.hypot(dx, dz) || 1;
-      this.world.player_impulse((dx / l) * 7 * kb, 5.5 * kb, (dz / l) * 7 * kb);
+      this.world.player_impulse(this.slot, (dx / l) * 7 * kb, 5.5 * kb, (dz / l) * 7 * kb);
     }
     this.audio.play('hurt');
     this.onHurt();
@@ -68,7 +70,7 @@ export class PlayerHealth {
     if (this.health <= 0) {
       this.dead = true;
       this.deathTime = 0;
-      this.world.set_frozen(true);
+      this.world.set_frozen(this.slot, true);
       this.emit('playerDeath', { player: this.player(), source: opts.source });
     }
     this.refresh();
@@ -87,7 +89,7 @@ export class PlayerHealth {
     this.invuln = 1;
     this.prevGround = true;
     this.prevVy = 0;
-    this.world.set_frozen(false);
+    this.world.set_frozen(this.slot, false);
     this.refresh();
   }
 

@@ -619,7 +619,8 @@ export class Runtime {
     return this.graphics.spriteIcon(icon, size);
   }
 
-  private showPlayer(me: PlayerFrame, creative: SimFrame['creative']) {
+  private showPlayer(me: PlayerFrame) {
+    const creative = me.creative;
     const health = `${me.health}|${me.mortal ? me.maxHealth : 0}`;
     if (health !== this.shown.health) {
       this.shown.health = health;
@@ -794,7 +795,7 @@ export class Runtime {
     this.entityView.sync(f.entities, f.projectiles, dt, running);
     this.pickupView.sync(f.pickups, dt);
     this.propView.sync(f.props, dt);
-    this.showPlayer(me, f.creative);
+    this.showPlayer(me);
 
     if (this.walker) {
       this.view.viewDirection(this.dir);

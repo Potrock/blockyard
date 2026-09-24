@@ -131,19 +131,39 @@ impl Default for ChunkMesher {
     }
 }
 
-/// Main-thread world: block storage, edits, raycasts and the player's physics body.
+/// A world: block storage, edits, raycasts, the players' physics bodies (by slot) and the
+/// entity simulation.
 #[wasm_bindgen]
 pub struct VoxelWorld {
     inner: world::World,
-    player: world::Player,
+    players: Vec<Option<world::Player>>,
     entities: entities::Entities,
+}
+
+impl VoxelWorld {
+    fn player(&self, i: u32) -> &world::Player {
+        self.players.get(i as usize).and_then(|p| p.as_ref()).expect("no player in this slot")
+    }
+
+    fn player_mut(&mut self, i: u32) -> &mut world::Player {
+        self.players.get_mut(i as usize).and_then(|p| p.as_mut()).expect("no player in this slot")
+    }
+
+    /// The players the entities react to: everyone not frozen (spectating, dead, in a menu).
+    fn targets(&self) -> Vec<entities::Target> {
+        self.players
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, p)| p.as_ref().filter(|p| !p.frozen).map(|p| entities::Target { pos: p.pos, hw: world::HALF_W, h: world::HEIGHT, slot }))
+            .collect()
+    }
 }
 
 #[wasm_bindgen]
 impl VoxelWorld {
     #[wasm_bindgen(constructor)]
     pub fn new() -> VoxelWorld {
-        VoxelWorld { inner: world::World::new(), player: world::Player::new(0.0, 100.0, 0.0), entities: entities::Entities::new(160, 320) }
+        VoxelWorld { inner: world::World::new(), players: Vec::new(), entities: entities::Entities::new(160, 320) }
     }
 
     pub fn insert_column(&mut self, cx: i32, cz: i32, data: &[u8]) {
@@ -211,31 +231,59 @@ impl VoxelWorld {
         }
     }
 
-    pub fn player_reset(&mut self, x: f64, y: f64, z: f64) {
-        let flying = self.player.flying;
-        self.player = world::Player::new(x, y, z);
-        self.player.flying = flying;
-    }
-
-    pub fn set_flying(&mut self, on: bool) {
-        self.player.flying = on;
-        if on {
-            self.player.vel[1] = self.player.vel[1].max(0.0);
+    /// A new player body at (x, y, z); returns its slot (slots of removed players are reused).
+    pub fn player_add(&mut self, x: f64, y: f64, z: f64) -> u32 {
+        let p = Some(world::Player::new(x, y, z));
+        match self.players.iter().position(|p| p.is_none()) {
+            Some(i) => {
+                self.players[i] = p;
+                i as u32
+            }
+            None => {
+                self.players.push(p);
+                (self.players.len() - 1) as u32
+            }
         }
     }
 
-    pub fn set_frozen(&mut self, on: bool) {
-        self.player.frozen = on;
+    pub fn player_remove(&mut self, i: u32) {
+        if let Some(p) = self.players.get_mut(i as usize) {
+            *p = None;
+        }
     }
 
-    pub fn player_step(&mut self, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, dt: f64) {
+    pub fn player_reset(&mut self, i: u32, x: f64, y: f64, z: f64) {
+        let p = self.player_mut(i);
+        let (flying, frozen) = (p.flying, p.frozen);
+        *p = world::Player::new(x, y, z);
+        p.flying = flying;
+        p.frozen = frozen;
+    }
+
+    pub fn set_flying(&mut self, i: u32, on: bool) {
+        let p = self.player_mut(i);
+        p.flying = on;
+        if on {
+            p.vel[1] = p.vel[1].max(0.0);
+        }
+    }
+
+    pub fn set_frozen(&mut self, i: u32, on: bool) {
+        self.player_mut(i).frozen = on;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn player_step(&mut self, i: u32, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, dt: f64) {
         let input = world::MoveInput { wish_x, wish_z, jump, sneak, sprint };
-        self.player.step(&self.inner, &input, dt);
+        let VoxelWorld { inner, players, .. } = self;
+        if let Some(Some(p)) = players.get_mut(i as usize) {
+            p.step(inner, &input, dt);
+        }
     }
 
     /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob]
-    pub fn player_state(&self) -> Vec<f64> {
-        let p = &self.player;
+    pub fn player_state(&self, i: u32) -> Vec<f64> {
+        let p = self.player(i);
         vec![
             p.pos[0],
             p.pos[1],
@@ -258,9 +306,9 @@ impl VoxelWorld {
         vec![s, b]
     }
 
-    /// Add a velocity change to the player (knockback, launch pads).
-    pub fn player_impulse(&mut self, vx: f64, vy: f64, vz: f64) {
-        self.player.impulse([vx, vy, vz]);
+    /// Add a velocity change to a player (knockback, launch pads).
+    pub fn player_impulse(&mut self, i: u32, vx: f64, vy: f64, vz: f64) {
+        self.player_mut(i).impulse([vx, vy, vz]);
     }
 
     // ---- Entity simulation (see `entities.rs` for the buffer layouts) ----
@@ -291,15 +339,15 @@ impl VoxelWorld {
 
     /// Advance bodies (navigation, physics, separation) and projectiles.
     pub fn step_entities(&mut self, dt: f64) {
-        let p = self.player.pos;
-        self.entities.step_bodies(&self.inner, dt, p, world::HALF_W, world::HEIGHT);
-        self.entities.step_projectiles(&self.inner, dt, p, world::HALF_W, world::HEIGHT);
+        let targets = self.targets();
+        self.entities.step_bodies(&self.inner, dt, &targets);
+        self.entities.step_projectiles(&self.inner, dt, &targets);
     }
 
-    /// Force a navigation-field rebuild toward the player now.
+    /// Force a navigation-field rebuild toward the players now.
     pub fn rebuild_flow(&mut self) {
-        let p = self.player.pos;
-        self.entities.rebuild_flow(&self.inner, p);
+        let targets = self.targets();
+        self.entities.rebuild_flow(&self.inner, &targets);
     }
 
     /// [body index or -1, distance] for the first body hit by a ray before any solid block.
@@ -317,13 +365,15 @@ impl VoxelWorld {
         entities::line_clear(&self.inner, [ax, ay, az], [bx, by, bz])
     }
 
-    /// Whether a unit block at (x, y, z) would overlap the player's body.
+    /// Whether a unit block at (x, y, z) would overlap any player's body.
     pub fn player_overlaps(&self, x: i32, y: i32, z: i32) -> bool {
-        let p = &self.player.pos;
-        let (x0, x1) = (p[0] - world::HALF_W, p[0] + world::HALF_W);
-        let (y0, y1) = (p[1], p[1] + world::HEIGHT);
-        let (z0, z1) = (p[2] - world::HALF_W, p[2] + world::HALF_W);
-        (x as f64) < x1 && (x + 1) as f64 > x0 && (y as f64) < y1 && (y + 1) as f64 > y0 && (z as f64) < z1 && (z + 1) as f64 > z0
+        self.players.iter().flatten().any(|p| {
+            let p = &p.pos;
+            let (x0, x1) = (p[0] - world::HALF_W, p[0] + world::HALF_W);
+            let (y0, y1) = (p[1], p[1] + world::HEIGHT);
+            let (z0, z1) = (p[2] - world::HALF_W, p[2] + world::HALF_W);
+            (x as f64) < x1 && (x + 1) as f64 > x0 && (y as f64) < y1 && (y + 1) as f64 > y0 && (z as f64) < z1 && (z + 1) as f64 > z0
+        })
     }
 }
 

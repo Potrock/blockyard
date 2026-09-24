@@ -9,7 +9,7 @@ use crate::world::{aabb_collides, aabb_move_axis, World};
 
 /// Body buffer layout (f64 fields per body).
 pub mod body {
-    pub const STRIDE: usize = 32;
+    pub const STRIDE: usize = 34;
     // Inputs (host writes).
     pub const X: usize = 0;
     pub const Y: usize = 1;
@@ -33,7 +33,8 @@ pub mod body {
     pub const IMP_X: usize = 17;
     pub const IMP_Y: usize = 18;
     pub const IMP_Z: usize = 19;
-    /// Navigation target. TARGET_KIND 0 = the player (flow field), 1 = the point (TX, TY, TZ).
+    /// Navigation target. TARGET_KIND 0 = the nearest player (flow field), 1 = the point
+    /// (TX, TY, TZ), 2 = the player in slot TX (flow field).
     pub const TX: usize = 20;
     pub const TY: usize = 21;
     pub const TZ: usize = 22;
@@ -48,10 +49,12 @@ pub mod body {
     pub const BLOCKED: usize = 30;
     /// Downward speed at the moment of the last landing (for fall damage); cleared by the host.
     pub const LANDED_SPEED: usize = 31;
+    /// The player DIST and LOS are measured to (the target, or the nearest): their slot, or -1.
+    pub const PLAYER: usize = 32;
 }
 
 pub const FLAG_ACTIVE: u32 = 1;
-/// Push apart from other bodies and from the player.
+/// Push apart from other bodies and from players.
 pub const FLAG_SOLID: u32 = 2;
 /// Float in water instead of sinking.
 pub const FLAG_SWIM: u32 = 4;
@@ -71,11 +74,12 @@ pub mod proj {
     pub const DRAG: usize = 7;
     pub const RADIUS: usize = 8;
     pub const FLAGS: usize = 9;
-    /// Body index that fired it, or -1 for the player.
+    /// Body index that fired it, or -1 - slot for a player.
     pub const OWNER: usize = 10;
     pub const AGE: usize = 11;
     /// 0 none, 1 world, 2 player, 3 body. Set by the simulation, cleared by the host.
     pub const HIT_KIND: usize = 12;
+    /// The body index, or the player's slot.
     pub const HIT_INDEX: usize = 13;
 }
 
@@ -86,7 +90,19 @@ pub const PFLAG_STUCK: u32 = 8;
 
 const GRAVITY: f64 = 30.0;
 
-/// Breadth-first distance field toward the player over walkable cells.
+/// A player as the entity simulation sees them: feet position, box, and slot.
+#[derive(Clone, Copy, Debug)]
+pub struct Target {
+    pub pos: [f64; 3],
+    pub hw: f64,
+    pub h: f64,
+    pub slot: usize,
+}
+
+/// At most this many players get a navigation field at once (the ones being chased).
+const MAX_FIELDS: usize = 8;
+
+/// Breadth-first distance field toward one player over walkable cells.
 pub struct FlowField {
     ox: i32,
     oy: i32,
@@ -329,8 +345,25 @@ fn ray_aabb(o: [f64; 3], d: [f64; 3], min: [f64; 3], max: [f64; 3]) -> Option<f6
 pub struct Entities {
     pub bodies: Vec<f64>,
     pub projectiles: Vec<f64>,
-    flow: FlowField,
+    /// A navigation field per chased player (by slot), rebuilt a few times a second.
+    flows: Vec<(usize, FlowField)>,
+    /// Players some body navigated toward since the last rebuild.
+    chased: Vec<usize>,
     flow_timer: f64,
+}
+
+/// The nearest player to a point.
+fn nearest(players: &[Target], p: [f64; 3]) -> Option<usize> {
+    let mut best = None;
+    let mut bd = f64::INFINITY;
+    for (i, t) in players.iter().enumerate() {
+        let d = (t.pos[0] - p[0]).powi(2) + (t.pos[1] - p[1]).powi(2) + (t.pos[2] - p[2]).powi(2);
+        if d < bd {
+            bd = d;
+            best = Some(i);
+        }
+    }
+    best
 }
 
 impl Entities {
@@ -338,7 +371,8 @@ impl Entities {
         Entities {
             bodies: vec![0.0; max_bodies * body::STRIDE],
             projectiles: vec![0.0; max_projectiles * proj::STRIDE],
-            flow: FlowField::new(),
+            flows: Vec::new(),
+            chased: Vec::new(),
             flow_timer: 0.0,
         }
     }
@@ -351,23 +385,58 @@ impl Entities {
         self.projectiles.len() / proj::STRIDE
     }
 
-    /// Rebuild the navigation field toward the player (normally ~4x per second).
-    pub fn rebuild_flow(&mut self, world: &World, target: [f64; 3]) {
-        self.flow.rebuild(world, target[0], target[1], target[2]);
+    /// Rebuild the navigation fields toward these players now (normally ~4x per second, and
+    /// only for players being chased).
+    pub fn rebuild_flow(&mut self, world: &World, players: &[Target]) {
+        self.chased = players.iter().map(|t| t.slot).collect();
+        self.rebuild_chased(world, players);
     }
 
-    /// Advance all bodies. `player` is the feet position, `player_hw` / `player_h` its box.
-    pub fn step_bodies(&mut self, world: &World, dt: f64, player: [f64; 3], player_hw: f64, player_h: f64) {
+    fn rebuild_chased(&mut self, world: &World, players: &[Target]) {
+        // Fields for players who left or aren't chased any more go back to the pool.
+        let mut pool: Vec<FlowField> = Vec::new();
+        let mut keep: Vec<(usize, FlowField)> = Vec::new();
+        for (slot, f) in self.flows.drain(..) {
+            if self.chased.contains(&slot) && players.iter().any(|t| t.slot == slot) {
+                keep.push((slot, f));
+            } else {
+                pool.push(f);
+            }
+        }
+        for t in players {
+            if keep.len() >= MAX_FIELDS {
+                break;
+            }
+            if self.chased.contains(&t.slot) && !keep.iter().any(|(s, _)| *s == t.slot) {
+                keep.push((t.slot, pool.pop().unwrap_or_else(FlowField::new)));
+            }
+        }
+        for (slot, f) in keep.iter_mut() {
+            if let Some(t) = players.iter().find(|t| t.slot == *slot) {
+                f.rebuild(world, t.pos[0], t.pos[1], t.pos[2]);
+            }
+        }
+        self.flows = keep;
+        self.chased.clear();
+    }
+
+    /// Advance all bodies toward, or away from, these players.
+    pub fn step_bodies(&mut self, world: &World, dt: f64, players: &[Target]) {
         let dt = dt.min(0.1);
         self.flow_timer -= dt;
         if self.flow_timer <= 0.0 {
-            self.flow.rebuild(world, player[0], player[1], player[2]);
+            // The first time, before anyone has been chased, every player gets a field.
+            if self.flows.is_empty() && self.chased.is_empty() {
+                self.chased = players.iter().map(|t| t.slot).collect();
+            }
+            self.rebuild_chased(world, players);
             self.flow_timer = 0.25;
         }
         let n = self.body_capacity();
         let steps = ((dt / (1.0 / 90.0)).ceil() as usize).max(1);
         let h = dt / steps as f64;
-        let player_eye = [player[0], player[1] + player_h * 0.9, player[2]];
+        let flows = &self.flows;
+        let chased = &mut self.chased;
         for i in 0..n {
             let b = &mut self.bodies[i * body::STRIDE..(i + 1) * body::STRIDE];
             if (b[body::FLAGS] as u32) & FLAG_ACTIVE == 0 {
@@ -376,18 +445,30 @@ impl Entities {
             // Navigation decides the wish direction once per frame.
             let pos = [b[body::X], b[body::Y], b[body::Z]];
             let eye = [pos[0], pos[1] + b[body::HEIGHT] * 0.85, pos[2]];
-            let to = [player[0] - pos[0], player[2] - pos[2]];
-            let dist = (to[0] * to[0] + to[1] * to[1] + (player[1] - pos[1]).powi(2)).sqrt();
+            let kind = b[body::TARGET_KIND] as i32;
+            // The player this body cares about: the one it's after, or the nearest.
+            let reference = if kind == 2 { players.iter().position(|t| t.slot as f64 == b[body::TX]) } else { nearest(players, pos) };
+            let (dist, los) = match reference {
+                Some(r) => {
+                    let t = &players[r];
+                    let d = ((t.pos[0] - pos[0]).powi(2) + (t.pos[2] - pos[2]).powi(2) + (t.pos[1] - pos[1]).powi(2)).sqrt();
+                    (d, line_clear(world, eye, [t.pos[0], t.pos[1] + t.h * 0.9, t.pos[2]]))
+                }
+                None => (999.0, false),
+            };
             b[body::DIST] = dist;
-            let los = line_clear(world, eye, player_eye);
             b[body::LOS] = los as u8 as f64;
+            b[body::PLAYER] = reference.map_or(-1.0, |r| players[r].slot as f64);
             let mode = b[body::MODE] as i32;
             let mut want_jump = b[body::WANT_JUMP] > 0.5;
             if mode == 1 {
-                let (tx, tz, point) = if b[body::TARGET_KIND] as i32 == 1 {
-                    (b[body::TX], b[body::TZ], true)
+                let (tx, tz, field) = if kind == 1 {
+                    (b[body::TX], b[body::TZ], None)
+                } else if let Some(r) = reference {
+                    (players[r].pos[0], players[r].pos[2], Some(players[r].slot))
                 } else {
-                    (player[0], player[2], false)
+                    // Nobody to go after: stay put.
+                    (pos[0], pos[2], None)
                 };
                 let direct = || {
                     let dx = tx - pos[0];
@@ -401,9 +482,15 @@ impl Entities {
                 };
                 let mut wish = direct();
                 b[body::PATH_DIST] = -1.0;
-                if !point {
+                if let Some(slot) = field {
+                    if !chased.contains(&slot) {
+                        chased.push(slot);
+                    }
+                }
+                let flow = field.and_then(|slot| flows.iter().find(|(s, _)| *s == slot)).map(|(_, f)| f);
+                if let Some(flow) = flow {
                     let close = los && dist < 4.5;
-                    match self.flow.steer(pos) {
+                    match flow.steer(pos) {
                         Some((wx, wz, jump, d)) => {
                             b[body::PATH_DIST] = d as f64;
                             if !close {
@@ -430,7 +517,7 @@ impl Entities {
                 b[body::HEADING] = b[body::VX].atan2(b[body::VZ]);
             }
         }
-        self.separate(world, player, player_hw, player_h);
+        self.separate(world, players);
     }
 
     fn integrate(world: &World, b: &mut [f64], dt: f64, mode: i32, want_jump: bool) {
@@ -512,8 +599,8 @@ impl Entities {
         b[body::Z] = pos[2];
     }
 
-    /// Soft collisions between bodies, and bodies against the player.
-    fn separate(&mut self, world: &World, player: [f64; 3], player_hw: f64, player_h: f64) {
+    /// Soft collisions between bodies, and bodies against players.
+    fn separate(&mut self, world: &World, players: &[Target]) {
         let n = self.body_capacity();
         let s = body::STRIDE;
         for i in 0..n {
@@ -546,7 +633,9 @@ impl Entities {
                 push[0] += nx * overlap * weight;
                 push[1] += nz * overlap * weight;
             };
-            add(player[0], player[1], player[2], player_hw, player_h, 1.0);
+            for t in players {
+                add(t.pos[0], t.pos[1], t.pos[2], t.hw, t.h, 1.0);
+            }
             for j in 0..n {
                 if j == i {
                     continue;
@@ -575,7 +664,7 @@ impl Entities {
     }
 
     /// Advance projectiles; hits are reported in HIT_KIND / HIT_INDEX for the host to consume.
-    pub fn step_projectiles(&mut self, world: &World, dt: f64, player: [f64; 3], player_hw: f64, player_h: f64) {
+    pub fn step_projectiles(&mut self, world: &World, dt: f64, players: &[Target]) {
         let n = self.projectile_capacity();
         for i in 0..n {
             let base = i * proj::STRIDE;
@@ -611,13 +700,20 @@ impl Entities {
                 best_t = t;
                 kind = 1.0;
             }
-            if flags & PFLAG_HITS_PLAYER != 0 && owner != -1 {
-                let min = [player[0] - player_hw - r, player[1] - r, player[2] - player_hw - r];
-                let max = [player[0] + player_hw + r, player[1] + player_h + r, player[2] + player_hw + r];
-                if let Some(t) = ray_aabb(o, d, min, max) {
-                    if t < best_t {
-                        best_t = t;
-                        kind = 2.0;
+            if flags & PFLAG_HITS_PLAYER != 0 {
+                for pl in players {
+                    // Never the player who fired it.
+                    if owner == -1 - pl.slot as i64 {
+                        continue;
+                    }
+                    let min = [pl.pos[0] - pl.hw - r, pl.pos[1] - r, pl.pos[2] - pl.hw - r];
+                    let max = [pl.pos[0] + pl.hw + r, pl.pos[1] + pl.h + r, pl.pos[2] + pl.hw + r];
+                    if let Some(t) = ray_aabb(o, d, min, max) {
+                        if t < best_t {
+                            best_t = t;
+                            kind = 2.0;
+                            index = pl.slot as f64;
+                        }
                     }
                 }
             }
@@ -711,6 +807,52 @@ mod tests {
         w
     }
 
+    fn target(pos: [f64; 3], slot: usize) -> Target {
+        Target { pos, hw: 0.3, h: 1.8, slot }
+    }
+
+    #[test]
+    fn bodies_chase_the_nearest_player_or_their_target() {
+        let w = flat_world();
+        let mut e = Entities::new(4, 4);
+        spawn(&mut e, 0, 0.5, 0.5);
+        spawn(&mut e, 1, 0.5, 0.5);
+        // Body 1 is after the player in slot 3, although slot 5 is nearer.
+        e.bodies[body::STRIDE + body::TARGET_KIND] = 2.0;
+        e.bodies[body::STRIDE + body::TX] = 3.0;
+        let players = [target([10.5, 64.0, 0.5], 5), target([-20.5, 64.0, 0.5], 3)];
+        for _ in 0..(60 * 4) {
+            e.step_bodies(&w, 1.0 / 60.0, &players);
+        }
+        let b0 = &e.bodies[0..body::STRIDE];
+        let b1 = &e.bodies[body::STRIDE..2 * body::STRIDE];
+        assert_eq!(b0[body::PLAYER], 5.0);
+        assert!(b0[body::X] > 7.0, "body 0 went to the nearest player, x = {}", b0[body::X]);
+        assert_eq!(b1[body::PLAYER], 3.0);
+        assert!(b1[body::X] < -10.0, "body 1 went after its target, x = {}", b1[body::X]);
+    }
+
+    #[test]
+    fn projectiles_hit_other_players_not_their_shooter() {
+        let w = flat_world();
+        let mut e = Entities::new(4, 4);
+        // Fired by the player in slot 1, from inside their own box, at the player in slot 2.
+        let p = &mut e.projectiles[0..proj::STRIDE];
+        p[proj::X] = 0.5;
+        p[proj::Y] = 65.0;
+        p[proj::Z] = 0.5;
+        p[proj::VZ] = 30.0;
+        p[proj::RADIUS] = 0.05;
+        p[proj::OWNER] = -2.0;
+        p[proj::FLAGS] = (PFLAG_ACTIVE | PFLAG_HITS_PLAYER) as f64;
+        let players = [target([0.5, 64.0, 0.5], 1), target([0.5, 64.0, 6.0], 2)];
+        for _ in 0..30 {
+            e.step_projectiles(&w, 1.0 / 60.0, &players);
+        }
+        assert_eq!(e.projectiles[proj::HIT_KIND], 2.0);
+        assert_eq!(e.projectiles[proj::HIT_INDEX], 2.0);
+    }
+
     fn spawn(e: &mut Entities, i: usize, x: f64, z: f64) {
         let b = &mut e.bodies[i * body::STRIDE..(i + 1) * body::STRIDE];
         b[body::X] = x;
@@ -739,7 +881,7 @@ mod tests {
         spawn(&mut e, 0, 0.5, -8.0);
         let player = [0.5, 64.0, 8.0];
         for _ in 0..(60 * 20) {
-            e.step_bodies(&w, 1.0 / 60.0, player, 0.3, 1.8);
+            e.step_bodies(&w, 1.0 / 60.0, &[target(player, 0)]);
         }
         let b = &e.bodies[0..body::STRIDE];
         let d = ((b[body::X] - player[0]).powi(2) + (b[body::Z] - player[2]).powi(2)).sqrt();
@@ -758,7 +900,7 @@ mod tests {
         spawn(&mut e, 0, 0.5, -5.0);
         let player = [0.5, 65.0, 10.0];
         for _ in 0..(60 * 8) {
-            e.step_bodies(&w, 1.0 / 60.0, player, 0.3, 1.8);
+            e.step_bodies(&w, 1.0 / 60.0, &[target(player, 0)]);
         }
         let b = &e.bodies[0..body::STRIDE];
         assert!(b[body::Y] >= 64.9, "climbed onto the step, y = {}", b[body::Y]);
@@ -782,7 +924,7 @@ mod tests {
         p[proj::OWNER] = -1.0;
         p[proj::FLAGS] = (PFLAG_ACTIVE | PFLAG_HITS_BODIES) as f64;
         for _ in 0..60 {
-            e.step_projectiles(&w, 1.0 / 60.0, [100.0, 64.0, 100.0], 0.3, 1.8);
+            e.step_projectiles(&w, 1.0 / 60.0, &[target([100.0, 64.0, 100.0], 0)]);
         }
         assert_eq!(e.projectiles[proj::HIT_KIND], 3.0);
         assert_eq!(e.projectiles[proj::HIT_INDEX], 0.0);
@@ -796,7 +938,7 @@ mod tests {
         p[proj::OWNER] = -1.0;
         p[proj::FLAGS] = (PFLAG_ACTIVE | PFLAG_HITS_BODIES) as f64;
         for _ in 0..60 {
-            e.step_projectiles(&w, 1.0 / 60.0, [100.0, 64.0, 100.0], 0.3, 1.8);
+            e.step_projectiles(&w, 1.0 / 60.0, &[target([100.0, 64.0, 100.0], 0)]);
         }
         let p = &e.projectiles[proj::STRIDE..2 * proj::STRIDE];
         assert_eq!(p[proj::HIT_KIND], 1.0);

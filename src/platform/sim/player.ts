@@ -7,6 +7,7 @@ import { PlayerHealth } from './health';
 import { SimInput } from './input';
 import { Inventory, type ItemSim } from './items';
 import type { Presentation } from './present';
+import type { CreativeBuild } from './creative';
 
 const EYE = 1.62;
 const SNEAK_EYE = 1.27;
@@ -14,6 +15,7 @@ const SNEAK_EYE = 1.27;
 /** One player as their client draws them (camera, hand, hearts, hotbar). */
 export interface PlayerFrame {
   id: string;
+  name: string;
   x: number;
   y: number;
   z: number;
@@ -44,6 +46,8 @@ export interface PlayerFrame {
   hand: { drawing: boolean; charge: number; strength: number };
   /** The game's camera (`controller: 'none'`). */
   camera: { p: [number, number, number]; q: [number, number, number, number]; fov: number };
+  /** Creative building (`player.build`): the block hotbar. */
+  creative: { hotbar: number[]; selected: number } | null;
 }
 
 export interface PlayerSimParts {
@@ -64,7 +68,9 @@ export interface PlayerSimParts {
  */
 export class PlayerSim {
   readonly id: string;
-  readonly name: string;
+  name: string;
+  /** Their physics body in the engine's world. */
+  readonly slot: number;
   readonly walker: boolean;
   readonly itemMode: boolean;
   yaw = 0;
@@ -85,10 +91,18 @@ export class PlayerSim {
   private sprintLatched = false;
   private time = 0;
   readonly api: Player;
+  /** Creative building's block hotbar and placing (games with `player.build`). */
+  creative: CreativeBuild | null = null;
+  /**
+   * The first player's place while nobody holds it: their client left and the next to join
+   * takes over (`game.player` stays the same object). Frozen, idle and not drawn meanwhile.
+   */
+  vacant = false;
 
   constructor(private p: PlayerSimParts) {
     this.id = p.id;
     this.name = p.name;
+    this.slot = p.world.player_add(0, 100, 0);
     const o = p.options;
     this.walker = (o.controller ?? 'walk') === 'walk';
     this.itemMode = this.walker && (o.hotbar ?? (o.build ? 'blocks' : 'items')) === 'items';
@@ -97,6 +111,7 @@ export class PlayerSim {
     this.inventory = new Inventory(p.items.defs);
     this.health = new PlayerHealth(
       p.world,
+      this.slot,
       present.audio(this.id),
       present.fx(this.id),
       p.emit,
@@ -167,7 +182,7 @@ export class PlayerSim {
 
   /** Put the player somewhere, facing `yaw` / `pitch` (spawning, a save); a game-driven camera starts at their eyes. */
   place(x: number, y: number, z: number, yaw: number, pitch = 0) {
-    this.p.world.player_reset(x, y, z);
+    this.p.world.player_reset(this.slot, x, y, z);
     this.syncState();
     this.setView(yaw, pitch);
     this.cam.pos.set(x, y + EYE, z);
@@ -176,7 +191,7 @@ export class PlayerSim {
 
   /** Read the physics body back from WebAssembly. */
   syncState() {
-    const st = this.p.world.player_state();
+    const st = this.p.world.player_state(this.slot);
     const S = this.state;
     S.x = st[0];
     S.y = st[1];
@@ -197,7 +212,7 @@ export class PlayerSim {
     const world = this.p.world;
     if (!this.walker) {
       // No walking body: it stays put (games may teleport it, e.g. to follow a vehicle).
-      world.set_frozen(true);
+      world.set_frozen(this.slot, true);
       this.syncState();
       return;
     }
@@ -229,13 +244,13 @@ export class PlayerSim {
       sprint = (inp.isDown('ControlLeft') || inp.isDown('ControlRight') || this.sprintLatched) && f > 0 && !sneak;
       if (inp.pressed('Space') && this.allowFlight) {
         if (this.time - this.lastJumpTap < 0.3) {
-          world.set_flying(!this.state.flying);
+          world.set_flying(this.slot, !this.state.flying);
           this.lastJumpTap = -1;
         } else {
           this.lastJumpTap = this.time;
         }
       }
-      if (inp.pressed('KeyF') && this.allowFlight) world.set_flying(!this.state.flying);
+      if (inp.pressed('KeyF') && this.allowFlight) world.set_flying(this.slot, !this.state.flying);
     }
     const sy = Math.sin(this.yaw);
     const cy = Math.cos(this.yaw);
@@ -246,7 +261,7 @@ export class PlayerSim {
       wx /= len;
       wz /= len;
     }
-    world.player_step(wx, wz, jump, sneak, sprint, dt);
+    world.player_step(this.slot, wx, wz, jump, sneak, sprint, dt);
     this.syncState();
     this.sneaking = sneak;
     this.sprinting = sprint && Math.hypot(this.state.vx, this.state.vz) > 4.5;
@@ -275,6 +290,7 @@ export class PlayerSim {
     const p = this.cam.pos;
     return {
       id: this.id,
+      name: this.name,
       x: s.x,
       y: s.y,
       z: s.z,
@@ -298,7 +314,13 @@ export class PlayerSim {
       hotbar: this.itemMode ? { slots: this.inventory.slots.map((st) => (st ? { ...st } : null)), selected: this.inventory.selected } : null,
       hand: { drawing: c.isDrawing, charge: c.charge, strength: c.strength },
       camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov },
+      creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
     };
+  }
+
+  /** Gone from the game: their body leaves the world. */
+  remove() {
+    this.p.world.player_remove(this.slot);
   }
 
   private makeApi(): Player {
@@ -340,7 +362,9 @@ export class PlayerSim {
     return {
       kind: 'player',
       id: this.id,
-      name: this.name,
+      get name() {
+        return me.name;
+      },
       hud: present.hud(this.id),
       input: this.input,
       camera,
@@ -391,15 +415,15 @@ export class PlayerSim {
         me.health.armor = v;
       },
       teleport: (pos, yaw, pitch) => {
-        world.player_reset(pos.x, pos.y, pos.z);
+        world.player_reset(this.slot, pos.x, pos.y, pos.z);
         this.syncState();
         if (yaw !== undefined || pitch !== undefined) this.setView(yaw ?? this.yaw, pitch ?? this.pitch);
       },
       damage: (amount, opts) => this.health.damage(amount, opts),
       heal: (amount) => this.health.heal(amount),
       revive: () => this.health.revive(),
-      impulse: (x, y, z) => world.player_impulse(x, y, z),
-      freeze: (f) => world.set_frozen(f),
+      impulse: (x, y, z) => world.player_impulse(this.slot, x, y, z),
+      freeze: (f) => world.set_frozen(this.slot, f),
     };
   }
 }

@@ -22,7 +22,7 @@ const B = {
   X: 0, Y: 1, Z: 2, VX: 3, VY: 4, VZ: 5, HALF_W: 6, HEIGHT: 7, SPEED: 8, ACCEL: 9, JUMP_VEL: 10, GRAVITY: 11,
   WISH_X: 12, WISH_Z: 13, MODE: 14, WANT_JUMP: 15, FLAGS: 16, IMP_X: 17, IMP_Y: 18, IMP_Z: 19,
   TX: 20, TY: 21, TZ: 22, TARGET_KIND: 23, ON_GROUND: 24, IN_WATER: 25, LOS: 26, PATH_DIST: 27, DIST: 28,
-  HEADING: 29, BLOCKED: 30, LANDED_SPEED: 31,
+  HEADING: 29, BLOCKED: 30, LANDED_SPEED: 31, PLAYER: 32,
 } as const;
 const P = { X: 0, Y: 1, Z: 2, VX: 3, VY: 4, VZ: 5, GRAVITY: 6, DRAG: 7, RADIUS: 8, FLAGS: 9, OWNER: 10, AGE: 11, HIT_KIND: 12, HIT_INDEX: 13 } as const;
 const FLAG_ACTIVE = 1;
@@ -45,9 +45,10 @@ export interface EntityServices {
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   dropItem(item: string, at: Vec3, count: number): void;
-  /** The player the engine's path-finding and line-of-sight track (and entity projectiles hit). */
-  localPlayer(): Player;
   players(): readonly Player[];
+  /** A player's body in the engine (its path-finding, line of sight and projectile hits), or -1. */
+  slotOf(p: Player): number;
+  bySlot(slot: number): Player | undefined;
 }
 
 /** One entity as the client needs to draw it. */
@@ -228,9 +229,11 @@ class EntityImpl implements Entity {
     const b = this.m.bodies;
     const o = this.o;
     b[o + B.MODE] = 1;
-    if (target === this.m.s.localPlayer()) {
-      // The engine's flow field path-finds to the local player.
-      b[o + B.TARGET_KIND] = 0;
+    const slot = isPlayer(target) ? this.m.s.slotOf(target) : -1;
+    if (slot >= 0) {
+      // The engine path-finds to players (a flow field toward each one being chased).
+      b[o + B.TARGET_KIND] = 2;
+      b[o + B.TX] = slot;
     } else {
       const p = isPlayer(target) ? target.position : target;
       b[o + B.TARGET_KIND] = 1;
@@ -276,8 +279,8 @@ class EntityImpl implements Entity {
   }
 
   canSee(target: Target): boolean {
-    // The engine keeps line of sight to the local player for every body.
-    if (target === this.m.s.localPlayer()) return this.m.bodies[this.o + B.LOS] > 0.5;
+    // The engine keeps line of sight to one player for every body: its target, or the nearest.
+    if (this.measures(target)) return this.m.bodies[this.o + B.LOS] > 0.5;
     const p = this.position;
     const eye = { x: p.x, y: p.y + this.height * 0.85, z: p.z };
     const t = this.m.aimPoint(target);
@@ -285,10 +288,15 @@ class EntityImpl implements Entity {
   }
 
   distanceTo(target: Target): number {
-    if (target === this.m.s.localPlayer()) return this.m.bodies[this.o + B.DIST];
+    if (this.measures(target)) return this.m.bodies[this.o + B.DIST];
     const p = this.position;
     const t = isPlayer(target) || isEntity(target) ? target.position : target;
     return Math.hypot(t.x - p.x, t.y - p.y, t.z - p.z);
+  }
+
+  /** The engine measured distance and line of sight to this player last step. */
+  private measures(target: Target): boolean {
+    return isPlayer(target) && this.m.bodies[this.o + B.PLAYER] === this.m.s.slotOf(target);
   }
 
   animate(name: 'attack' | 'raise' | 'cast' | 'none') {
@@ -487,8 +495,8 @@ export class EntitySim implements EntityApi {
     }
   }
 
-  projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner: Entity | Player = this.s.localPlayer()) {
-    this.spawnProjectile(spec, from, dir, isPlayer(owner) ? owner : (owner as EntityImpl));
+  projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner: Entity | Player | null = this.s.players()[0] ?? null) {
+    this.spawnProjectile(spec, from, dir, owner === null || isPlayer(owner) ? owner : (owner as EntityImpl));
   }
 
   /** Where to aim at something: a player's eyes, an entity's middle, or the point itself. */
@@ -518,8 +526,10 @@ export class EntitySim implements EntityApi {
     p[o + P.GRAVITY] = spec.gravity ?? 20;
     p[o + P.DRAG] = 0.05;
     p[o + P.RADIUS] = 0.12;
-    p[o + P.OWNER] = owner === null || isPlayer(owner) ? -1 : owner.slot;
-    p[o + P.FLAGS] = PF_ACTIVE | (isPlayer(owner) ? PF_HITS_BODIES : PF_HITS_PLAYER);
+    // Owner: a body index, -1 - slot for a player (never hit by their own shot), or nobody.
+    p[o + P.OWNER] = owner === null ? -1e6 : isPlayer(owner) ? -1 - this.s.slotOf(owner) : owner.slot;
+    // A player's shots hit monsters and other players; a monster's hit players.
+    p[o + P.FLAGS] = PF_ACTIVE | (isPlayer(owner) ? PF_HITS_BODIES | PF_HITS_PLAYER : PF_HITS_PLAYER);
     this.shots[slot] = { id: this.nextShot++, slot, spec, owner, stuckAt: -1 };
   }
 
@@ -576,7 +586,8 @@ export class EntitySim implements EntityApi {
             continue;
           }
         } else if (kind === 2) {
-          this.s.localPlayer().damage(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5 });
+          const hit = this.s.bySlot(p[o + P.HIT_INDEX]);
+          if (hit?.alive) hit.damage(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5 });
           this.removeProjectile(shot);
           continue;
         } else if (kind === 3) {
