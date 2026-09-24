@@ -12,7 +12,7 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 
 ![Starfighter: the opening shot, a dogfight by the Star Destroyer, a strafing run on a shield generator, the break-up](docs/starfighter.png)
 
-![First-person view: sword, battle axe, bow at full draw, potion](docs/viewmodel.png)
+![First-person view: diamond sword mid-slash, battle axe, two-handed pike, health potion](docs/viewmodel.png)
 
 ## Games
 
@@ -156,7 +156,7 @@ URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for ga
 - Smooth lighting and AO, normal maps and specular from generated material textures, and emissive blocks. Entities sample the voxel light field through a Rust light probe, so a zombie in a tunnel is dark and one next to a torch is lit.
 - Waving leaves and grass. Foliage lets light through, and alpha-to-coverage keeps it sharp.
 - Water: screen-space reflections, refraction with Beer-Lambert absorption, a sun glint, shoreline foam, a Snell's-window view from below, and caustics plus softened shadows on underwater floors.
-- A first-person view built from Minecraft's own transforms. The skinned arm is posed like Minecraft's, swords are held upright in the fist, the bow uses Java's draw pose, and the swing, eat/drink animation and post-attack dip all match Minecraft. Walk bob, look sway, a landing dip and recoil are added on top. Two-handed weapons use 3D held models, like the pike with its jab. Games can set their own grips (in Minecraft display-transform numbers), models and keyframe animations.
+- A first-person view built from Minecraft's own transforms: a skinned arm, the bow's draw pose and the post-attack dip. Swords, axes, potions and polearms are real 3D block models gripped in the hand, with a diagonal slash, an overhead hew, a sip and a two-handed jab; other items are extruded sprites. Walk bob, look sway, a landing dip and recoil on top. Games can add their own held models, grips and keyframe animations.
 - Movable block builds ("props", like the Starfighter ships): a Blueprint meshed once with the world's block textures, AO, shadows and glowing blocks, then moved freely every frame. Glowing laser bolts, explosions (fireball, smoke, sparks, shockwave) and `world.explode` craters.
 - Additive FX (pickup beams, shockwaves, glows), a particle system, floating damage numbers and screen shake.
 - HDR with MSAA, bloom (13-tap down / tent up), screen-space god rays, ACES tone mapping and underwater fog.

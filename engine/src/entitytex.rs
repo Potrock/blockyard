@@ -29,6 +29,8 @@
 //! Atlas layout (256 x 256, unused texels transparent):
 //! - (0,0): the player skin, standard 64x64 layout (`HUMAN_*` boxes).
 //! - Items: 16x16 sprites in a row at y = 64, see `ITEMS` (x = 16 * index).
+//! - Held 3D models (box UVs, lengths along part-space z with z = 0 at the tip / top end):
+//!   the four swords at (64 * tier, 96), `SWORD_*` boxes; the potion at (0, 120), `POTION_*`.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -42,6 +44,10 @@ pub fn generate() -> (Vec<u8>, Vec<u8>) {
     let mut cv = Canvas::new();
     player(&mut cv, PLAYER.0, PLAYER.1);
     items(&mut cv, 0, ITEM_Y);
+    for (k, m) in SWORD_MODELS.iter().enumerate() {
+        sword_model(&mut cv, SWORD_MODEL.0 + 64 * k as i32, SWORD_MODEL.1, m);
+    }
+    potion_model(&mut cv, POTION_MODEL.0, POTION_MODEL.1);
     cv.finish()
 }
 
@@ -97,6 +103,24 @@ pub const HUMAN_HEAD: Part = part(0, 0, 8, 8, 8);
 pub const HUMAN_BODY: Part = part(16, 16, 8, 12, 4);
 pub const HUMAN_ARM: Part = part(40, 16, 4, 12, 4);
 pub const HUMAN_LEG: Part = part(0, 16, 4, 12, 4);
+
+/// Held sword models, one 64x24 region per tier at (SWORD_MODEL.0 + 64 * tier, SWORD_MODEL.1).
+/// Blade 4 wide (x) and 1 thick (y): its broad faces are the top / bottom faces.
+pub const SWORD_MODEL: (i32, i32) = (0, 96);
+pub const SWORD_BLADE: Part = part(0, 0, 4, 1, 15);
+pub const SWORD_TIP1: Part = part(0, 18, 2, 1, 2);
+pub const SWORD_TIP2: Part = part(10, 18, 1, 1, 2);
+pub const SWORD_GUARD: Part = part(40, 0, 10, 2, 2);
+pub const SWORD_GRIP: Part = part(40, 6, 2, 2, 6);
+pub const SWORD_POMMEL: Part = part(40, 16, 3, 3, 2);
+
+/// The potion model, upright along z (z = 0 at the top of each box).
+pub const POTION_MODEL: (i32, i32) = (0, 120);
+pub const POTION_BODY: Part = part(0, 0, 6, 6, 5);
+pub const POTION_SHOULDER: Part = part(24, 0, 4, 4, 1);
+pub const POTION_NECK: Part = part(36, 0, 2, 2, 3);
+pub const POTION_LIP: Part = part(48, 0, 3, 3, 1);
+pub const POTION_CORK: Part = part(24, 6, 2, 2, 2);
 
 pub const ITEM_Y: i32 = 64;
 /// Item sprites, left to right from x = 0 at y = `ITEM_Y`, 16 px apart.
@@ -707,6 +731,149 @@ fn player_leg(s: &S) -> Px {
 }
 
 // ============================================================================
+// Held 3D models (swords, potion)
+// ============================================================================
+
+/// Palettes for a sword model, each dark to light.
+struct SwordModel {
+    blade: [u32; 5],
+    guard: [u32; 3],
+    pommel: [u32; 3],
+    speckle: bool,
+    glow: u8,
+}
+
+static SWORD_MODELS: [SwordModel; 4] = [
+    SwordModel {
+        blade: [0x2e1d0d, 0x755830, 0x967443, 0xb28d56, 0xd2ad74],
+        guard: [0x24170a, 0x5b4023, 0x7a5a32],
+        pommel: [0x3d2616, 0x6b4c28, 0x9a7646],
+        speckle: false,
+        glow: 0,
+    },
+    SwordModel {
+        blade: [0x1c1c1f, 0x505054, 0x6b6b6f, 0x88888c, 0xa6a6aa],
+        guard: [0x24170a, 0x5b4023, 0x7a5a32],
+        pommel: [0x2a2a2e, 0x5a5a5e, 0x8a8a8e],
+        speckle: true,
+        glow: 0,
+    },
+    SwordModel {
+        blade: [0x25282c, 0x8b9197, 0xb9bdc2, 0xdfe2e5, 0xffffff],
+        guard: [0x1d1f22, 0x4b5057, 0x6d737a],
+        pommel: [0x3a3e44, 0x6d737a, 0xb9bdc2],
+        speckle: false,
+        glow: 0,
+    },
+    SwordModel {
+        blade: [0x0c3337, 0x22a0a6, 0x4ad6d4, 0x8ff4ee, 0xe8ffff],
+        guard: [0x0a2729, 0x1d6468, 0x2f8e93],
+        pommel: [0x0a2729, 0x22a0a6, 0x8ff4ee],
+        speckle: false,
+        glow: 40,
+    },
+];
+
+fn sword_model(cv: &mut Canvas, ox: i32, oy: i32, m: &'static SwordModel) {
+    let glow = |p: Px| if m.glow > 0 { p.glow(m.glow) } else { p };
+    let blade = |s: &S| -> Px {
+        // Part-space z = 0 is the tip end; z = d meets the guard.
+        let along = s.z / s.d as f32;
+        let mut p = match s.f {
+            Face::Top | Face::Bottom => {
+                let edge = s.ix == 0 || s.ix == s.w - 1;
+                // A fuller down the middle that stops short of the tip and the guard.
+                let fuller = !edge && along > 0.12 && along < 0.9;
+                if edge {
+                    px(&m.blade, 4.2).h(0.2)
+                } else if fuller {
+                    px(&m.blade, 1.6).h(-0.6)
+                } else {
+                    px(&m.blade, 2.9).h(0.3)
+                }
+            }
+            // The honed edges (1 px faces) catch the light.
+            Face::Right | Face::Left => px(&m.blade, 4.4),
+            _ => px(&m.blade, 3.0),
+        };
+        p.l += 0.4 * (s.rnd(701) - 0.5) + 0.3 * (1.0 - along);
+        if m.speckle && s.rnd(703) < 0.45 {
+            p.l += if s.rnd(704) < 0.5 { -1.0 } else { 0.7 };
+        }
+        // A scratch or two.
+        if s.rnd(702) < 0.04 {
+            p.l += 1.2;
+        }
+        glow(p)
+    };
+    paint_box(cv, ox, oy, SWORD_BLADE, blade);
+    paint_box(cv, ox, oy, SWORD_TIP1, |s| glow(px(&m.blade, if s.side() && (s.c == 0 || s.c == s.fw - 1) { 4.3 } else { 3.3 } + 0.3 * (s.rnd(705) - 0.5))));
+    paint_box(cv, ox, oy, SWORD_TIP2, |s| glow(px(&m.blade, 4.1 + 0.2 * (s.rnd(706) - 0.5))));
+    paint_box(cv, ox, oy, SWORD_GUARD, |s| {
+        // Lit upper rim, shaded lower rim, darker flared ends and a central boss.
+        let end = s.cx() > 3.8;
+        let boss = s.cx() < 1.2 && matches!(s.f, Face::Front | Face::Back);
+        let mut l = 1.3 + 0.35 * (s.rnd(707) - 0.5);
+        if s.f == Face::Top || (s.side() && s.r == 0) {
+            l += 0.7;
+        }
+        if s.side() && s.r == s.h - 1 {
+            l -= 0.5;
+        }
+        if end {
+            l -= 0.4;
+        }
+        if boss {
+            l += 0.8;
+        }
+        px(&m.guard, l).h(if boss { 0.8 } else { 0.4 })
+    });
+    paint_box(cv, ox, oy, SWORD_GRIP, |s| {
+        // Leather strips wound in a spiral, with dark gaps.
+        let t = ((s.z * 1.0 + s.per.max(0) as f32 * 0.5) as i32).rem_euclid(3);
+        match t {
+            0 => p_leather(s, 709, 4.6).h(0.8),
+            1 => p_leather(s, 709, 3.2).h(0.5),
+            _ => px(&LEATHER, 0.8),
+        }
+    });
+    paint_box(cv, ox, oy, SWORD_POMMEL, |s| {
+        let lit = s.f == Face::Top || s.f == Face::Front || (s.side() && s.r == 0);
+        px(&m.pommel, 1.0 + if lit { 0.9 } else { 0.0 } + 0.3 * (s.rnd(711) - 0.5)).h(0.5)
+    });
+}
+
+const GLASS: [u32; 6] = [0x5f7680, 0x8fb0c0, 0xa9c6d2, 0xc8dde6, 0xe2f0f5, 0xffffff];
+const BREW: [u32; 6] = [0x5a0712, 0x8e0f1e, 0xb8141f, 0xd8202c, 0xff5c5c, 0xffb0a8];
+const CORK: [u32; 4] = [0x5e4222, 0x7a5a32, 0x8a6638, 0xb08a5a];
+
+fn potion_model(cv: &mut Canvas, ox: i32, oy: i32) {
+    // Glass bottle, liquid up to a meniscus (part-space z = 0 is the top).
+    paint_box(cv, ox, oy, POTION_BODY, |s| {
+        let side = s.side();
+        // The top cap: brew seen through the glass from above.
+        if s.f == Face::Front {
+            let rim = s.c == 0 || s.r == 0 || s.c == s.fw - 1 || s.r == s.h - 1;
+            return if rim { px(&GLASS, 4.0) } else { px(&BREW, 4.4 + 0.5 * (s.rnd(729) - 0.5)).glow(60) };
+        }
+        let liquid = s.f == Face::Back || s.z > 1.0;
+        if liquid {
+            let meniscus = side && s.z < 1.9;
+            let highlight = side && s.c == 1 && s.z < 4.0;
+            let l = if meniscus { 4.2 } else if highlight { 5.0 } else { 2.6 + 0.5 * (s.rnd(721) - 0.5) - 0.3 * (s.z - 2.0).max(0.0) };
+            return px(&BREW, l).glow(90);
+        }
+        // Empty glass: pale, with a bright streak.
+        let l = if side && s.c == 1 { 5.0 } else { 2.6 + 0.4 * (s.rnd(723) - 0.5) };
+        px(&GLASS, l)
+    });
+    paint_box(cv, ox, oy, POTION_SHOULDER, |s| px(&GLASS, if s.side() && s.c == 0 { 4.6 } else { 2.8 }));
+    paint_box(cv, ox, oy, POTION_NECK, |s| px(&GLASS, if s.side() && s.c == 0 { 4.4 } else { 2.2 }));
+    paint_box(cv, ox, oy, POTION_LIP, |s| px(&GLASS, 3.4 + 0.3 * (s.rnd(725) - 0.5)).h(0.5));
+    paint_box(cv, ox, oy, POTION_CORK, |s| px(&CORK, 1.6 + 0.8 * (s.rnd(727) - 0.5) + if s.f == Face::Front { 0.8 } else { 0.0 }));
+}
+
+// ============================================================================
 // Items
 // ============================================================================
 
@@ -1133,7 +1300,15 @@ mod tests {
         }
         // Every face is painted (the crown's top and bottom are deliberately open), and nothing
         // is painted outside the face rectangles and item cells.
-        let models: [((i32, i32), &[Part]); 1] = [(PLAYER, &[HUMAN_HEAD, HUMAN_BODY, HUMAN_ARM, HUMAN_LEG])];
+        let sword: &[Part] = &[SWORD_BLADE, SWORD_TIP1, SWORD_TIP2, SWORD_GUARD, SWORD_GRIP, SWORD_POMMEL];
+        let models: [((i32, i32), &[Part]); 6] = [
+            (PLAYER, &[HUMAN_HEAD, HUMAN_BODY, HUMAN_ARM, HUMAN_LEG]),
+            (SWORD_MODEL, sword),
+            ((SWORD_MODEL.0 + 64, SWORD_MODEL.1), sword),
+            ((SWORD_MODEL.0 + 128, SWORD_MODEL.1), sword),
+            ((SWORD_MODEL.0 + 192, SWORD_MODEL.1), sword),
+            (POTION_MODEL, &[POTION_BODY, POTION_SHOULDER, POTION_NECK, POTION_LIP, POTION_CORK]),
+        ];
         let mut owned = vec![false; ATLAS * ATLAS];
         let opaque = |x: i32, y: i32| a[((y * AW + x) * 4 + 3) as usize] == 255;
         for (region, parts) in models {

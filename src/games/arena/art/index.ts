@@ -6,13 +6,16 @@
  * - Skins (64x64 regions): (0,0) zombie, (64,0) brute, (128,0) warden (with its crown),
  *   (0,64) skeleton, (64,64) spider.
  * - Items: 16x16 sprites at y = 128, in the cells they have in the built-in atlas.
- * - (0,160): the pike, a held 3D model.
+ * - (0,160): the pike, a held 3D model; (0,208): the battle axe, likewise.
  */
 import type { HeldModelSpec } from '@platform';
 import { ATLAS, Canvas, type Part } from './canvas';
 import { ITEM_X, ITEM_Y, items } from './items';
 import { brute, BRUTE, skeleton, SKELETON, spider, SPIDER, warden, WARDEN, zombie, ZOMBIE } from './mobs';
 import { pike, PIKE, PIKE_BUTT, PIKE_COLLAR, PIKE_HEAD, PIKE_HEAD2, PIKE_SHAFT } from './pike';
+import { axe, AXE } from './axe';
+
+export { AXE_MODEL } from './axe';
 
 export const ARENA_ATLAS = 'arena';
 
@@ -25,6 +28,7 @@ export function paintArenaAtlas(): { width: number; height: number; albedo: Uint
   skeleton(cv, SKELETON[0], SKELETON[1]);
   spider(cv, SPIDER[0], SPIDER[1]);
   pike(cv, PIKE[0], PIKE[1]);
+  axe(cv, AXE[0], AXE[1]);
   items(cv, 0, ITEM_Y);
   const { albedo, emissive } = cv.finish();
   return { width: ATLAS, height: ATLAS, albedo, emissive };

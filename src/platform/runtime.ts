@@ -27,6 +27,7 @@ import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
 import { Commands } from './commands';
 import { PropSystem } from './props/props';
+import { BUILTIN_HELD_MODELS } from './api/models';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -1035,7 +1036,9 @@ export class Runtime {
     }
     const drawn = def.kind === 'bow' && this.combat.isDrawing && this.combat.charge > 0.25;
     const icon = drawn && def.kind === 'bow' ? def.drawIcon ?? 'bow_pulling' : def.icon;
-    const { geometry, atlas } = def.hold?.model && !drawn ? this.graphics.heldModelGeometry(def.hold.model) : this.graphics.spriteGeometry(icon);
+    // A 3D model if the item has one (its own, or the built-in model for a built-in icon).
+    const model = def.hold?.model ?? (typeof def.icon === 'string' ? BUILTIN_HELD_MODELS[def.icon] : undefined);
+    const { geometry, atlas } = model && !drawn ? this.graphics.heldModelGeometry(model) : this.graphics.spriteGeometry(icon);
     const a = this.graphics.atlas(atlas);
     const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : 'item';
     if (def.kind === 'bow' && drawn !== this.drawFrame) {
@@ -1043,7 +1046,7 @@ export class Runtime {
       this.held.swapItemGeometry(geometry);
       return;
     }
-    this.held.setItem(geometry, a.albedo, a.emissive, def.hold ?? {}, style);
+    this.held.setItem(geometry, a.albedo, a.emissive, model ? { ...def.hold, model } : def.hold ?? {}, style);
   }
 
   /** The player's render distance, raised to the game's minimum (`world.viewDistance`). */

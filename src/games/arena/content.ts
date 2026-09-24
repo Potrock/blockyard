@@ -1,6 +1,6 @@
 import { Behaviors, Models, type Behavior, type GameContext, type ModelPart, type ProjectileSpec } from '@platform';
 import { FLOOR, GATES, GATE_SPAWN_RADIUS } from './structure';
-import { ARENA_ATLAS, PIKE_MODEL, Skin, Sprite, paintArenaAtlas } from './art';
+import { ARENA_ATLAS, AXE_MODEL, PIKE_MODEL, Skin, Sprite, paintArenaAtlas } from './art';
 
 /** The Arena's own art: mob skins and item sprites painted into the `arena` atlas. */
 export function defineArt(game: GameContext) {
@@ -19,7 +19,7 @@ export function defineItems(game: GameContext) {
   it.define('iron_sword', { kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42, reach: 3.5, knockback: 1.1, rank: 3 });
   // Two-handed: long reach and a heavy shove, but a slower thrust.
   it.define('pike', { kind: 'melee', name: 'Pike', icon: Sprite.pike, damage: 7.5, cooldown: 0.7, reach: 5, knockback: 2.2, rank: 3.5, hold: { style: 'polearm', model: PIKE_MODEL } });
-  it.define('battle_axe', { kind: 'melee', name: 'Battle Axe', icon: Sprite.battle_axe, damage: 10, cooldown: 0.85, reach: 3.3, knockback: 1.8, sweep: true, rank: 4, hold: { style: 'axe' } });
+  it.define('battle_axe', { kind: 'melee', name: 'Battle Axe', icon: Sprite.battle_axe, damage: 10, cooldown: 0.85, reach: 3.3, knockback: 1.8, sweep: true, rank: 4, hold: { style: 'axe', model: AXE_MODEL } });
   it.define('diamond_sword', { kind: 'melee', name: 'Diamond Sword', icon: 'diamond_sword', damage: 9, cooldown: 0.4, reach: 3.7, knockback: 1.2, sweep: true, rank: 5 });
   it.define('bow', { kind: 'bow', name: 'Bow', icon: 'bow', drawIcon: 'bow_pulling', ammo: 'arrow', damage: [2, 9], drawTime: 0.9, speed: 42, rank: 0 });
   it.define('arrow', { kind: 'misc', name: 'Arrow', icon: 'arrow', stack: 64 });

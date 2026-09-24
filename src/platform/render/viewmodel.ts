@@ -328,6 +328,55 @@ function polearmRest(d: StyleDef, model: HeldModelSpec | undefined, side: number
   out.twoHanded = true;
 }
 
+/** Default actions for 3D models (sprites use Minecraft's swing). */
+const MODEL_USE: Partial<Record<HoldStyle, string>> = { sword: 'slash', axe: 'hew', item: 'sip' };
+
+/**
+ * One hand around a 3D model, in camera space: where the fist is, which way the item points
+ * (its +z) and which way its face turns (its +y), the forearm (fist toward elbow, right hand),
+ * the hand's size and the item's scale.
+ */
+interface ModelGrip {
+  fist: V3;
+  axis: V3;
+  face: V3;
+  forearm: V3;
+  hand: number;
+  scale: number;
+}
+
+const MODEL_GRIPS: Partial<Record<HoldStyle, ModelGrip>> = {
+  // Blade up and into the scene toward the top of the screen, its flat turned to you.
+  sword: { fist: [0.36, -0.44, -0.78], axis: [-0.28, 0.8, -0.53], face: [-0.62, 0.05, 0.78], forearm: [0.4, -0.7, 0.6], hand: 0.8, scale: 0.62 },
+  // Held low on the haft, head up, the edge facing forward.
+  axe: { fist: [0.38, -0.5, -0.78], axis: [-0.2, 0.85, -0.48], face: [-0.94, 0, 0.33], forearm: [0.4, -0.7, 0.6], hand: 0.8, scale: 0.55 },
+  // Upright in the fist, leaning back a little, label side to you.
+  item: { fist: [0.34, -0.42, -0.7], axis: [-0.1, 0.99, 0.06], face: [-0.4, 0, 0.92], forearm: [0.35, -0.75, 0.55], hand: 0.8, scale: 0.5 },
+};
+
+/** Holding a 3D model in one hand (see `MODEL_GRIPS`). */
+function modelRest(g: ModelGrip, hold: HoldSpec, model: HeldModelSpec, side: number, drop: number, out: Rest) {
+  out.twoHanded = false;
+  out.grip.set(side * g.fist[0], g.fist[1] - drop, g.fist[2]);
+  const axis = out.axis.set(side * g.axis[0], g.axis[1], g.axis[2]).normalize();
+  const face = _s.set(side * g.face[0], g.face[1], g.face[2]);
+  face.addScaledVector(axis, -face.dot(axis)).normalize();
+  _m.makeBasis(_v.crossVectors(face, axis), face, axis);
+  out.itemRot.setFromRotationMatrix(_m);
+  // The item's own tweaks (degrees and pixels, camera axes) on top.
+  const [rx, ry, rz] = hold.rotation ?? [0, 0, 0];
+  if (rx || ry || rz) out.itemRot.premultiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(rx * DEG, side * ry * DEG, side * rz * DEG)));
+  out.itemScale = g.scale * (hold.scale ?? 1);
+  const gp = model.grip ?? [0, 0, 0];
+  out.gripLocal.set(gp[0] / 16, gp[1] / 16, gp[2] / 16);
+  const [tx, ty, tz] = hold.translation ?? [0, 0, 0];
+  out.itemOffset.set((side * tx) / 16, ty / 16, tz / 16);
+  const f = forearm(g.forearm, side, axis, out.armRot);
+  out.armOffset.copy(f).multiplyScalar((4.5 / 16) * g.hand);
+  out.armScale = g.hand;
+  out.armStretch = 1;
+}
+
 /** The hand in Minecraft's first-person arm pose, holding style `d` (or nothing) upright in the fist. */
 function attachedRest(d: StyleDef | null, model: HeldModelSpec | undefined, side: number, drop: number, out: Rest) {
   out.twoHanded = false;
@@ -528,6 +577,41 @@ const BUILTIN: Record<string, Anim> = {
       m.wrist.identity();
     },
   },
+  // A diagonal cut for 3D blades: cock it back over the right shoulder, sweep it across the
+  // middle of the screen to the left (mostly a roll, so the blade stays in view), recover.
+  slash: compile({
+    duration: 0.34,
+    keys: [
+      { t: 0 },
+      { t: 0.2, hand: [0.25, -0.1, -0.6], move: [0.06, 0.1, 0.05], ease: 'out' },
+      { t: 0.45, hand: [-0.1, 0.25, 0.85], move: [-0.18, 0.12, -0.12], ease: 'in' },
+      { t: 0.62, hand: [-0.25, 0.3, 1.3], move: [-0.28, -0.02, -0.08], ease: 'out' },
+      { t: 1, ease: 'inOut' },
+    ],
+  }),
+  // Drinking from a held bottle: up toward your mouth, neck tipped to you, a few gulps.
+  sip: compile({
+    duration: 0.9,
+    keys: [
+      { t: 0 },
+      { t: 0.18, hand: [0.75, 0.15, 0.3], move: [-0.22, 0.17, 0.08], ease: 'out' },
+      { t: 0.34, hand: [0.9, 0.15, 0.3], move: [-0.22, 0.2, 0.09], ease: 'inOut' },
+      { t: 0.5, hand: [0.75, 0.15, 0.3], move: [-0.22, 0.17, 0.08], ease: 'inOut' },
+      { t: 0.66, hand: [0.9, 0.15, 0.3], move: [-0.22, 0.2, 0.09], ease: 'inOut' },
+      { t: 0.8, hand: [0.75, 0.15, 0.3], move: [-0.22, 0.17, 0.08], ease: 'inOut' },
+      { t: 1, ease: 'inOut' },
+    ],
+  }),
+  // An overhead hew for axes and hammers: heave it back, bring it down in front of you.
+  hew: compile({
+    duration: 0.44,
+    keys: [
+      { t: 0 },
+      { t: 0.36, hand: [0.4, -0.05, -0.15], move: [0.02, 0.1, 0.05], ease: 'out' },
+      { t: 0.56, hand: [-0.85, 0.15, 0.2], move: [-0.06, -0.06, -0.16], ease: 'in' },
+      { t: 1, ease: 'inOut' },
+    ],
+  }),
   // Two-handed thrust along the shaft: out fast, back steady.
   jab: {
     duration: 0.34,
@@ -739,7 +823,7 @@ export class ViewModel implements ViewModelApi {
   /** The held item's own action: swing, drink, loose a bow, place a block, punch. */
   use(power = 1) {
     let anim: string | ViewAnimation;
-    if (this.held.kind === 'sprite') anim = this.hold.use ?? STYLES[this.held.style].use;
+    if (this.held.kind === 'sprite') anim = this.hold.use ?? ((this.hold.model && MODEL_USE[this.held.style]) || STYLES[this.held.style].use);
     else if (this.held.kind === 'block') anim = 'swing';
     else anim = 'punch';
     this.play(anim, { power });
@@ -869,6 +953,7 @@ export class ViewModel implements ViewModelApi {
       pos.copy(fist).addScaledVector(dir, len);
     };
     fit(new THREE.Vector3(), r.armOffset, this.arm.quaternion, this.arm.position, r.grip);
+    if (!r.twoHanded) return;
     const off2 = r.arm2Offset.clone().sub(r.grip2);
     fit(r.grip2.clone(), off2, this.arm2.quaternion, this.arm2.position, r.grip.clone().add(r.grip2));
   }
@@ -903,6 +988,8 @@ export class ViewModel implements ViewModelApi {
       }
     } else if (this.styleName === 'polearm' && this.style) {
       polearmRest(this.style, this.hold.model, l, this.drop, r);
+    } else if (this.hold.model && this.style && this.styleName && MODEL_GRIPS[this.styleName]) {
+      modelRest(MODEL_GRIPS[this.styleName]!, this.hold, this.hold.model, l, this.drop, r);
     } else {
       attachedRest(this.style, this.hold.model, l, this.drop, r);
     }
@@ -945,8 +1032,9 @@ export class ViewModel implements ViewModelApi {
       this.arm2.quaternion.copy(r.arm2Rot);
       this.arm2.position.copy(r.arm2Offset);
       this.arm2.scale.set(r.armScale, r.armScale * r.armStretch, r.armScale);
-      if (this.playing || this.fadeT < 1) this.reach(r);
     }
+    // During an animation, forearms turn toward where their elbows were at rest (3D models).
+    if (this.hold.model && (this.playing || this.fadeT < 1) && this.held.kind !== 'empty') this.reach(r);
 
     // Procedural motion: breathing, walk bob, look sway, landing dip, recoil.
     const breathe = Math.sin(this.time * 1.7);

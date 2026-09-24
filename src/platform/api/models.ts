@@ -1,4 +1,4 @@
-import type { ModelPart, ModelSpec } from './types';
+import type { BuiltinSprite, HeldModelSpec, ModelPart, ModelSpec } from './types';
 
 /** Origins of the built-in skins in the `builtin` entity atlas. Games bring their own (`items.atlas`). */
 export const Skins = {
@@ -69,3 +69,49 @@ export const Models = {
   },
 };
 
+const sword = (tier: number): HeldModelSpec => {
+  const o: [number, number] = [64 * tier, 96];
+  return {
+    parts: [
+      { size: [3, 3, 2], uv: add(o, [40, 16]), offset: [-1.5, -1.5, -3] },
+      { size: [2, 2, 6], uv: add(o, [40, 6]), offset: [-1, -1, -1] },
+      { size: [10, 2, 2], uv: add(o, [40, 0]), offset: [-5, -1, 5] },
+      { size: [4, 1, 15], uv: add(o, [0, 0]), offset: [-2, -0.5, 7] },
+      { size: [2, 1, 2], uv: add(o, [0, 18]), offset: [-1, -0.5, 22] },
+      { size: [1, 1, 2], uv: add(o, [10, 18]), offset: [-0.5, -0.5, 24] },
+    ],
+    grip: [0, 0, 2],
+  };
+};
+
+/**
+ * Built-in 3D held items (`hold.model`), in the `builtin` atlas. Items whose icon is a built-in
+ * starter sprite get the matching model automatically.
+ */
+export const HeldModels = {
+  woodenSword: sword(0),
+  stoneSword: sword(1),
+  ironSword: sword(2),
+  diamondSword: sword(3),
+  /** Upright along +z: a glass bottle with glowing red brew and a cork. */
+  healthPotion: {
+    parts: [
+      { size: [6, 6, 5], uv: [0, 120], offset: [-3, -3, 0] },
+      { size: [4, 4, 1], uv: [24, 120], offset: [-2, -2, 5] },
+      { size: [2, 2, 3], uv: [36, 120], offset: [-1, -1, 6] },
+      { size: [3, 3, 1], uv: [48, 120], offset: [-1.5, -1.5, 9] },
+      { size: [2, 2, 2], uv: [24, 126], offset: [-1, -1, 9.6] },
+    ],
+    // Held up on the palm: the fist sits under the bottle.
+    grip: [0, 0, -2.2],
+  } as HeldModelSpec,
+};
+
+/** The model an item with this built-in icon is held as, if it has one. */
+export const BUILTIN_HELD_MODELS: Partial<Record<BuiltinSprite, HeldModelSpec>> = {
+  wooden_sword: HeldModels.woodenSword,
+  stone_sword: HeldModels.stoneSword,
+  iron_sword: HeldModels.ironSword,
+  diamond_sword: HeldModels.diamondSword,
+  health_potion: HeldModels.healthPotion,
+};
