@@ -118,6 +118,8 @@ interface Client {
 export class GameHost {
   readonly sim: Sim;
   readonly world: GeneratedWorld;
+  /** The world's seed (the game's own, if it fixes one). */
+  readonly seed: number;
   radius: number;
   private budget: number;
   private events: HostEvent[] = [];
@@ -126,6 +128,8 @@ export class GameHost {
   private state = new PresentState();
   /** Every content definition so far, for clients that join later. */
   private contentLog: HostEvent[] = [];
+  /** The player whose command is running (a button they pressed may call `game.exit()`). */
+  private acting: string | undefined;
 
   constructor(
     readonly def: GameDefinition,
@@ -133,7 +137,7 @@ export class GameHost {
   ) {
     loadEngineSync(o.engine);
     const registry = loadRegistry();
-    const seed = (def.world?.seed ?? o.seed) >>> 0;
+    const seed = (this.seed = (def.world?.seed ?? o.seed) >>> 0);
     this.radius = o.radius ?? 8;
     this.budget = o.budget ?? 4;
     const blockId = (b: BlockRef) => {
@@ -178,7 +182,7 @@ export class GameHost {
       sink: (call) => {
         if (this.state.admit(call)) this.events.push({ t: 'call', call });
       },
-      exit: () => this.events.push({ t: 'exit' }),
+      exit: () => this.events.push({ t: 'exit', player: this.acting }),
       cheats: o.cheats ?? false,
       player: o.player,
     });
@@ -265,7 +269,9 @@ export class GameHost {
   command(id: string, c: ClientCommand) {
     const client = this.clients.get(id);
     if (!client) return;
+    this.acting = id;
     this.guard(() => this.run(client, c));
+    this.acting = undefined;
   }
 
   /**
@@ -298,7 +304,7 @@ export class GameHost {
     const out = new Map<string, HostBatch>();
     for (const id of this.clients.keys()) {
       out.set(id, {
-        events: events.filter((e) => (e.t === 'call' ? e.call.to === null || e.call.to === id : e.t === 'reply' ? e.player === id : true)),
+        events: events.filter((e) => (e.t === 'call' ? e.call.to === null || e.call.to === id : e.t === 'reply' ? e.player === id : e.t === 'exit' ? !e.player || e.player === id : true)),
         frame,
       });
     }

@@ -1,5 +1,6 @@
 import type { GameDefinition } from '../api/types';
-import type { ClientCommand, HostBatch, HostInit } from '../net/protocol';
+import { decode, encode } from '../net/codec';
+import type { ClientCommand, HostBatch, HostInit, ServerWelcome, TimedBatch } from '../net/protocol';
 import { GameHost, type GameHostOptions } from './game';
 
 /** A client's connection to wherever its game is hosted. */
@@ -48,5 +49,64 @@ export class WorkerLink implements SimLink {
 
   send(cmd: ClientCommand) {
     this.worker.postMessage(cmd);
+  }
+}
+
+/**
+ * A game server (`?server=ws://…`): the host runs elsewhere on its own clock. The client sends
+ * its controls as `input` each frame instead of ticking, and batches arrive stamped with the
+ * host's time for smooth playback.
+ */
+export class SocketLink implements SimLink {
+  readonly local = null;
+  /** The connection dropped (the server stopped, the network went). */
+  onClose: (() => void) | null = null;
+  private handler: ((b: HostBatch) => void) | null = null;
+  private waiting: TimedBatch[] = [];
+
+  private constructor(
+    private ws: WebSocket,
+    readonly welcome: ServerWelcome,
+  ) {}
+
+  /** Connect and wait for the welcome: which game, which world, which player. */
+  static connect(url: string, name: string): Promise<SocketLink> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${url}${url.includes('?') ? '&' : '?'}name=${encodeURIComponent(name)}`);
+      let link: SocketLink | null = null;
+      ws.onmessage = (e: MessageEvent<string>) => {
+        const m = decode<ServerWelcome | TimedBatch>(e.data);
+        if (link) link.deliver(m as TimedBatch);
+        else if ('t' in m && m.t === 'welcome') resolve((link = new SocketLink(ws, m)));
+      };
+      ws.onerror = () => {
+        if (!link) reject(new Error(`Can't reach the game server at ${url}.`));
+      };
+      ws.onclose = () => link?.onClose?.();
+    });
+  }
+
+  get onBatch() {
+    return this.handler;
+  }
+
+  /** Batches that came before anyone listened (the catch-up) are handed over first. */
+  set onBatch(fn: ((b: HostBatch) => void) | null) {
+    this.handler = fn;
+    if (!fn) return;
+    for (const b of this.waiting.splice(0)) fn(b);
+  }
+
+  send(cmd: ClientCommand) {
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(encode(cmd));
+  }
+
+  close() {
+    this.ws.close();
+  }
+
+  private deliver(b: TimedBatch) {
+    if (this.handler) this.handler(b);
+    else this.waiting.push(b);
   }
 }

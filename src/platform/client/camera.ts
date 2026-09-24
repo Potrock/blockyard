@@ -34,7 +34,8 @@ export class PlayerCamera {
 
   /** Where the simulation put the player; it turns us when it says so (teleports, spawning). */
   follow(dt: number, f: PlayerFrame) {
-    if (f.view.seq !== this.viewSeq) {
+    // Newer only: frames can come out of order (a server's, played back smoothly).
+    if (f.view.seq > this.viewSeq) {
       this.viewSeq = f.view.seq;
       this.yaw = f.view.yaw;
       this.pitch = f.view.pitch;

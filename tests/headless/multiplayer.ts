@@ -59,6 +59,16 @@ function sandbox() {
   const replies = (id: string) => last.get(id)!.events.filter((e) => e.t === 'reply').length;
   check(replies(cat.id) === 1 && replies(ann.id) === 0, 'the reply went to whoever asked');
 
+  // A button Bob presses that calls game.exit() sends Bob away, not everyone.
+  host.sim.players[1].api.hud.menu({ title: 'Leave?', sections: [{ title: '', entries: [{ label: 'Quit', onSelect: () => host.sim.ctx.exit() }] }] });
+  step(1);
+  const menu = last.get(bob.id)!.events.find((e) => e.t === 'call' && e.call.method === 'menu');
+  const cb = menu?.t === 'call' ? (menu.call.args[1] as { sections: { entries: { onSelect: { $cb: number } }[] }[] }).sections[0].entries[0].onSelect.$cb : -1;
+  host.command(bob.id, { t: 'message', msg: { t: 'callback', player: bob.id, id: cb } });
+  step(1);
+  const exits = (id: string) => last.get(id)!.events.filter((e) => e.t === 'exit').length;
+  check(exits(bob.id) === 1 && exits(ann.id) === 0 && exits(cat.id) === 0, 'exit went to Bob only');
+
   // Leaving: Bob is gone; Ann's place (the first player) waits for the next to join.
   let left = '';
   host.sim.ctx.events.on('playerLeave', (e) => (left += e.player.name));

@@ -104,8 +104,8 @@ export type HostEvent =
   | { t: 'revert' }
   /** Set up and placed: play can begin. */
   | { t: 'ready' }
-  /** The game called `exit()`. */
-  | { t: 'exit' }
+  /** The game called `exit()`: for the player whose action it answered, or everyone. */
+  | { t: 'exit'; player?: string }
   /** The answer to a request (`exec`, `complete`), for the player who asked. */
   | { t: 'reply'; id: number; value: unknown; player?: string }
   /** The game threw (the host carries on). */
@@ -154,4 +154,19 @@ export interface HostInit {
   cheats: boolean;
   radius: number;
   dayLength: number | null;
+}
+
+/** A server's first message to a client: which game, which world, and who they are in it. */
+export interface ServerWelcome {
+  t: 'welcome';
+  game: string;
+  seed: number;
+  player: string;
+  /** Steps per second. */
+  tickRate: number;
+}
+
+/** A batch from a server, stamped with the host's clock (seconds) for smooth playback. */
+export interface TimedBatch extends HostBatch {
+  time: number;
 }

@@ -1,4 +1,5 @@
 import type { GameContext, GameDefinition } from '../api/types';
+import { decode, encode } from '../net/codec';
 import type { ClientMessage, HostBatch, PlayerInput, PresentCall, SaveState } from '../net/protocol';
 import type { PlayerSim } from '../sim/player';
 import type { Sim } from '../sim/sim';
@@ -15,8 +16,8 @@ export interface HeadlessOptions {
   /** Continue a saved world. */
   save?: SaveState;
   /**
-   * Put every batch through `structuredClone`, as a worker or a socket would: a definition or a
-   * call that can't cross to a client fails here, in Node, instead of in the browser.
+   * Put every batch through the socket encoding (JSON, typed arrays as base64), the strictest way
+   * to a client: a definition, call or frame that can't cross fails or shows here, in Node.
    */
   wire?: boolean;
 }
@@ -71,7 +72,7 @@ export class Headless {
       ? { active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: me.yaw, pitch: me.pitch, viewSeq: me.viewSeq, ...input }
       : undefined;
     let b = this.host.handle({ t: 'tick', dt, running: true, input: full })!;
-    if (this.wire) b = structuredClone(b);
+    if (this.wire) b = decode<HostBatch>(encode(b));
     for (const e of b.events) {
       if (e.t === 'call') this.calls.push(e.call);
       else if (e.t === 'exit') this.exited = true;

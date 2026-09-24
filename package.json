@@ -12,14 +12,17 @@
     "typecheck": "tsc --noEmit && npm run check:boundaries",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "test:engine": "cargo test --release --manifest-path engine/Cargo.toml",
-    "test:headless": "node scripts/headless.mjs"
+    "test:headless": "node scripts/headless.mjs",
+    "server": "node scripts/server.mjs"
   },
   "dependencies": {
-    "three": "^0.186.0"
+    "three": "^0.186.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
     "@types/three": "^0.186.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "wasm-pack": "^0.15.0"

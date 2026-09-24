@@ -123,9 +123,20 @@ Games are written so the same code works with one player or many:
 - **Who did it.** Damage sources, killers and block events are an `Actor`: an `Entity`, a `Player`, or `'world'`. Tell them apart with `kind` (`'entity'` or `'player'`): `if (killer !== 'world' && killer?.kind === 'player') kills++`.
 - **Callbacks name the player**: `use(game, player)`, `onPickup(game, count, player)`, command `run(args, game, player)`, the `pickup`, `playerDamage` and `playerDeath` events, and the kits' handlers. Use that player rather than `game.player`, and a potion heals whoever drank it.
 - **Mobs pick their target**: `self.nearestPlayer()`, then `moveTo`, `lookAt`, `canSee`, `distanceTo`, `shoot` and `damage` it. The built-in `Behaviors` all hunt the nearest player.
-- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`.
+- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`, and the array stays up to date as players come and go.
+- **Shots hit players too.** A player's arrows and fireballs hit monsters and other players (never the shooter); a monster's shots hit any player.
 
-Today every game runs with one local player; the server that hosts several is the next step (see "Architecture and the road to multiplayer"). Writing against `players` and the named player now is what lets a game go multiplayer without a rewrite.
+**Playing together.** Any game can be hosted by the game server, and players join from their browsers:
+
+```sh
+npm run server -- sandbox --port 8787          # add --cheats for /tp, /give…, --seed to pick the world
+# then each player opens:
+http://localhost:5173/?server=ws://localhost:8787&name=Ann
+```
+
+The server runs the game at 30 steps a second whether or not anyone's watching a given frame. The first to join is `game.player`; everyone else arrives at the spawn and the game hears `playerJoin`. When the first player leaves, the next to join takes their place, so `game.player` always works. Everyone sees everyone else as a figure with their name above it, wearing the game's player skin. The server doesn't save worlds yet, and a restart (from any player's pause menu or a "Play again" button) restarts the game for everyone. `game.exit()` sends back to the launcher only the player whose button or command called it.
+
+How a single-player game behaves with company depends on how it's written: a game that only talks to `game.player` gives the others a world to walk around in, while one that uses `game.players`, `player.hud` and the named player in callbacks works for everyone.
 
 ## Items
 
@@ -485,7 +496,7 @@ Your game runs inside the **simulation**, and everything it does reaches players
 - **Presentation calls out.** `hud`, `fx`, `audio` and the view model are proxies. Each call becomes a `PresentCall` addressed to one player (`player.hud`) or to everyone (`game.hud`). Menu entries, buttons and other callbacks go out as ids and come back as `ClientMessage`s, which call your function inside the simulation.
 - **Content by name.** Sounds, atlases, animations, entity and item definitions, and prop models go into a shared `Content` registry, so a frame only has to name them.
 
-A `GameHost` runs the simulation on a world of its own, generated around the players, and answers each tick with a batch: the content your game defined since the last one, presentation calls, block edits, then the frame. In the browser the host runs in a Web Worker, so your game's logic never costs the renderer a frame. The page is only the client: it sends one tick per frame with the player's controls, draws the newest frame, and mirrors the host's block edits into its own world for meshing (and for saves). In Node, `Headless` (`src/platform/host/headless.ts`) wraps the same `GameHost` with no client at all; that's what the headless tests run on. A server will host it the same way, with clients over a socket instead of a worker, without changing your game. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
+A `GameHost` runs the simulation on a world of its own, generated around the players (every player has a physics body in it, by slot), and answers each tick with a batch: the content your game defined since the last one, presentation calls, block edits, then the frame. In the browser the host runs in a Web Worker, so your game's logic never costs the renderer a frame. The page is only the client: it sends one tick per frame with the player's controls, draws the newest frame, and mirrors the host's block edits into its own world for meshing (and for saves). In Node, `Headless` (`src/platform/host/headless.ts`) wraps the same `GameHost` with no client at all; that's what the headless tests run on. The game server (`src/platform/host/server.ts`) hosts it too, for many clients over WebSockets: it keeps its own clock, merges each client's controls between steps, sends each client only the calls meant for everyone or for them, and catches late joiners up with the game's content, the world's edits and what's on everyone's screen. Clients play the server's frames back about two steps behind, blending positions, so movement is smooth although frames arrive unevenly. Presentation calls that set something lasting (an objective, a stat, a marker, the block highlight) are only sent when they change, which is what keeps a game's traffic small. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
 
 On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server can link the same crate and generate identical worlds from the same seed and blueprints. Entity state lives in flat `f64` buffers (layout documented in `entities.rs`) that serialise directly into snapshots. Rendering, chunk meshing, lighting and culling stay on the client.
 

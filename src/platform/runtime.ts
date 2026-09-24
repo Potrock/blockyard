@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { engine, loadEngine } from './engine/wasm';
 import { WorkerPool } from './workers/pool';
 import { worldGenConfig } from './host/spawn';
-import { PageLink, WorkerLink, type SimLink } from './host/link';
+import { PageLink, SocketLink, WorkerLink, type SimLink } from './host/link';
+import { FrameBuffer } from './client/interp';
+import { Models, Skins } from './api/models';
 import { LAYER_CHUNKS, Renderer, type FrameHooks } from './render/pipeline';
 import { Environment } from './render/environment';
 import { BiomeMap, createBlockTextures, createNoiseTexture, type TextureSet } from './render/textures';
@@ -27,7 +29,8 @@ import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
 import type { Sim, SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
-import type { HostBatch, SaveState } from './net/protocol';
+import type { HostBatch, SaveState, TimedBatch } from './net/protocol';
+import type { EntityFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -100,6 +103,13 @@ export class Runtime {
   /** The host has set the game up and placed the player. */
   private hostReady = false;
   private requests = new Map<number, (value: unknown) => void>();
+  /** Which player in the frames is this client's. */
+  private playerId: string;
+  /** A server's frames, played back smoothly (a server only). */
+  private playback: FrameBuffer | null = null;
+  /** Other players drawn as figures: their stable entity ids, and name tags shown. */
+  private avatarIds = new Map<string, number>();
+  private tags = new Set<string>();
   private nextRequest = 1;
   private commandBar!: CommandBar;
   private last = performance.now();
@@ -126,7 +136,10 @@ export class Runtime {
     games: GameDefinition[],
     private seed: number,
     private makeWorker: (() => Worker) | null,
+    /** Joined a game server (`?server=`): the host is there, not here. */
+    private server: SocketLink | null = null,
   ) {
+    this.playerId = server?.welcome.player ?? 'local';
     this.settings = loadSettings();
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.1, 400);
     this.camera.layers.enable(LAYER_CHUNKS);
@@ -138,15 +151,19 @@ export class Runtime {
 
   /**
    * Boot the game selected by `?game=` (default: the first registered game). `worker` starts the
-   * app's game host worker; without it (or with `?host=page`) the game runs in this page.
+   * app's game host worker; without it (or with `?host=page`) the game runs in this page. With
+   * `?server=ws://…` it joins that server's game instead (`&name=` names the player).
    */
   static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[] = [], worker?: () => Worker): Promise<Runtime> {
     const url = new URL(location.href);
-    const id = url.searchParams.get('game');
+    const address = url.searchParams.get('server');
+    const server = address ? await SocketLink.connect(address, url.searchParams.get('name') ?? 'Player') : null;
+    const id = server?.welcome.game ?? url.searchParams.get('game');
     // Hidden games (dev previews) open by id but aren't listed in the launcher.
     const def = [...games, ...hidden].find((g) => g.id === id) ?? games[0];
-    const seed = Runtime.chooseSeed(def);
-    const rt = new Runtime(canvas, ui, def, games, seed, worker ?? null);
+    if (server && def.id !== server.welcome.game) throw new Error(`The server is running "${server.welcome.game}", which this client doesn't have.`);
+    const seed = server?.welcome.seed ?? Runtime.chooseSeed(def);
+    const rt = new Runtime(canvas, ui, def, games, seed, worker ?? null, server);
     await rt.init();
     return rt;
   }
@@ -267,7 +284,7 @@ export class Runtime {
     });
 
     // The presentation calls the host sends run here; callbacks go back as messages.
-    this.presenter = new Presenter('local', {
+    this.presenter = new Presenter(this.playerId, {
       hud: this.gameHud,
       fx: this.fx,
       sfx: this.sfx,
@@ -276,9 +293,9 @@ export class Runtime {
       client: (method, args) => this.clientCall(method, args),
     });
 
-    // The game's host: a worker by default, this page for development and tests (`?host=page`).
-    // It sets the game up, places the player and answers each tick with a batch.
-    const save = this.load();
+    // The game's host: a server we joined, a worker by default, or this page for development and
+    // tests (`?host=page`). It sets the game up, places the player and sends batches.
+    const save = this.server ? null : this.load();
     const opts = {
       seed: this.seed,
       save,
@@ -288,13 +305,23 @@ export class Runtime {
       fov: this.settings.fov,
     };
     const inPage = new URL(location.href).searchParams.get('host') === 'page';
-    this.link = inPage || !this.makeWorker ? new PageLink(def, { ...opts, engine: module, budget: 2 }) : new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts });
+    if (this.server) {
+      this.link = this.server;
+      // Two steps behind the newest frame: smooth, and about 70 ms behind the server at 30 steps a second.
+      this.playback = new FrameBuffer(2 / this.server.welcome.tickRate);
+      this.server.onClose = () => this.disconnected();
+    } else {
+      this.link = inPage || !this.makeWorker ? new PageLink(def, { ...opts, engine: module, budget: 2 }) : new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts });
+    }
+    // Other players look like the game's player (its first-person arm's skin), or the default.
+    const skin = def.player?.skin ?? Skins.player;
+    this.content.defineEntity('$player', { name: 'Player', model: Models.humanoid({ skin, atlas: def.player?.skin ? def.player.skinAtlas : undefined }), hitbox: { width: 0.6, height: 1.8 }, health: 20, speed: 4.3 });
     this.link.onBatch = (b) => this.receive(b);
 
     if (def.player?.build) {
       this.picker = new BlockPicker(this.ui, this.registry, icons, () => this.closePicker());
       this.picker.onPick = (id) => {
-        this.link.send({ t: 'message', msg: { t: 'creativePick', player: 'local', block: id } });
+        this.link.send({ t: 'message', msg: { t: 'creativePick', player: this.playerId, block: id } });
         this.hud.showToast(this.registry.blocks[id]?.label ?? '');
       };
     }
@@ -439,7 +466,59 @@ export class Runtime {
     if (b.frame) {
       this.frameData = b.frame;
       this.ticking = false;
+      this.playback?.push(b.frame, (b as TimedBatch).time);
     }
+  }
+
+  /** This client's player in a frame. */
+  private mine(f: SimFrame | null): PlayerFrame | undefined {
+    return f?.players.find((p) => p.id === this.playerId);
+  }
+
+  /** The server went away: say so, and stop sending. */
+  private disconnected() {
+    this.input.unlock();
+    this.gameHud.screen({ title: 'Disconnected', subtitle: 'The connection to the game server was lost.', tone: 'defeat', buttons: [{ label: 'Reload', primary: true, onClick: () => location.reload() }] });
+  }
+
+  /** Other players as figures (entities of the built-in `$player` type), with their names above. */
+  private avatars(f: SimFrame): EntityFrame[] {
+    const out: EntityFrame[] = [];
+    const seen = new Set<string>();
+    for (const p of f.players) {
+      if (p.id === this.playerId) continue;
+      let id = this.avatarIds.get(p.id);
+      if (id === undefined) this.avatarIds.set(p.id, (id = -1 - this.avatarIds.size));
+      const cp = Math.cos(p.view.pitch);
+      const eye = { x: p.x, y: p.y + 1.62, z: p.z };
+      out.push({
+        id,
+        type: '$player',
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        vx: p.vx,
+        vz: p.vz,
+        yaw: p.view.yaw,
+        look: { x: eye.x - Math.sin(p.view.yaw) * cp * 4, y: eye.y + Math.sin(p.view.pitch) * 4, z: eye.z - Math.cos(p.view.yaw) * cp * 4 },
+        attacks: 0,
+        raised: false,
+        casting: false,
+        glow: null,
+        hurt: 0,
+        dying: p.dead ? p.deathTime : -1,
+      });
+      const tag = `$name:${p.id}`;
+      seen.add(tag);
+      this.tags.add(tag);
+      this.gameHud.marker(tag, { x: p.x, y: p.y + 2.25, z: p.z }, { label: p.name, shape: 'dot', size: 3, color: '#ffffff' });
+    }
+    for (const tag of this.tags) {
+      if (seen.has(tag)) continue;
+      this.gameHud.marker(tag, null);
+      this.tags.delete(tag);
+    }
+    return out;
   }
 
   /** Ask the host something; the answer comes in a later batch. */
@@ -499,8 +578,9 @@ export class Runtime {
 
   private save() {
     const f = this.frameData;
-    const s = f?.players[0];
-    if (!this.chunks || !this.def.world?.persist || !f || !s) return;
+    const s = this.mine(f);
+    // On a server, the server keeps the world.
+    if (!this.chunks || !this.def.world?.persist || this.server || !f || !s) return;
     // This client's world has every edit the host made (mirrored), loaded or not.
     const data: SaveData = {
       edits: toB64(this.chunks.world.export_edits()),
@@ -526,7 +606,7 @@ export class Runtime {
 
   /** The title screen's progress: the terrain around the player (the host placed them) meshed. */
   private updateReadiness() {
-    const s = this.frameData?.players[0];
+    const s = this.mine(this.frameData);
     if (this.worldReady || !s || !this.hostReady) return;
     const ready = this.chunks.readiness(s.x, s.z, Math.min(this.settings.renderDistance, 6));
     this.title.progress(0.1 + 0.9 * ready, ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : 'Ready');
@@ -733,7 +813,7 @@ export class Runtime {
     const playing = this.mode === 'playing';
     const started = this.frameData?.started ?? false;
     const running = playing && started;
-    const dead = this.frameData?.players[0]?.dead ?? false;
+    const dead = this.mine(this.frameData)?.dead ?? false;
     const active = playing && (this.input.locked || this.debugActive) && !dead && !this.gameHud.screenOpen;
     this.sfx.hold(started && (this.mode === 'paused' || this.mode === 'console'));
 
@@ -746,10 +826,13 @@ export class Runtime {
         this.view.look(this.input, active);
       }
     }
-    // One tick at a time: while one is on its way, frame time (and input) adds up for the next.
-    // In this page the answer is immediate; from a worker it arrives before the next frame.
+    // A server keeps its own clock: it gets the controls every frame. Otherwise one tick at a time:
+    // while one is on its way, frame time (and input) adds up for the next. In this page the
+    // answer is immediate; from a worker it arrives before the next frame.
     this.tickDt += dt;
-    if (!this.ticking) {
+    if (this.server) {
+      this.link.send({ t: 'input', input: this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq) });
+    } else if (!this.ticking) {
       this.ticking = true;
       const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
       const tickDt = Math.min(0.1, this.tickDt);
@@ -761,14 +844,14 @@ export class Runtime {
         throw err;
       }
     }
-    const f = this.frameData;
+    const f = this.playback?.sample() ?? this.frameData;
     this.updateReadiness();
-    if (!f) {
+    const me = this.mine(f);
+    if (!f || !me) {
       // The host is still starting: nothing to draw yet but the sky.
       this.present(dt, playing, t0);
       return;
     }
-    const me = f.players[0];
 
     this.env.time = f.time;
     this.env.paused = true;
@@ -792,7 +875,7 @@ export class Runtime {
       this.camera.updateMatrixWorld();
       if (this.mode !== 'title') this.titleSpin = 0;
     }
-    this.entityView.sync(f.entities, f.projectiles, dt, running);
+    this.entityView.sync(f.players.length > 1 ? [...f.entities, ...this.avatars(f)] : f.entities, f.projectiles, dt, running);
     this.pickupView.sync(f.pickups, dt);
     this.propView.sync(f.props, dt);
     this.showPlayer(me);
@@ -885,7 +968,7 @@ export class Runtime {
 
   private updateDebug() {
     const f = this.frameData;
-    const s = f?.players[0];
+    const s = this.mine(f);
     if (!f || !s) return;
     const c = this.chunks.stats();
     const r = this.renderer;
@@ -902,7 +985,7 @@ export class Runtime {
       `Facing   ${facing}   pitch ${((this.view.pitch * 180) / Math.PI).toFixed(1)}°`,
       `Motion   ${s.flying ? 'flying' : s.inWater ? 'swimming' : s.onGround ? 'grounded' : 'airborne'}   ${Math.hypot(s.vx, s.vz).toFixed(2)} m/s`,
       `Time     ${this.env.clock()}   game clock ${(this.frameData?.clock ?? 0).toFixed(1)} s`,
-      `Entities ${f.entities.length} alive   host ${this.link.local ? 'in page' : 'worker'}`,
+      `Entities ${f.entities.length} alive   host ${this.server ? `server (${f.players.length} playing)` : this.link.local ? 'in page' : 'worker'}`,
       '',
       `Columns  ${c.loaded} loaded · ${c.meshed} meshed · ${c.pending} pending upload`,
       `Workers  ${this.pool.size} · gen ${c.generating} (${c.genMs.toFixed(2)} ms) · mesh ${c.meshing} (${c.meshMs.toFixed(2)} ms)`,
@@ -943,9 +1026,10 @@ export class Runtime {
       game: this.def.id,
       mode: this.mode,
       ready: this.worldReady,
-      host: this.link.local ? 'page' : 'worker',
-      state: this.frameData?.players[0] ?? null,
-      health: this.frameData?.players[0]?.health ?? 0,
+      host: this.server ? 'server' : this.link.local ? 'page' : 'worker',
+      player: this.playerId,
+      state: this.mine(this.frameData) ?? null,
+      health: this.mine(this.frameData)?.health ?? 0,
       entities: this.frameData?.entities.length ?? 0,
       chunks: this.chunks.stats(),
       render: { ...this.renderer.stats },
