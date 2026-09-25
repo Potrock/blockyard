@@ -7,12 +7,15 @@ import type { SavedPlayer, SavedWorld, Store } from './store';
  * A game server's store: one SQLite file per server (Node's built-in `node:sqlite`). The world,
  * players by name, and the game's `game.store` data. Changes to the game's data are kept in
  * memory and written in one transaction on `flush` (the server flushes every few seconds and when
- * it stops), so a game setting values every tick costs nothing.
+ * it stops), so a game setting values every tick costs nothing. Several rooms of a game (each in
+ * its own thread) each open it: a flush also picks up what the others wrote.
  */
 export class SqliteStore implements Store {
   private db: DatabaseSync;
   private values = new Map<string, unknown>();
   private dirty = new Map<string, unknown>();
+  /** The database's version as of our last read (other connections' writes change it). */
+  private version = -1;
 
   private constructor(
     path: string,
@@ -20,7 +23,9 @@ export class SqliteStore implements Store {
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
+    // A game's rooms each open it (in threads of their own): wait for another's write to finish.
     this.db.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
       CREATE TABLE IF NOT EXISTS world (
@@ -43,7 +48,23 @@ export class SqliteStore implements Store {
         updated TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
-    for (const row of this.db.prepare('SELECT key, value FROM kv').all() as { key: string; value: string }[]) this.values.set(row.key, JSON.parse(row.value));
+    this.refresh();
+  }
+
+  /**
+   * Read the game's data again if another connection wrote to the database since we last did: the
+   * game's other rooms (each in a thread of its own, with a connection of its own) share it.
+   */
+  private refresh() {
+    const version = (this.db.prepare('PRAGMA data_version').get() as { data_version: number }).data_version;
+    if (version === this.version) return;
+    this.version = version;
+    const seen = new Set<string>();
+    for (const row of this.db.prepare('SELECT key, value FROM kv').all() as { key: string; value: string }[]) {
+      seen.add(row.key);
+      if (!this.dirty.has(row.key)) this.values.set(row.key, JSON.parse(row.value));
+    }
+    for (const key of [...this.values.keys()]) if (!seen.has(key) && !this.dirty.has(key)) this.values.delete(key);
   }
 
   /** Open (or create) a server's database. It belongs to one game: opening it for another fails. */
@@ -88,7 +109,13 @@ export class SqliteStore implements Store {
     this.dirty.set(key, value);
   }
 
+  /** Write the game's data that changed, and pick up what other rooms of the game wrote. */
   flush() {
+    this.write();
+    this.refresh();
+  }
+
+  private write() {
     if (!this.dirty.size) return;
     const set = this.db.prepare(`INSERT INTO kv (key, value, updated) VALUES (?, ?, datetime('now')) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated = excluded.updated`);
     const del = this.db.prepare('DELETE FROM kv WHERE key = ?');
@@ -107,7 +134,7 @@ export class SqliteStore implements Store {
   }
 
   close() {
-    this.flush();
+    this.write();
     this.db.close();
   }
 }

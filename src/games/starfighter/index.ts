@@ -363,6 +363,7 @@ export default defineGame({
   title: 'Starfighter',
   tagline: 'Dogfight TIEs and take down a Star Destroyer',
   accent: '#ff5a4a',
+  instances: true,
   controls: [
     ['Mouse', 'steer'],
     ['LMB', 'lasers'],

@@ -8,6 +8,10 @@ export interface OnlineOptions {
   server: string;
   /** The game on show. */
   game: string;
+  /** In a room a player started of their own: its code (else the public game). */
+  room: string | null;
+  /** A game with rooms of players' own: start one (`true`), or go back to the public game. */
+  onRoom?: (own: boolean) => void;
 }
 
 interface GameEntry {
@@ -53,6 +57,8 @@ export class TitleScreen {
   private title = 'the game';
   private poll = 0;
   private game: HomeGame | null = null;
+  /** Who's in the room on show (a room of a player's own), as last said. */
+  private here: string | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -103,8 +109,10 @@ export class TitleScreen {
     }
     const walks = g.walks ?? true;
     const controls = g.controls ?? [['LMB', 'break'], ['RMB', 'place'], ['E', 'blocks']];
+    const rooms = g.online?.onRoom ? this.rooms(g.online, g.online.onRoom) : null;
+    const tag = g.online?.room ? h('span.home-room-tag', {}, 'Your own game') : null;
     this.start.replaceChildren(
-      ...[name, this.button, this.status].filter((x): x is HTMLElement => !!x),
+      ...[tag, name, this.button, rooms, this.status].filter((x): x is HTMLElement => !!x),
       h(
         'div.home-controls',
         {},
@@ -115,8 +123,46 @@ export class TitleScreen {
     );
     this.loading(`Loading ${this.title}…`);
     this.status.textContent = '';
+    this.here = null;
     window.clearInterval(this.poll);
     if (g.online) this.watchCounts(g.online);
+  }
+
+  /**
+   * The choice of room, under Play: in the public game, a game of one's own instead; in one's
+   * own, its invite link and the way back.
+   */
+  private rooms(online: OnlineOptions, onRoom: (own: boolean) => void): HTMLElement {
+    if (!online.room) {
+      return h(
+        'button.btn.home-alt',
+        { onclick: () => onRoom(true) },
+        h('span.home-alt-title', {}, 'Play on your own'),
+        h('span.home-alt-note', {}, 'Just you and the bots, or friends you send the link to'),
+      );
+    }
+    const copy = h('button.btn.home-alt', {}, 'Copy invite link') as HTMLButtonElement;
+    copy.onclick = () => {
+      const link = new URL(location.href);
+      for (const p of ['server', 'name', 'seed']) link.searchParams.delete(p);
+      const said = (text: string) => {
+        copy.textContent = text;
+        window.setTimeout(() => (copy.textContent = 'Copy invite link'), 2000);
+      };
+      navigator.clipboard?.writeText(link.href).then(
+        () => said('Link copied'),
+        () => said(link.href),
+      ) ?? said(link.href);
+    };
+    return h('div.home-room-actions', {}, copy, h('button.btn.home-alt', { onclick: () => onRoom(false), title: 'Back to the public game' }, 'Public game'));
+  }
+
+  /** Who's in the room on show (a room of a player's own). */
+  present(names: string[]) {
+    const here = names.join(', ');
+    if (here === this.here) return;
+    this.here = here;
+    this.status.textContent = names.length ? `Here now: ${here}` : 'Nobody here yet: send friends the link to play together';
   }
 
   /** Picked another game: show it chosen at once, while the switch happens behind. */
@@ -167,6 +213,8 @@ export class TitleScreen {
             el.textContent = g.players ? `${g.players} playing` : '';
             el.classList.toggle('on', g.players > 0);
           }
+          // (In a room of one's own, `present` says who's in it.)
+          if (online.room) return;
           const here = games.find((g) => g.id === online.game)?.players ?? 0;
           this.status.textContent = here ? `${here} ${here === 1 ? 'player' : 'players'} in this game now` : 'Nobody in this game yet: you could be first';
         })
@@ -215,7 +263,8 @@ export class TitleScreen {
 
   /** The game couldn't start (say, its server is down): say so; another can still be picked. */
   failed(text: string, onPick: (id: string) => void) {
-    this.game = { current: this.game?.current ?? '', onPlay: () => {}, onPick };
+    // Any game may be picked again, this one included (its public game).
+    this.game = { current: '', onPlay: () => {}, onPick };
     this.label.textContent = `Couldn't load ${this.title}`;
     this.status.textContent = text;
   }

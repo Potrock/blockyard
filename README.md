@@ -92,12 +92,12 @@ Other scripts:
 | `npm run typecheck` | TypeScript only |
 | `npm run test:engine` | Rust unit tests: generation, blueprints, meshing, lighting, culling, physics, entities, path-finding, textures |
 | `npm run test:headless` | Games in Node, no browser (`tests/headless`): every game runs 30 s, a bot beats the Arena, bots play out a Bed Wars match, several players share a host and a real server. About 8 s in total |
-| `npm run server -- [games…] --port 8787` | Host games for several players (all of them by default, each at `ws://localhost:8787/<game>`); they open `/?server=ws://localhost:8787/sandbox&name=Ann`. Each game's world, players' places and data are kept in `data/<game>.sqlite` (`--data dir`, `--new` for fresh worlds, `--cheats` for developer commands) |
+| `npm run server -- [games…] --port 8787` | Host games for several players (all of them by default, each at `ws://localhost:8787/<game>`); they open `/?server=ws://localhost:8787&game=sandbox`. Match games (Bed Wars, Arena, Starfighter) also offer a game of your own (`&room=<code>`), each game running in a worker thread of its own (`--rooms 8` at once). Each game's world, players' places and data are kept in `data/<game>.sqlite` (`--data dir`, `--new` for fresh worlds, `--cheats` for developer commands) |
 | `npm run build:server` / `npm start` | Bundle the game server (games included) into `dist-server/` / run it with plain Node |
 | `npm run deploy:server` | Deploy the game server to Fly.io (`fly.toml`, `Dockerfile`) |
 | `npm run deploy:site` | Build the site pointed at the game server (`GAME_SERVER`, default the Fly app) and deploy it to Vercel |
 
-URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for games that don't fix their own seed. `?server=ws://host:port&name=Ann` joins a game server instead. `?host=page` runs the game in the page rather than a worker (for debugging).
+URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for games that don't fix their own seed. `?server=ws://host:port` joins a game server instead (`&room=<code>`: a game of one's own on it). `?host=page` runs the game in the page rather than a worker (for debugging).
 
 ## Online
 
