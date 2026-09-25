@@ -183,10 +183,21 @@ export interface HostInit {
   store: Record<string, unknown>;
 }
 
+/** A room a player started of their own: its code, in its address (`wss://host/bedwars/k3x9f2`). */
+export const ROOM_CODE = /^[a-z0-9]{4,24}$/;
+
+/** A new room's code: eight letters and digits, hard to guess. */
+export function newRoomCode(): string {
+  const abc = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => abc[b % abc.length]).join('');
+}
+
 /** A server's first message to a client: which game, which world, and who they are in it. */
 export interface ServerWelcome {
   t: 'welcome';
   game: string;
+  /** `public`, or the code of a room a player started of their own (`?room=`). */
+  room: string;
   seed: number;
   /** Null: watching until the client sends `start` (then `joined` names the player). */
   player: string | null;

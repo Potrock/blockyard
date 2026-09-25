@@ -407,6 +407,45 @@ body {
 .home .home-play-label {
   position: relative;
 }
+/* The choice of room: a game of one's own, or (in one) its link and the way back. */
+.home .home-alt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+}
+.home-alt-title {
+  font-weight: 600;
+}
+.home-alt-note {
+  font: 400 11px var(--sans);
+  color: var(--muted);
+}
+.home-room-tag {
+  align-self: flex-start;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font: 700 10px var(--pixel);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--game);
+  background: color-mix(in srgb, var(--game) 14%, transparent);
+}
+.home-room-actions {
+  display: flex;
+  gap: 8px;
+}
+.home-room-actions .home-alt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
 .home-status {
   min-height: 16px;
   font-size: 12px;

@@ -224,6 +224,7 @@ export default defineGame({
   title: 'Arena',
   tagline: 'Survive six waves and slay the Warden',
   accent: '#ff8a4c',
+  instances: true,
   controls: [
     ['LMB', 'attack · hold to draw bow'],
     ['RMB', 'drink potion'],

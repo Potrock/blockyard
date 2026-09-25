@@ -35,7 +35,7 @@ import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
 import type { Sim, SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
-import type { HostBatch, SaveState, TimedBatch } from './net/protocol';
+import { newRoomCode, ROOM_CODE, type HostBatch, type SaveState, type TimedBatch } from './net/protocol';
 import type { EntityFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
@@ -175,6 +175,8 @@ export class Runtime {
   private shown = { health: '', hotbar: '', creative: '', held: '', arm: '' };
   /** Development: treat input as active without pointer lock (headless tests). */
   debugActive = false;
+  /** On a server, in a room of a player's own: its code. */
+  private room: string | null = null;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -196,8 +198,11 @@ export class Runtime {
     this.input = new Input(canvas, this.life.signal);
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
-    // On a server, the title screen asks for a name (and says who's on).
-    const online = server ? { server: server.url.replace(/\/[^/]*$/, ''), game: def.id } : null;
+    // On a server, the title screen asks for a name and says who's on; a game with rooms of
+    // players' own offers one (or, in one, the link to it and the way back).
+    const room = server?.welcome.room && server.welcome.room !== 'public' ? server.welcome.room : null;
+    this.room = room;
+    const online = server ? { server: new URL(server.url).origin, game: def.id, room, onRoom: def.instances ? (own: boolean) => this.switchGame(def.id, own ? newRoomCode() : null) : undefined } : null;
     this.title = carried?.title ?? new TitleScreen(ui, games);
     this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, walks: this.walker, online });
   }
@@ -205,15 +210,23 @@ export class Runtime {
   /**
    * Boot the game selected by `?game=` (default: the first registered game). A build with a game
    * server (`VITE_GAME_SERVER`, e.g. wss://voxel-games.fly.dev) plays online only: it connects to
-   * that server's game at once, watching behind the title screen, and joins on Play. `?server=`
-   * picks a server for any build (`ws://localhost:8787/sandbox`). Otherwise the game runs here:
-   * in the app's worker (`worker`), or in this page (`?host=page`).
+   * that server's game at once, watching behind the title screen, and joins on Play; `?room=`
+   * picks a room of a player's own there instead of the public one (a game with `instances`).
+   * `?server=` picks a server for any build (`ws://localhost:8787`), or one game on one
+   * (`ws://localhost:8787/sandbox`). Otherwise the game runs here: in the app's worker
+   * (`worker`), or in this page (`?host=page`).
    */
   static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[] = [], worker?: () => Worker, carried: Carry | null = null): Promise<Runtime> {
     const url = new URL(location.href);
     const online = (import.meta.env.VITE_GAME_SERVER as string | undefined)?.replace(/\/+$/, '');
     const picked = url.searchParams.get('game');
-    const address = url.searchParams.get('server') ?? (online ? `${online}/${(games.find((g) => g.id === picked) ?? games[0]).id}` : null);
+    const given = url.searchParams.get('server');
+    // A server (then as a build with one), or one game's address on it.
+    const base = given ? (Runtime.gameAddress(given) ? null : given.replace(/\/+$/, '')) : online;
+    const listed = games.find((g) => g.id === picked) ?? games[0];
+    const room = url.searchParams.get('room');
+    const own = room && listed.instances && ROOM_CODE.test(room) ? room : null;
+    const address = base ? `${base}/${listed.id}${own ? `/${own}` : ''}` : given;
     const server = address ? await SocketLink.connect(address) : null;
     const id = server?.welcome.game ?? picked;
     // Hidden games (dev previews) open by id but aren't listed in the launcher.
@@ -224,6 +237,15 @@ export class Runtime {
     await rt.init();
     Runtime.onStart?.(rt);
     return rt;
+  }
+
+  /** A `?server=` naming one game on a server (`ws://host/sandbox`), not the server. */
+  private static gameAddress(server: string): boolean {
+    try {
+      return new URL(server).pathname.replace(/\/+$/, '') !== '';
+    } catch {
+      return false;
+    }
   }
 
   private static chooseSeed(def: GameDefinition): number {
@@ -472,6 +494,12 @@ export class Runtime {
     window.addEventListener('resize', () => this.resize(), life);
     window.addEventListener('beforeunload', () => this.save(), life);
     document.addEventListener('visibilitychange', () => document.hidden && this.save(), life);
+    if (this.server) {
+      // Leaving the page: leave the game, even if the browser keeps the page to come back to (its
+      // connection would otherwise stay, and the player with it). Back again: a fresh start.
+      window.addEventListener('pagehide', () => this.link.close(), life);
+      window.addEventListener('pageshow', (e) => e.persisted && location.reload(), life);
+    }
 
     this.commandBar = new CommandBar(this.ui);
     this.commandBar.complete = (line) => this.request<{ start: number; options: string[] }>({ t: 'complete', line });
@@ -591,6 +619,8 @@ export class Runtime {
     if (b.frame) {
       this.frameData = b.frame;
       this.ticking = false;
+      // In a room of a player's own, the home page says who's in it.
+      if (this.room && this.mode === 'title') this.title.present(b.frame.players.map((p) => p.name));
       this.playback?.push(b.frame, (b as TimedBatch).time);
       const me = this.playerId !== null ? b.frame.players.find((p) => p.id === this.playerId) : undefined;
       // Prediction starts again from this frame: its solid props too.
@@ -736,37 +766,42 @@ export class Runtime {
     });
   }
 
-  /** Back to the home page (this game's, fresh): `game.exit()`, the pause menu's Switch game. */
+  /** Back to the home page (this game's, fresh; the same room): `game.exit()`, the pause menu's Switch game. */
   exit() {
-    this.switchGame(this.def.id);
+    this.switchGame(this.def.id, this.room);
   }
 
   /**
    * Another game, in place: the home page stays (showing it picked at once), the world fades
    * out, this game shuts down and the next starts, fading in when its world is ready.
    */
-  private switchGame(id: string) {
+  private switchGame(id: string, room: string | null = null) {
     if (this.switching) return;
     this.switching = true;
     this.save();
     this.canvas.classList.add('fading');
     window.setTimeout(() => {
       const carry = this.shutdown();
-      Runtime.switchTo(id, this.canvas, this.ui, this.games, this.hidden, this.makeWorker, carry);
+      Runtime.switchTo(id, room, this.canvas, this.ui, this.games, this.hidden, this.makeWorker, carry);
     }, 260);
     this.title.select(id);
   }
 
-  /** Start another game on the page the last one left (the home page stays up throughout). */
-  private static switchTo(id: string, canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[], worker: (() => Worker) | null, carry: Carry) {
+  /** Start another game (or room) on the page the last one left (the home page stays up throughout). */
+  private static switchTo(id: string, room: string | null, canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[], worker: (() => Worker) | null, carry: Carry) {
     const url = new URL(location.href);
     url.searchParams.set('game', id);
-    for (const p of ['seed', 'server', 'name']) url.searchParams.delete(p);
+    if (room) url.searchParams.set('room', room);
+    else url.searchParams.delete('room');
+    for (const p of ['seed', 'name']) url.searchParams.delete(p);
+    // A server stays (any game on it); one game's address doesn't.
+    const server = url.searchParams.get('server');
+    if (server && Runtime.gameAddress(server)) url.searchParams.delete('server');
     history.replaceState(null, '', url);
     carry.title.select(id);
     Runtime.start(canvas, ui, games, hidden, worker ?? undefined, carry).catch((err: unknown) => {
       console.error(err);
-      carry.title.failed(err instanceof Error ? err.message : String(err), (next) => Runtime.switchTo(next, canvas, ui, games, hidden, worker, carry));
+      carry.title.failed(err instanceof Error ? err.message : String(err), (next) => Runtime.switchTo(next, null, canvas, ui, games, hidden, worker, carry));
     });
   }
 

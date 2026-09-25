@@ -368,6 +368,7 @@ export default defineGame({
   title: 'Bed Wars',
   tagline: 'Guard your bed, bridge out, break theirs. Last team standing wins.',
   accent: '#ff5b5b',
+  instances: true,
   controls: [
     ['LMB', 'attack · hold to mine'],
     ['RMB', 'place block · use item'],

@@ -47,6 +47,13 @@ export interface GameDefinition {
   /** Runs every frame while the game is running (not while paused). `dt` is in seconds. */
   update?(game: GameContext, dt: number): void;
   /**
+   * Players can start a game of their own on a server (just them, or friends they send the link
+   * to) instead of joining the public one: each such game is a separate copy with its own world,
+   * and the home page offers both. For match games (Bed Wars, the Arena); leave it off for one
+   * shared world everyone builds in (Sandbox).
+   */
+  instances?: boolean;
+  /**
    * Vehicles players can drive (`player.drive(name, state)`): ships, cars, boards. Defined here,
    * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
    */
