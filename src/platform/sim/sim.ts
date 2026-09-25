@@ -408,6 +408,7 @@ export class Sim {
       // Out of any vehicle (its model went with the props): `start` puts them back in.
       p.vehicle = null;
       p.followVehicle = false;
+      p.orbit = null;
       p.health.configure(this.def.player ?? {});
       p.health.revive();
       p.place(sp.x, sp.y, sp.z, sp.yaw);

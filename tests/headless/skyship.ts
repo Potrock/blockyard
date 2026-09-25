@@ -29,6 +29,8 @@ function voyage() {
   h.step(1 / 60, { pressed: ['KeyE'], down: ['KeyE'] });
   h.run(0.5);
   check(h.find('hud', 'toast').some((c) => String(c.args[0]).startsWith('At the helm')), 'took the helm');
+  const orbit = h.step(1 / 60).frame!.players[0].orbit;
+  check(orbit?.prop === (deck as unknown as { id: number }).id && orbit.max > 20, `the helm's camera can zoom out round the ship: ${JSON.stringify(orbit)}`);
   // Where the helmsman is on the ship (its own space).
   const helmLocal = () => deck.position.clone().set(me.position.x, me.position.y, me.position.z).sub(deck.position).applyQuaternion(deck.quaternion.clone().invert());
   const start = deck.position.clone();
@@ -42,8 +44,9 @@ function voyage() {
   check(Math.abs(at.x - 0.5) < 0.1 && Math.abs(at.y - 4) < 0.1 && Math.abs(at.z - 12.5) < 0.1, `the helmsman stayed at the wheel: ${JSON.stringify(at)}`);
   check(me.riding === deck, 'still riding at the helm');
 
-  // Let go of the helm and step off the side: hauled back aboard.
+  // Let go of the helm (first person again) and step off the side: hauled back aboard.
   h.step(1 / 60, { pressed: ['KeyE'], down: ['KeyE'] });
+  check(h.step(1 / 60).frame!.players[0].orbit === null, 'first person again off the helm');
   me.teleport({ x: deck.position.x + 30, y: deck.position.y, z: deck.position.z });
   h.run(4);
   check(me.riding === deck, `back aboard after falling: ${JSON.stringify(me.position)}`);

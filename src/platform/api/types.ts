@@ -197,6 +197,26 @@ export interface CameraApi {
    * over (a cutscene, watching after being shot down). Driving starts with it.
    */
   follow(): void;
+  /**
+   * Third person, for a walking player: the mouse wheel pulls the camera back from their eyes to
+   * circle `target` (a prop: the ship they're steering; or a player: themselves) at a distance,
+   * turned by their own mouse look. It's worked out on their screen every frame, so it's smooth
+   * and immediate online. Blocks stop it; solid props don't (it sees a ship from outside). Zoomed
+   * all the way in (distance 0) they're back in first person. While it's on, the wheel zooms
+   * rather than changing hotbar slots. Their figure shows while the camera is out of their eyes.
+   * `null` returns to first person.
+   */
+  orbit(target: Prop | Player | null, opts?: OrbitOptions): void;
+}
+
+export interface OrbitOptions {
+  /** The point it circles, from the target: in a prop's own space, or up from a player's feet. Default: a player's eyes, a prop's origin. */
+  offset?: Vec3;
+  /** Blocks from that point to start at (0: still first person until they zoom out). Default 0. */
+  distance?: number;
+  /** How close and how far the wheel takes it. Default 0 and 30. */
+  min?: number;
+  max?: number;
 }
 
 export interface InputApi {

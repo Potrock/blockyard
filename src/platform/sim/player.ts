@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
+import type { CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, OrbitOptions, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
 import { IDLE_INPUT } from '../net/protocol';
 import { Combat } from './combat';
 import type { EntitySim } from './entities';
@@ -78,6 +78,12 @@ export interface PlayerFrame {
   color: string | null;
   /** The solid prop they ride (`player.riding`), and where their feet are on it (its own space). */
   ride: { prop: number; p: [number, number, number] } | null;
+  /**
+   * Third person (`camera.orbit`): what the camera circles (a prop or a player, by id), the point
+   * on it, and the wheel's range. `seq` counts up each time the game sets it (their screen then
+   * starts from `distance`; the wheel is theirs after that).
+   */
+  orbit: { seq: number; prop?: number; player?: string; offset: [number, number, number] | null; distance: number; min: number; max: number } | null;
 }
 
 export interface PlayerSimParts {
@@ -139,6 +145,9 @@ export class PlayerSim {
   vehicle: VehicleSim | null = null;
   /** Their client works the camera out from the vehicle (until the game sets one). */
   followVehicle = false;
+  /** Third person (`camera.orbit`), as their frame carries it. */
+  orbit: PlayerFrame['orbit'] = null;
+  private orbitSeq = 0;
   /**
    * The first player's place while nobody holds it: their client left and the next to join
    * takes over (`game.player` stays the same object). Frozen, idle and not drawn meanwhile.
@@ -254,6 +263,7 @@ export class PlayerSim {
     this.skin = null;
     this.model = null;
     this.color = null;
+    this.orbit = null;
     this.ack = -1;
     this.lead = 0;
     this.swings = 0;
@@ -393,7 +403,21 @@ export class PlayerSim {
       model: this.model,
       color: this.color,
       ride: s.ride ? { prop: s.ride, p: [s.rideX, s.rideY, s.rideZ] } : null,
+      orbit: this.orbit,
     };
+  }
+
+  /** `camera.orbit`: third person round a prop or a player, or back to first person. */
+  setOrbit(target: Prop | Player | null, o: OrbitOptions = {}) {
+    if (!target) {
+      this.orbit = null;
+      return;
+    }
+    const who = (target as Player).kind === 'player' ? { player: (target as Player).id } : { prop: (target as PropState).id };
+    const off = o.offset ? ([o.offset.x, o.offset.y, o.offset.z] as [number, number, number]) : null;
+    const max = Math.max(0, o.max ?? 30);
+    const min = Math.min(max, Math.max(0, o.min ?? 0));
+    this.orbit = { seq: ++this.orbitSeq, ...who, offset: off, distance: Math.min(max, Math.max(min, o.distance ?? 0)), min, max };
   }
 
   /** Gone from the game: their body leaves the world. */
@@ -440,6 +464,9 @@ export class PlayerSim {
       },
       follow() {
         me.followVehicle = true;
+      },
+      orbit(target, opts) {
+        me.setOrbit(target, opts);
       },
     };
     return {

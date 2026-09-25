@@ -118,7 +118,9 @@ function takeHelm(game: GameContext, p: Player) {
   helm = p;
   p.teleport(ship.toWorld(HELM), s.yaw, -0.1);
   p.freeze(true);
-  p.hud.toast('At the helm: W ahead, S astern, A/D turn, Space/Shift climb and sink, E to let go');
+  // Scroll out to see the ship from outside while steering (the camera circles her middle).
+  p.camera.orbit(ship, { offset: { x: 0.5, y: 8, z: -2 }, max: 70 });
+  p.hud.toast('At the helm: W ahead, S astern, A/D turn, Space/Shift climb and sink, scroll out to see her, E to let go');
   game.hud.feed(`${p.name} has the helm`, { color: '#ffd35a' });
   helmMarker(game);
 }
@@ -128,6 +130,7 @@ function leaveHelm(game: GameContext) {
   if (!p) return;
   helm = null;
   p.freeze(false);
+  p.camera.orbit(null);
   p.hud.meter('speed', 'Speed', null);
   p.hud.stat('alt', 'Altitude', null);
   helmMarker(game);
@@ -219,6 +222,7 @@ export default defineGame({
     ['W / S', 'ahead / astern'],
     ['A / D', 'turn'],
     ['Space / Shift', 'climb / sink'],
+    ['Wheel', 'zoom out from the helm'],
   ],
   world: {
     terrain: 'void',

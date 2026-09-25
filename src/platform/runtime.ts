@@ -393,6 +393,7 @@ export class Runtime {
     });
 
     this.view = new PlayerCamera(this.camera);
+    this.view.clearance = (from, dir, max) => this.clearance(from, dir, max);
     this.held = new ViewModel(this.textures.albedo, this.textures.material, this.graphics);
     this.renderer.overlay = { scene: this.held.scene, camera: this.held.camera };
     this.renderer.opaqueScene.add(this.highlight.object);
@@ -699,6 +700,7 @@ export class Runtime {
       model: null,
       color: null,
       ride: null,
+      orbit: null,
     };
   }
 
@@ -709,12 +711,15 @@ export class Runtime {
   }
 
   /** Other players as figures (entities of the built-in `$player` type), with their names above. */
-  private avatars(f: SimFrame): EntityFrame[] {
+  private avatars(f: SimFrame, me: PlayerFrame): EntityFrame[] {
     const out: EntityFrame[] = [];
     const seen = new Set<string>();
-    for (const p of f.players) {
-      // Only people on foot get a figure: a driver is their vehicle's model.
-      if (p.id === this.playerId || !this.walker || p.vehicle) continue;
+    for (const other of f.players) {
+      // Only people on foot get a figure: a driver is their vehicle's model. Our own shows in
+      // third person, where we're shown (predicted) facing where we look.
+      const mine = other.id === this.playerId;
+      if ((mine && !this.view.thirdPerson) || !this.walker || other.vehicle) continue;
+      const p = mine ? { ...me, view: { ...me.view, yaw: this.view.yaw, pitch: this.view.pitch } } : other;
       const type = this.avatarType(p);
       let id = this.avatarIds.get(p.id);
       if (id === undefined) this.avatarIds.set(p.id, (id = -1 - this.avatarIds.size));
@@ -744,6 +749,7 @@ export class Runtime {
         dying: p.dead ? p.deathTime : -1,
         held: p.hotbar?.slots[p.hotbar.selected]?.item ?? null,
       });
+      if (mine) continue;
       const tag = `$name:${p.id}`;
       seen.add(tag);
       this.tags.add(tag);
@@ -1172,6 +1178,11 @@ export class Runtime {
         this.view.pitch = -0.18;
       } else {
         this.view.look(this.input, active);
+        // In third person (the game's `camera.orbit`) the wheel zooms rather than changing hotbar slots.
+        if (this.view.zooms) {
+          if (active) this.view.zoom(this.input.wheel);
+          this.input.wheel = 0;
+        }
       }
     }
     // A server keeps its own clock: it gets the controls every frame. Otherwise one tick at a time:
@@ -1229,7 +1240,8 @@ export class Runtime {
       }
       this.camera.updateMatrixWorld();
     } else if (this.walker) {
-      this.view.follow(dt, me);
+      this.view.setOrbit(this.mode === 'title' ? null : me.orbit);
+      this.view.follow(dt, me, this.orbitPoint(f, me));
       if (this.mode === 'title') {
         this.camera.position.y += 22;
         this.camera.updateMatrixWorld();
@@ -1248,7 +1260,7 @@ export class Runtime {
       if (this.mode !== 'title') this.titleSpin = 0;
     }
     // A server's game runs on while this client is paused: its figures keep walking.
-    this.entityView.sync(f.players.length > 1 ? [...f.entities, ...this.avatars(f)] : f.entities, f.projectiles, dt, this.server ? started : running);
+    this.entityView.sync(f.players.length > 1 || this.view.thirdPerson ? [...f.entities, ...this.avatars(f, me)] : f.entities, f.projectiles, dt, this.server ? started : running);
     this.pickupView.sync(f.pickups, dt);
     // Our own vehicle's model where prediction has it, not where the (older) frame does.
     const own = this.vehicles.active && this.vehicles.prop !== null ? new Map([[this.vehicles.prop, this.vehicles.pose()]]) : undefined;
@@ -1317,9 +1329,33 @@ export class Runtime {
     return { ...me, x: at.x, y: at.y, z: at.z };
   }
 
+  /** The point the game's orbit circles (`camera.orbit`): on a prop as it's drawn, or a player. */
+  private orbitPoint(f: SimFrame, me: PlayerFrame): THREE.Vector3 | null {
+    const o = me.orbit;
+    if (!o) return null;
+    if (o.prop !== undefined) {
+      const pose = propPose(f.props, o.prop, f.clock);
+      const off = o.offset ?? [0, 0, 0];
+      return pose && toWorld(pose, { x: off[0], y: off[1], z: off[2] });
+    }
+    const p = o.player === this.playerId ? me : f.players.find((x) => x.id === o.player);
+    const off = o.offset ?? [0, 1.62, 0];
+    return p ? new THREE.Vector3(p.x + off[0], p.y + off[1], p.z + off[2]) : null;
+  }
+
+  /** How far a third-person camera can go from a point along a direction before a block (solid props don't stop it). */
+  private clearance(from: THREE.Vector3, dir: THREE.Vector3, max: number): number {
+    const w = this.chunks.world;
+    for (let t = 0.25; t <= max + 0.35; t += 0.25) {
+      const id = w.get_block(Math.floor(from.x + dir.x * t), Math.floor(from.y + dir.y * t), Math.floor(from.z + dir.z * t));
+      if (id !== 255 && this.registry.blocks[id]?.solid) return Math.max(0, t - 0.6);
+    }
+    return max;
+  }
+
   private updateHand(dt: number, me: PlayerFrame) {
-    // Nothing in hand while dead (someone out of the game watching sees only the game).
-    this.held.scene.visible = !me.dead && !me.vehicle;
+    // Nothing in hand while dead (someone out of the game watching sees only the game), or in third person.
+    this.held.scene.visible = !me.dead && !me.vehicle && !this.view.thirdPerson;
     this.held.draw = me.hand.drawing ? me.hand.charge : 0;
     const bobAmt = this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0;
     this.held.update(dt, {
