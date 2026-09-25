@@ -68,10 +68,12 @@ export type ItemPoint = 'grip' | 'grip2' | 'muzzle' | 'sight' | 'mag';
 
 /** One side of a humanoid's arms, for its first-person view (see `GltfLibrary.humanoidArms`). */
 export interface HumanoidArm {
-  /** The forearm, from the elbow down (its joint's space), and the fist (the wrist's space): a mesh per material. */
+  /** The upper arm (the shoulder's space), the forearm (the elbow's) and the fist (the wrist's): a mesh per material. */
+  upper: ItemMesh[];
   forearm: ItemMesh[];
   fist: ItemMesh[];
-  /** Where the wrist is below the elbow, and where (and how) the fist holds, in the wrist's space. */
+  /** Where the elbow is below the shoulder and the wrist below the elbow; where (and how) the fist holds, in the wrist's space. */
+  elbow: THREE.Vector3;
   wrist: THREE.Vector3;
   grip: THREE.Vector3;
   gripQ: THREE.Quaternion;
@@ -263,14 +265,17 @@ export class GltfLibrary {
     if (hit !== undefined) return hit;
     const node = (n: string) => g.scene.getObjectByName(n) ?? null;
     const side = (s: 'L' | 'R'): HumanoidArm | null => {
+      const upper = node(`upperArm${s}`);
       const lower = node(`lowerArm${s}`);
       const hand = node(`hand${s}`);
-      if (!lower || !hand) return null;
+      if (!upper || !lower || !hand) return null;
       const grip = node(`grip${s}`);
       g.scene.updateMatrixWorld(true);
       return {
+        upper: this.meshesIn(upper, lower),
         forearm: this.meshesIn(lower, hand),
         fist: this.meshesIn(hand, null),
+        elbow: lower.position.clone(),
         wrist: hand.position.clone(),
         grip: grip ? grip.position.clone() : new THREE.Vector3(0, -0.085, 0.015),
         gripQ: grip ? grip.quaternion.clone() : new THREE.Quaternion(),
@@ -439,7 +444,7 @@ export class GltfLibrary {
     for (const m of this.shadows.values()) m.dispose();
     for (const t of this.swatches.values()) t.dispose();
     for (const i of this.items.values()) i.geometry.dispose();
-    for (const a of this.arms.values()) for (const side of a ? [a.R, a.L] : []) for (const m of [...side.forearm, ...side.fist]) m.geometry.dispose();
+    for (const a of this.arms.values()) for (const side of a ? [a.R, a.L] : []) for (const m of [...side.upper, ...side.forearm, ...side.fist]) m.geometry.dispose();
     this.arms.clear();
     this.items.clear();
     this.icons.clear();
