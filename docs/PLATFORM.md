@@ -32,6 +32,13 @@ src/games/
     shop.ts items.ts    the shopkeeper's menu and everything it sells
     fireballs.ts        thrown fireballs that blast wool and wood
     art/ sounds.ts      team skins, item sprites, sounds
+  callofblocky/         Call of Blocky: a pulp free-for-all shooter against bots and people
+    index.ts            rules: the match, spawns, kills, streaks, loadouts, the HUD
+    weapons.ts          the guns (kind 'gun') and the katana
+    bots.ts nav.ts      bot fighters (game.bots) and the walking grid they path-find on
+    map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
+    models/             the guns as GLB files (scripts/guns/build.mjs writes them)
+    art.ts sounds.ts    the pulp wardrobe (skins painted in code), gunshots and stingers
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
     index.ts            rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
     course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
@@ -134,6 +141,23 @@ bp.set(x + 1, y, z, 'red_bed[facing=east,part=head]');
 
 `game.player` (one of `game.players`, see "Players and multiplayer") gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
 
+**Movement.** `player: { movement }` tunes how everyone moves (speeds in blocks a second; the defaults are Minecraft's). It's data rather than code because each player's own screen runs the same movement to predict them:
+
+```ts
+player: {
+  movement: {
+    walk: 6, sprint: 8.4, crouch: 2.8, jump: 1.3,     // jump height in blocks
+    gravity: 30, acceleration: 16, airControl: 4,
+    sprintKeys: ['ShiftLeft'], crouchKeys: ['KeyC'],  // default: Ctrl sprints, Shift sneaks
+    doubleTapSprint: false, edgeGuard: false,         // crouching stops at edges (Minecraft's sneak)
+    slide: { speed: 11.5, time: 0.8 },                // crouch out of a sprint: a slide (jump out of it keeping the speed)
+    mantle: 1.1,                                      // jump into a ledge up to this high and climb onto it
+  },
+},
+```
+
+`player.speed` multiplies one player's speeds (a power-up; guns have their own `mobility`), `player.crouching`, `sliding` and `aiming` say what they're doing, and `player.protect(seconds)` makes them ignore damage for a while (spawn protection). `hurtCooldown` (default 0.45, Minecraft's) is how long a player ignores further damage after a hit; shooters set it to 0.
+
 **Third person.** `player.camera.orbit(target, { offset, distance, min, max })` lets a walking player scroll out of their eyes to circle `target` with the mouse: a prop (the ship they steer) or a player (themselves).
 - `offset` is the point circled: in the prop's own space, or up from the player's feet. Players default to their eyes.
 - The wheel zooms between `min` and `max` blocks (default 0 and 30). Zoomed all the way in, they're in first person again, and scrolling out glides from their eyes to the target.
@@ -198,6 +222,49 @@ Built-in starter sprites: `wooden_sword`, `stone_sword`, `iron_sword`, `diamond_
 - Potions and trinkets stand upright.
 
 Art drawn another way works too: set `hold.grip` (and `hold.rotation`) to match it.
+
+## Guns
+
+A `kind: 'gun'` item is a hitscan gun: every shot is a ray (a few for a shotgun) that hits the first player, creature, block or solid prop along it. Plants, torches and leaves don't stop bullets.
+
+```ts
+game.items.define('rifle', {
+  kind: 'gun', name: 'Big Kahuna', icon: { gltf: rifleUrl }, hold: { style: 'gun', model: HeldModels.gltf(rifleUrl) },
+  auto: true, rpm: 640,                       // held trigger; rounds a minute
+  damage: [30, 22], falloff: [22, 48],        // close up, and from 48 blocks on
+  headshot: 1.5,
+  magazine: 30, reserve: 120, reload: 2.1,    // `shells: true` loads round by round (shotguns)
+  spread: { hip: 2.2, aim: 0.12, move: 1.3, air: 3, bloom: 0.22 },   // degrees
+  recoil: { up: 0.85, side: 0.35, recover: 0.7 },
+  aim: { zoom: 1.35, time: 0.22, move: 0.62, sight: 'iron' },       // 'dot', or 'scope' (the view fills with it)
+  mobility: 0.95, pellets: 1, action: undefined,                    // 'pump' | 'bolt'
+  sounds: { use: 'shot_rifle', reload: 'reload_mag', empty: 'gun_empty', cycle: 'pump' },
+});
+```
+
+The platform does the rest:
+- **Fair online.** The shooter's own screen fires the moment the trigger's pulled: the flash, the kick, the tracer, the sound, the rounds. The shots go to the host with the controls. The host takes each one the gun could have fired (its rate, its rounds) and casts it where the targets were *on the shooter's screen*: it keeps a second of everyone's positions and rewinds to the moment that screen was showing, at most 0.35 s back. Spread is seeded per shot, so the tracer you see is where the host's bullet goes.
+- **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself. Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up.
+- **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people).
+- **The HUD.** An ammo counter replaces the hotbar's job, the crosshair opens with the spread (and goes when aiming), and there's a scope overlay.
+- **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
+- **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working a pump. A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. `scripts/guns/build.mjs` builds Call of Blocky's guns from boxes and writes them as GLB files that way.
+
+## Bots
+
+`game.bots.add(name)` adds a player driven by your code: they're in `game.players` like anyone, everyone sees them (a figure, a name, what they hold), and they move, jump, slide, swing and shoot by exactly the same rules, because they do it through the same controls a person has:
+
+```ts
+const bot = game.bots.add('Lucky Lou');     // the game hears playerJoin
+bot.controls.hold('KeyW');                  // held until released
+bot.controls.hold('ShiftLeft');
+bot.controls.lookAt(target.eye);            // or look(yaw, pitch)
+bot.controls.button(0);                     // hold the trigger; click(0) for one shot
+bot.controls.press('KeyR');                 // this tick only
+game.bots.remove(bot);
+```
+
+Set their controls in `update`; they apply from the next tick. `player.bot` tells them from people. Call of Blocky's bots (`src/games/callofblocky/bots.ts`) look for enemies, react, swing their aim on imperfectly, fire, strafe, reload and roam the map along a walking grid built from the world's blocks (`nav.ts`).
 
 ## Kits: ready-made systems, no special access
 
@@ -583,12 +650,32 @@ game.commands.run('/give pike'); // run one from code
 | `hud.feed(text, { color })` | A line in the message feed at the top left (kill feeds, match events); lines stack and fade |
 | `hud.screen({ title, tone, stats, buttons })` | Modal victory / defeat / menu |
 | `hud.menu({ title, subtitle, sections: [{ title, entries }] })` | A panel of clickable entries (shops, upgrades, level select) while the game keeps running. Entries take an `icon` (a sprite or `{ block }`), `label`, `detail` (a price), `note`, `disabled`, `active` and `onSelect`; `update()` refreshes it after a purchase. Esc or E closes it |
-| `hud.meter`, `marker`, `radar`, `crosshair` | Vehicle HUD (see above); markers and radar blips can follow props, entities and players |
+| `hud.meter`, `marker`, `radar`, `crosshair` | Vehicle HUD (see above); markers and radar blips can follow props, entities and players; a marker's `bar` draws a bar under its label |
+| `hud.pop(text, { big, sub, color })` | A short pop-up under the crosshair ("+100", "Headshot", "Double kill") |
+| `hud.scoreboard({ title, columns, rows, footer, show })` | The scoreboard players see while holding Tab (or kept up with `show`); a row naming a `player` is highlighted on their screen |
+| `hud.feed([...parts])` | A feed line can be parts: text, `{ text, color }`, `{ icon }` (a gun side on: `{ gltf: url, view: 'side' }`) |
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
 | `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave', fn)` | Events (player events name the `player`) |
 | `rng` | Seeded random numbers |
+
+**The HUD's look.** `hud` on the game definition sets how the HUD looks on every screen:
+
+```ts
+hud: {
+  health: 'bar',          // or Minecraft's 'hearts' (default), or 'none'
+  healthBars: true,       // bars over other players' (and creatures') heads
+  nameTags: 'sight',      // names only while nothing blocks the view ('always' by default, or 'never')
+  theme: {
+    display: "'Bangers', Impact, sans-serif",   // titles, banners, big numbers
+    text: "'Archivo', system-ui, sans-serif",
+    fonts: ['Bangers', 'Archivo'],              // fetched from Google Fonts
+    colors: { accent: '#ffcc00', ink: '#111', paper: '#fdf1d6', text: '#111', danger: '#e63946', good: '#ffcc00' },
+    comic: true,                                // ink outlines, hard shadows, paper panels
+  },
+},
+```
 
 ## Testing a game headless
 
