@@ -1565,9 +1565,12 @@ export class Runtime {
     }
     this.fx.muzzleFlash(from, 0.55);
     const color = def?.kind === 'gun' && def.tracer !== false ? (def.tracer ?? '#ffd27a') : null;
+    const cam = this.camera.position;
     w.ends.forEach(([x, y, z, kind], i) => {
       const at = { x, y, z };
       if (color && (i === 0 || i % 3 === 0)) this.fx.tracer(from, at, color);
+      // Not on our own body (we'd see the puff from inside it): the HUD says we were hit.
+      if (Math.hypot(x - cam.x, y - cam.y, z - cam.z) < 2.2) return;
       if (kind === 1 && w.blocks[i] >= 0) {
         const n = w.normals[i];
         this.fx.impact(at, n ? { x: n[0], y: n[1], z: n[2] } : null, this.blockColor(w.blocks[i]));

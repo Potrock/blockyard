@@ -507,6 +507,7 @@ export default defineGame({
       if (player.bot) bots.add(player as Bot, 0.45 + game.rng.next() * 0.45);
       if (running && phase === 'playing') spawn(game, f);
       if (!player.bot) {
+        if (running) loadoutMenu(game, f);
         balanceBots(game);
         game.hud.feed([{ text: player.name, color: COLORS.gold }, ' rolled into Jackrabbit Lane']);
       }
