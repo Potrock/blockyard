@@ -4,6 +4,7 @@ import rifle from './rifle.glb?url';
 import shotgun from './shotgun.glb?url';
 import sniper from './sniper.glb?url';
 import katana from './katana.glb?url';
+import briefcase from './briefcase.glb?url';
 
 /**
  * The weapon models (GLB, written by `scripts/guns/build.mjs`; see its header for the conventions:
@@ -22,4 +23,5 @@ export const GUNS: GunModel[] = [
   { id: 'shotgun', name: 'Pump Shotgun', url: shotgun },
   { id: 'sniper', name: 'Sniper', url: sniper },
   { id: 'katana', name: 'Katana', url: katana },
+  { id: 'briefcase', name: 'The Briefcase', url: briefcase },
 ];
