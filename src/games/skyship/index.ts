@@ -212,6 +212,7 @@ export default defineGame({
   title: 'Skyship',
   tagline: 'Crew an airship across the sky islands and light the five beacons.',
   accent: '#e0663a',
+  instances: true,
   controls: [
     ['E', 'take or leave the helm'],
     ['W / S', 'ahead / astern'],
