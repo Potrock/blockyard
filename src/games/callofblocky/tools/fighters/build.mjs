@@ -1,494 +1,55 @@
 #!/usr/bin/env node
 /**
- * Call of Blocky: the fighters, built procedurally and written as binary glTF 2.0 (`.glb`) to
- * `src/games/callofblocky/models/fighters/<id>.glb`, plus `index.ts` listing them. Dependency-free
- * (Node 22+): `node src/games/callofblocky/tools/fighters/build.mjs [ids...]` (with ids, only those files are rebuilt and
- * index.ts is left alone). Every file is parsed back and checked after it's written: chunks,
- * accessors, winding, the rig (names, parents, rest positions, no rotations) and the budgets.
+ * Call of Blocky: the fighters, built as micro-voxel figures and written as binary glTF 2.0 (`.glb`)
+ * to `src/games/callofblocky/models/fighters/<id>.glb`, plus `index.ts` listing them. Dependency-free
+ * (Node 22+): `node src/games/callofblocky/tools/fighters/build.mjs [ids...] [--scale=16] [--out=dir]`
+ * (with ids, only those files are rebuilt and index.ts is left alone; `--scale=16` resamples the
+ * figures to 16 voxels a metre, for comparison). Every file is parsed back and checked after it's
+ * written: the rig, the skin, every vertex on one bone, the budgets.
  *
- * Conventions (the platform's animation code relies on these; see docs/HUMANOID.md):
- *
- * - Units: metres (1 unit = 1 block). Origin on the ground between the feet, facing +z, +y up; the
- *   figure's own right is -x. The top of the head is at 1.82-1.86 (the fedora's crown 1.87); the
- *   eyes are at about 1.67.
+ * - Voxels: 24 a metre (a voxel 1/24 block, about 4 cm), so a figure is about 44 voxels tall, with
+ *   chunky, stylized proportions: a big head (a quarter of the height), broad shoulders, big fists
+ *   and boots. Each fighter is painted in code as one voxel part per joint of the humanoid rig
+ *   (docs/HUMANOID.md), in design units of 1/24 m: boxes, rounded boxes and ellipsoids, coloured
+ *   by region (collars, lapels, belts, stripes, prints), and details placed voxel by voxel (faces,
+ *   ties, buttons, shades, hat bands). Every part is a closed surface; where two meet, one reaches
+ *   into the other, a voxel in from its surface, so bends open no gaps.
  * - Rig: nodes named exactly hips > spine > chest > neck > head; chest > upperArmL > lowerArmL >
  *   handL > gripL (and the R mirror); hips > upperLegL > lowerLegL > footL (and R). Each has its rest
- *   translation (parent space) and no rotation or scale. The root node is named after the fighter's
- *   id (extras.title is its name). Joint heights are the doc's for every fighter; only the x of the
- *   shoulders (0.188-0.222) and hips (0.096-0.106) varies by build (see BUILDS).
- * - Rest pose: standing straight, arms hanging along -y. The figure is one skinned mesh on a skin
- *   whose bones are the rig's joints (the grips are empties, not bones), skinned rigidly: every
- *   vertex wholly on its joint's bone, so each part moves with its joint as a rigid part would.
- *   Limb ends are faceted domes centred on their pivots, and each torso segment reaches into its
- *   neighbours with a smaller copy of itself, so elbows and knees bend ~130 degrees, hips and
- *   shoulders ~60 and spine + chest ~70 without opening gaps.
- * - Hands are fists (GRIP_R / GRIP_L). The right fist grips a vertical bar (a pistol grip): the hand
- *   reaches +z from the wrist (in the rest pose the wrist is cocked forward), palm toward +x, thumb
- *   on top, knuckles front-right. The left fist hangs below its wrist, palm toward -x, thumb forward,
- *   gripping a bar that runs along z (a handguard). It is the right fist mirrored and turned:
- *   right-hand (x, y, z) -> left (-x, -z, y). `gripR` / `gripL` are empty nodes at the centre of each
- *   fist's hold, identity rotation. The bar itself isn't modelled; a gun's grip passes through.
- * - Shading: low-poly and faceted. Parts are convex hulls (clipped by planes for cut edges and
- *   overlays) and lofts (hair, collars, the skirt, the brim). Every face has its own normal and
- *   vertices are shared only within a face; neighbouring triangles of one material within 7 degrees
- *   of coplanar are shaded as one face.
- * - Material: one (one draw call a figure, one more for its shadow). Every flat colour is a 2x2
- *   block in a small palette texture, each face's UVs on its block's middle; patterned cloth
- *   (pinstripes, the Hawaiian print) is tiled over a region of the same texture (a face's
- *   box-projected UVs moved by whole tiles into it); a matching metallicRoughnessTexture holds
- *   each colour's roughness (G) and metalness (B); the factors are 1. Triangles go colour by
- *   colour, in the order the rigid parts' materials were drawn.
- * - Vertices (KHR_mesh_quantization): positions and normals 16-bit normalized, UVs 16-bit
- *   normalized, JOINTS_0 / WEIGHTS_0 bytes. The mesh's own space starts at ORIGIN (the inverse
- *   bind matrices carry it).
- * - Budgets (checked): <= 4000 triangles and <= 200 KB per file.
+ *   translation (parent space) and no rotation or scale; the joints sit where the proportions put
+ *   them (the platform reads them from the file). The root node is named after the fighter's id
+ *   (extras.title is its name).
+ * - Rest pose: standing straight, arms hanging along -y. One skinned mesh (a node `body` of the
+ *   root's) on a skin whose bones are the rig's joints (the grips are empties, not bones), skinned
+ *   rigidly: every vertex wholly on its part's joint.
+ * - Hands are fists round a grip. The right fist reaches +z from the wrist round a vertical bar (a
+ *   pistol grip); the left hangs below its wrist round a bar along z (a handguard). `gripR` /
+ *   `gripL` are empty nodes at the centre of each fist's hold, identity rotation; the bar itself
+ *   isn't modelled (a gun's grip passes through).
+ * - Look (tools/voxel.mjs): a quad per visible voxel face, never merged, each showing a bevelled
+ *   8 x 8 tile of the fighter's palette atlas (occlusion baked into tile variants, shades varied
+ *   voxel by voxel), with a metallic-roughness atlas (gold, buckles and chains glossy) and an
+ *   emissive one. One mesh, one material: one draw call a fighter (one more for its shadow).
+ * - Vertices: KHR_mesh_quantization (positions as voxel coordinates in bytes, the voxel size in the
+ *   inverse bind matrices; normals as bytes), through EXT_meshopt_compression.
+ * - Budgets (checked): <= 25000 triangles and <= 300 KB per file.
  */
-import { deflateSync, inflateSync } from 'node:zlib';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Palette, Voxels, faces, atlas, quadCorners, png, writeGlb, readGlb, cellKey, cellOf, DIRS } from '../voxel.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = join(HERE, '../../models/fighters');
-const MAX_TRIS = 4000;
-const MAX_BYTES = 200 * 1024;
+const argv = process.argv.slice(2);
+/** Voxels a metre: the design's 24, or resampled (`--scale=16`). */
+const SCALE = Number(argv.find((a) => a.startsWith('--scale='))?.slice(8) ?? 24);
+const OUT = argv.find((a) => a.startsWith('--out='))?.slice(6) ?? join(HERE, '../../models/fighters');
+const DU = 1 / 24;
+const MAX_TRIS = 25000;
+const MAX_BYTES = 300 * 1024;
 
 // ---------------------------------------------------------------------------------------------
-// Vectors
-
-const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const scl = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const len = (a) => Math.hypot(a[0], a[1], a[2]);
-const nrm = (a) => {
-  const l = len(a) || 1;
-  return [a[0] / l, a[1] / l, a[2] / l];
-};
-const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-const mix1 = (a, b, t) => a + (b - a) * t;
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-const DEG = Math.PI / 180;
-/** Mirror a point in x. */
-const mx = (p) => [-p[0], p[1], p[2]];
-/** Turn a point about an axis ('x'|'y'|'z') through a pivot, right-handed, degrees. */
-function rot(p, axis, deg, o = [0, 0, 0]) {
-  const c = Math.cos(deg * DEG), s = Math.sin(deg * DEG);
-  const [x, y, z] = sub(p, o);
-  if (axis === 'x') return add(o, [x, y * c - z * s, y * s + z * c]);
-  if (axis === 'y') return add(o, [z * s + x * c, y, z * c - x * s]);
-  return add(o, [x * c - y * s, x * s + y * c, z]);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Colour
-
-const hexRGB = (v) => [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-const toLinear = (c8) => {
-  const c = c8 / 255;
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-};
-/** An sRGB hex colour as a linear baseColorFactor. */
-const linear = (v) => [...hexRGB(v).map(toLinear), 1];
-/** Scale an sRGB hex colour's brightness (in sRGB). */
-const shade = (v, k) => {
-  const [r, g, b] = hexRGB(v).map((c) => clamp(Math.round(c * k), 0, 255));
-  return (r << 16) | (g << 8) | b;
-};
-
-// ---------------------------------------------------------------------------------------------
-// Solids: convex hulls (clipped by planes) and lofts. A solid is a list of triangles [a, b, c]
-// (points in the figure's rest space), counter-clockwise seen from outside.
-
-function hash(a, b = 0, c = 0) {
-  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul((b | 0) + 0x3c6ef372, 0x165667b1) ^ Math.imul((c | 0) + 0x5bd1e995, 0x9e3779b1);
-  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
-  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
-  h ^= h >>> 15;
-  return (h >>> 0) / 4294967296;
-}
-
-/** The convex hull of a point cloud: { pts, faces: [{ v: [i, j, k], n, d }] }, faces outward. */
-function hull(input) {
-  const pts = [];
-  const seen = new Set();
-  for (const p of input) {
-    if (p.some((v) => !Number.isFinite(v))) throw new Error('hull: bad point ' + p);
-    const key = p.map((v) => Math.round(v * 2e5)).join(',');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    // A tiny deterministic jitter keeps coplanar and collinear inputs out of trouble.
-    const k = pts.length;
-    pts.push([p[0] + (hash(k, 1) - 0.5) * 2e-7, p[1] + (hash(k, 2) - 0.5) * 2e-7, p[2] + (hash(k, 3) - 0.5) * 2e-7]);
-  }
-  const n = pts.length;
-  if (n < 4) throw new Error(`hull: ${n} points`);
-  let i0 = 0;
-  for (let i = 1; i < n; i++) if (pts[i][0] < pts[i0][0]) i0 = i;
-  const far = (f) => {
-    let best = -1, bi = -1;
-    for (let i = 0; i < n; i++) {
-      const d = f(pts[i]);
-      if (d > best) (best = d), (bi = i);
-    }
-    return [bi, best];
-  };
-  const [i1] = far((p) => len(sub(p, pts[i0])));
-  const e01 = sub(pts[i1], pts[i0]);
-  const [i2] = far((p) => len(cross(e01, sub(p, pts[i0]))));
-  const n012 = cross(e01, sub(pts[i2], pts[i0]));
-  const [i3, vol] = far((p) => Math.abs(dot(n012, sub(p, pts[i0]))));
-  if (vol < 1e-15) throw new Error('hull: flat point set');
-  const mk = (a, b, c) => {
-    const nn = nrm(cross(sub(pts[b], pts[a]), sub(pts[c], pts[a])));
-    return { v: [a, b, c], n: nn, d: dot(nn, pts[a]) };
-  };
-  const cen = scl(add(add(pts[i0], pts[i1]), add(pts[i2], pts[i3])), 0.25);
-  let faces = [];
-  for (const [a, b, c] of [[i0, i1, i2], [i0, i2, i3], [i0, i3, i1], [i1, i3, i2]]) {
-    let f = mk(a, b, c);
-    if (dot(f.n, cen) - f.d > 0) f = mk(a, c, b);
-    faces.push(f);
-  }
-  const EPS = 1e-9;
-  for (let i = 0; i < n; i++) {
-    if (i === i0 || i === i1 || i === i2 || i === i3) continue;
-    const p = pts[i];
-    const vis = new Set();
-    faces.forEach((f, k) => {
-      if (dot(f.n, p) - f.d > EPS) vis.add(k);
-    });
-    if (!vis.size) continue;
-    const edges = new Set();
-    for (const k of vis) {
-      const [a, b, c] = faces[k].v;
-      edges.add(a * 65536 + b).add(b * 65536 + c).add(c * 65536 + a);
-    }
-    const next = faces.filter((_, k) => !vis.has(k));
-    for (const e of edges) {
-      const a = Math.floor(e / 65536), b = e % 65536;
-      if (!edges.has(b * 65536 + a)) next.push(mk(a, b, i));
-    }
-    faces = next;
-  }
-  return { pts, faces };
-}
-
-/**
- * A plane that keeps the half-space { p : n.p <= d }. `keep(point, towards)`: the plane through
- * `point` keeping the side `towards` points to.
- */
-const keep = (point, towards) => {
-  const n = scl(nrm(towards), -1);
-  return { n, d: dot(n, point) };
-};
-/** The plane through the line a-b that also contains direction `dir`, keeping the side of `inside`. */
-function keepSide(a, b, dir, inside) {
-  let n = nrm(cross(sub(b, a), dir));
-  if (dot(n, sub(inside, a)) > 0) n = scl(n, -1);
-  return { n, d: dot(n, a) };
-}
-const above = (y) => keep([0, y, 0], [0, 1, 0]);
-const below = (y) => keep([0, y, 0], [0, -1, 0]);
-const xAbove = (x) => keep([x, 0, 0], [1, 0, 0]);
-const xBelow = (x) => keep([x, 0, 0], [-1, 0, 0]);
-const zAbove = (z) => keep([0, 0, z], [0, 0, 1]);
-const zBelow = (z) => keep([0, 0, z], [0, 0, -1]);
-
-/** Clip a convex point set by planes: the vertices of hull(points) ∩ planes. */
-function clipPoints(points, planes) {
-  let pts = points;
-  for (const pl of planes) {
-    const h = hull(pts);
-    const side = h.pts.map((p) => dot(pl.n, p) - pl.d);
-    const out = h.pts.filter((_, i) => side[i] <= 0);
-    const done = new Set();
-    for (const f of h.faces)
-      for (let k = 0; k < 3; k++) {
-        const a = f.v[k], b = f.v[(k + 1) % 3];
-        const key = Math.min(a, b) * 65536 + Math.max(a, b);
-        if (done.has(key)) continue;
-        done.add(key);
-        if ((side[a] < 0 && side[b] > 0) || (side[a] > 0 && side[b] < 0)) out.push(lerp(h.pts[a], h.pts[b], side[a] / (side[a] - side[b])));
-      }
-    pts = out;
-    if (pts.length < 4) return [];
-  }
-  return pts;
-}
-
-/** A convex solid: the hull of `points`, clipped by `planes`. */
-function solid(points, planes = []) {
-  const pts = planes.length ? clipPoints(points, planes) : points;
-  if (pts.length < 4) return [];
-  let h;
-  try {
-    h = hull(pts);
-  } catch {
-    return [];
-  }
-  const tris = [];
-  for (const f of h.faces) {
-    const [a, b, c] = f.v.map((i) => h.pts[i]);
-    if (len(cross(sub(b, a), sub(c, a))) < 1e-9) continue;
-    tris.push([a, b, c]);
-  }
-  return tris;
-}
-
-/**
- * A loft through rings of points (each ring the same count, counter-clockwise seen from the end
- * the rings run toward), with fan caps. Non-convex shapes (a hollow hem) use this.
- */
-function loft(rings, { start = true, end = true } = {}) {
-  const tris = [];
-  const n = rings[0].length;
-  for (let r = 0; r + 1 < rings.length; r++) {
-    const A = rings[r], B = rings[r + 1];
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      tris.push([A[i], A[j], B[j]], [A[i], B[j], B[i]]);
-    }
-  }
-  const cap = (R, flip) => {
-    const c = scl(R.reduce((s, p) => add(s, p), [0, 0, 0]), 1 / R.length);
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      tris.push(flip ? [c, R[i], R[j]] : [c, R[j], R[i]]);
-    }
-  };
-  if (start) cap(rings[0], false);
-  if (end) cap(rings[rings.length - 1], true);
-  const out = tris.filter(([a, b, c]) => len(cross(sub(b, a), sub(c, a))) > 1e-10);
-  // Face outward whichever way the rings were given: a closed surface's signed volume is positive.
-  let vol = 0;
-  for (const [a, b, c] of out) vol += dot(a, cross(b, c));
-  return vol >= 0 || !(start && end) ? out : out.map(([a, b, c]) => [a, c, b]);
-}
-
-/**
- * Sweep a closed profile along a path: path [{ p, n, u }] (a point, the profile's outward and up
- * directions there); profile(i) -> [[a, b], ...] (a along n, b along u). Capped at both ends.
- */
-function sweep(path, profile) {
-  const rings = path.map((q, i) => profile(i).map(([a, b]) => add(q.p, add(scl(q.n, a), scl(q.u, b)))));
-  return loft(rings);
-}
-
-/** Where a ray from o along unit d leaves a convex solid (its triangles), or null. */
-function rayOut(tris, o, d) {
-  let best = null;
-  for (const [a, b, c] of tris) {
-    const e1 = sub(b, a), e2 = sub(c, a);
-    const pv = cross(d, e2);
-    const det = dot(e1, pv);
-    if (Math.abs(det) < 1e-14) continue;
-    const tv = sub(o, a);
-    const u = dot(tv, pv) / det;
-    if (u < -1e-9 || u > 1 + 1e-9) continue;
-    const qv = cross(tv, e1);
-    const v = dot(d, qv) / det;
-    if (v < -1e-9 || u + v > 1 + 1e-9) continue;
-    const t = dot(e2, qv) / det;
-    if (t > 0 && (best === null || t > best)) best = t;
-  }
-  return best;
-}
-
-const mirrorTris = (tris) => tris.map(([a, b, c]) => [mx(a), mx(c), mx(b)]);
-const mapTris = (tris, f, flip = false) => tris.map(([a, b, c]) => (flip ? [f(a), f(c), f(b)] : [f(a), f(b), f(c)]));
-const moveTris = (tris, o) => mapTris(tris, (p) => add(p, o));
-
-/** Superellipse ring in a horizontal plane: n points, front at z = f (> 0), back at z = b (< 0). */
-function ring(c, hw, f, b, n = 12, p = 2, phase = 0) {
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const t = phase + (i / n) * Math.PI * 2;
-    const ct = Math.cos(t), st = Math.sin(t);
-    const x = hw * Math.sign(ct) * Math.pow(Math.abs(ct), 2 / p);
-    const z = (st >= 0 ? f : b) * Math.pow(Math.abs(st), 2 / p);
-    out.push([c[0] + x, c[1], c[2] + z]);
-  }
-  return out;
-}
-
-/**
- * A limb: rings along y (each { y, rx, rz, x?, z? }), each end closed by a faceted dome centred on
- * the end ring's centre. n sides; the phase puts a face (not a corner) toward +-x and +-z.
- */
-function limb(rings, { n = 8, domeTop = true, domeBottom = true, phase = Math.PI / n, grow = 0, crease = 0, domeScale = 1, domeRings = [38, 70] } = {}) {
-  const pts = [];
-  const R = (r, y, k = 1) => {
-    const out = ring([r.x ?? 0, y, r.z ?? 0], (r.rx + grow) * k, (r.rz + grow) * k, -(r.rz + grow) * k, n, 2, phase);
-    if (crease) for (const q of out) if (Math.abs(q[0] - (r.x ?? 0)) < 1e-6 || q[2] - (r.z ?? 0) > (r.rz + grow) * k * 0.95) q[2] += crease * k;
-    return out;
-  };
-  for (const r of rings) pts.push(...R(r, r.y));
-  const dome = (r, dir, k) => {
-    const rr = Math.min(r.rx, r.rz) + grow;
-    for (const e of domeRings) pts.push(...R(r, r.y + dir * rr * Math.sin(e * DEG) * k, Math.cos(e * DEG)));
-  };
-  if (domeTop) dome(rings[0].y > rings[rings.length - 1].y ? rings[0] : rings[rings.length - 1], 1, domeScale);
-  if (domeBottom) dome(rings[0].y > rings[rings.length - 1].y ? rings[rings.length - 1] : rings[0], -1, 1);
-  return pts;
-}
-
-/** Points on an ellipsoid (centre c, radii r) in nu x nv, optionally squared off (p > 2). */
-function ellipsoid(c, r, nu = 10, nv = 7, p = 2) {
-  const out = [];
-  const sp = (v, e) => Math.sign(v) * Math.pow(Math.abs(v), e);
-  for (let j = 0; j <= nv; j++) {
-    const v = -Math.PI / 2 + (j / nv) * Math.PI;
-    for (let i = 0; i < (j === 0 || j === nv ? 1 : nu); i++) {
-      const u = (i / nu) * Math.PI * 2 + Math.PI / nu;
-      const cv = Math.cos(v);
-      out.push([c[0] + r[0] * sp(cv, 2 / p) * sp(Math.cos(u), 2 / p), c[1] + r[1] * sp(Math.sin(v), 2 / p), c[2] + r[2] * sp(cv, 2 / p) * sp(Math.sin(u), 2 / p)]);
-    }
-  }
-  return out;
-}
-
-/** A box (optionally chamfered on its vertical edges by ch) as points. */
-function box(lo, hi, ch = 0) {
-  const out = [];
-  for (const y of [lo[1], hi[1]])
-    for (const [x, z] of [
-      [lo[0], lo[2]],
-      [hi[0], lo[2]],
-      [hi[0], hi[2]],
-      [lo[0], hi[2]],
-    ]) {
-      if (!ch) out.push([x, y, z]);
-      else {
-        const sx = x === lo[0] ? 1 : -1, sz = z === lo[2] ? 1 : -1;
-        out.push([x + sx * ch, y, z], [x, y, z + sz * ch]);
-      }
-    }
-  return out;
-}
-
-/** Push points outward from a centre by t (per axis weights w). */
-function inflateFrom(points, c, t, w = [1, 1, 1]) {
-  return points.map((p) => {
-    const q = nrm(sub(p, c));
-    return [p[0] + q[0] * t * w[0], p[1] + q[1] * t * w[1], p[2] + q[2] * t * w[2]];
-  });
-}
-
-/** Where a ray down -z at (x, y) first meets a solid's surface (its largest z), or null. */
-function surfaceZ(tris, x, y) {
-  let best = null;
-  for (const [a, b, c] of tris) {
-    const n = cross(sub(b, a), sub(c, a));
-    if (n[2] <= 1e-12) continue;
-    // Barycentric test in xy.
-    const d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
-    if (Math.abs(d) < 1e-14) continue;
-    const l1 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / d;
-    const l2 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / d;
-    const l3 = 1 - l1 - l2;
-    if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
-    const z = l1 * a[2] + l2 * b[2] + l3 * c[2];
-    if (best === null || z > best) best = z;
-  }
-  return best;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Textures: small repeating patterns (RGBA), painted analytically with soft edges.
-
-function texture(name, size, paint) {
-  const px = new Uint8Array(size * size * 4);
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++) {
-      // 4x supersampling for clean edges.
-      let r = 0, g = 0, b = 0;
-      for (const [ox, oy] of [
-        [0.25, 0.25],
-        [0.75, 0.25],
-        [0.25, 0.75],
-        [0.75, 0.75],
-      ]) {
-        const c = paint((x + ox) / size, (y + oy) / size);
-        r += c[0];
-        g += c[1];
-        b += c[2];
-      }
-      const i = (y * size + x) * 4;
-      px[i] = Math.round(r / 4);
-      px[i + 1] = Math.round(g / 4);
-      px[i + 2] = Math.round(b / 4);
-      px[i + 3] = 255;
-    }
-  return { name, w: size, h: size, px };
-}
-
-/** Pinstripes: thin light lines on the cloth, every 1/n of the tile. */
-function pinstripe(base, line, n = 6, width = 0.11) {
-  const B = hexRGB(base), L = hexRGB(line);
-  return texture('pinstripe', 128, (u) => {
-    const f = (u * n) % 1;
-    const d = Math.abs(f - 0.5);
-    return d < width / 2 ? L : B;
-  });
-}
-
-/** Hawaiian print: hibiscus flowers and leaves on the shirt colour, tiling. */
-function hawaiian(base, petal, centre, leaf) {
-  const B = hexRGB(base), P = hexRGB(petal), C = hexRGB(centre), Lf = hexRGB(leaf), W = hexRGB(0xfff4d6);
-  const flowers = [
-    [0.22, 0.26, 0.15, 0.3],
-    [0.72, 0.62, 0.16, 1.4],
-    [0.7, 0.08, 0.1, 2.2],
-    [0.2, 0.8, 0.11, 0.9],
-  ];
-  const leaves = [
-    [0.47, 0.35, 0.16, 0.6],
-    [0.05, 0.55, 0.14, 2.4],
-    [0.93, 0.35, 0.12, 1.9],
-    [0.45, 0.9, 0.15, 0.2],
-    [0.5, 0.12, 0.1, 1.2],
-  ];
-  const wrap = (d) => d - Math.round(d);
-  return texture('hawaiian', 128, (u, v) => {
-    let c = B;
-    for (const [x, y, r, a] of leaves) {
-      const dx = wrap(u - x), dy = wrap(v - y);
-      const ca = Math.cos(a), sa = Math.sin(a);
-      const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
-      // A pointed leaf: |ly| < w(lx), with a midrib.
-      const t = lx / r;
-      if (t > -1 && t < 1) {
-        const w = 0.42 * r * (1 - t * t) * (t < 0 ? 1 : 1 - 0.25 * t);
-        if (Math.abs(ly) < w) c = Math.abs(ly) < r * 0.03 ? B : Lf;
-      }
-    }
-    for (const [x, y, r, a] of flowers) {
-      const dx = wrap(u - x), dy = wrap(v - y);
-      const d = Math.hypot(dx, dy);
-      const th = Math.atan2(dy, dx) + a;
-      const petals = r * (0.62 + 0.38 * Math.abs(Math.cos(2.5 * th)));
-      if (d < petals) {
-        c = P;
-        if (d < r * 0.5 && Math.abs(Math.sin(2.5 * th)) < 0.12) c = W; // petal veins
-        if (d < r * 0.2) c = C;
-      }
-    }
-    return c;
-  });
-}
-
-// ---------------------------------------------------------------------------------------------
-// The figure: joints, materials, parts.
-
-/** The centre of the right fist's hold from its wrist (for a regular hand; see fistScale). */
-const GRIP_R = [0.005, -0.03, 0.075];
-/** Hands are smaller on the women, larger on the big-armed builds. */
-const fistScale = (b) => (b.fem ? 0.88 : b.arm > 1.05 ? 1.06 : 1);
-/** The left hand is the right one mirrored and turned: right-hand (x, y, z) -> left (-x, -z, y). */
-const toLeftHand = (p) => [-p[0], -p[2], p[1]];
-const GRIP_L = toLeftHand(GRIP_R);
+// The rig
 
 const JOINT_PARENT = {
   hips: null,
@@ -511,1848 +72,708 @@ const JOINT_PARENT = {
   lowerLegR: 'upperLegR',
   footR: 'lowerLegR',
 };
+const JOINT_ORDER = Object.keys(JOINT_PARENT);
 const EMPTY = new Set(['gripL', 'gripR']);
+const BONES = JOINT_ORDER.filter((j) => !EMPTY.has(j));
 
-class Figure {
-  constructor(id, name, b) {
-    this.id = id;
-    this.name = name;
-    this.b = b;
-    this.parts = {};
-    this.materials = [];
-    this.matKey = {};
-    this.textures = [];
-    const sx = b.sx, hx = b.hx;
-    this.J = {
-      hips: [0, 0.95, 0],
-      spine: [0, 1.05, 0],
-      chest: [0, 1.27, 0],
-      neck: [0, 1.51, 0],
-      head: [0, 1.58, 0],
-      upperArmL: [sx, 1.46, 0],
-      lowerArmL: [sx, 1.18, 0],
-      handL: [sx, 0.93, 0],
-      upperArmR: [-sx, 1.46, 0],
-      lowerArmR: [-sx, 1.18, 0],
-      handR: [-sx, 0.93, 0],
-      upperLegL: [hx, 0.91, 0],
-      lowerLegL: [hx, 0.48, 0],
-      footL: [hx, 0.07, 0],
-      upperLegR: [-hx, 0.91, 0],
-      lowerLegR: [-hx, 0.48, 0],
-      footR: [-hx, 0.07, 0],
-    };
-    const k = fistScale(b);
-    this.J.gripR = add(this.J.handR, scl(GRIP_R, k));
-    this.J.gripL = add(this.J.handL, scl(GRIP_L, k));
+// ---------------------------------------------------------------------------------------------
+// Shapes (design units; a cell's centre is (i + 0.5, j + 0.5, k + 0.5))
+
+const C = (i) => i + 0.5;
+/** Inside a box (faces lo..hi) rounded by r (a number or one per axis) on its edges. */
+function inRound(p, lo, hi, r) {
+  let d2 = 0;
+  for (let a = 0; a < 3; a++) {
+    const ra = Array.isArray(r) ? r[a] : r;
+    if (p[a] < lo[a] || p[a] > hi[a]) return false;
+    if (ra <= 0) continue;
+    const q = Math.max(lo[a] + ra - p[a], 0, p[a] - (hi[a] - ra));
+    d2 += (q / ra) ** 2;
   }
-  /** A material: colour (sRGB hex), roughness, metalness, an optional texture ({ tex, uvScale }). */
-  mat(key, color, rough, metal = 0, extra = {}) {
-    if (this.matKey[key] !== undefined) return key;
-    this.matKey[key] = this.materials.length;
-    this.materials.push({ key, color, rough, metal, ...extra });
-    return key;
-  }
-  add(joint, mat, tris) {
-    if (!(joint in this.J) || EMPTY.has(joint)) throw new Error(`no joint ${joint}`);
-    if (this.matKey[mat] === undefined) throw new Error(`${this.id}: no material ${mat}`);
-    ((this.parts[joint] ??= {})[mat] ??= []).push(...tris);
-    return tris;
-  }
-  /** A convex part (hull of points, clipped by planes) on a joint. */
-  solid(joint, mat, pts, planes = []) {
-    return this.add(joint, mat, solid(pts, planes));
-  }
-  /** The same part on the left (as given, +x) and mirrored onto the right joint. */
-  pair(jointL, mat, tris) {
-    this.add(jointL, mat, tris);
-    this.add(jointL.replace(/L$/, 'R'), mat, mirrorTris(tris));
-  }
-  pairSolid(jointL, mat, pts, planes = []) {
-    this.pair(jointL, mat, solid(pts, planes));
-  }
-  get triangles() {
-    let n = 0;
-    for (const j of Object.values(this.parts)) for (const t of Object.values(j)) n += t.length;
-    return n;
-  }
+  return d2 <= 1.0001;
+}
+const inEllipsoid = (p, c, r) => ((p[0] - c[0]) / r[0]) ** 2 + ((p[1] - c[1]) / r[1]) ** 2 + ((p[2] - c[2]) / r[2]) ** 2 <= 1;
+
+/**
+ * Fill a part: the cells whose centres lie in the box lo..hi (design units) and that `inside`
+ * accepts (default: all), coloured `colour` (a name, or `(i, j, k) => name`).
+ */
+function fill(vox, part, lo, hi, colour, inside = null) {
+  const f = typeof colour === 'function' ? colour : () => colour;
+  vox.paint(part, lo.map((v) => Math.floor(v)), hi.map((v) => Math.ceil(v)), (i, j, k) => {
+    const p = [C(i), C(j), C(k)];
+    if (p[0] < lo[0] || p[0] > hi[0] || p[1] < lo[1] || p[1] > hi[1] || p[2] < lo[2] || p[2] > hi[2]) return;
+    if (inside && !inside(p)) return;
+    return f(i, j, k);
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
-// Builds: shoulder and hip joints (x), girths. Heights are the rig's for everyone.
+// Builds: widths in design units (the heights are everyone's). Arms and legs are even or odd as
+// their widths say; the arms hang beside the chest (`sh` its half-width), the legs from under the
+// pelvis a voxel either side of the middle.
 
 const BUILDS = {
-  slim: { sx: 0.2, hx: 0.098, W: 0.95, D: 0.95, arm: 0.93, leg: 0.94, neck: 0.95, head: 1.0, belly: 0, fem: false },
-  regular: { sx: 0.205, hx: 0.1, W: 1, D: 1, arm: 1, leg: 1, neck: 1, head: 1, belly: 0, fem: false },
-  broad: { sx: 0.222, hx: 0.104, W: 1.1, D: 1.06, arm: 1.14, leg: 1.08, neck: 1.15, head: 1.03, belly: 0, fem: false },
-  heavy: { sx: 0.218, hx: 0.106, W: 1.12, D: 1.12, arm: 1.1, leg: 1.1, neck: 1.12, head: 1.04, belly: 0.03, fem: false },
-  female: { sx: 0.188, hx: 0.096, W: 0.9, D: 0.94, arm: 0.84, leg: 0.92, neck: 0.84, head: 0.96, belly: 0, fem: true },
-  athlete: { sx: 0.19, hx: 0.097, W: 0.93, D: 0.95, arm: 0.9, leg: 0.96, neck: 0.88, head: 0.96, belly: 0, fem: true },
+  slim: { sh: 7, waist: 6, hip: 6, arm: 4, leg: 5, belly: 0, bust: 0 },
+  broad: { sh: 8, waist: 7, hip: 7, arm: 6, leg: 6, belly: 0, bust: 0 },
+  heavy: { sh: 8, waist: 8, hip: 7, arm: 6, leg: 6, belly: 2, bust: 0 },
+  female: { sh: 6, waist: 5, hip: 6, arm: 4, leg: 5, belly: 0, bust: 1 },
+  athlete: { sh: 6, waist: 5, hip: 6, arm: 4, leg: 5, belly: 0, bust: 1 },
 };
 
-/** The trunk's outer surface (a shirt over the body): [y, half width, front z, back z]. */
-const TRUNK_M = [
-  [0.8, 0.115, 0.05, -0.075],
-  [0.86, 0.152, 0.08, -0.106],
-  [0.93, 0.156, 0.093, -0.112],
-  [1.0, 0.146, 0.092, -0.1],
-  [1.05, 0.14, 0.092, -0.095],
-  [1.12, 0.141, 0.098, -0.095],
-  [1.2, 0.148, 0.106, -0.098],
-  [1.28, 0.156, 0.114, -0.102],
-  [1.36, 0.162, 0.117, -0.105],
-  [1.42, 0.176, 0.108, -0.102],
-  [1.47, 0.196, 0.08, -0.09],
-];
-const TRUNK_F = [
-  [0.8, 0.112, 0.046, -0.078],
-  [0.86, 0.16, 0.076, -0.112],
-  [0.93, 0.162, 0.088, -0.114],
-  [1.0, 0.145, 0.083, -0.098],
-  [1.06, 0.126, 0.079, -0.087],
-  [1.13, 0.128, 0.085, -0.087],
-  [1.2, 0.136, 0.098, -0.089],
-  [1.27, 0.144, 0.12, -0.092],
-  [1.34, 0.148, 0.114, -0.094],
-  [1.41, 0.162, 0.096, -0.092],
-  [1.47, 0.18, 0.072, -0.08],
-];
+/**
+ * Heights (design units, from the soles): boots to 4, shins to 10, thighs to 17 (under the pelvis
+ * from 14), the pelvis to 19 (its top row the belt), the belly to 23, the chest to 31 (the
+ * shoulders' pivots at 29), the head from 32 to 44.
+ */
+const Y = { ankle: 4, knee: 10, pelvis: 14, hipJoint: 16.5, hips: 17, belt: 18, spine: 19, chest: 23, shoulder: 29, chestTop: 31, neck: 31, head: 32, crown: 44, elbow: 23, wrist: 17.5 };
+/** The torso's front row of cells (k), and the head's face row. */
+const F = 3;
+const FACE = 4;
 
-function trunkAt(s, y) {
-  const T = s.b.fem ? TRUNK_F : TRUNK_M;
-  let k = 0;
-  while (k < T.length - 2 && T[k + 1][0] < y) k++;
-  const [y0, w0, f0, b0] = T[k], [y1, w1, f1, b1] = T[k + 1];
-  const t = (y - y0) / (y1 - y0);
-  const deep = s.b.fem ? 1.06 : 1.1;
-  let w = mix1(w0, w1, t) * s.b.W, f = mix1(f0, f1, t) * s.b.D * deep, b = mix1(b0, b1, t) * s.b.D * deep;
-  // A belly: forward and a little wider around the navel.
-  if (s.b.belly) {
-    const k2 = Math.max(0, 1 - Math.abs(y - 1.1) / 0.17);
-    f += s.b.belly * k2 * 1.3;
-    w += s.b.belly * k2 * 0.5;
-  }
-  return { w, f, b };
+/** Where a build's limbs are (design units, the figure's left; the right mirrors). */
+function limbs(b) {
+  const ax = b.sh + b.arm / 2;
+  const lx0 = 1, lx1 = 1 + b.leg;
+  const lz0 = b.leg % 2 ? -2 : -3, lz1 = lz0 + b.leg;
+  return { ax, lx0, lx1, lx: (lx0 + lx1) / 2, lz0, lz1, lz: (lz0 + lz1) / 2 };
 }
 
-/** Trunk points between y0 and y1 (rings every ~5 cm), grown by g, with a squared-off section. */
-function trunkPoints(s, y0, y1, g = 0, { n = 12, p = 2.5, extra = null } = {}) {
-  const pts = [];
-  const steps = Math.max(1, Math.ceil((y1 - y0) / 0.07 - 1e-9));
-  for (let i = 0; i <= steps; i++) {
-    const y = y0 + ((y1 - y0) * i) / steps;
-    const t = trunkAt(s, y);
-    const e = extra ? extra(y) : { w: 0, f: 0, b: 0 };
-    pts.push(...ring([0, y, 0], t.w + g + e.w, t.f + g + e.f, t.b - g - e.b, n, p, 0));
-  }
-  return pts;
+/** The joints (design units, the figure's space: +x its left, +z ahead) for a build. */
+function joints(b) {
+  const L = limbs(b);
+  const J = {
+    hips: [0, Y.hips, 0],
+    spine: [0, Y.spine, 0],
+    chest: [0, Y.chest, 0],
+    neck: [0, Y.neck, -1],
+    head: [0, Y.head, -1],
+    upperArmL: [L.ax, Y.shoulder, 0],
+    lowerArmL: [L.ax, Y.elbow, 0],
+    handL: [L.ax, Y.wrist, 0],
+    upperLegL: [L.lx, Y.hipJoint, L.lz],
+    lowerLegL: [L.lx, Y.knee, L.lz],
+    footL: [L.lx, Y.ankle, L.lz],
+  };
+  for (const k of Object.keys(J)) if (k.endsWith('L')) J[k.slice(0, -1) + 'R'] = [-J[k][0], J[k][1], J[k][2]];
+  // The fists' holds: the right's round a vertical bar ahead of its wrist, the left's round a bar
+  // along z below its wrist.
+  J.gripR = [-L.ax, Y.wrist - 3, 1];
+  J.gripL = [L.ax, Y.wrist - 3.5, 0];
+  return J;
 }
-
-/** The shoulder line and the base of the neck above the trunk's last ring. */
-function shoulderPoints(s, g) {
-  const sx = s.b.sx;
-  const pts = [];
-  for (const side of [1, -1]) {
-    pts.push([side * (sx + 0.014 + g), 1.472 + g, 0.046 + g], [side * (sx + 0.014 + g), 1.472 + g, -0.05 - g]);
-    pts.push([side * (sx + 0.004 + g), 1.487 + g, 0.036 + g], [side * (sx + 0.004 + g), 1.487 + g, -0.04 - g]);
-    pts.push([side * (sx * 0.6 + g), 1.503 + g, 0.062 + g], [side * (sx * 0.6 + g), 1.503 + g, -0.07 - g]);
-    pts.push([side * (0.066 + g), 1.52 + g, 0.05 + g], [side * (0.066 + g), 1.52 + g, -0.062 - g]);
-  }
-  return pts;
-}
-
-const neckR = (s) => (s.b.fem ? 0.05 : 0.054) * s.b.neck;
-/** The neck's centre line sits a little behind the rig's axis. */
-const NECK_Z = -0.008;
 
 // ---------------------------------------------------------------------------------------------
-// The body generator. `s` = { fig, b: build, o: outfit, d: the outfit's colours }.
+// The body: every part a closed voxel volume on its joint, in its base colour (dress() recolours).
+// Where a part reaches into its neighbour it's a voxel in from the neighbour's surface all round,
+// so their surfaces never meet.
 
-function legs(fig, s) {
-  const { o, b } = s;
-  const g = b.leg;
-  const hx = b.hx;
-  const L = (y, rx, rz, extra = {}) => ({ y, rx: rx * g, rz: rz * g, x: hx, ...extra });
-  const bare = o.legs === 'bare';
-  const thigh = [L(0.91, bare ? 0.08 : 0.09, 0.088), L(0.78, bare ? 0.075 : 0.084, 0.081), L(0.6, bare ? 0.062 : 0.072, 0.068), L(0.48, bare ? 0.056 : 0.064, 0.062)];
-  // Upper leg: the thigh from its hip dome to the knee dome.
-  if (o.legs === 'shorts') {
-    fig.pairSolid('upperLegL', 'pants', limb([L(0.91, 0.094, 0.092), L(0.75, 0.092, 0.089), L(0.57, 0.09, 0.086)], { domeBottom: false }));
-    fig.pairSolid('upperLegL', 'skin', limb([L(0.6, 0.066, 0.064), L(0.52, 0.056, 0.056), L(0.48, 0.054, 0.054)], { domeTop: false }));
-  } else {
-    fig.pairSolid('upperLegL', bare ? 'skin' : 'pants', limb(thigh, { crease: o.crease ? 0.006 : 0, domeRings: [50] }));
-  }
-  // Lower leg: the knee dome, then trousers (or a bare calf) down to the ankle.
-  if (o.legs === 'shorts' || bare) {
-    const k = bare ? 0.92 : 1;
-    fig.pairSolid('lowerLegL', 'skin', limb([L(0.48, 0.052 * k, 0.052 * k), L(0.38, 0.055 * k, 0.059 * k, { z: -0.008 }), L(0.25, 0.046 * k, 0.049 * k, { z: -0.004 }), L(0.12, 0.033 * k, 0.035 * k), L(0.07, 0.031 * k, 0.033 * k)], { domeBottom: false }));
-    if (o.socks) fig.pairSolid('lowerLegL', 'socks', limb([L(0.15, 0.037 * k, 0.039 * k), L(0.075, 0.036 * k, 0.038 * k)], { domeTop: false, domeBottom: false }));
-  } else if (o.legs === 'cigarette') {
-    // Slim trousers that stop above the ankle.
-    fig.pairSolid('lowerLegL', 'pants', limb([L(0.48, 0.059, 0.059), L(0.38, 0.056, 0.059), L(0.2, 0.046, 0.048), L(0.13, 0.043, 0.045)], { domeBottom: false, crease: 0.004 }));
-    fig.pairSolid('lowerLegL', 'skin', limb([L(0.14, 0.032, 0.033), L(0.07, 0.03, 0.031)], { domeTop: false, domeBottom: false }));
-  } else {
-    const fl = o.legs === 'track' ? 1.07 : 1;
-    fig.pairSolid('lowerLegL', 'pants', limb([L(0.48, 0.062, 0.062), L(0.38, 0.061, 0.063), L(0.22, 0.058 * fl, 0.059 * fl), L(0.1, 0.059 * fl, 0.06 * fl), L(0.07, 0.06 * fl, 0.062 * fl, { z: 0.004 })], { domeBottom: false, crease: o.crease ? 0.005 : 0 }));
-  }
-  // A stripe down the outside of each leg (the tracksuit).
-  if (o.legStripe) {
-    const up = limb(thigh, { grow: 0.003, domeTop: false, domeBottom: false });
-    fig.pairSolid('upperLegL', 'stripe', up, [xAbove(hx + 0.02), zAbove(-0.012), zBelow(0.012), below(0.86)]);
-    const lo = limb([L(0.48, 0.062, 0.062), L(0.38, 0.061, 0.063), L(0.22, 0.062, 0.063), L(0.1, 0.063, 0.064), L(0.07, 0.064, 0.066)], { grow: 0.003, domeTop: false, domeBottom: false });
-    fig.pairSolid('lowerLegL', 'stripe', lo, [xAbove(hx + 0.02), zAbove(-0.012), zBelow(0.012), above(0.08)]);
-  }
-  shoes(fig, s);
-}
-
-function shoes(fig, s) {
-  const { o, b } = s;
-  const hx = b.hx;
-  const fem = b.fem;
-  const W = fem ? 0.92 : 1.1, Lg = fem ? 0.98 : 1.1;
-  const A = 0.07; // ankle height
-  const style = o.shoeStyle ?? 'oxford';
-  const sole = style === 'sneaker' ? 0.024 : 0.014;
-  const P = (x, y, z) => [hx + x * W, A + y, z * Lg];
-  const half = [
-    // heel
-    [0.034, -A + sole, -0.062],
-    [0.036, -0.02, -0.068],
-    [0.0, -0.015, -0.074],
-    [0.028, 0.02, -0.058],
-    [0.0, 0.028, -0.062],
-    // collar / ankle opening
-    [0.04, 0.022, -0.02],
-    [0.041, 0.018, 0.03],
-    [0.0, 0.034, 0.03],
-    // instep
-    [0.037, 0.0, 0.08],
-    [0.0, 0.018, 0.085],
-    // ball of the foot (widest)
-    [0.047, -A + sole, 0.11],
-    [0.046, -0.035, 0.12],
-    // toe box
-    [0.04, -0.03, 0.17],
-    [0.026, -0.036, 0.205],
-    [0.0, -0.031, 0.18],
-    [0.0, -0.041, 0.214],
-    [0.03, -A + sole, 0.2],
-    [0.0, -A + sole, 0.215],
-    [0.036, -A + sole, -0.03],
-  ];
-  const all = [];
-  for (const [x, y, z] of half) all.push(P(x, y, z), P(-x, y, z));
-  if (style === 'flat') {
-    // A low ballet flat: the instep bare above it.
-    fig.pairSolid('footL', 'shoes', all, [below(A - 0.012)]);
-    fig.pairSolid('footL', 'skin', [...ring([hx, A - 0.02, 0.02], 0.028, 0.05, -0.045, 8), ...ring([hx, A + 0.02, -0.005], 0.029, 0.032, -0.032, 8)]);
-  } else {
-    fig.pairSolid('footL', 'shoes', all);
-  }
-  // The sole: a slightly wider slab under it.
-  const slab = [];
-  for (const p of all)
-    if (p[1] <= sole + 1e-6) {
-      const x = hx + (p[0] - hx) * 1.06, z = p[2] * 1.025 + (p[2] > 0 ? 0.002 : -0.002);
-      slab.push([x, 0, z], [x, sole + 0.001, z]);
-    }
-  fig.pairSolid('footL', 'sole', slab);
-  if (o.shoeStripes) {
-    // Two black stripes crossing each side of the shoe (the Bride's sneakers).
-    const up = inflateFrom(all, [hx, A - 0.03, 0.07], 0.0025);
-    for (const side of [1, -1])
-      for (const [dz, lean] of [
-        [0.0, 1],
-        [0.05, -1],
-      ]) {
-        const a0 = [hx, A - 0.05, 0.03 + dz], a1 = [hx, A + 0.02, 0.03 + dz - lean * 0.05];
-        fig.pairSolid('footL', 'stripe', up, [side > 0 ? xAbove(hx + 0.02) : xBelow(hx - 0.02), keepSide(a0, a1, [1, 0, 0], [hx, 0.03, -1]), keepSide(add(a0, [0, 0, 0.012]), add(a1, [0, 0, 0.012]), [1, 0, 0], [hx, 0.03, 1]), above(sole + 0.004)]);
-      }
-  }
-}
-
-function pelvis(fig, s) {
-  const { o } = s;
-  const pm = o.legs === 'bare' ? 'dress' : 'pants';
-  // The seat and hips of the trousers (or the skirt's lining), reaching up into the belly.
-  fig.solid('hips', pm, [...trunkPoints(s, 0.8, 1.045, -0.004, { n: 10 }), ...trunkPoints(s, 1.11, 1.11, -0.024, { n: 10 })]);
-  if (o.belt) {
-    fig.solid('hips', 'belt', trunkPoints(s, 1.0, 1.045, 0.004, { n: 16 }), o.jacket && !o.openJacket ? [zAbove(0.02)] : []);
-    const t = trunkAt(s, 1.02);
-    fig.solid('hips', 'buckle', box([-0.022, 1.004, t.f], [0.022, 1.041, t.f + 0.011]));
-  }
-  if (o.skirt) skirt(fig, s);
-}
-
-/** A flared skirt from the waist to above the knee (hips), turned up inside at the hem. */
-function skirt(fig, s) {
-  const { o } = s;
-  const n = 16;
-  const ys = [1.08, 1.0, 0.9, 0.78, o.skirt];
-  const rings = ys.map((y) => {
-    const t = trunkAt(s, Math.max(y, 0.9));
-    const fl = y < 0.93 ? (0.93 - y) * 0.3 : 0;
-    return ring([0, y, -0.004], t.w + 0.008 + fl * 0.55, t.f + 0.008 + fl, t.b - 0.008 - fl, n, 2.2, 0);
-  });
-  const last = rings[rings.length - 1];
-  const inner = last.map((p) => [p[0] * 0.9, p[1] + 0.035, p[2] * 0.9]);
-  fig.add('hips', 'dress', loft([...rings, inner]));
-  if (o.apron) {
-    const grown = rings.flatMap((r) => r.map((p) => [p[0] * 1.025, p[1], p[2] * 1.03 + 0.002]));
-    fig.solid('hips', 'apron', grown, [zAbove(0.03), xBelow(0.095), xAbove(-0.095), above(o.skirt + 0.06), below(1.035)]);
-    // The waistband and its ties.
-    fig.solid('hips', 'apron', trunkPoints(s, 1.03, 1.06, 0.012, { n: 16 }));
-  }
-}
-
-/**
- * The trunk. Segments: hips (the hem, below 1.045), spine (1.045-1.27), chest (1.27-top); each
- * reaches into its neighbours with a smaller copy of itself so bends never open a gap. With a
- * jacket, each segment is two halves cut along the open front (the lapels' V above the button,
- * the parted fronts below), the shirt and tie set back inside.
- */
-const SEGS = [
-  ['spine', 1.045, 1.27],
-  ['chest', 1.27, 1.47],
-];
-
-function segmentPoints(s, seg, g) {
-  const [joint, y0, y1] = seg;
-  const pts = trunkPoints(s, y0, y1, g);
-  if (joint === 'chest') pts.push(...shoulderPoints(s, g));
-  else pts.push(...trunkPoints(s, y1 + 0.07, y1 + 0.07, g - 0.024));
-  pts.push(...trunkPoints(s, y0 - 0.07, y0 - 0.07, g - 0.024));
-  return pts;
-}
-
-/** The open front of a shirt (a V down to `depth`) or a jacket (see jacketEdge). */
-function frontCut(s, side, edge) {
-  // edge: [[x, y], ...] from the collar down; the kept side is away from the middle.
-  const planes = [];
-  const J = s.o.jacket ? s.o.jacketGrow ?? 0.012 : 0;
-  for (let k = 0; k + 1 < edge.length; k++) {
-    const [x0, y0] = edge[k], [x1, y1] = edge[k + 1];
-    const a = [side * x0, y0, trunkAt(s, y0).f + J], bb = [side * x1, y1, trunkAt(s, y1).f + J];
-    planes.push(keepSide(a, bb, [-side * 0.45, 0, -1], [side * 0.4, (y0 + y1) / 2, 0]));
-  }
-  return planes;
-}
-
-/** The edge of a jacket's open front, from the collar down to the hem (x >= 0). */
-function jacketEdge(s) {
-  const o = s.o;
-  const top = o.vTop ?? 0.052;
-  if (o.openJacket) return [
-    [top, 1.49],
-    [top + 0.004, 1.2],
-    [top + 0.01, 0.8],
-  ];
-  const button = o.button ?? 1.1;
-  return [
-    [top, 1.49],
-    [0, button],
-    [o.hemOpen ?? 0.075, 0.8],
-  ];
-}
-
-function torso(fig, s) {
-  const { o } = s;
-  const shirtMat = o.shirtMat ?? 'shirt';
-  if (!o.jacket) {
-    // A shirt (or dress, or tracksuit top) is the outer layer; open collars show a V of skin.
-    for (const seg of SEGS) {
-      const pts = segmentPoints(s, seg, 0);
-      if (o.neckV) {
-        const edge = [
-          [o.neckVTop ?? 0.05, 1.5],
-          [0, o.neckV],
-        ];
-        for (const side of [1, -1]) fig.solid(seg[0], shirtMat, pts, [side > 0 ? xAbove(0) : xBelow(0), ...frontCut(s, side, edge)]);
-        if (seg[0] === 'chest') fig.solid('chest', 'skin', [...trunkPoints(s, o.neckV - 0.02, 1.47, -0.006), ...shoulderPoints(s, -0.006)], [xBelow(0.07), xAbove(-0.07), zAbove(0.0)]);
-      } else fig.solid(seg[0], shirtMat, pts);
-    }
-    return;
-  }
-  const J = o.jacketGrow ?? 0.012;
-  const edge = jacketEdge(s);
-  for (const seg of SEGS) {
-    const pts = segmentPoints(s, seg, J);
-    for (const side of [1, -1]) fig.solid(seg[0], 'jacket', pts, [side > 0 ? xAbove(0) : xBelow(0), ...frontCut(s, side, edge)]);
-    // The shirt, set back inside the opening.
-    const lo = seg[0] === 'spine' ? seg[1] - 0.02 : seg[1] - 0.03;
-    const shirt = trunkPoints(s, lo, seg[2] + (seg[0] === 'chest' ? 0 : 0.03), 0);
-    if (seg[0] === 'chest') shirt.push(...shoulderPoints(s, 0));
-    const w = (o.vTop ?? 0.052) + 0.03;
-    fig.solid(seg[0], shirtMat, shirt, [zAbove(0.02), xBelow(o.openJacket ? w + 0.02 : w), xAbove(o.openJacket ? -w - 0.02 : -w)]);
-  }
-  if (o.ruffles) {
-    // Ruffles down the shirt front (the Crooner).
-    for (let k = 0; k < 5; k++) {
-      const y = 1.43 - k * 0.045;
-      const t = trunkAt(s, y);
-      const w = 0.028 - k * 0.002;
-      for (const joint of [y > 1.27 ? 'chest' : 'spine'])
-        fig.solid(joint, 'shirt', [
-          [-w, y + 0.012, t.f + 0.002],
-          [w, y + 0.012, t.f + 0.002],
-          [-w * 1.1, y - 0.014, t.f + 0.012],
-          [w * 1.1, y - 0.014, t.f + 0.012],
-          [-w, y - 0.016, t.f],
-          [w, y - 0.016, t.f],
-          [0, y - 0.018, t.f + 0.014],
-        ]);
-    }
-  }
-}
-
-/** The jacket's hem (on the hips), or an untucked shirt's tail. */
-function hem(fig, s) {
-  const { o } = s;
-  if (!o.jacket) {
-    if (o.untucked) {
-      const pts = [...trunkPoints(s, o.untucked, 1.045, 0.008, { extra: (y) => ({ w: 0.004 * clamp((1.0 - y) / 0.1, 0, 1), f: 0, b: 0 }) }), ...trunkPoints(s, 1.11, 1.11, -0.016)];
-      if (o.neckV) fig.solid('hips', o.shirtMat ?? 'shirt', pts);
-      else fig.solid('hips', o.shirtMat ?? 'shirt', pts);
-    }
-    return;
-  }
-  const J = o.jacketGrow ?? 0.012;
-  const hemY = o.hemY ?? 0.83;
-  const flare = (y) => {
-    const k = clamp((1.0 - y) / 0.15, 0, 1);
-    return { w: 0.012 * k, f: 0.004 * k, b: 0.01 * k };
-  };
-  const pts = trunkPoints(s, Math.max(hemY, 0.88), 1.045, J, { extra: flare });
-  if (hemY < 0.88) {
-    // Below the seat the trunk narrows into the crotch; the jacket keeps falling straight.
-    const t = trunkAt(s, 0.9), e = flare(0.9);
-    pts.push(...ring([0, hemY, 0], t.w + J + e.w, t.f + J + e.f, t.b - J - e.b, 12, 2.5, 0));
-  }
-  pts.push(...trunkPoints(s, 1.115, 1.115, J - 0.024));
-  const edge = jacketEdge(s);
-  for (const side of [1, -1]) fig.solid('hips', 'jacket', pts, [side > 0 ? xAbove(0) : xBelow(0), ...frontCut(s, side, edge)]);
-  if (o.flaps) {
-    // Hip pocket flaps.
-    const grown = trunkPoints(s, 0.9, 1.0, J + 0.005, { extra: flare });
-    for (const side of [1, -1]) fig.solid('hips', 'jacket', grown, [side > 0 ? xAbove(0.07) : xBelow(-0.07), side > 0 ? xBelow(0.15) : xAbove(-0.15), above(0.925), below(0.948), zAbove(0.03)]);
-  }
-}
-
-/** Lapels beside the V, the jacket's collar round the back of the neck, a breast pocket, buttons. */
-function lapels(fig, s) {
-  const { o, b } = s;
-  if (!o.jacket) return;
-  const J = o.jacketGrow ?? 0.012;
-  const edge = jacketEdge(s);
-  const top = edge[0][0];
-  const button = o.openJacket ? 1.12 : edge[1][1];
-  const lapelW = o.lapelW ?? 0.055;
-  const mat = o.lapelMat ?? (o.pinstripe ? 'jacket' : 'lapel');
-  const grown = [...trunkPoints(s, button - 0.02, 1.47, J + 0.007), ...shoulderPoints(s, J + 0.007)];
-  for (const side of [1, -1]) {
-    // The lapel: a band beside the opening, widest at the notch, narrowing to the button.
-    const along = frontCut(s, side, edge.slice(0, 2));
-    const tN = trunkAt(s, 1.44);
-    const outerA = [side * (top + lapelW), 1.44, tN.f + J], outerB = [side * (o.openJacket ? top + 0.02 : 0.004), button, trunkAt(s, button).f + J];
-    const outer = keepSide(outerA, outerB, [-side * 0.3, 0, -1], [0, 1.3, 0.3]);
-    const notch = keepSide([side * top, 1.466, 0.3], [side * (top + lapelW + 0.03), 1.43, 0.3], [0, 0, 1], [0, 1.2, 0]);
-    const planes = [...along, outer, notch, side > 0 ? xAbove(0) : xBelow(0), zAbove(0.02), above(button)];
-    fig.solid('chest', mat, grown, [...planes, above(1.265)]);
-    fig.solid('spine', mat, grown, [...planes, below(1.275)]);
-  }
-  // The collar: round the back of the neck (under the shirt collar's top), down to the notches.
-  const open = 36;
-  fig.add('chest', mat, sweep(collarPath(s, open, 1.474, 0, 0.011, 6), band(0.034, 0.01)));
-  const { rx, zf } = collarRing(s);
-  const tN = trunkAt(s, 1.46);
-  for (const side of [1, -1]) {
-    const e = (y, g) => [side * Math.sin(open * DEG) * (rx + g), y, NECK_Z + Math.cos(open * DEG) * (zf - NECK_Z + g)];
-    fig.solid('chest', mat, [e(1.474, 0.011), e(1.508, 0.012), e(1.474, 0.022), e(1.508, 0.024), [side * (top + 0.004), 1.462, tN.f + J + 0.006], [side * (top + 0.024), 1.456, tN.f + J - 0.002], [side * (top + 0.012), 1.47, tN.f + J - 0.012]]);
-  }
-  // A welt pocket on the left breast, a pocket square in it.
-  const px = 0.095 * b.W;
-  fig.solid('chest', 'jacket', trunkPoints(s, 1.33, 1.39, J + 0.004), [xAbove(px - 0.034), xBelow(px + 0.034), above(1.352), below(1.362), zAbove(0.03)]);
-  if (o.pocketSquare) {
-    const t = trunkAt(s, 1.37);
-    const z = t.f + J;
-    for (const [dx, h] of [
-      [-0.016, 0.022],
-      [0.006, 0.03],
-    ])
-      fig.solid('chest', 'square', [
-        [px + dx - 0.014, 1.358, z - 0.004],
-        [px + dx + 0.014, 1.358, z - 0.004],
-        [px + dx - 0.014, 1.358, z + 0.004],
-        [px + dx + 0.014, 1.358, z + 0.004],
-        [px + dx, 1.358 + h, z + 0.0],
-      ]);
-  }
-  if (!o.openJacket) {
-    const tB = trunkAt(s, button);
-    for (const dy of o.buttons === 2 ? [0, -0.1] : [0]) fig.solid(dy < -0.05 ? 'hips' : 'spine', 'button', ellipsoid([0, button + dy - 0.004, tB.f + J + 0.001], [0.009, 0.009, 0.005], 6, 2));
-  }
-}
-
-/** The ring a collar follows: round the back of the neck, forward to the top of the chest. */
-function collarRing(s) {
-  const r = neckR(s);
-  return { rx: r + 0.008, zf: NECK_Z + r + 0.016, zb: NECK_Z - r - 0.008, r };
-}
-function collarPath(s, open, y0, lift, g, count = 7) {
-  const { rx, zf, zb } = collarRing(s);
-  const path = [];
-  for (let i = 0; i <= count; i++) {
-    const a = (open + ((360 - 2 * open) * i) / count) * DEG;
-    const rz = Math.cos(a) > 0 ? zf - NECK_Z : NECK_Z - zb;
-    const n = nrm([Math.sin(a) / (rx + g), 0, Math.cos(a) / (rz + g)]);
-    path.push({ p: [Math.sin(a) * (rx + g), y0 - lift * Math.max(0, Math.cos(a)), NECK_Z + Math.cos(a) * (rz + g)], n, u: [0, 1, 0] });
-  }
-  return path;
-}
-const band = (h, t = 0.007) => () => [
-  [0, 0],
-  [t, 0],
-  [t + 0.003, h],
-  [0.002, h],
-];
-
-/** A shirt collar round the neck (neck joint): kinds shirt, open, camp, track, crew, peter. */
-function collar(fig, s) {
-  const { o } = s;
-  const kind = o.collar;
-  if (!kind) return;
-  const mat = o.collarMat ?? 'shirt';
-  const { rx, zf } = collarRing(s);
-  const end = (open, y, g = 0.004) => [Math.sin(open * DEG) * (rx + g), y, NECK_Z + Math.cos(open * DEG) * (zf - NECK_Z + g)];
-  if (kind === 'shirt') {
-    const open = 22;
-    fig.add('neck', mat, sweep(collarPath(s, open, 1.47, 0.012, 0), band(0.046)));
-    for (const side of [1, -1]) {
-      const e0 = end(open, 1.505), e1 = end(open, 1.46);
-      const t = trunkAt(s, 1.44);
-      fig.solid('neck', mat, [e0, e1, add(e0, [0, 0, -0.008]), add(e1, [0, 0, -0.008]), [e0[0] + 0.022, 1.492, e0[2] - 0.012], [0.036, 1.438, t.f + 0.006], [0.016, 1.447, t.f + 0.008], [0.03, 1.44, t.f - 0.002]].map((p) => [side * Math.abs(p[0]), p[1], p[2]]));
-    }
-  } else if (kind === 'open' || kind === 'camp') {
-    // Spread open over the collarbones: a low band behind, wide points lying on the chest.
-    const wide = kind === 'camp' ? 1.3 : 1;
-    const open = 62;
-    fig.add('neck', mat, sweep(collarPath(s, open, 1.476, 0, 0), band(0.034)));
-    for (const side of [1, -1]) {
-      const e0 = end(open, 1.51), e1 = end(open, 1.478);
-      const t1 = trunkAt(s, 1.43), t2 = trunkAt(s, 1.4);
-      fig.solid('chest', mat, [e0, e1, [0.05, 1.472, t1.f - 0.01], [0.05 + 0.045 * wide, 1.43, t1.f - 0.006], [0.056 + 0.01 * wide, 1.4 - 0.01 * wide, t2.f + 0.006], [0.05, 1.415, t1.f + 0.008], [0.07 + 0.03 * wide, 1.46, t1.f - 0.018], [0.05 + 0.045 * wide, 1.43, t1.f - 0.014], [0.056 + 0.01 * wide, 1.4 - 0.01 * wide, t2.f - 0.002]].map((p) => [side * Math.abs(p[0]), p[1], p[2]]));
-    }
-  } else if (kind === 'track') {
-    // A zipped stand collar, and the zip down the front.
-    fig.add('neck', mat, sweep(collarPath(s, 0.001, 1.468, 0.01, 0, 12), band(0.058, 0.009)));
-    const zip = trunkPoints(s, 1.0, 1.47, 0.003);
-    fig.solid('chest', 'stripe', zip, [xAbove(-0.004), xBelow(0.004), zAbove(0.03), above(1.265)]);
-    fig.solid('spine', 'stripe', zip, [xAbove(-0.004), xBelow(0.004), zAbove(0.03), below(1.275)]);
-    fig.solid('neck', 'buckle', box([-0.005, 1.49, zf + 0.008], [0.005, 1.515, zf + 0.014]));
-  } else if (kind === 'crew') {
-    fig.add('neck', mat, sweep(collarPath(s, 0.001, 1.47, 0.006, 0.002, 12), band(0.016, 0.008)));
-  } else if (kind === 'peter') {
-    // A round white collar: a low band and two rounded flaps at the front.
-    const open = 26;
-    fig.add('neck', mat, sweep(collarPath(s, open, 1.47, 0.006, 0), band(0.026)));
-    for (const side of [1, -1]) {
-      const pts = [];
-      for (let i = 0; i < 7; i++) {
-        const a = (i / 6) * Math.PI;
-        const x = side * (0.006 + 0.036 * (0.5 - 0.5 * Math.cos(a)));
-        const y = 1.465 - 0.036 * Math.sin(a) * 0.9;
-        const z = trunkAt(s, y).f + 0.004;
-        pts.push([x, y, z + 0.003], [x, y, z - 0.004]);
-      }
-      pts.push([side * 0.045, 1.478, 0.03], end(open, 1.478).map((v, i) => (i === 0 ? side * Math.abs(v) : v)));
-      fig.solid('chest', mat, pts);
-    }
-  }
-}
-
-/** The tie (on the chest and spine) and its knot, or a bow tie (on the neck). */
-function tie(fig, s) {
-  const { o } = s;
-  if (!o.tie) return;
-  const { zf } = collarRing(s);
-  if (o.tie === 'bow') {
-    for (const side of [1, -1])
-      fig.solid('neck', 'tie', [
-        [side * 0.006, 1.492, zf + 0.026],
-        [side * 0.006, 1.468, zf + 0.026],
-        [side * 0.05, 1.503, zf + 0.018],
-        [side * 0.05, 1.458, zf + 0.018],
-        [side * 0.044, 1.506, zf + 0.004],
-        [side * 0.044, 1.455, zf + 0.004],
-        [side * 0.006, 1.492, zf + 0.006],
-        [side * 0.006, 1.468, zf + 0.006],
-      ]);
-    fig.solid('neck', 'tie', box([-0.01, 1.468, zf + 0.012], [0.01, 1.492, zf + 0.031], 0.004));
-    return;
-  }
-  // The knot, between the collar points.
-  fig.solid('neck', 'tie', [
-    [-0.015, 1.5, zf + 0.012],
-    [0.015, 1.5, zf + 0.012],
-    [-0.009, 1.46, zf + 0.024],
-    [0.009, 1.46, zf + 0.024],
-    [-0.013, 1.5, zf - 0.004],
-    [0.013, 1.5, zf - 0.004],
-    [0, 1.455, zf + 0.016],
-  ]);
-  // The blade follows the shirt front down from the knot, widening.
-  const shirt = trunkPoints(s, 1.0, 1.5, 0.004);
-  const w = (y) => mix1(0.011, o.tieW ?? 0.028, clamp((1.462 - y) / 0.3, 0, 1));
-  const planes = [keepSide([w(1.462), 1.462, 0], [w(1.162), 1.162, 0], [0, 0, 1], [0, 1.3, 0]), keepSide([-w(1.462), 1.462, 0], [-w(1.162), 1.162, 0], [0, 0, 1], [0, 1.3, 0]), zAbove(0.03), below(1.462)];
-  const tip = o.jacket && !o.openJacket ? (o.button ?? 1.1) + 0.01 : 1.05;
-  fig.solid('chest', 'tie', shirt, [...planes, above(1.265)]);
-  fig.solid('spine', 'tie', shirt, [...planes, below(1.275), above(tip + 0.02)]);
-  // The pointed tip.
-  const t = trunkAt(s, tip + 0.02);
-  const W = o.tieW ?? 0.028;
-  fig.solid('spine', 'tie', [
-    [-W, tip + 0.022, t.f + 0.006],
-    [W, tip + 0.022, t.f + 0.006],
-    [0, tip - 0.01, t.f + 0.006],
-    [-W, tip + 0.022, t.f - 0.002],
-    [W, tip + 0.022, t.f - 0.002],
-    [0, tip - 0.01, t.f - 0.002],
-  ]);
-  if (o.tieBar) {
-    const tb = trunkAt(s, 1.34);
-    fig.solid('chest', 'gold', box([-0.026, 1.334, tb.f + 0.004], [0.026, 1.341, tb.f + 0.012]));
-  }
-}
-
-/** Overlay panels on a shirt: the bowling shirt's cream panels, the tracksuit's side stripes. */
-function panels(fig, s) {
-  const { o } = s;
-  if (o.panels) {
-    for (const seg of SEGS) {
-      const pts = trunkPoints(s, seg[1] - (seg[0] === 'spine' ? 0.03 : 0), seg[2], 0.003);
-      if (seg[0] === 'chest') pts.push(...shoulderPoints(s, 0.003));
-      for (const side of [1, -1]) fig.solid(seg[0], 'panel', pts, [side > 0 ? xAbove(0.045) : xBelow(-0.045), side > 0 ? xBelow(0.078) : xAbove(-0.078), zAbove(0.03), ...(seg[0] === 'chest' ? [below(1.395)] : [])]);
-    }
-    const tail = trunkPoints(s, o.untucked ?? 0.9, 1.05, 0.011);
-    for (const side of [1, -1]) fig.solid('hips', 'panel', tail, [side > 0 ? xAbove(0.045) : xBelow(-0.045), side > 0 ? xBelow(0.078) : xAbove(-0.078), zAbove(0.03)]);
-  }
-  if (o.sideStripe) {
-    for (const seg of SEGS) {
-      const pts = trunkPoints(s, seg[1] - 0.02, seg[2], 0.003);
-      for (const side of [1, -1]) fig.solid(seg[0], 'stripe', pts, [side > 0 ? xAbove(0.08) : xBelow(-0.08), zAbove(-0.016), zBelow(0.016), below(1.37)]);
-    }
-  }
-  if (o.buttonsDown) {
-    // A placket of buttons down the front.
-    for (const y of [1.37, 1.29, 1.21, 1.13, 1.05]) {
-      const t = trunkAt(s, y);
-      fig.solid(y > 1.27 ? 'chest' : 'spine', o.buttonsDown, ellipsoid([0, y, t.f + 0.002], [0.006, 0.006, 0.004], 6, 2));
-    }
-  }
-  if (o.nameTag) fig.solid('chest', 'apron', trunkPoints(s, 1.33, 1.38, 0.004), [xAbove(0.05), xBelow(0.105), above(1.335), below(1.358), zAbove(0.03)]);
-  if (o.chain) {
-    // A gold chain round the neck, lying on the chest.
-    const path = [];
-    for (let i = 0; i <= 14; i++) {
-      const a = (-80 + (160 * i) / 14) * DEG;
-      const x = Math.sin(a) * 0.075;
-      const y = 1.47 - Math.cos(a) * 0.075;
-      const z = trunkAt(s, y).f * Math.cos(a * 0.6) + 0.004;
-      path.push({ p: [x, y, z], n: [0, 0, 1], u: [0, 1, 0] });
-    }
-    fig.add('chest', 'gold', sweep(path, () => [[0, -0.003], [0.005, -0.003], [0.005, 0.003], [0, 0.003]]));
-  }
-}
-
-function arms(fig, s) {
-  const { o, b } = s;
-  const sx = b.sx;
-  const g = b.arm;
-  const A = (y, rx, rz, extra = {}) => ({ y, rx: rx * g, rz: rz * g, x: sx, ...extra });
-  const sleeve = o.jacket ? 'jacket' : o.sleeveMat ?? o.shirtMat ?? 'shirt';
-  const flat = 0.45; // the shoulder's dome, flattened under the jacket's shoulder line
-  if (o.sleeves === 'short' || o.sleeves === 'puff') {
-    const puff = o.sleeves === 'puff' ? 1.14 : 1;
-    const hemY = o.sleeves === 'puff' ? 1.35 : 1.3;
-    fig.pairSolid('upperArmL', sleeve, limb([A(1.46, 0.066 * puff, 0.066 * puff), A(1.39, 0.065 * puff, 0.063 * puff), A(hemY, 0.062, 0.06)], { domeBottom: false, domeScale: flat }));
-    fig.pairSolid('upperArmL', 'skin', limb([A(hemY + 0.02, 0.051, 0.05), A(1.2, 0.045, 0.044), A(1.18, 0.044, 0.044)], { domeTop: false }));
-    if (o.sleeveTrim) fig.pairSolid('upperArmL', o.sleeveTrim, limb([A(hemY + 0.014, 0.064, 0.062), A(hemY - 0.004, 0.064, 0.062)], { domeTop: false, domeBottom: false }));
-    fig.pairSolid('lowerArmL', 'skin', limb([A(1.18, 0.043, 0.043), A(1.1, 0.044, 0.042), A(1.0, 0.034, 0.032), A(0.95, 0.028, 0.025)], { domeBottom: false }));
-  } else {
-    const upper = [A(1.46, 0.064, 0.064), A(1.36, 0.061, 0.06), A(1.24, 0.056, 0.055), A(1.18, 0.055, 0.054)];
-    fig.pairSolid('upperArmL', sleeve, limb(upper, { domeScale: flat }));
-    const end = 0.972;
-    const fore = [A(1.18, 0.052, 0.052), A(1.1, 0.052, 0.051), A(1.02, 0.047, 0.046), A(end, 0.046, 0.045)];
-    fig.pairSolid('lowerArmL', sleeve, limb(fore, { domeBottom: false }));
-    if (o.sleeveStripe) {
-      fig.pairSolid('upperArmL', 'stripe', limb(upper, { grow: 0.003, domeTop: false, domeBottom: false }), [xAbove(sx + 0.02), zAbove(-0.012), zBelow(0.012)]);
-      fig.pairSolid('lowerArmL', 'stripe', limb(fore, { grow: 0.003, domeTop: false, domeBottom: false }), [xAbove(sx + 0.02), zAbove(-0.012), zBelow(0.012)]);
-    }
-    // The shirt cuff showing below a jacket sleeve (or the shirt's own cuff band).
-    const cuffMat = o.cuffMat ?? (o.jacket ? 'shirt' : sleeve);
-    fig.pairSolid('lowerArmL', cuffMat, limb([A(end + 0.012, 0.039, 0.038), A(0.952, 0.038, 0.037)], { domeTop: false, domeBottom: false }));
-    fig.pairSolid('lowerArmL', 'skin', limb([A(0.97, 0.027, 0.024), A(0.94, 0.026, 0.023)], { domeTop: false, domeBottom: false }));
-    if (o.cufflinks) fig.pairSolid('lowerArmL', 'gold', box([sx + 0.03 * g, 0.958, -0.006], [sx + 0.04 * g, 0.968, 0.006]));
-  }
-  if (o.watch) {
-    // A gold watch on the left wrist.
-    fig.solid('lowerArmL', 'gold', limb([A(0.956, 0.03 / g, 0.027 / g), A(0.941, 0.03 / g, 0.027 / g)], { domeTop: false, domeBottom: false }));
-    fig.solid('lowerArmL', 'glass', box([sx + 0.024, 0.94, -0.011], [sx + 0.034, 0.957, 0.011]));
-  }
-}
-
-/**
- * A fist gripping a bar, in the right hand's frame: wrist at the origin, the hand pointing +z,
- * palm toward +x, thumb up (+y); the bar runs along y through GRIP_R. Returns point clouds (each
- * one convex part).
- */
-function fist(b) {
-  const k = fistScale(b);
-  const [gx, gy, gz] = GRIP_R;
-  const parts = [];
-  const P = (x, y, z) => [x * k, y * k, z * k];
-  // The back of the hand, from the wrist to the knuckles (front-right of the bar).
-  const back = [];
-  for (const [x, y] of [
-    [-0.022, 0.018],
-    [-0.016, 0.026],
-    [0.016, 0.026],
-    [0.022, 0.018],
-    [0.022, -0.02],
-    [0.014, -0.028],
-    [-0.014, -0.028],
-    [-0.022, -0.02],
-  ])
-    back.push(P(x, y, -0.012));
-  for (const [y, z] of [
-    [0.012, 0.098],
-    [-0.012, 0.102],
-    [-0.036, 0.099],
-    [-0.058, 0.092],
-  ])
-    back.push(P(-0.044, y + gy + 0.03, z - 0.014), P(-0.036, y + gy + 0.03, z - 0.004));
-  back.push(P(-0.042, 0.02, 0.03), P(-0.044, -0.062, 0.05), P(-0.02, -0.07, 0.045), P(-0.016, 0.024, 0.045), P(0.02, 0.02, 0.03), P(0.018, -0.04, 0.02));
-  parts.push(back);
-  // Four fingers wrapping round the front of the bar and down its left side; the middle finger
-  // reaches furthest, the little finger is the smallest.
-  for (const [y, h, reach] of [
-    [0.004, 0.018, 1.0],
-    [-0.019, 0.019, 1.04],
-    [-0.042, 0.018, 0.98],
-    [-0.062, 0.015, 0.88],
-  ]) {
-    const yy = y + gy + 0.028;
-    const D = [];
-    for (const [x, z, edge] of [
-      [-0.051, 0.094, 1],
-      [-0.043, 0.082, 0],
-      [-0.028, 0.108, 1],
-      [0.002, 0.113, 1],
-      [0.03, 0.102, 1],
-      [0.041, 0.078, 1],
-      [0.036, 0.052, 0],
-      [0.012, 0.046, 0],
-    ]) {
-      const zz = gz + (z - gz) * reach;
-      const xx = gx + (x - gx) * (reach < 0.95 ? 0.94 : 1);
-      // The outer corners are bevelled: the knuckle rolls read as separate fingers.
-      const inset = edge ? 0.0032 : 0.0005;
-      D.push(P(xx, yy - h * 0.5 + inset, zz), P(xx, yy + h * 0.5 - inset, zz));
-    }
-    parts.push(D);
-  }
-  // The thumb: from its base on the palm's left, forward along the left side above the index finger.
-  parts.push([P(0.006, 0.02, 0.018), P(0.024, 0.016, 0.022), P(0.012, -0.006, 0.02), P(0.03, -0.002, 0.03), P(0.03, 0.022, 0.06), P(0.046, 0.018, 0.062), P(0.04, 0.005, 0.064), P(0.03, 0.018, 0.098), P(0.042, 0.014, 0.098), P(0.038, 0.005, 0.094), P(0.028, 0.006, 0.092)]);
-  // The wrist: a faceted ball so the hand turns cleanly against the cuff.
-  parts.push(ellipsoid(P(0, -0.004, 0.0), [0.024 * k, 0.028 * k, 0.026 * k], 6, 2));
-  return parts;
-}
-
-function hands(fig, s) {
+function body(vox, s) {
   const { b, o } = s;
-  const parts = fist(b);
-  const put = (mat, tris) => {
-    fig.add('handR', mat, moveTris(tris, fig.J.handR));
-    // The left hand: the same fist, mirrored and turned to hang below the wrist.
-    fig.add('handL', mat, moveTris(mapTris(tris, toLeftHand, true), fig.J.handL));
-  };
-  for (const pts of parts) put('skin', solid(pts));
-  if (o.handWraps) {
-    // Boxer's tape round the knuckles and the palm.
-    put('wrap', solid(inflateFrom(parts[0], [0, -0.03, 0.03], 0.003), [zAbove(0.035), zBelow(0.09)]));
-    put('wrap', solid(inflateFrom(parts[parts.length - 1], [0, -0.004, 0], 0.003), [zAbove(-0.01)]));
+  const L = limbs(b);
+  const sh = b.sh, W = b.waist, H = b.hip;
+  const box = (p, lo, hi, r) => inRound(p, lo, hi, r);
+  // Pelvis (hips): the seat, its top row the belt.
+  fill(vox, 'hips', [-H, Y.pelvis, -4], [H, Y.spine, 4], 'pants', (p) => box(p, [-H, Y.pelvis - 2, -4], [H, Y.spine, 4], [1.3, 0, 1.3]));
+  // Belly (spine): the waist; into the pelvis and the chest.
+  const bz = 4 + b.belly;
+  fill(vox, 'spine', [-W, Y.spine, -4], [W, Y.chest, bz], 'shirt', (p) => box(p, [-W, Y.spine - 2, -4], [W, Y.chest + 2, bz], [1.4, 0, 1.3 + b.belly * 0.8]));
+  fill(vox, 'spine', [-W + 1, Y.spine - 2, -3], [W - 1, Y.spine, 3], 'shirt');
+  fill(vox, 'spine', [-W + 1, Y.chest, -3], [W - 1, Y.chest + 2, 3], 'shirt');
+  // Chest: squared shoulders rounded over the top, a bust on the women.
+  fill(vox, 'chest', [-sh, Y.chest, -4], [sh, Y.chestTop, 4 + b.bust], 'shirt', (p) => {
+    const w = p[1] < Y.chest + 2 ? Math.max(W, sh - 1) : sh;
+    if (box(p, [-w, Y.chest - 4, -4], [w, Y.chestTop, 4], [2, 2.2, 1.4])) return true;
+    return !!b.bust && box(p, [-sh + 1, Y.chest + 1, 0], [sh - 1, Y.chest + 5, 4 + b.bust], [1.4, 1.4, 1.2]);
+  });
+  // Neck: into the chest below and the head above.
+  fill(vox, 'neck', [-2, Y.chestTop - 1, -3], [2, Y.head + 1, 1], 'skin');
+  head(vox, s);
+  // Arms: the upper arm (a rounded cap over the shoulder, proud on a jacket), the forearm (into the
+  // upper arm), the fist (round the wrist).
+  for (const side of ['L', 'R']) {
+    const m = side === 'L' ? 1 : -1;
+    const X = (a, c) => (m > 0 ? [a, c] : [-c, -a]);
+    const [x0, x1] = X(sh, sh + b.arm);
+    const a2 = b.arm / 2;
+    fill(vox, `upperArm${side}`, [x0, Y.elbow, -a2], [x1, Y.chestTop, a2], 'sleeve', (p) => box(p, [x0, Y.elbow - 4, -a2], [x1, Y.chestTop, a2], [1, 1.6, 1]));
+    if (o.jacket) {
+      const [c0, c1] = X(sh, sh + b.arm + 1);
+      fill(vox, `upperArm${side}`, [c0, Y.shoulder - 2, -a2 - 1], [c1, Y.chestTop + 1, a2 + 1], 'sleeve', (p) => box(p, [c0, Y.shoulder - 3, -a2 - 1], [c1, Y.chestTop + 1, a2 + 1], [1.4, 1.7, 1.4]));
+    }
+    const [f0, f1] = X(L.ax - 2 * m * m, L.ax + 2);
+    const fx0 = m > 0 ? L.ax - 2 : -L.ax - 2, fx1 = fx0 + 4;
+    fill(vox, `lowerArm${side}`, [fx0 + 1, Y.elbow, -1], [fx1 - 1, Y.elbow + 2, 1], 'sleeve');
+    fill(vox, `lowerArm${side}`, [fx0, Y.wrist, -2], [fx1, Y.elbow, 2], 'sleeve', (p) => box(p, [fx0, Y.wrist - 3, -2], [fx1, Y.elbow + 3, 2], [0.9, 0, 0.9]));
+    void f0, void f1;
+    fist(vox, s, side, [fx0 - 1, fx1 + 1]);
   }
-  if (o.ring) {
-    // A gold pinky ring on the right hand.
-    const gy = GRIP_R[1];
-    fig.add('handR', 'gold', moveTris(solid(box([-0.049, gy - 0.037, 0.072], [-0.03, gy - 0.027, 0.1], 0.003).map((p) => scl(p, fistScale(b)))), fig.J.handR));
+  // Legs: thigh (inset where it's under the pelvis), shin (into the thigh), boot (into the shin).
+  for (const side of ['L', 'R']) {
+    const m = side === 'L' ? 1 : -1;
+    const [x0, x1] = m > 0 ? [L.lx0, L.lx1] : [-L.lx1, -L.lx0];
+    const { lz0: z0, lz1: z1 } = L;
+    fill(vox, `upperLeg${side}`, [x0, Y.knee, z0], [x1, Y.pelvis, z1], 'pants', (p) => box(p, [x0, Y.knee - 3, z0], [x1, Y.pelvis + 3, z1], [0.8, 0, 0.8]));
+    fill(vox, `upperLeg${side}`, [x0 + 1, Y.pelvis, z0 + 1], [x1 - 1, Y.hipJoint + 1, z1 - 1], 'pants');
+    fill(vox, `lowerLeg${side}`, [x0 + 1, Y.knee, z0 + 1], [x1 - 1, Y.knee + 2, z1 - 1], 'pants');
+    fill(vox, `lowerLeg${side}`, [x0, Y.ankle, z0], [x1, Y.knee, z1], 'pants', (p) => box(p, [x0, Y.ankle - 3, z0], [x1, Y.knee + 3, z1], [0.8, 0, 0.8]));
+    boot(vox, s, side, [x0, x1], [z0, z1]);
   }
 }
 
-function neck(fig, s) {
-  const r = neckR(s);
-  fig.solid('neck', 'skin', limb([{ y: 1.44, rx: r, rz: r * 0.96, z: NECK_Z }, { y: 1.63, rx: r * 0.95, rz: r * 0.92, z: NECK_Z - 0.01 }], { domeTop: false, domeBottom: false }));
-  collar(fig, s);
+/** A fist (6 wide): a rounded block round the grip, the fingers' creases across its knuckles. */
+function fist(vox, s, side, [x0, x1]) {
+  const part = `hand${side}`;
+  const hand = s.o.handWraps ? 'wrap' : 'skin';
+  const crease = `${hand}Crease`;
+  const y0 = Y.wrist - 6, y1 = Y.wrist + 0.5;
+  if (side === 'R') {
+    // Ahead of the wrist, round a vertical grip: the knuckles to the front (+z).
+    const z0 = -2, z1 = 4;
+    fill(vox, part, [x0, y0, z0], [x1, y1, z1], hand, (p) => inRound(p, [x0, y0, z0], [x1, y1 + 1, z1], 1.2));
+    vox.recolour(part, (i, j, k) => (k === z1 - 1 && j < Y.wrist - 1 && j > y0 && (j - y0) % 2 === 0 ? crease : undefined));
+  } else {
+    // Below the wrist, round a bar along z: the knuckles to the outside (+x).
+    const z0 = -3, z1 = 3;
+    fill(vox, part, [x0, y0, z0], [x1, y1, z1], hand, (p) => inRound(p, [x0, y0, z0], [x1, y1 + 1, z1], 1.2));
+    vox.recolour(part, (i, j, k) => (i === x1 - 1 && j < Y.wrist - 1 && j > y0 && k > z0 && k < z1 - 1 && (k - z0) % 2 === 0 ? crease : undefined));
+  }
+}
+
+/** A boot: chunky, its toe reaching forward, the sole a darker row underneath. */
+function boot(vox, s, side, [x0, x1], [z0, z1]) {
+  const part = `foot${side}`;
+  const st = s.o.shoeStyle;
+  const top = st === 'boot' ? Y.ankle + 2 : Y.ankle;
+  const toe = z1 + (st === 'flat' ? 2 : 3);
+  const toeTop = st === 'flat' ? 2 : 3;
+  fill(vox, part, [x0, 0, z0 - 1], [x1, top, z1], 'shoes', (p) => inRound(p, [x0, -2, z0 - 1], [x1, top, z1 + 1], [0.9, 0, 0.9]));
+  fill(vox, part, [x0, 0, z0], [x1, toeTop, toe], 'shoes', (p) => inRound(p, [x0, -2, z0 - 1], [x1, toeTop, toe], [1.2, 1.3, 1.8]));
+  fill(vox, part, [x0 + 1, top, z0 + 1], [x1 - 1, top + 2, z1 - 1], 'shoes');
+  vox.recolour(part, (i, j) => (j === 0 ? 'sole' : undefined));
 }
 
 // ---------------------------------------------------------------------------------------------
-// The head: a faceted skull and jaw, a brow, a nose wedge, eyes, lips, ears; hair and hats.
+// The head: skull, face, hair, hats. The skull is 12 x 12 x 11: x -6..5, y 32..43, z -6..4 (the
+// face the front row, k = 4).
 
-/** Head scale (about the head pivot) and its width factor. */
-const headScale = (s) => s.b.head * 1.06;
-
-function headPoints(s, grow = 0, underHair = false) {
-  const f = s.b.fem;
-  const H = headScale(s);
-  const jaw = f ? 0.055 : 0.068, chin = f ? 0.019 : 0.03, cheek = f ? 0.071 : 0.076;
-  const pts = [];
-  const both = (x, y, z) => {
-    for (const sx of x === 0 ? [1] : [1, -1]) {
-      let p = [sx * x * H * (f ? 0.97 : 1), 1.58 + y * H, z * H];
-      if (grow) p = add(p, scl(nrm(sub(p, [0, 1.58 + 0.09 * H, -0.005])), grow));
-      // Where hair (or a hat) always covers the skull, the skin sits 5 mm lower, so no corner of
-      // it can show between the hair's facets.
-      if (underHair && (y >= 0.17 || (z <= -0.08 && y >= 0.035))) p = add(p, scl(nrm(sub(p, [0, 1.58 + 0.09 * H, -0.005])), -0.005));
-      pts.push(p);
-    }
-  };
-  // Chin and jaw.
-  both(0, -0.033, 0.074);
-  both(chin, -0.031, 0.069);
-  both(0, -0.018, 0.086);
-  both(chin, -0.016, 0.081);
-  both(jaw * 0.86, -0.019, 0.038);
-  both(jaw, -0.002, -0.012);
-  both(jaw + 0.002, 0.03, -0.042);
-  // Mouth and cheeks.
-  both(0, 0.012, 0.092);
-  both(0.028, 0.012, 0.084);
-  both(0.058, 0.036, 0.066);
-  both(cheek, 0.066, 0.052);
-  both(0.046, 0.074, 0.08);
-  // Brow and forehead.
-  both(0, 0.108, 0.098);
-  both(0.046, 0.11, 0.09);
-  both(0.07, 0.103, 0.058);
-  both(0, 0.155, 0.092);
-  both(0.05, 0.155, 0.075);
-  both(0.074, 0.14, 0.038);
-  // Temples, sides, crown and back.
-  both(0.08, 0.1, 0.01);
-  both(0.082, 0.07, -0.03);
-  both(0.078, 0.035, -0.04);
-  both(0, 0.214, 0.046);
-  both(0.052, 0.205, 0.035);
-  both(0, 0.232, -0.02);
-  both(0.058, 0.216, -0.028);
-  both(0, 0.205, -0.086);
-  both(0.062, 0.174, -0.092);
-  both(0, 0.13, -0.116);
-  both(0.066, 0.1, -0.1);
-  both(0.076, 0.125, -0.05);
-  both(0, 0.06, -0.105);
-  both(0.054, 0.04, -0.09);
-  both(0, 0.012, -0.075);
-  both(0.044, 0.0, -0.064);
-  return pts;
-}
-
-/** A point on the head in head units (x, y, z before scaling). */
-const HP = (s) => {
-  const H = headScale(s);
-  return (x, y, z) => [x * H, 1.58 + y * H, z * H];
-};
-
-function head(fig, s) {
-  const { o, b } = s;
-  const H = headScale(s);
-  const f = b.fem;
-  const P = HP(s);
-  // The full skull places the face and the hair; the skin drawn is the same, a little lower under the hair.
-  const skull = solid(headPoints(s));
-  fig.solid('head', 'skin', headPoints(s, 0, true));
-  s.skull = skull;
-  const ez = (x, y) => (surfaceZ(skull, x * H, 1.58 + y * H) ?? 0.08 * H) / H;
-  // Brow ridge.
-  fig.solid('head', 'skin', [P(-0.062, 0.098, 0.074), P(0.062, 0.098, 0.074), P(-0.05, 0.117, 0.092), P(0.05, 0.117, 0.092), P(-0.048, 0.102, 0.097), P(0.048, 0.102, 0.097), P(0, 0.113, 0.102), P(0, 0.1, 0.103), P(-0.062, 0.12, 0.068), P(0.062, 0.12, 0.068)]);
-  // The nose: a wedge from the brow to its tip, nostrils either side.
-  const nw = f ? 0.012 : 0.017, nt = f ? 0.119 : 0.131;
-  fig.solid('head', 'skin', [P(0, 0.104, 0.1), P(-0.008, 0.1, 0.094), P(0.008, 0.1, 0.094), P(0, 0.045, nt), P(-nw, 0.04, 0.1), P(nw, 0.04, 0.1), P(0, 0.033, 0.113), P(-nw * 0.7, 0.032, 0.1), P(nw * 0.7, 0.032, 0.1)]);
+function head(vox, s) {
+  const { o } = s;
+  const lo = [-6, Y.head, -6], hi = [6, Y.crown, 5];
+  fill(vox, 'head', lo, hi, 'skin', (p) => {
+    if (!inRound(p, lo, hi, [2.2, 2.4, 2.2])) return false;
+    // The jaw narrows to the chin.
+    const x = Math.abs(p[0]);
+    if (p[1] < Y.head + 1 && (x > 4.2 || p[2] < -3)) return false;
+    if (p[1] < Y.head + 2 && x > 5.2) return false;
+    return true;
+  });
+  const set = (i, j, k, c) => vox.set('head', i, j, k, c);
+  const del = (i, j, k) => vox.del('head', i, j, k);
+  const P = FACE + 1;
   // Ears.
-  for (const sd of [1, -1]) fig.solid('head', 'skin', [P(sd * 0.075, 0.108, -0.01), P(sd * 0.089, 0.102, -0.02), P(sd * 0.09, 0.062, -0.022), P(sd * 0.075, 0.04, -0.004), P(sd * 0.08, 0.1, -0.036), P(sd * 0.08, 0.05, -0.03), P(sd * 0.072, 0.07, 0.0)]);
-  // Eyes: a white almond and a dark iris under the brow (unless shades cover them).
-  if (!o.shades) {
-    for (const sd of [1, -1]) {
-      const cx = sd * 0.031, cy = 0.084;
-      const w = f ? 0.016 : 0.015, h = f ? 0.0072 : 0.0056;
-      const white = [], iris = [];
-      for (const [dx, dy] of [
-        [-w, 0.0005],
-        [-w * 0.35, h],
-        [w * 0.5, h * 0.9],
-        [w, 0.002],
-        [w * 0.4, -h * 0.7],
-        [-w * 0.5, -h * 0.6],
-      ]) {
-        const x = cx + dx * sd, y = cy + dy;
-        const z = ez(x, y);
-        white.push(P(x, y, z + 0.002), P(x, y, z - 0.004));
+  for (const i of [6, -7]) for (const j of [36, 37]) for (const k of [-2, -1]) set(i, j, k, j === 36 && k === -1 ? 'skinShade' : 'skin');
+  // Nose: two wide, two tall, a voxel proud; the nostrils darker.
+  for (const i of [-1, 0]) {
+    set(i, 36, P, 'skin');
+    set(i, 35, P, 'skinShade');
+  }
+  // Eyes, set a voxel in under proud brows: a white outside, a dark pupil inside.
+  const brow = o.lashes ? 'lash' : 'brow';
+  for (const m of [1, -1]) {
+    const inner = m > 0 ? 2 : -3, outer = m > 0 ? 3 : -4;
+    for (const i of [inner, outer]) for (const j of [37, 38]) del(i, j, FACE);
+    if (!o.shades) {
+      for (const j of [37, 38]) {
+        set(inner, j, FACE - 1, 'eye');
+        set(outer, j, FACE - 1, j === 38 ? 'white' : 'white');
       }
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        const x = cx + sd * 0.001 + Math.cos(a) * 0.0068, y = cy + 0.0012 + Math.sin(a) * h * 0.92;
-        const z = ez(x, y);
-        iris.push(P(x, y, z + 0.0032), P(x, y, z - 0.003));
+      set(inner, 38, FACE - 1, 'eye');
+    }
+    for (const i of [inner - m, inner, outer, outer + m]) if (i !== inner - m || !o.lashes) set(i, 39, i === inner - m ? FACE : P, brow);
+    if (o.lashes) set(outer + m, 38, FACE, 'lash');
+  }
+  // Cheeks.
+  if (o.blush) for (const i of [-5, -4, 3, 4]) set(i, 35, FACE, 'blush');
+  // Mouth.
+  for (const i of [-2, -1, 0, 1]) set(i, 33, FACE, o.lips ? 'lips' : 'mouth');
+  if (o.lips) for (const i of [-1, 0]) set(i, 34, FACE, 'lips');
+  // Shades: a band across the eyes a voxel proud, a bridge, arms back over the ears.
+  if (o.shades) {
+    for (let i = -6; i < 6; i++) for (const j of [37, 38]) if (!(j === 37 && (i === -1 || i === 0))) set(i, j, P, i === -1 || i === 0 || i === -6 || i === 5 ? 'frame' : 'glass');
+    for (const i of [6, -7]) for (let k = -2; k < P; k++) set(i, 38, k, 'frame');
+  }
+  // Facial hair.
+  if (o.beard === 'goatee') {
+    for (const [i, j] of [[-2, 34], [-1, 34], [0, 34], [1, 34], [-2, 33], [1, 33], [-2, 32], [-1, 32], [0, 32], [1, 32], [-1, 31.5], [0, 31.5]]) if (j === Math.floor(j)) set(i, j, P, 'beard');
+    for (const i of [-1, 0]) set(i, 32, FACE, 'beard');
+  }
+  if (o.beard === 'pencil') for (const i of [-2, -1, 0, 1]) set(i, 34, FACE, 'beard');
+  if (o.beard === 'stubble') for (let i = -5; i < 5; i++) for (const j of [32, 33, 34]) if (vox.get('head', i, j, FACE) === 'skin' && (i + j) % 2 === 0) set(i, j, FACE, 'stubble');
+  hair(vox, s);
+  if (o.hat) hat(vox, s);
+}
+
+/** Hair: a shell a voxel over the skull where the style says, and its own shapes. */
+function hair(vox, s) {
+  const st = s.o.hairStyle;
+  const set = (i, j, k, c = 'hair') => vox.set('head', i, j, k, c);
+  const skull = (i, j, k) => vox.filled(i, j, k, 'head');
+  const shell = (where, grow = 1) => {
+    for (let i = -9; i < 9; i++)
+      for (let j = Y.head; j < Y.crown + 3; j++)
+        for (let k = -9; k < 8; k++) {
+          const p = [C(i), C(j), C(k)];
+          if (skull(i, j, k)) continue;
+          if (!inRound(p, [-6 - grow, Y.head, -6 - grow], [6 + grow, Y.crown + grow, 5 + grow], [2.2 + grow * 0.5, 2.4 + grow * 0.5, 2.2 + grow * 0.5])) continue;
+          if (where(p, i, j, k)) set(i, j, k, typeof where === 'function' && where.colour ? where.colour(p) : 'hair');
+        }
+  };
+  const top = (p) => p[1] > Y.crown - 1.5;
+  const back = (p) => p[2] < 1;
+  const sides = (p) => p[1] > 39 && p[2] < 3.5;
+  if (st === 'buzz') shell((p) => top(p) || (back(p) && p[1] > 35) || sides(p));
+  else if (st === 'crew') {
+    shell((p) => top(p) || (back(p) && p[1] > 35) || sides(p));
+    for (let i = -5; i < 5; i++) for (let k = -4; k < 4; k++) set(i, Y.crown + 1, k);
+    for (let i = -4; i < 4; i++) set(i, Y.crown, 5);
+  } else if (st === 'short') {
+    shell((p) => top(p) || (back(p) && p[1] > 34.5) || sides(p) || p[1] > 41.5);
+    for (let i = -5; i < 5; i++) if ((i + 7) % 3 !== 0) set(i, 41, 6);
+  } else if (st === 'slick' || st === 'long') {
+    shell((p) => top(p) || (back(p) && p[1] > (st === 'long' ? 33 : 35)) || sides(p) || p[1] > 41.5);
+    // Swept back from a ridge over the forehead.
+    for (let i = -6; i < 6; i++) set(i, Y.crown, 5);
+    for (let i = -5; i < 5; i++) set(i, Y.crown - 1, 6);
+    if (st === 'long') {
+      // Down to the collar behind and over the ears at the sides, parted in the middle.
+      for (let i = -7; i < 7; i++) for (let j = 31; j < 38; j++) for (let k = -8; k < 0; k++) if (!skull(i, j, k) && inRound([C(i), C(j), C(k)], [-7, 31, -8], [7, 40, 0], [1.6, 1, 1.6])) set(i, j, k);
+      for (const i of [-8, -7, 6, 7]) for (let j = 33; j < 41; j++) for (let k = -2; k < 2; k++) if (!skull(i, j, k) && (Math.abs(C(i)) < 7.5 || (j > 34 && k < 1))) set(i, j, k);
+      for (let k = -2; k < 7; k++) for (const i of [-1, 0]) if (vox.get('head', i, Y.crown, k) === 'hair') set(i, Y.crown, k, 'hairDark');
+    }
+  } else if (st === 'pomp') {
+    shell((p) => top(p) || (back(p) && p[1] > 35) || sides(p) || p[1] > 41.5);
+    for (let i = -6; i < 6; i++) for (let j = Y.crown - 3; j < Y.crown + 4; j++) for (let k = 0; k < 8; k++) if (inEllipsoid([C(i), C(j), C(k)], [0, Y.crown + 0.2, 3.6], [5.6, 2.8, 3.6])) set(i, j, k);
+    for (const i of [6, -7]) for (let j = 34; j < 38; j++) set(i, j, 1, 'hair');
+  } else if (st === 'bob') {
+    shell((p) => top(p) || back(p) || p[1] > 39.5);
+    for (let i = -8; i < 8; i++) for (let j = 33; j < 41; j++) for (let k = -8; k < 3; k++) if (!skull(i, j, k) && inRound([C(i), C(j), C(k)], [-7.5, 33, -8], [7.5, 43, 3], [2, 0.8, 2])) set(i, j, k);
+    // Blunt bangs across the brow.
+    for (let i = -6; i < 6; i++) for (const j of [40, 41, 42]) set(i, j, FACE + 1);
+  } else if (st === 'pony' || st === 'ponycap') {
+    shell((p) => top(p) || (back(p) && p[1] > 35) || sides(p) || p[1] > 41.5);
+    for (let i = -5; i < 5; i++) if (i < -1 || i > 0) set(i, 41, FACE + 2);
+    // A high ponytail behind, tied, falling to the shoulders.
+    const tieY = 40;
+    for (let j = 29; j < tieY + 2; j++)
+      for (let i = -3; i < 3; i++)
+        for (let k = -12; k < -6; k++) {
+          const w = j > tieY ? 1.9 : 1.4 + (tieY - j) * 0.04;
+          if (inEllipsoid([C(i), C(j), C(k)], [0, j + 0.5, -8.2 - (tieY - j) * 0.14], [w, 1, 1.6])) set(i, j, k);
+        }
+    for (let i = -2; i < 2; i++) for (const k of [-9, -8, -7]) set(i, tieY, k, 'hairTie');
+  }
+}
+
+/** Hats: the Boss's fedora, the waitress's paper cap. */
+function hat(vox, s) {
+  const set = (i, j, k, c) => vox.set('head', i, j, k, c);
+  const del = (i, j, k) => vox.del('head', i, j, k);
+  if (s.o.hat === 'fedora') {
+    // A wide brim (turned down a little in front), a pinched crown with a band; it covers the top.
+    const y0 = 42;
+    for (let i = -10; i < 10; i++) for (let j = y0; j < Y.crown + 4; j++) for (let k = -10; k < 10; k++) if (vox.get('head', i, j, k) === 'hair') del(i, j, k);
+    for (let i = -10; i < 10; i++)
+      for (let k = -11; k < 10; k++) {
+        if (!inEllipsoid([C(i), 0, C(k)], [0, 0, -0.5], [9.6, 1, 9.8])) continue;
+        const front = C(k) > 6.5;
+        set(i, y0 + (front ? -1 : 0), k, 'hat');
       }
-      fig.solid('head', 'whites', white);
-      fig.solid('head', 'eyes', iris);
-    }
-  }
-  for (const sd of [1, -1]) {
-    // Eyebrows: stern bars for the men, arched for the women (under the shades' top edge anyway).
-    const cx = sd * 0.031, by = f ? 0.103 : 0.1;
-    const bw = f ? 0.021 : 0.024;
-    const bp = [];
-    for (const [dx, dy, t] of f
-      ? [
-          [-bw, -0.001, 0.0022],
-          [bw * 0.1, 0.006, 0.0028],
-          [bw, 0.001, 0.002],
-        ]
-      : [
-          [-bw, -0.004, 0.0048],
-          [0, 0.002, 0.0055],
-          [bw, 0.005, 0.004],
-        ]) {
-      const x = cx - dx * sd, y = by + dy;
-      const z = ez(x, y);
-      bp.push(P(x, y + t, z + 0.0045), P(x, y - t, z + 0.0045), P(x, y, z - 0.003));
-    }
-    fig.solid('head', 'brows', bp);
-  }
-  // Lips (coloured for the women) or a mouth line.
-  {
-    const my = 0.011, mw = f ? 0.02 : 0.022;
-    const pts = [];
-    for (const [dx, dy] of [
-      [-mw, 0],
-      [-mw * 0.5, f ? 0.0065 : 0.0025],
-      [0, f ? 0.004 : 0.0025],
-      [mw * 0.5, f ? 0.0065 : 0.0025],
-      [mw, 0],
-      [mw * 0.5, f ? -0.007 : -0.0025],
-      [0, f ? -0.008 : -0.0025],
-      [-mw * 0.5, f ? -0.007 : -0.0025],
-    ]) {
-      const z = ez(dx, my + dy);
-      pts.push(P(dx, my + dy, z + (f ? 0.004 : 0.002)), P(dx, my + dy, z - 0.004));
-    }
-    fig.solid('head', f ? 'lips' : 'mouth', pts);
-  }
-  // Facial hair: the skull grown a little and cut to shape.
-  if (o.beard) {
-    const grown = headPoints(s, o.beard === 'pencil' ? 0.0025 : 0.005);
-    const cut = (planes) => fig.solid('head', 'hair', grown, planes);
-    const y = (v) => 1.58 + v * H;
-    if (o.beard === 'goatee') {
-      cut([below(y(0.0)), xBelow(0.026 * H), xAbove(-0.026 * H), zAbove(0.04 * H)]);
-      cut([above(y(0.017)), below(y(0.03)), xBelow(0.03 * H), xAbove(-0.03 * H), zAbove(0.06 * H)]);
-    } else if (o.beard === 'pencil') {
-      cut([above(y(0.02)), below(y(0.026)), xBelow(0.025 * H), xAbove(-0.025 * H), zAbove(0.06 * H)]);
-    }
-  }
-  hair(fig, s);
-  if (o.shades) shades(fig, s);
-  if (o.hat) hat(fig, s);
-}
-
-function shades(fig, s) {
-  const P = HP(s);
-  const f = s.b.fem;
-  const y = 0.087, z = 0.107;
-  const lw = f ? 0.03 : 0.032;
-  for (const sd of [1, -1]) {
-    // A lens: flat-topped (a wayfarer), tilted a little, wrapping back at the outer edge.
-    const pts = [];
-    for (const [dx, dy] of [
-      [0.006, 0.016],
-      [lw, 0.018],
-      [lw + 0.007, 0.012],
-      [lw + 0.002, -0.01],
-      [lw * 0.55, -0.016],
-      [0.009, -0.012],
-      [0.005, 0.002],
-    ]) {
-      const zz = z - dx * 0.25 + dy * 0.12;
-      pts.push(P(sd * dx, y + dy, zz + 0.0035), P(sd * dx, y + dy, zz - 0.003));
-    }
-    fig.solid('head', 'shades', pts);
-    // The arm back to the ear.
-    fig.solid('head', 'shades', [P(sd * (lw + 0.006), y + 0.016, z - 0.012), P(sd * (lw + 0.006), y + 0.008, z - 0.012), P(sd * 0.086, y + 0.016, -0.02), P(sd * 0.087, y + 0.009, -0.02), P(sd * (lw + 0.003), y + 0.016, z - 0.02), P(sd * 0.081, y + 0.016, -0.02)]);
-  }
-  // The bridge.
-  fig.solid('head', 'shades', [P(-0.009, y + 0.016, z + 0.003), P(0.009, y + 0.016, z + 0.003), P(-0.009, y + 0.008, z + 0.003), P(0.009, y + 0.008, z + 0.003), P(0, y + 0.012, z - 0.006)]);
-}
-
-// Hair: shells lofted over the skull. Each style gives a hairline (its latitude, degrees, at each
-// angle round the head; 0 = the front, 90 = the left side) and a thickness; the shell is placed by
-// casting rays from inside the skull, so it sits on the head's own facets.
-
-const HAIR_THETA = [0, 18, 36, 52, 66, 80, 94, 110, 128, 148, 166, 180, -166, -148, -128, -110, -94, -80, -66, -52, -36, -18];
-function table(rows) {
-  return (th) => {
-    const a = Math.abs(th);
-    for (let k = 1; k < rows.length; k++)
-      if (a <= rows[k][0]) {
-        const [a0, v0] = rows[k - 1], [a1, v1] = rows[k];
-        return v0 + ((v1 - v0) * (a - a0)) / (a1 - a0);
-      }
-    return rows[rows.length - 1][1];
-  };
-}
-const HAIRLINE_M = table([
-  [0, 27],
-  [36, 23],
-  [62, 12],
-  [74, -4],
-  [84, -16],
-  [92, -2],
-  [104, -8],
-  [128, -28],
-  [180, -42],
-]);
-const HAIRLINE_F = table([
-  [0, 29],
-  [40, 23],
-  [66, 10],
-  [86, 0],
-  [104, -10],
-  [132, -32],
-  [180, -44],
-]);
-
-function hairShell(s, { line, thick, hang = null, shape = null, lip = 0.004, ts = [0, 0.17, 0.38, 0.62, 0.86], thetas = HAIR_THETA, ridge = 0 }) {
-  const H = headScale(s);
-  const C = [0, 1.58 + 0.1 * H, -0.006 * H];
-  const dirOf = (th, ph) => [Math.cos(ph * DEG) * Math.sin(th * DEG), Math.sin(ph * DEG), Math.cos(ph * DEG) * Math.cos(th * DEG)];
-  const at = (th, ph, d) => {
-    if (hang && ph < 0 && hang(th)) {
-      const e = dirOf(th, 0);
-      const q = add(C, scl(e, rayOut(s.skull, C, e) + d));
-      return [q[0], C[1] + Math.sin(ph * DEG) * 0.13 * H, q[2]];
-    }
-    const e = dirOf(th, ph);
-    return add(C, scl(e, rayOut(s.skull, C, e) + d));
-  };
-  const rings = [thetas.map((th) => at(th, line(th), -lip))];
-  for (const t of ts)
-    rings.push(
-      thetas.map((th, i) => {
-        const ph0 = line(th);
-        const ph = ph0 + (88 - ph0) * t;
-        // Ridges: combed strands running from the hairline to the crown.
-        const q = at(th, ph, thick(th, t, ph) + (t > 0 && t < 0.85 ? ridge * (i % 2) * Math.sin(Math.PI * t) : 0));
-        return shape ? shape(q, th, t, ph) : q;
-      }),
-    );
-  // Close over the crown at a pole (a flat cap would let the skull's top poke through).
-  if (ts[ts.length - 1] > 0.5) {
-    let pole = at(0, 90, thick(0, 1, 90));
-    if (shape) pole = shape(pole, 0, 1, 90);
-    rings.push(thetas.map(() => pole));
-  }
-  return loft(rings);
-}
-
-/** A tapered tube between two points (a ponytail's segment). */
-function tube(a, b2, ra, rb, n = 7) {
-  const d = nrm(sub(b2, a));
-  const u = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
-  const e1 = nrm(cross(d, u)), e2 = cross(d, e1);
-  const pts = [];
-  for (const [c, r] of [
-    [a, ra],
-    [b2, rb],
-  ])
-    for (let i = 0; i < n; i++) {
-      const t = (i / n) * Math.PI * 2;
-      pts.push(add(c, add(scl(e1, Math.cos(t) * r), scl(e2, Math.sin(t) * r * 0.85))));
-    }
-  return pts;
-}
-
-function hair(fig, s) {
-  const { o } = s;
-  const H = headScale(s);
-  const P = HP(s);
-  const style = o.hairStyle;
-  const add1 = (tris) => fig.add('head', 'hair', tris);
-  const bump = (th, w) => Math.exp(-((th / w) ** 2));
-  const ss = (a, b2, t) => {
-    const x = clamp((t - a) / (b2 - a), 0, 1);
-    return x * x * (3 - 2 * x);
-  };
-  if (style === 'long') {
-    // Slicked back and down to the collar, tucked behind the ears (the Hitman).
-    const line = table([
-      [0, 28],
-      [36, 24],
-      [62, 13],
-      [80, 2],
-      [92, -2],
-      [104, -30],
-      [120, -70],
-      [180, -76],
-    ]);
-    add1(hairShell(s, { line, thick: (th, t) => (0.012 + 0.008 * ss(0.1, 0.5, t) + (Math.abs(th) > 110 ? 0.006 * (1 - t) : 0) + 0.006 * bump(Math.abs(th) - 40, 30) * (1 - t)) * (1 - 0.55 * bump(th, 12) * (1 - ss(0.3, 0.7, t))), hang: (th) => Math.abs(th) > 100, ridge: 0.004 }));
-  } else if (style === 'buzz') {
-    const hatted = !!o.hat;
-    add1(hairShell(s, { line: HAIRLINE_M, thick: () => (hatted ? 0.008 : 0.0065), ...(hatted ? { ts: [0, 0.2, 0.38], thetas: [0, 36, 66, 94, 128, 156, 180, -156, -128, -94, -66, -36] } : { ts: [0, 0.13, 0.28, 0.44, 0.6, 0.75, 0.9] }) }));
-  } else if (style === 'crew') {
-    // Short at the sides, a flat top standing up in front.
-    const top = 1.58 + 0.248 * H;
-    add1(hairShell(s, { line: HAIRLINE_M, thick: (th, t) => 0.003 + 0.013 * ss(0.15, 0.4, t) + (t > 0.1 ? 0.009 * hash(Math.round(th) + 7, Math.round(t * 100)) * ss(0.1, 0.4, t) : 0) + 0.012 * bump(th, 36) * ss(0.02, 0.25, t), shape: (q) => (q[1] > top ? [q[0], top, q[2]] : q) }));
-  } else if (style === 'slick') {
-    // Combed back, glossy, a soft wave over the brow.
-    add1(hairShell(s, { line: HAIRLINE_M, thick: (th, t) => (0.005 + 0.014 * ss(0.1, 0.45, t) + 0.02 * bump(th + 14, 36) * Math.sin(Math.PI * clamp(t / 0.6, 0, 1))) * (1 - 0.65 * bump(th - 48, 8) * (1 - ss(0.35, 0.7, t))), ridge: 0.0035 }));
-  } else if (style === 'pomp') {
-    // A high rolled pompadour; the sides swept back; long sideburns.
-    add1(
-      hairShell(s, {
-        line: HAIRLINE_M,
-        thick: (th, t) => 0.006 + 0.012 * ss(0.1, 0.4, t) + 0.05 * bump(th, 42) * Math.max(0, 1 - t / 0.66) ** 0.7,
-        ridge: 0.004,
-        shape: (q, th, t) => add(q, [0, 0.03 * bump(th, 42) * Math.sin(Math.PI * clamp(t / 0.5, 0, 1)) + 0.012 * bump(th, 42) * (t < 0.05 ? 1 : 0), 0.022 * bump(th, 42) * Math.max(0, 1 - t / 0.45)]),
-      }),
-    );
-    for (const sd of [1, -1]) fig.solid('head', 'hair', [P(sd * 0.077, 0.115, 0.024), P(sd * 0.084, 0.115, 0.012), P(sd * 0.078, 0.052, 0.022), P(sd * 0.083, 0.052, 0.01), P(sd * 0.079, 0.115, -0.004), P(sd * 0.079, 0.052, -0.002)]);
-  } else if (style === 'short') {
-    // Short and a little ragged.
-    add1(hairShell(s, { line: HAIRLINE_M, thick: (th, t) => 0.005 + 0.013 * ss(0.1, 0.45, t) + (t > 0.1 ? 0.012 * hash(Math.round(th), Math.round(t * 100)) * ss(0.1, 0.5, t) : 0) + 0.008 * bump(th, 30) * ss(0.0, 0.3, t) }));
-  } else if (style === 'bob') {
-    // The bob: blunt bangs at the brow, straight sides to the jaw, a squared back.
-    const line = table([
-      [0, 4],
-      [44, 3],
-      [54, -8],
-      [58, -58],
-      [180, -58],
-    ]);
-    add1(hairShell(s, { line, thick: (th, t, ph) => 0.016 + (ph < 0 ? 0.01 * clamp(-ph / 58, 0, 1) : 0) + 0.004 * t, hang: (th) => Math.abs(th) > 52, lip: 0.008 }));
-  } else if (style === 'pony' || style === 'ponycap') {
-    // Pulled back tight into a high ponytail, a swept fringe.
-    const roll = style === 'ponycap' ? 0.024 : 0.012;
-    const fringe = style === 'pony' ? (th) => HAIRLINE_F(th) - 17 * bump(th + 22, 26) : HAIRLINE_F;
-    add1(hairShell(s, { line: fringe, thick: (th, t) => 0.006 + 0.01 * ss(0.1, 0.5, t) + roll * bump(th - (style === 'ponycap' ? 0 : -20), 34) * Math.sin(Math.PI * clamp(t / 0.6, 0, 1)) + (style === 'pony' ? 0.006 * bump(th + 22, 26) * (1 - t) : 0), ridge: 0.003 }));
-    const tie = P(0, 0.17, -0.112);
-    const a = add(tie, [0, -0.012 * H, -0.03 * H]);
-    const bb = add(a, [0, -0.09 * H, -0.014 * H]);
-    const c = add(bb, [0, -0.11 * H, 0.012 * H]);
-    fig.solid('head', 'hairTie', tube(add(tie, [0, 0.006, 0.01]), add(tie, [0, -0.004, -0.012]), 0.017 * H, 0.016 * H, 8));
-    fig.solid('head', 'hair', tube(tie, a, 0.017 * H, 0.032 * H));
-    fig.solid('head', 'hair', tube(a, bb, 0.032 * H, 0.028 * H));
-    fig.solid('head', 'hair', tube(bb, c, 0.028 * H, 0.006 * H));
-  }
-}
-
-function hat(fig, s) {
-  const { o } = s;
-  const H = headScale(s);
-  const P = HP(s);
-  if (o.hat === 'fedora') {
-    // A snap-brim fedora: the brim dips at the front, curls up at the sides; a pinched crown; a band.
-    const by = 0.158;
-    const inner = [], outer = [], outerLo = [];
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      const sa = Math.sin(a), ca = Math.cos(a);
-      const y = by + 0.014 * sa * sa - (ca > 0 ? 0.02 * ca * ca : 0.004 * ca * ca);
-      outer.push(P(0.148 * sa, y, 0.162 * ca - 0.008));
-      outerLo.push(P(0.148 * sa, y - 0.008, 0.162 * ca - 0.008));
-      inner.push(P(0.086 * sa, by + 0.004, 0.106 * ca - 0.012));
-    }
-    fig.add('head', 'hat', loft([outerLo, outer, inner]));
-    const crown = [];
-    for (const [y, rx, rz] of [
-      [by, 0.088, 0.108],
-      [by + 0.055, 0.084, 0.103],
-      [by + 0.092, 0.068, 0.088],
-    ])
-      crown.push(...ring(P(0, y, -0.014), rx * H, rz * H, -rz * H, 12, 2.2, 0));
-    crown.push(P(0, by + 0.104, -0.02));
-    // The pinch at the front and the crease along the top.
-    fig.solid('head', 'hat', crown, [keepSide(P(-0.1, by + 0.075, 0.08), P(0.1, by + 0.075, 0.08), [0, 0.55, -1], P(0, by, 0)), keepSide(P(0.05, by + 0.1, 0.1), P(0.05, by + 0.1, -0.1), [1, -0.35, 0], P(0, by, 0)), keepSide(P(-0.05, by + 0.1, 0.1), P(-0.05, by + 0.1, -0.1), [1, 0.35, 0], P(0, by, 0))]);
-    fig.solid('head', 'hatBand', [...ring(P(0, by + 0.002, -0.014), 0.091 * H, 0.111 * H, -0.111 * H, 10, 2.2, 0), ...ring(P(0, by + 0.028, -0.014), 0.09 * H, 0.11 * H, -0.11 * H, 10, 2.2, 0)]);
-  } else if (o.hat === 'waitress') {
-    // A little white cap perched on top.
-    const pts = [];
-    for (const [y, rx, rz] of [
-      [0.214, 0.066, 0.026],
-      [0.25, 0.07, 0.016],
-    ])
-      pts.push(...ring(P(0, y, 0.03), rx * H, rz * H, -rz * H, 8, 2.5, 0));
-    fig.solid('head', 'cap', pts.map((p) => rot(p, 'x', -24, P(0, 0.214, 0.03))));
+    for (let i = -7; i < 7; i++)
+      for (let j = y0; j < y0 + 6; j++)
+        for (let k = -8; k < 7; k++) {
+          const p = [C(i), C(j), C(k)];
+          if (!inRound(p, [-6.5, y0, -7.5], [6.5, y0 + 6, 5.5], [2.4, 1.6, 2.4])) continue;
+          if (j === y0 + 5 && Math.abs(p[0]) < 1.6) continue;
+          set(i, j, k, j <= y0 + 1 ? 'hatBand' : 'hat');
+        }
+  } else if (s.o.hat === 'cap') {
+    for (let i = -5; i < 5; i++) for (let j = Y.crown; j < Y.crown + 3; j++) for (let k = -4; k < 3; k++) if (inRound([C(i), C(j), C(k)], [-5, Y.crown, -4], [5, Y.crown + 3, 3], [1.2, 0.8, 1.2])) set(i, j, k, j === Y.crown ? 'capBand' : 'cap');
   }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Outfits: the ten from art.ts (names and colours), as characters.
+// Outfits: the ten from art.ts, as pulp-crime characters.
 
-const COMMON = { belt: true, crease: false, collar: null, tie: null, jacket: false, sleeves: 'long', legs: 'trousers' };
+const COMMON = { jacket: false, tie: null, collar: 'shirt', sleeves: 'long', legs: 'trousers', belt: true, shoeStyle: 'oxford' };
 const OUTFITS = [
-  {
-    id: 'hitman',
-    name: 'The Hitman',
-    build: 'slim',
-    skin: 0xe2b38e,
-    hair: 0x1a1512,
-    jacket: 0x17171b,
-    shirt: 0xf4f1ea,
-    tie: 0x0c0c0e,
-    pants: 0x17171b,
-    shoes: 0x0a0a0a,
-    o: { hairStyle: 'long', jacket: true, tie: 'long', tieW: 0.022, collar: 'shirt', crease: true, flaps: true, vTop: 0.05, lapelW: 0.046 },
-  },
-  {
-    id: 'partner',
-    name: 'The Partner',
-    build: 'broad',
-    skin: 0x6b4630,
-    hair: 0x121010,
-    jacket: 0x17171b,
-    shirt: 0xf4f1ea,
-    tie: 0xb3202a,
-    pants: 0x17171b,
-    shoes: 0x0a0a0a,
-    o: { hairStyle: 'buzz', beard: 'goatee', jacket: true, tie: 'long', tieW: 0.026, collar: 'shirt', crease: true, flaps: true, lapelW: 0.056 },
-  },
-  {
-    id: 'bride',
-    name: 'The Bride',
-    build: 'athlete',
-    skin: 0xf0c9a4,
-    hair: 0xe8c65a,
-    shirt: 0xf2c418,
-    pants: 0xf2c418,
-    shoes: 0xf2c418,
-    accent: 0x121212,
-    o: { hairStyle: 'pony', collar: 'track', collarMat: 'shirt', legs: 'track', sleeveStripe: true, legStripe: true, sideStripe: true, shoeStyle: 'sneaker', shoeStripes: true, belt: false, untucked: 0.95, sheen: true },
-  },
-  {
-    id: 'wife',
-    name: 'The Wife',
-    build: 'female',
-    skin: 0xf3d5bd,
-    hair: 0x0d0b0b,
-    shirt: 0xf7f5f0,
-    pants: 0x121214,
-    shoes: 0x121214,
-    lips: 0xc2182b,
-    o: { hairStyle: 'bob', collar: 'open', neckV: 1.385, legs: 'cigarette', shoeStyle: 'flat', belt: true, beltColor: 0x121214 },
-  },
-  {
-    id: 'bowler',
-    name: 'The Bowler',
-    build: 'heavy',
-    skin: 0xd7a179,
-    hair: 0x5a3a1e,
-    shirt: 0xd63a2f,
-    pants: 0x2d4e86,
-    shoes: 0x2a1a10,
-    accent: 0xf4efe2,
-    o: { hairStyle: 'pomp', sleeves: 'short', sleeveTrim: 'panel', collar: 'camp', neckV: 1.4, panels: true, untucked: 0.93, belt: false, buttonsDown: 'panel' },
-  },
-  {
-    id: 'crooner',
-    name: 'The Crooner',
-    build: 'slim',
-    skin: 0xc48a62,
-    hair: 0x241810,
-    jacket: 0x8fc2ea,
-    shirt: 0xffffff,
-    tie: 0x111111,
-    pants: 0x8fc2ea,
-    shoes: 0x1a1a1a,
-    o: { hairStyle: 'slick', beard: 'pencil', jacket: true, tie: 'bow', collar: 'shirt', ruffles: true, crease: true, lapelMat: 'satin', vTop: 0.058, button: 1.08, lapelW: 0.05 },
-  },
-  {
-    id: 'boxer',
-    name: 'The Boxer',
-    build: 'broad',
-    skin: 0xe8b894,
-    hair: 0xd9b25a,
-    jacket: 0x6b3a1f,
-    shirt: 0xf1eee6,
-    pants: 0x3a5a8c,
-    shoes: 0x2a1a10,
-    o: { hairStyle: 'crew', jacket: true, leather: true, openJacket: true, collar: 'crew', vTop: 0.075, hemY: 0.93, lapelW: 0.068, handWraps: true, jacketGrow: 0.014, shoeStyle: 'boot' },
-  },
-  {
-    id: 'kahuna',
-    name: 'The Kahuna',
-    build: 'heavy',
-    skin: 0xb8784e,
-    hair: 0x2a1c12,
-    shirt: 0x1fa3a0,
-    pants: 0xcbb68a,
-    shoes: 0x7a4a26,
-    accent: 0xff5c8a,
-    o: { hairStyle: 'short', sleeves: 'short', legs: 'shorts', collar: 'camp', neckV: 1.385, shades: true, untucked: 0.9, flowers: true, belt: false, chain: true, shoeStyle: 'loafer' },
-  },
-  {
-    id: 'waitress',
-    name: 'The Waitress',
-    build: 'female',
-    skin: 0xf0c8a8,
-    hair: 0xb8421e,
-    shirt: 0xf49ac1,
-    pants: 0xf0c8a8,
-    shoes: 0xf7f5f0,
-    accent: 0xffffff,
-    lips: 0xd01c3a,
-    o: { hairStyle: 'ponycap', shirtMat: 'dress', legs: 'bare', skirt: 0.6, apron: true, sleeves: 'puff', sleeveTrim: 'apron', collar: 'peter', collarMat: 'apron', hat: 'waitress', socks: true, shoeStyle: 'sneaker', belt: false, nameTag: true, buttonsDown: 'apron' },
-  },
-  {
-    id: 'boss',
-    name: 'The Boss',
-    build: 'heavy',
-    skin: 0x8a5a3c,
-    hair: 0x2b2b30,
-    jacket: 0x3a3a44,
-    shirt: 0x1c1c22,
-    tie: 0xd9b030,
-    pants: 0x3a3a44,
-    shoes: 0x0a0a0a,
-    accent: 0x8a8a96,
-    o: { hairStyle: 'buzz', hat: 'fedora', shades: true, jacket: true, tie: 'long', tieW: 0.03, collar: 'shirt', pinstripe: true, crease: true, pocketSquare: true, tieBar: true, ring: true, watch: true, cufflinks: true, lapelW: 0.062, buttons: 2, button: 1.12 },
-  },
+  { id: 'hitman', name: 'The Hitman', build: 'slim', skin: 0xe2b38e, hair: 0x241c17, jacket: 0x26262c, shirt: 0xf4f1ea, tie: 0x141416, pants: 0x26262c, shoes: 0x141414, o: { hairStyle: 'long', jacket: true, tie: 'thin', beard: 'stubble' } },
+  { id: 'partner', name: 'The Partner', build: 'broad', skin: 0x6b4630, hair: 0x1a1616, jacket: 0x26262c, shirt: 0xf4f1ea, tie: 0xb3202a, pants: 0x26262c, shoes: 0x141414, o: { hairStyle: 'buzz', beard: 'goatee', jacket: true, tie: 'long' } },
+  { id: 'bride', name: 'The Bride', build: 'athlete', skin: 0xf0c9a4, hair: 0xe8c65a, shirt: 0xf2c418, pants: 0xf2c418, shoes: 0xf2c418, accent: 0x161616, lips: 0xd6606a, o: { hairStyle: 'pony', collar: 'track', stripes: true, shoeStyle: 'sneaker', belt: false, lashes: true, zip: true } },
+  { id: 'wife', name: 'The Wife', build: 'female', skin: 0xf3d5bd, hair: 0x141111, shirt: 0xf7f5f0, pants: 0x1c1c20, shoes: 0x1c1c20, lips: 0xc2182b, o: { hairStyle: 'bob', collar: 'open', shoeStyle: 'flat', lashes: true, blush: true, cuffs: true } },
+  { id: 'bowler', name: 'The Bowler', build: 'heavy', skin: 0xd7a179, hair: 0x5a3a1e, shirt: 0xd63a2f, pants: 0x2d4e86, shoes: 0x2a1a10, accent: 0xf4efe2, o: { hairStyle: 'pomp', sleeves: 'short', collar: 'camp', panels: true, belt: false } },
+  { id: 'crooner', name: 'The Crooner', build: 'slim', skin: 0xc48a62, hair: 0x2a1c12, jacket: 0x8fc2ea, shirt: 0xffffff, tie: 0x161616, pants: 0x8fc2ea, shoes: 0x1a1a1a, o: { hairStyle: 'slick', beard: 'pencil', jacket: true, tie: 'bow', ruffles: true, lapels: 'satin' } },
+  { id: 'boxer', name: 'The Boxer', build: 'broad', skin: 0xe8b894, hair: 0xd9b25a, jacket: 0x6b3a1f, shirt: 0xf1eee6, pants: 0x3a5a8c, shoes: 0x2a1a10, o: { hairStyle: 'crew', jacket: true, open: true, collar: 'crew', handWraps: true, shoeStyle: 'boot', leather: true } },
+  { id: 'kahuna', name: 'The Kahuna', build: 'heavy', skin: 0xb8784e, hair: 0x2a1c12, shirt: 0x1fa3a0, pants: 0xcbb68a, shoes: 0x7a4a26, accent: 0xff5c8a, o: { hairStyle: 'short', sleeves: 'short', legs: 'shorts', collar: 'camp', shades: true, flowers: true, belt: false, chain: true, shoeStyle: 'loafer' } },
+  { id: 'waitress', name: 'The Waitress', build: 'female', skin: 0xf0c8a8, hair: 0xb8421e, shirt: 0xf49ac1, pants: 0xf0c8a8, shoes: 0xf7f5f0, accent: 0xffffff, lips: 0xd01c3a, o: { hairStyle: 'ponycap', hat: 'cap', legs: 'skirt', apron: true, sleeves: 'short', collar: 'peter', socks: true, shoeStyle: 'sneaker', belt: false, lashes: true, blush: true } },
+  { id: 'boss', name: 'The Boss', build: 'heavy', skin: 0x8a5a3c, hair: 0x2b2b30, jacket: 0x44444f, shirt: 0x1c1c22, tie: 0xd9b030, pants: 0x44444f, shoes: 0x161616, accent: 0x8a8a96, o: { hairStyle: 'buzz', hat: 'fedora', shades: true, jacket: true, tie: 'long', pinstripe: true, pocketSquare: true, ring: true, watch: true } },
 ];
 
-/** A fighter's materials, from its outfit's colours. Only the ones its parts use are written. */
-function materials(fig, d) {
-  const o = d.o;
-  const glossy = ['slick', 'long', 'pomp'].includes(o.hairStyle);
-  fig.mat('skin', d.skin, 0.6);
-  fig.mat('hair', d.hair, glossy ? 0.32 : 0.62);
-  fig.mat('brows', shade(d.hair, d.hair > 0x906000 ? 0.62 : 0.9), 0.6);
-  fig.mat('eyes', 0x17100e, 0.25);
-  fig.mat('whites', 0xf1ece4, 0.35);
-  fig.mat('mouth', shade(d.skin, 0.68), 0.5);
-  fig.mat('lips', d.lips ?? shade(d.skin, 0.72), 0.35);
-  fig.mat('shades', 0x0b0b0e, 0.1, 0.35);
-  fig.mat('gold', 0xd9b030, 0.3, 1);
-  fig.mat('glass', 0xe8f0f2, 0.08, 0.2);
-  fig.mat('button', 0x101012, 0.35);
-  if (o.flowers) {
-    fig.textures.push(hawaiian(d.shirt, d.accent, 0xffe066, shade(d.shirt, 0.55)));
-    fig.mat('shirt', 0xffffff, 0.7, 0, { tex: fig.textures.length - 1, uvScale: 0.26 });
-  } else fig.mat('shirt', d.shirt, o.sheen ? 0.5 : 0.8);
-  if (o.pinstripe) {
-    fig.textures.push(pinstripe(d.jacket, d.accent, 8, 0.09));
-    fig.mat('jacket', 0xffffff, 0.85, 0, { tex: fig.textures.length - 1, uvScale: 0.26 });
-    fig.mat('pants', 0xffffff, 0.85, 0, { tex: fig.textures.length - 1, uvScale: 0.26 });
-  } else {
-    if (d.jacket) fig.mat('jacket', d.jacket, o.leather ? 0.42 : 0.85);
-    if (d.jacket) fig.mat('lapel', d.jacket, o.leather ? 0.35 : 0.55);
-    fig.mat('pants', d.pants, o.legs === 'track' ? 0.5 : 0.85);
-  }
-  fig.mat('satin', 0x131316, 0.28);
-  fig.mat('tie', d.tie ?? 0x111111, 0.4);
-  const shoe = o.shoeStyle ?? 'oxford';
-  fig.mat('shoes', d.shoes, shoe === 'sneaker' ? 0.7 : shoe === 'loafer' || shoe === 'boot' ? 0.5 : 0.25);
-  fig.mat('sole', shoe === 'sneaker' ? 0xf4f1ea : 0x16110e, 0.8);
-  fig.mat('stripe', d.accent ?? 0x121212, 0.5);
-  fig.mat('panel', d.accent ?? 0xf4efe2, 0.8);
-  fig.mat('belt', o.beltColor ?? 0x2a1a12, 0.45);
-  fig.mat('buckle', 0xc9c9cf, 0.25, 1);
-  fig.mat('dress', d.shirt, 0.75);
-  fig.mat('apron', 0xffffff, 0.8);
-  fig.mat('socks', 0xffffff, 0.9);
-  fig.mat('cap', 0xffffff, 0.8);
-  fig.mat('hairTie', o.hairStyle === 'ponycap' ? 0xffffff : 0x121212, 0.6);
-  fig.mat('hat', d.hair, 0.8);
-  fig.mat('hatBand', 0x111114, 0.5);
-  fig.mat('square', 0xd9b030, 0.45);
-  fig.mat('wrap', 0xf4f1ea, 0.9);
+/** An sRGB colour scaled in brightness. */
+const shade = (v, k) => {
+  const c = [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((x) => Math.max(0, Math.min(255, Math.round(x * k))));
+  return (c[0] << 16) | (c[1] << 8) | c[2];
+};
+/** Two sRGB colours mixed. */
+const mix = (a, b, t) => {
+  const c = [16, 8, 0].map((sh) => Math.round(((a >> sh) & 255) * (1 - t) + ((b >> sh) & 255) * t));
+  return (c[0] << 16) | (c[1] << 8) | c[2];
+};
+
+function palette(d, o) {
+  const P = new Palette();
+  const jacket = d.jacket ?? d.shirt;
+  const cloth = o.leather ? { rough: 0.42, vary: 0.07 } : { rough: 0.85, vary: 0.05 };
+  P.add('skin', d.skin, { rough: 0.62, vary: 0.028 });
+  P.add('skinShade', shade(d.skin, 0.8), { rough: 0.62, vary: 0.02 });
+  P.add('skinCrease', shade(d.skin, 0.8), { rough: 0.62, vary: 0 });
+  P.add('blush', mix(d.skin, 0xe0607a, 0.3), { rough: 0.62, vary: 0 });
+  P.add('wrap', 0xf4f1ea, { rough: 0.9, vary: 0.04 });
+  P.add('wrapCrease', 0xc8c0ae, { rough: 0.9, vary: 0 });
+  P.add('stubble', mix(d.skin, d.hair, 0.28), { rough: 0.7, vary: 0.04 });
+  P.add('hair', d.hair, { rough: ['slick', 'long', 'pomp'].includes(o.hairStyle) ? 0.32 : 0.7, vary: 0.09 });
+  P.add('hairDark', shade(d.hair, 0.7), { rough: 0.5, vary: 0.04 });
+  P.add('beard', shade(d.hair, 1.1), { rough: 0.7, vary: 0.07 });
+  P.add('brow', shade(d.hair, d.hair > 0x906000 ? 0.62 : 0.9), { rough: 0.7, vary: 0.03 });
+  P.add('lash', 0x141010, { rough: 0.5, vary: 0 });
+  P.add('eye', 0x1c120e, { rough: 0.15, vary: 0 });
+  P.add('white', 0xf2eee6, { rough: 0.3, vary: 0 });
+  P.add('mouth', shade(d.skin, 0.6), { rough: 0.5, vary: 0 });
+  P.add('lips', d.lips ?? shade(d.skin, 0.7), { rough: 0.3, vary: 0 });
+  P.add('glass', 0x101014, { rough: 0.06, metal: 0.4, vary: 0 });
+  P.add('frame', 0x2a2a30, { rough: 0.3, metal: 0.7, vary: 0 });
+  P.add('gold', 0xe0b83a, { rough: 0.22, metal: 1, vary: 0.06 });
+  P.add('button', 0x121214, { rough: 0.3, vary: 0 });
+  P.add('jacket', jacket, cloth);
+  P.add('sleeve', jacket, cloth);
+  P.add('jacketDark', shade(jacket, 0.72), { ...cloth, vary: 0.03 });
+  P.add('lapel', o.lapels === 'satin' ? 0x161618 : shade(jacket, 0.84), { rough: o.lapels === 'satin' ? 0.22 : 0.6, vary: 0.03 });
+  P.add('stripe', o.pinstripe ? shade(jacket, 1.45) : d.accent ?? 0x8a8a96, { rough: 0.8, vary: 0.03 });
+  P.add('shirt', d.shirt, { rough: 0.8, vary: o.flowers ? 0.05 : 0.035 });
+  P.add('shirtShade', shade(d.shirt, 0.84), { rough: 0.8, vary: 0.02 });
+  P.add('tie', d.tie ?? 0x111111, { rough: 0.35, vary: 0.03 });
+  P.add('tieKnot', shade(d.tie ?? 0x111111, 0.8), { rough: 0.35, vary: 0 });
+  P.add('pants', d.pants, { rough: 0.85, vary: 0.05 });
+  P.add('pantsShade', shade(d.pants, 0.8), { rough: 0.85, vary: 0.03 });
+  P.add('shoes', d.shoes, { rough: o.shoeStyle === 'sneaker' ? 0.7 : 0.28, vary: 0.04 });
+  P.add('sole', o.shoeStyle === 'sneaker' ? 0xf4f1ea : 0x1a130f, { rough: 0.8, vary: 0.03 });
+  P.add('lace', o.shoeStyle === 'sneaker' ? 0x161616 : 0xf4f1ea, { rough: 0.8, vary: 0 });
+  P.add('belt', 0x2e1d14, { rough: 0.4, vary: 0.04 });
+  P.add('buckle', 0xd0d0d6, { rough: 0.2, metal: 1, vary: 0 });
+  P.add('accent', d.accent ?? 0xf4efe2, { rough: 0.8, vary: 0.035 });
+  P.add('zip', shade(d.shirt, 0.72), { rough: 0.4, metal: 0.3, vary: 0 });
+  P.add('flower', 0xff5c8a, { rough: 0.75, vary: 0.05 });
+  P.add('flowerMid', 0xffe066, { rough: 0.75, vary: 0 });
+  P.add('leaf', shade(d.shirt, 0.55), { rough: 0.75, vary: 0.05 });
+  P.add('apron', 0xffffff, { rough: 0.85, vary: 0.03 });
+  P.add('socks', 0xffffff, { rough: 0.9, vary: 0.03 });
+  P.add('cap', 0xffffff, { rough: 0.8, vary: 0.02 });
+  P.add('capBand', d.shirt, { rough: 0.8, vary: 0 });
+  P.add('hairTie', o.hairStyle === 'ponycap' ? 0xffffff : 0x161616, { rough: 0.6, vary: 0 });
+  P.add('hat', d.hair, { rough: 0.85, vary: 0.05 });
+  P.add('hatBand', 0x141417, { rough: 0.5, vary: 0 });
+  P.add('square', 0xe0b83a, { rough: 0.45, vary: 0 });
+  return P;
 }
+
+/** The outfit: recolour the body's parts by region, and add what's worn over it. */
+function dress(vox, s) {
+  const { b, o, J } = s;
+  const L = limbs(b);
+  const suit = o.jacket;
+  const top = suit ? 'jacket' : 'shirt';
+  const bz = F + b.belly;
+  // Arms: sleeves (the jacket's, a shirt cuff at the wrist), or short sleeves (a cuff) and bare arms.
+  for (const side of ['L', 'R']) {
+    vox.recolour(`upperArm${side}`, (i, j) => (o.sleeves === 'short' && j < Y.elbow + 2 ? 'skin' : top));
+    vox.recolour(`lowerArm${side}`, (i, j) => (o.sleeves === 'short' ? 'skin' : (suit || o.cuffs) && j === Math.floor(Y.wrist) ? 'shirt' : top));
+    if (o.sleeves === 'short') {
+      const m = side === 'L' ? 1 : -1;
+      const [x0, x1] = m > 0 ? [b.sh - 1, b.sh + b.arm + 1] : [-b.sh - b.arm - 1, -b.sh + 1];
+      const a2 = b.arm / 2;
+      fill(vox, `upperArm${side}`, [x0 + (m > 0 ? 1 : 0), Y.elbow + 2, -a2 - 1], [x1 - (m > 0 ? 0 : 1), Y.elbow + 4, a2 + 1], o.panels ? 'accent' : o.apron ? 'shirt' : 'shirt');
+    }
+  }
+  // Chest and belly: the jacket (or shirt). A suit's open in a V from the collar to its button,
+  // the shirt and tie inside, lapels a voxel proud beside it.
+  const button = suit ? (o.open ? Y.pelvis : Y.spine + 1) : 0;
+  const vHalf = (j) => (o.open ? 2 + ((j - button) / (Y.chestTop - button)) * 1.5 : 0.3 + ((j - button) / (Y.chestTop - button)) * 2.8);
+  if (suit) {
+    for (const part of ['chest', 'spine'])
+      vox.recolour(part, (i, j, k) => {
+        const front = k >= (part === 'spine' ? bz : F);
+        if (!front || j < button) return top;
+        const x = Math.abs(C(i));
+        const v = vHalf(j);
+        if (x < v) return 'shirt';
+        if (o.open && x < v + 1) return 'jacketDark';
+        return top;
+      });
+    if (!o.open)
+      for (let j = button + 1; j < Y.chestTop; j++) {
+        const v = vHalf(j);
+        for (const m of [1, -1]) for (let x = Math.ceil(v - 0.5); x < v + 1.5; x++) vox.set(j < Y.chest ? 'spine' : 'chest', m > 0 ? x : -x - 1, j, (j < Y.chest ? bz : F) + 1, 'lapel');
+      }
+  } else vox.recolour('chest', () => 'shirt');
+  // Ties: a long one down the middle, a knot under the collar; or a bow tie.
+  if (o.tie === 'long' || o.tie === 'thin') {
+    for (let j = Y.spine; j < Y.chestTop - 1; j++) {
+      const part = j < Y.chest ? 'spine' : 'chest';
+      const k = (part === 'spine' ? bz : F) + 1;
+      const cols = o.tie === 'thin' || j === Y.spine ? [j === Y.spine ? -1 : -1, 0].slice(o.tie === 'thin' || j === Y.spine ? 1 : 0) : [-1, 0];
+      for (const i of cols) vox.set(part, i, j, k, 'tie');
+    }
+    for (const i of [-1, 0]) vox.set('chest', i, Y.chestTop - 1, F + 1, 'tieKnot');
+  } else if (o.tie === 'bow') {
+    for (const [i, j] of [[-3, 29], [-2, 29], [-1, 29], [0, 29], [1, 29], [2, 29], [-3, 30], [2, 30], [-3, 28], [2, 28]]) vox.set('chest', i, j, F + 1, i === -1 || i === 0 ? 'tieKnot' : 'tie');
+  }
+  // Ruffles down the shirt front.
+  if (o.ruffles) for (let j = Y.chest; j < 28; j++) vox.set('chest', j % 2 ? -1 : 0, j, F + 1, 'shirt');
+  // Buttons.
+  if (suit && !o.open) for (const i of [-1, 0]) vox.set('spine', i, Y.spine, bz + 1, 'button');
+  if (!suit && (o.collar === 'camp' || o.collar === 'open')) for (let j = Y.spine + 1; j < Y.chestTop - 3; j += 2) vox.set(j < Y.chest ? 'spine' : 'chest', -1, j, (j < Y.chest ? bz : F) + 1, o.panels ? 'button' : 'shirtShade');
+  // Collars: a band round the neck (on the chest, round the neck's cells), points down the front.
+  const collar = o.collar === 'peter' ? 'apron' : o.collar === 'camp' && o.panels ? 'accent' : 'shirt';
+  const ring = (c) => {
+    for (let i = -3; i < 3; i++) for (let k = -4; k < 2; k++) if (!(i >= -2 && i < 2 && k >= -3 && k < 1)) vox.set('chest', i, Y.chestTop, k, c);
+  };
+  if (['shirt', 'camp', 'open', 'peter'].includes(o.collar)) {
+    ring(collar);
+    for (const m of [1, -1]) {
+      const a = m > 0 ? 0 : -1;
+      vox.set('chest', a + m, Y.chestTop - 1, F + 2, collar);
+      vox.set('chest', a + 2 * m, Y.chestTop - 1, F + 2, collar);
+      vox.set('chest', a + 2 * m, Y.chestTop - 2, F + 2, collar);
+      if (o.collar !== 'shirt') vox.set('chest', a + 3 * m, Y.chestTop - 1, F + 2, collar);
+    }
+    if (o.collar === 'open' || o.collar === 'camp') for (const i of [-1, 0]) for (let j = Y.chestTop - 3; j < Y.chestTop; j++) vox.set('chest', i, j, F, 'skin');
+  } else if (o.collar === 'crew' || o.collar === 'track') ring(o.collar === 'track' ? 'shirt' : 'shirt');
+  if (o.collar === 'track') for (let i = -3; i < 3; i++) for (let k = -4; k < 2; k++) if (!(i >= -2 && i < 2 && k >= -3 && k < 1)) vox.set('chest', i, Y.chestTop + 1, k, 'shirt');
+  // The Bride's track suit: a zip down the front, black stripes down the sleeves, the sides and the legs.
+  if (o.zip) for (let j = Y.spine; j < Y.chestTop; j++) vox.set(j < Y.chest ? 'spine' : 'chest', -1, j, j < Y.chest ? bz : F, 'zip');
+  if (o.stripes) {
+    for (const side of ['L', 'R']) {
+      const m = side === 'L' ? 1 : -1;
+      const armOut = m > 0 ? b.sh + b.arm - 1 : -b.sh - b.arm;
+      const foreOut = m > 0 ? Math.floor(L.ax) + 1 : -Math.floor(L.ax) - 2;
+      vox.recolour(`upperArm${side}`, (i, j, k, c) => (i === armOut && c !== 'skin' ? 'stripe' : undefined));
+      vox.recolour(`lowerArm${side}`, (i, j, k, c) => (i === foreOut && c !== 'skin' ? 'stripe' : undefined));
+      const legOut = m > 0 ? L.lx1 - 1 : -L.lx1;
+      for (const part of [`upperLeg${side}`, `lowerLeg${side}`]) vox.recolour(part, (i) => (i === legOut ? 'stripe' : undefined));
+      vox.recolour(`foot${side}`, (i, j, k) => (j > 0 && j < 3 && k > L.lz0 && k < L.lz1 + 1 && (i === legOut || (k + j) % 3 === 0 && i === legOut) ? 'stripe' : undefined));
+    }
+    for (const part of ['chest', 'spine']) {
+      const w = part === 'chest' ? b.sh : b.waist;
+      vox.recolour(part, (i, j, k) => (C(k) > -1 && C(k) < 1 && (i === w - 1 || i === -w) ? 'stripe' : undefined));
+    }
+  }
+  // The bowling shirt's cream panels down the front.
+  if (o.panels) for (const part of ['chest', 'spine']) vox.recolour(part, (i, j, k, c) => (c === 'shirt' && k >= (part === 'spine' ? bz : F) && Math.abs(C(i)) > 2 && Math.abs(C(i)) < 5 ? 'accent' : undefined));
+  // The Hawaiian print: flowers (a yellow heart, pink petals) and leaves scattered over the shirt.
+  if (o.flowers) {
+    const hash = (i, j, k) => {
+      let h = Math.imul(i * 73856093 ^ j * 19349663 ^ k * 83492791, 0x9e3779b1);
+      h ^= h >>> 15;
+      return ((h >>> 0) % 1000) / 1000;
+    };
+    for (const part of ['chest', 'spine', 'upperArmL', 'upperArmR', 'hips'])
+      vox.recolour(part, (i, j, k, c) => {
+        if (c !== 'shirt') return;
+        const gi = Math.floor((i + 40) / 5), gj = Math.floor(j / 5), gk = Math.floor((k + 40) / 5);
+        const seed = hash(gi, gj, gk);
+        const ci = gi * 5 - 40 + 1 + Math.floor(seed * 3), cj = gj * 5 + 1 + Math.floor(hash(gj, gi, gk) * 3), ck = gk * 5 - 40 + 1 + Math.floor(hash(gk, gj, gi) * 3);
+        const dd = Math.abs(i - ci) + Math.abs(j - cj) + Math.abs(k - ck);
+        if (seed < 0.62) return dd === 0 ? 'flowerMid' : dd === 1 ? 'flower' : undefined;
+        if (seed < 0.9 && dd <= 1 && hash(i, j, k) < 0.8) return 'leaf';
+      });
+  }
+  // Pinstripes: every third column a little lighter on the Boss's suit (not on a part's sides).
+  if (o.pinstripe)
+    for (const part of ['chest', 'spine', 'hips', 'upperArmL', 'upperArmR', 'lowerArmL', 'lowerArmR', 'upperLegL', 'upperLegR', 'lowerLegL', 'lowerLegR']) {
+      const cells = vox.parts.get(part);
+      vox.recolour(part, (i, j, k, c) => ((c === 'jacket' || c === 'pants' || c === 'sleeve') && ((i % 3) + 3) % 3 === 1 && cells.has(cellKey(i - 1, j, k)) && cells.has(cellKey(i + 1, j, k)) ? 'stripe' : undefined));
+    }
+  // The waist: a belt with a buckle, or a suit jacket's skirt over the seat (split in front).
+  if (suit && !o.open) {
+    vox.recolour('hips', (i, j, k) => (j >= Y.pelvis + 2 && !(k >= 3 && Math.abs(C(i)) < 1 + (Y.belt - j) * 0.6) ? 'jacket' : undefined));
+  } else if (o.belt || o.open) {
+    vox.recolour('hips', (i, j) => (j === Y.belt ? 'belt' : undefined));
+    for (const i of [-1, 0]) vox.set('hips', i, Y.belt, 4, 'buckle');
+  }
+  if (!suit && !o.belt && o.legs !== 'skirt') vox.recolour('hips', (i, j) => (j === Y.belt ? top : undefined));
+  // Legs: trousers (a crease down the front), shorts to the knee, or bare under a skirt.
+  for (const side of ['L', 'R']) {
+    if (o.legs === 'shorts') vox.recolour(`lowerLeg${side}`, (i, j) => (j >= Y.knee - 1 ? 'pants' : 'skin'));
+    if (o.legs === 'skirt') {
+      vox.recolour(`upperLeg${side}`, () => 'skin');
+      vox.recolour(`lowerLeg${side}`, (i, j) => (o.socks && j < Y.ankle + 2 ? 'socks' : 'skin'));
+    }
+    if (o.legs === 'trousers' && !o.stripes && !o.pinstripe) {
+      const mid = side === 'L' ? Math.floor(L.lx) : -Math.floor(L.lx) - 1;
+      for (const part of [`upperLeg${side}`, `lowerLeg${side}`]) vox.recolour(part, (i, j, k, c) => (i === mid && k === L.lz1 - 1 && c === 'pants' ? 'pantsShade' : undefined));
+    }
+  }
+  if (o.legs === 'skirt') {
+    // A flared skirt from the waist to above the knee, on the hips.
+    for (let i = -11; i < 11; i++)
+      for (let j = 11; j < Y.spine; j++)
+        for (let k = -8; k < 9; k++) {
+          const t = (Y.spine - j) / 8;
+          if (Math.abs(C(i)) < b.hip + 0.6 + t * 2 && Math.abs(C(k)) < 4.2 + t * 1.8) vox.set('hips', i, j, k, 'shirt');
+        }
+  }
+  if (o.apron) {
+    // A white apron on the skirt, a bib on the chest, a frill along its hem.
+    for (let j = 11; j < Y.spine; j++) {
+      const t = (Y.spine - j) / 8;
+      const k = Math.floor(4.2 + t * 1.8);
+      for (let i = -4; i < 4; i++) vox.set('hips', i, j, k, 'apron');
+    }
+    for (let i = -3; i < 3; i++) for (let j = Y.chest; j < Y.chest + 5; j++) vox.set('chest', i, j, F + b.bust + 1, 'apron');
+    for (const i of [-4, 3]) for (let j = Y.chest + 4; j < Y.chestTop; j++) vox.set('chest', i, j, F + 1, 'apron');
+  }
+  // Jewellery, pocket squares.
+  if (o.chain) for (let i = -3; i < 3; i++) vox.set('chest', i, Y.chestTop - 2 - (Math.abs(C(i)) < 1.5 ? 1 : 0), F + 1, 'gold');
+  if (o.pocketSquare) for (const i of [3, 4]) vox.set('chest', i, Y.chest + 5, F + 1, 'square');
+  if (o.ring) vox.set('handR', -Math.floor(L.ax) - 3, Math.floor(Y.wrist) - 3, 2, 'gold');
+  if (o.watch) vox.recolour('lowerArmL', (i, j) => (j === Math.floor(Y.wrist) + 1 ? 'gold' : undefined));
+  // Sneakers: laces up the front.
+  if (o.shoeStyle === 'sneaker') for (const side of ['L', 'R']) vox.recolour(`foot${side}`, (i, j, k) => (j === 2 && k >= L.lz1 && k < L.lz1 + 2 && i === (side === 'L' ? Math.floor(L.lx) : -Math.floor(L.lx) - 1) ? 'lace' : undefined));
+  void J;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The figure
 
 function makeFighter(d) {
   const b = BUILDS[d.build];
   const o = { ...COMMON, ...d.o };
-  const fig = new Figure(d.id, d.name, b);
-  materials(fig, d);
-  const s = { fig, b, o, d };
-  legs(fig, s);
-  pelvis(fig, s);
-  torso(fig, s);
-  hem(fig, s);
-  lapels(fig, s);
-  panels(fig, s);
-  tie(fig, s);
-  arms(fig, s);
-  hands(fig, s);
-  neck(fig, s);
-  head(fig, s);
-  return fig;
+  const s = { b, o, d, J: joints(b) };
+  const vox = new Voxels();
+  for (const j of BONES) vox.part(j);
+  body(vox, s);
+  dress(vox, s);
+  return { vox, s, P: palette(d, o) };
 }
 
-// ---------------------------------------------------------------------------------------------
-// PNG and GLB writing
-
-const CRC = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
+/** A figure's voxels at another scale: each coarse cell takes the design cell under its centre. */
+function resample(vox, scale) {
+  if (scale === 24) return vox;
+  const k = 24 / scale;
+  const out = new Voxels();
+  for (const [part, cells] of vox.parts) {
+    const p = out.part(part);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const key of cells.keys()) {
+      const c = cellOf(key);
+      for (let a = 0; a < 3; a++) (lo[a] = Math.min(lo[a], c[a])), (hi[a] = Math.max(hi[a], c[a]));
+    }
+    for (let x = Math.floor(lo[0] / k) - 1; x <= Math.ceil(hi[0] / k) + 1; x++)
+      for (let y = Math.floor(lo[1] / k) - 1; y <= Math.ceil(hi[1] / k) + 1; y++)
+        for (let z = Math.floor(lo[2] / k) - 1; z <= Math.ceil(hi[2] / k) + 1; z++) {
+          const c = cells.get(cellKey(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k), Math.floor((z + 0.5) * k)));
+          if (c) p.set(cellKey(x, y, z), c);
+        }
   }
-  return t;
-})();
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-function pngChunk(type, data) {
-  const out = Buffer.alloc(12 + data.length);
-  out.writeUInt32BE(data.length, 0);
-  out.write(type, 4, 'ascii');
-  data.copy(out, 8);
-  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
   return out;
 }
-const PNG_SIG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-function png({ w, h, px }) {
-  // RGB (the alpha is always opaque), filter 1 (sub) for smaller files.
-  const raw = Buffer.alloc((w * 3 + 1) * h);
-  for (let y = 0; y < h; y++) {
-    const o = y * (w * 3 + 1);
-    raw[o] = 1;
-    for (let x = 0; x < w; x++)
-      for (let c = 0; c < 3; c++) {
-        const v = px[(y * w + x) * 4 + c];
-        const left = x ? px[(y * w + x - 1) * 4 + c] : 0;
-        raw[o + 1 + x * 3 + c] = (v - left) & 255;
-      }
-  }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(w, 0);
-  ihdr.writeUInt32BE(h, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 2; // RGB
-  return Buffer.concat([PNG_SIG, pngChunk('IHDR', ihdr), pngChunk('IDAT', deflateSync(raw, { level: 9 })), pngChunk('IEND', Buffer.alloc(0))]);
-}
 
-const JOINT_ORDER = Object.keys(JOINT_PARENT);
-
-/**
- * One joint's mesh: flat-shaded triangles grouped by material, sharing one vertex buffer. Each
- * triangle keeps its own face normal, except that neighbours in the same material that are within
- * a few degrees of coplanar are shaded as one face (they share vertices and an averaged normal).
- * Returns { pos, nor, uv (or null), mat, face, groups: [{ key, idx }] } in the joint's space;
- * `textured` picks the joint's textured materials (their vertices carry UVs, a box projection in
- * tiles of the pattern) or the rest. `mat` and `face` are each vertex's material and face (a face
- * is numbered within its material).
- */
-const MERGE_COS = Math.cos(7 * DEG);
-function jointMesh(fig, joint, textured) {
-  const o = fig.J[joint];
-  const pos = [], nor = [], uv = [], mat = [], face = [];
-  const map = new Map();
-  const groups = [];
-  const pkey = (q) => `${Math.round(q[0] * 1e5)},${Math.round(q[1] * 1e5)},${Math.round(q[2] * 1e5)}`;
-  for (const [key, all] of Object.entries(fig.parts[joint] ?? {})) {
-    const m = fig.materials[fig.matKey[key]];
-    if ((m.tex !== undefined) !== textured) continue;
-    // Slivers (under ~0.5 mm^2) left by hulls of near-coplanar points are dropped.
-    const tris = [];
-    for (const [a, b, c] of all) {
-      const cr = cross(sub(b, a), sub(c, a));
-      if (len(cr) >= 1e-6) tris.push({ v: [a, b, c].map((p) => sub(p, o)), n: nrm(cr), area: len(cr) / 2, face: -1 });
-    }
-    if (!tris.length) continue;
-    // Faces: grow regions of neighbours (sharing an edge) whose normals stay within 4 degrees.
-    const byEdge = new Map();
-    tris.forEach((t, i) => {
-      const k = t.v.map(pkey);
-      for (let e = 0; e < 3; e++) {
-        const a = k[e], b2 = k[(e + 1) % 3];
-        const ek = a < b2 ? a + '|' + b2 : b2 + '|' + a;
-        if (!byEdge.has(ek)) byEdge.set(ek, []);
-        byEdge.get(ek).push(i);
-      }
-      t.keys = k;
-    });
-    const faces = [];
-    for (let i = 0; i < tris.length; i++) {
-      if (tris[i].face >= 0) continue;
-      const f = { n: scl(tris[i].n, tris[i].area), members: [i] };
-      tris[i].face = faces.length;
-      const stack = [i];
-      while (stack.length) {
-        const t = tris[stack.pop()];
-        for (let e = 0; e < 3; e++) {
-          const a = t.keys[e], b2 = t.keys[(e + 1) % 3];
-          for (const j of byEdge.get(a < b2 ? a + '|' + b2 : b2 + '|' + a)) {
-            const u = tris[j];
-            if (u.face >= 0 || dot(u.n, nrm(f.n)) < MERGE_COS || dot(u.n, t.n) < MERGE_COS) continue;
-            u.face = faces.length;
-            f.n = add(f.n, scl(u.n, u.area));
-            f.members.push(j);
-            stack.push(j);
-          }
-        }
-      }
-      f.n = nrm(f.n);
-      faces.push(f);
-    }
-    const idx = [];
-    for (const t of tris) {
-      const n = faces[t.face].n;
-      const ax = Math.abs(n[0]) > Math.abs(n[1]) && Math.abs(n[0]) > Math.abs(n[2]) ? 0 : Math.abs(n[1]) > Math.abs(n[2]) ? 1 : 2;
-      for (let k = 0; k < 3; k++) {
-        const q = t.v[k];
-        const vk = `${t.keys[k]},${key},${t.face}`;
-        let i = map.get(vk);
-        if (i === undefined) {
-          i = pos.length / 3;
-          map.set(vk, i);
-          pos.push(q[0], q[1], q[2]);
-          nor.push(n[0], n[1], n[2]);
-          mat.push(key);
-          face.push(t.face);
-          if (textured) {
-            // Box projection in the joint's space (the rest pose).
-            const S = m.uvScale;
-            const [u, v] = ax === 0 ? [q[2] * Math.sign(n[0]), q[1]] : ax === 1 ? [q[0], q[2]] : [q[0] * -Math.sign(n[2]), q[1]];
-            uv.push(u / S, -v / S);
-          }
-        }
-        idx.push(i);
-      }
-    }
-    groups.push({ key, idx });
-  }
-  return { pos, nor, uv: textured ? uv : null, mat, face, groups };
-}
-
-/**
- * The texture pair every face is coloured from: the flat colours as a palette, each a 2x2 block of
- * texels (a face's UVs sit on the block's middle, so filtering never reaches a neighbour), and each
- * patterned cloth tiled over a region of its own, REGION x REGION tiles (a face's box-projected
- * UVs move by whole tiles to the middle of it, keeping the pattern's phase, and the pattern carries
- * on past the region's edges, so filtering and mipmaps find more of it there), with a matching
- * metallic-roughness image (G roughness, B metalness). With a pattern, the palette sits in the
- * corner of the first region's first tile, half a tile and more from any patterned face.
- */
-const REGION = 4;
-const pot = (n) => 2 ** Math.ceil(Math.log2(Math.max(n, 4)));
-function atlas(fig, keys) {
-  const flat = [], patterns = [];
-  const entry = {}, region = {};
-  for (const k of keys) {
-    const m = fig.materials[fig.matKey[k]];
-    const mr = [0, Math.round(m.rough * 255), Math.round(m.metal * 255)];
-    const list = m.tex === undefined ? flat : patterns;
-    const id = `${m.tex === undefined ? m.color : 'tex' + m.tex},${mr}`;
-    let i = list.findIndex((e) => e.id === id);
-    if (i < 0) {
-      i = list.length;
-      list.push(m.tex === undefined ? { id, rgb: hexRGB(m.color), mr } : { id, tex: fig.textures[m.tex], mr });
-    }
-    (m.tex === undefined ? entry : region)[k] = i;
-  }
-  const tile = patterns[0]?.tex.w ?? 0;
-  if (patterns.some((p) => p.tex.w !== tile || p.tex.h !== tile)) throw new Error(`${fig.id}: patterns of different sizes`);
-  const span = REGION * tile;
-  const cols = patterns.length ? tile / 8 : Math.ceil(Math.sqrt(flat.length));
-  if (flat.length > cols * cols) throw new Error(`${fig.id}: too many colours for the palette`);
-  const w = patterns.length ? pot(patterns.length * span) : pot(2 * cols);
-  const h = patterns.length ? pot(span) : w;
-  const albedo = new Uint8Array(w * h * 4), mr = new Uint8Array(w * h * 4);
-  const put = (x, y, rgb, m) => {
-    const i = (y * w + x) * 4;
-    albedo[i] = rgb[0], albedo[i + 1] = rgb[1], albedo[i + 2] = rgb[2], albedo[i + 3] = 255;
-    mr[i] = m[0], mr[i + 1] = m[1], mr[i + 2] = m[2], mr[i + 3] = 255;
-  };
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) {
-      const p = patterns[Math.min(patterns.length - 1, Math.floor(x / span))];
-      if (!p) put(x, y, [0, 0, 0], [0, 255, 0]);
-      else {
-        const s = ((y % tile) * tile + (x % tile)) * 4;
-        put(x, y, p.tex.px.subarray(s, s + 3), p.mr);
-      }
-    }
-  const block = (i) => [(i % cols) * 2, Math.floor(i / cols) * 2];
-  flat.forEach((e, i) => {
-    const [bx, by] = block(i);
-    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) put(bx + dx, by + dy, e.rgb, e.mr);
-  });
-  return {
-    w,
-    h,
-    tile,
-    span,
-    albedo: { w, h, px: albedo },
-    mr: { w, h, px: mr },
-    colours: flat.length,
-    patterns: patterns.length,
-    /** A flat colour: its UV (its block's middle), what it is. */
-    flat: (k) => {
-      const [bx, by] = block(entry[k]);
-      return { id: `colour ${entry[k]}`, uv: [(bx + 1) / w, (by + 1) / h], rgb: flat[entry[k]].rgb, mr: flat[entry[k]].mr };
-    },
-    /** A patterned face's UVs (in tiles of its pattern) in the atlas, moved by whole tiles to the middle of its region. */
-    pattern: (k, uvs) => {
-      const r = region[k];
-      const lo = [0, 1].map((a) => Math.min(...uvs.map((t) => t[a])));
-      const hi = [0, 1].map((a) => Math.max(...uvs.map((t) => t[a])));
-      const d = [0, 1].map((a) => Math.round(REGION / 2 - (lo[a] + hi[a]) / 2));
-      for (const a of [0, 1]) if (lo[a] + d[a] < 0.5 || hi[a] + d[a] > REGION - 0.5) throw new Error(`${fig.id}: a ${k} face ${(hi[a] - lo[a]).toFixed(2)} tiles across is too big for the atlas`);
-      return { id: `pattern ${r}`, region: r, mr: patterns[r].mr, tex: patterns[r].tex, uvs: uvs.map(([u, v]) => [(r * span + (u + d[0]) * tile) / w, ((v + d[1]) * tile) / h]) };
-    },
-  };
-}
-
-/**
- * Where the mesh's own space starts in the figure's: positions are 16-bit normalized (+-1 m about
- * it, steps of 0.03 mm), so it sits at the hips' height to cover the figure from the ground to
- * 1.95 m. The inverse bind matrices carry the offset.
- */
-const ORIGIN = [0, 0.95, 0];
-/** The skin's bones: the rig's joints, in its order (the grips are empties, not bones). */
-const BONES = JOINT_ORDER.filter((j) => !EMPTY.has(j));
-
-function glb(fig) {
-  const chunks = [];
-  let offset = 0;
-  const views = [];
-  const addView = (buf, target, byteStride) => {
-    const pad = (4 - (offset % 4)) % 4;
-    if (pad) {
-      chunks.push(Buffer.alloc(pad));
-      offset += pad;
-    }
-    views.push({ buffer: 0, byteOffset: offset, byteLength: buf.length, ...(byteStride ? { byteStride } : {}), ...(target ? { target } : {}) });
-    chunks.push(buf);
-    offset += buf.length;
-    return views.length - 1;
-  };
-  const accessors = [];
-  const acc = (a) => (accessors.push(a), accessors.length - 1);
-
-  // The rig's nodes: each joint at its rest translation (rounded as written), no rotation; the
-  // grips empty. `at` is each joint in the figure's space as a reader adds the translations up.
-  const nodes = [{ name: fig.id, children: [], extras: { title: fig.name } }];
-  const nodeOf = {};
-  const at = {};
+function glb(d) {
+  const { vox: design, s, P } = makeFighter(d);
+  const vox = resample(design, SCALE);
+  const flat = (process.env.VOXEL_BEVEL ?? 'flat') === 'flat';
+  const { faces: list, hidden, duplicates, before } = faces(vox, P, { vary: argv.includes('--vary'), merge: flat && !argv.includes('--no-merge') });
+  const A = atlas(list, P);
+  // Joints in metres; each node's translation from its parent's, rounded as written.
+  const J = Object.fromEntries(Object.entries(s.J).map(([k, v]) => [k, v.map((x) => x * DU)]));
+  const nodes = [{ name: d.id, children: [], extras: { title: d.name } }];
+  const nodeOf = {}, at = {};
   for (const j of JOINT_ORDER) {
     const parent = JOINT_PARENT[j];
-    const t = (parent ? sub(fig.J[j], fig.J[parent]) : fig.J[j]).map((v) => Math.round(v * 1e5) / 1e5);
-    at[j] = parent ? add(at[parent], t) : t;
+    const t = (parent ? J[j].map((v, a) => v - J[parent][a]) : J[j]).map((v) => Math.round(v * 1e5) / 1e5);
+    at[j] = parent ? at[parent].map((v, a) => v + t[a]) : t;
     nodeOf[j] = nodes.length;
     nodes.push({ name: j, translation: t, children: [] });
     nodes[parent ? nodeOf[parent] : 0].children.push(nodeOf[j]);
   }
-  const body = nodes.length;
-  nodes.push({ name: 'body', mesh: 0, skin: 0 });
-  nodes[0].children.push(body);
+  const bodyNode = nodes.length;
+  nodes.push({ name: 'body' });
+  nodes[0].children.push(bodyNode);
   for (const n of nodes) if (n.children && !n.children.length) delete n.children;
-
-  // One mesh: its vertices joint by joint in the rig's order, each joint's flat-coloured faces and
-  // then its patterned ones, every vertex on its joint's bone alone; faces keep their own vertices
-  // and normals (flat shading). Its triangles go colour by colour, in the order the colours are
-  // first met that way (joint by joint), as the rigid parts' materials were drawn: where parts of
-  // two colours lie in one plane, the later still shows.
-  const parts = BONES.map((j) => [jointMesh(fig, j, false), jointMesh(fig, j, true)]);
-  const usedKeys = fig.materials.map((m) => m.key).filter((k) => parts.some((pair) => pair.some((mm) => mm.groups.some((g) => g.key === k))));
-  const A = atlas(fig, usedKeys);
-  const P = [], N = [], T = [], J = [];
-  const tris = [];
-  const rank = new Map();
-  /** What each triangle's texels should be (a colour, or a pattern's region), and each patterned vertex's UV in its pattern. */
-  const expect = { tris: [], patternUV: new Map() };
-  BONES.forEach((j, b) => {
-    for (const mm of parts[b]) {
-      if (!mm.groups.length) continue;
-      const base = P.length / 3;
-      const n = mm.pos.length / 3;
-      const uv = new Array(n);
-      const look = new Array(n);
-      if (!mm.uv) for (let i = 0; i < n; i++) (look[i] = A.flat(mm.mat[i])), (uv[i] = look[i].uv);
-      else {
-        const faces = new Map();
-        for (let i = 0; i < n; i++) {
-          const f = `${mm.mat[i]}:${mm.face[i]}`;
-          if (!faces.has(f)) faces.set(f, []);
-          faces.get(f).push(i);
-        }
-        for (const vs of faces.values()) {
-          const p = A.pattern(mm.mat[vs[0]], vs.map((i) => [mm.uv[i * 2], mm.uv[i * 2 + 1]]));
-          vs.forEach((i, k) => {
-            uv[i] = p.uvs[k];
-            look[i] = { region: p.region, mr: p.mr, tex: p.tex };
-            expect.patternUV.set(base + i, [mm.uv[i * 2], mm.uv[i * 2 + 1]]);
-          });
-        }
-      }
-      for (let i = 0; i < n; i++) {
-        for (let k = 0; k < 3; k++) {
-          P.push(mm.pos[i * 3 + k] + at[j][k] - ORIGIN[k]);
-          N.push(mm.nor[i * 3 + k]);
-        }
-        T.push(uv[i][0], uv[i][1]);
-        J.push(b);
-      }
-      for (const g of mm.groups)
-        for (let t = 0; t < g.idx.length; t += 3) {
-          const l = look[g.idx[t]];
-          if (!rank.has(l.id)) rank.set(l.id, rank.size);
-          tris.push({ v: [base + g.idx[t], base + g.idx[t + 1], base + g.idx[t + 2]], look: l, rank: rank.get(l.id), seq: tris.length });
-        }
+  // The mesh, bone by bone: each quad's corners (voxel coordinates), normal, UVs, bone.
+  const boneOf = Object.fromEntries(BONES.map((j, i) => [j, i]));
+  const order = list.map((_, i) => i).sort((a, b) => boneOf[list[a].part] - boneOf[list[b].part] || a - b);
+  const pos = [], nor = [], uv = [], jo = [], we = [], idx = [];
+  for (const fi of order) {
+    const f = list[fi];
+    const base = pos.length / 3;
+    const corners = quadCorners(f);
+    const n = DIRS[f.dir].n;
+    for (let c = 0; c < 4; c++) {
+      pos.push(...corners[c]);
+      nor.push(n[0] * 127, n[1] * 127, n[2] * 127);
+      uv.push(Math.round(A.uvs[fi][c][0] * 65535), Math.round(A.uvs[fi][c][1] * 65535));
+      jo.push(boneOf[f.part], 0, 0, 0);
+      we.push(255, 0, 0, 0);
     }
-  });
-  tris.sort((a, b) => a.rank - b.rank || a.seq - b.seq);
-  const idx = tris.flatMap((t) => t.v);
-  expect.tris = tris.map((t) => t.look);
-  const count = P.length / 3;
-  if (count > 65535) throw new Error(`${fig.id}: ${count} vertices`);
-
-  // Vertices, KHR_mesh_quantization: positions and normals 16-bit normalized (padded to 8 bytes),
-  // UVs 16-bit normalized, a bone index and its weight a byte each.
-  const pos = Buffer.alloc(count * 8), nor = Buffer.alloc(count * 8), tex = Buffer.alloc(count * 4), joints = Buffer.alloc(count * 4), weights = Buffer.alloc(count * 4);
-  const lo = [32767, 32767, 32767], hi = [-32767, -32767, -32767];
-  for (let i = 0; i < count; i++) {
-    for (let k = 0; k < 3; k++) {
-      const q = Math.round(P[i * 3 + k] * 32767);
-      if (Math.abs(q) > 32767) throw new Error(`${fig.id}: a vertex beyond the mesh's range (${P[i * 3 + k] + ORIGIN[k]})`);
-      pos.writeInt16LE(q, i * 8 + k * 2);
-      lo[k] = Math.min(lo[k], q);
-      hi[k] = Math.max(hi[k], q);
-      nor.writeInt16LE(Math.round(N[i * 3 + k] * 32767), i * 8 + k * 2);
-    }
-    for (let k = 0; k < 2; k++) tex.writeUInt16LE(Math.round(T[i * 2 + k] * 65535), i * 4 + k * 2);
-    joints[i * 4] = J[i];
-    weights[i * 4] = 255;
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
-  const attributes = {
-    POSITION: acc({ bufferView: addView(pos, 34962, 8), componentType: 5122, normalized: true, count, type: 'VEC3', min: lo, max: hi }),
-    NORMAL: acc({ bufferView: addView(nor, 34962, 8), componentType: 5122, normalized: true, count, type: 'VEC3' }),
-    TEXCOORD_0: acc({ bufferView: addView(tex, 34962), componentType: 5123, normalized: true, count, type: 'VEC2' }),
-    JOINTS_0: acc({ bufferView: addView(joints, 34962), componentType: 5121, count, type: 'VEC4' }),
-    WEIGHTS_0: acc({ bufferView: addView(weights, 34962), componentType: 5121, normalized: true, count, type: 'VEC4' }),
-  };
-  const indices = acc({ bufferView: addView(Buffer.from(new Uint16Array(idx).buffer), 34963), componentType: 5123, count: idx.length, type: 'SCALAR' });
-  // Each bone's inverse bind matrix: from the mesh's space into the joint's at rest (a translation).
+  for (const p of pos) if (p < -128 || p > 127) throw new Error(`${d.id}: a voxel beyond a byte's reach (${p})`);
+  // Each bone's inverse bind matrix: from voxel coordinates into its joint's space at rest.
   const ibm = new Float32Array(BONES.length * 16);
-  BONES.forEach((j, b) => {
-    for (let k = 0; k < 4; k++) ibm[b * 16 + k * 5] = 1;
-    for (let k = 0; k < 3; k++) ibm[b * 16 + 12 + k] = ORIGIN[k] - at[j][k];
+  BONES.forEach((j, n) => {
+    for (let k = 0; k < 3; k++) ibm[n * 16 + k * 5] = 1 / SCALE;
+    ibm[n * 16 + 15] = 1;
+    for (let k = 0; k < 3; k++) ibm[n * 16 + 12 + k] = -at[j][k];
   });
-  const inverseBindMatrices = acc({ bufferView: addView(Buffer.from(ibm.buffer)), componentType: 5126, count: BONES.length, type: 'MAT4' });
-  const images = [
-    { name: `${fig.id}_palette`, bufferView: addView(png(A.albedo)), mimeType: 'image/png' },
-    { name: `${fig.id}_metal_rough`, bufferView: addView(png(A.mr)), mimeType: 'image/png' },
-  ];
-  const json = {
-    asset: { version: '2.0', generator: 'Call of Blocky src/games/callofblocky/tools/fighters/build.mjs' },
-    extensionsUsed: ['KHR_mesh_quantization'],
-    extensionsRequired: ['KHR_mesh_quantization'],
-    scene: 0,
-    scenes: [{ name: fig.id, nodes: [0] }],
+  const bytes = writeGlb({
+    generator: 'Call of Blocky src/games/callofblocky/tools/fighters/build.mjs',
     nodes,
-    meshes: [{ name: 'body', primitives: [{ attributes, indices, material: 0 }] }],
-    skins: [{ name: `${fig.id}_skeleton`, inverseBindMatrices, joints: BONES.map((j) => nodeOf[j]), skeleton: nodeOf.hips }],
-    materials: [{ name: fig.id, pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 1, roughnessFactor: 1, metallicRoughnessTexture: { index: 1 } } }],
-    textures: images.map((_, i) => ({ sampler: 0, source: i })),
-    samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }],
-    images,
-    accessors,
-    bufferViews: views,
-    buffers: [{ byteLength: 0 }],
-  };
-  const tail = (4 - (offset % 4)) % 4;
-  if (tail) chunks.push(Buffer.alloc(tail));
-  const bin = Buffer.concat(chunks);
-  json.buffers[0].byteLength = bin.length;
-  let jsonBuf = Buffer.from(JSON.stringify(json), 'utf8');
-  jsonBuf = Buffer.concat([jsonBuf, Buffer.alloc((4 - (jsonBuf.length % 4)) % 4, 0x20)]);
-  const header = Buffer.alloc(12);
-  header.writeUInt32LE(0x46546c67, 0);
-  header.writeUInt32LE(2, 4);
-  header.writeUInt32LE(12 + 8 + jsonBuf.length + 8 + bin.length, 8);
-  const jh = Buffer.alloc(8);
-  jh.writeUInt32LE(jsonBuf.length, 0);
-  jh.writeUInt32LE(0x4e4f534a, 4);
-  const bh = Buffer.alloc(8);
-  bh.writeUInt32LE(bin.length, 0);
-  bh.writeUInt32LE(0x004e4942, 4);
-  return { bytes: Buffer.concat([header, jh, jsonBuf, bh, bin]), expect, atlas: A };
+    sceneName: d.id,
+    meshName: 'body',
+    meshNode: bodyNode,
+    attributes: {
+      POSITION: { values: pos, componentType: 5120, type: 'VEC3', minmax: true },
+      NORMAL: { values: nor, componentType: 5120, type: 'VEC3', normalized: true },
+      TEXCOORD_0: { values: uv, componentType: 5123, type: 'VEC2', normalized: true },
+      JOINTS_0: { values: jo, componentType: 5121, type: 'VEC4' },
+      WEIGHTS_0: { values: we, componentType: 5121, type: 'VEC4', normalized: true },
+    },
+    indices: idx,
+    skin: { name: `${d.id}_skeleton`, joints: BONES.map((j) => nodeOf[j]), skeleton: nodeOf.hips, inverseBindMatrices: ibm },
+    material: { name: d.id, albedo: png(A.albedo), mr: png(A.mr), glow: png(A.glow, { grey: true }) },
+    compress: true,
+    quantized: true,
+  });
+  return { bytes, stats: { voxels: vox.count, quads: list.length, faces: before, hidden, duplicates, tiles: A.tiles, atlas: `${A.width}x${A.height}` }, at };
 }
 
 // ---------------------------------------------------------------------------------------------
-// Validation: parse the GLB back and check the file, the rig, the skin, the atlas and the budgets.
+// Validation: parse the GLB back and check the file, the rig, the skin and the budgets.
 
-/** A PNG as written here (RGB, every row filtered "sub"): its pixels, RGB. */
-function unpng(data, fail) {
-  if (!data.subarray(0, 8).equals(PNG_SIG)) fail('image is not a PNG');
-  const w = data.readUInt32BE(16), h = data.readUInt32BE(20);
-  let o = 8;
-  const idat = [];
-  while (o < data.length) {
-    const l = data.readUInt32BE(o);
-    if (crc32(data.subarray(o + 4, o + 8 + l)) !== data.readUInt32BE(o + 8 + l)) fail('PNG CRC');
-    if (data.subarray(o + 4, o + 8).toString('ascii') === 'IDAT') idat.push(data.subarray(o + 8, o + 8 + l));
-    o += 12 + l;
-  }
-  const raw = inflateSync(Buffer.concat(idat));
-  if (raw.length !== (w * 3 + 1) * h) fail('PNG data size');
-  const px = new Uint8Array(w * h * 3);
-  for (let y = 0; y < h; y++) {
-    const r = y * (w * 3 + 1);
-    if (raw[r] !== 1) fail('PNG filter');
-    for (let x = 0; x < w * 3; x++) px[y * w * 3 + x] = (raw[r + 1 + x] + (x >= 3 ? px[y * w * 3 + x - 3] : 0)) & 255;
-  }
-  return { w, h, px };
-}
-
-function validate(buf, fig, expect) {
+function validate(buf, d, at) {
   const fail = (m) => {
-    throw new Error(`${fig.id}.glb: ${m}`);
+    throw new Error(`${d.id}.glb: ${m}`);
   };
-  if (buf.readUInt32LE(0) !== 0x46546c67 || buf.readUInt32LE(4) !== 2 || buf.readUInt32LE(8) !== buf.length) fail('bad header');
-  const jlen = buf.readUInt32LE(12);
-  if (buf.readUInt32LE(16) !== 0x4e4f534a || jlen % 4) fail('bad JSON chunk');
-  const json = JSON.parse(buf.subarray(20, 20 + jlen).toString('utf8'));
-  const bo = 20 + jlen;
-  const blen = buf.readUInt32LE(bo);
-  if (buf.readUInt32LE(bo + 4) !== 0x004e4942 || blen % 4 || bo + 8 + blen !== buf.length) fail('bad BIN chunk');
-  const bin = buf.subarray(bo + 8);
-  if (json.buffers[0].byteLength !== blen) fail('buffer length');
-  for (const v of json.bufferViews) if (v.byteOffset + v.byteLength > blen || v.byteOffset % 4 || (v.byteStride ?? 4) % 4) fail('bufferView out of range or misaligned');
-  if (!json.extensionsRequired?.includes('KHR_mesh_quantization')) fail('KHR_mesh_quantization not declared');
-  const size = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
-  const comp = { 5120: [1, 'readInt8'], 5121: [1, 'readUInt8'], 5122: [2, 'readInt16LE'], 5123: [2, 'readUInt16LE'], 5125: [4, 'readUInt32LE'], 5126: [4, 'readFloatLE'] };
-  const read = (a) => {
-    const v = json.bufferViews[a.bufferView];
-    const n = size[a.type];
-    const [cs, fn] = comp[a.componentType];
-    const stride = v.byteStride ?? n * cs;
-    if ((a.byteOffset ?? 0) + stride * (a.count - 1) + n * cs > v.byteLength) fail('accessor out of range');
-    const out = new Float64Array(a.count * n);
-    for (let i = 0; i < a.count; i++) for (let k = 0; k < n; k++) out[i * n + k] = bin[fn](v.byteOffset + (a.byteOffset ?? 0) + i * stride + k * cs);
-    return out;
-  };
-  // The rig: names, parents, rest translations, no rotation or scale; the grips empty.
+  const { json, read } = readGlb(buf);
   const byName = new Map(json.nodes.map((n, i) => [n.name, i]));
   const parentOf = new Map();
   json.nodes.forEach((n, i) => (n.children ?? []).forEach((c) => parentOf.set(c, i)));
   const root = json.scenes[0].nodes[0];
-  if (json.nodes[root].name !== fig.id) fail('root not named after the fighter');
+  if (json.nodes[root].name !== d.id) fail('root not named after the fighter');
   const world = (i) => {
     let p = [0, 0, 0];
-    for (let k = i; k !== undefined; k = parentOf.get(k)) p = add(p, json.nodes[k].translation ?? [0, 0, 0]);
+    for (let k = i; k !== undefined; k = parentOf.get(k)) p = p.map((v, a) => v + (json.nodes[k].translation ?? [0, 0, 0])[a]);
     return p;
   };
   for (const j of JOINT_ORDER) {
@@ -2360,124 +781,60 @@ function validate(buf, fig, expect) {
     if (i === undefined) fail(`joint ${j} missing`);
     const n = json.nodes[i];
     if (n.rotation || n.scale || n.matrix) fail(`${j} has a rotation/scale`);
-    const want = JOINT_PARENT[j] ?? fig.id;
+    const want = JOINT_PARENT[j] ?? d.id;
     if (json.nodes[parentOf.get(i)].name !== want) fail(`${j}'s parent is ${json.nodes[parentOf.get(i)].name}, not ${want}`);
-    if (len(sub(world(i), fig.J[j])) > 1e-4) fail(`${j} at ${world(i)}`);
+    if (world(i).some((v, a) => Math.abs(v - at[j][a]) > 1e-4)) fail(`${j} at ${world(i)}`);
     if (EMPTY.has(j) && (n.mesh !== undefined || n.children)) fail(`${j} should be empty`);
   }
-  // One skinned mesh (on a node of the root's, untransformed), one primitive, one material.
   if (json.meshes.length !== 1 || json.meshes[0].primitives.length !== 1 || json.materials.length !== 1) fail('not one mesh, one primitive, one material');
-  const meshNodes = json.nodes.filter((n) => n.mesh !== undefined);
-  const bodyNode = json.nodes.indexOf(meshNodes[0]);
-  if (meshNodes.length !== 1 || parentOf.get(bodyNode) !== root || meshNodes[0].skin !== 0 || meshNodes[0].translation || meshNodes[0].rotation || meshNodes[0].scale) fail('the mesh node');
-  // The skin: the rig's joints as bones, each bind matrix the way from the mesh's space into the joint's.
-  const skin = json.skins?.[0];
-  if (json.skins?.length !== 1 || skin.skeleton !== byName.get('hips') || skin.joints.join() !== BONES.map((j) => byName.get(j)).join()) fail('the skin\'s joints');
+  const bodyNode = json.nodes.findIndex((n) => n.mesh !== undefined);
+  if (parentOf.get(bodyNode) !== root || json.nodes[bodyNode].skin !== 0) fail('the mesh node');
+  const skin = json.skins[0];
+  if (skin.joints.join() !== BONES.map((j) => byName.get(j)).join() || skin.skeleton !== byName.get('hips')) fail('the skin\'s joints');
   const ibm = read(json.accessors[skin.inverseBindMatrices]);
   BONES.forEach((j, b) => {
     const w = world(byName.get(j));
     for (let k = 0; k < 16; k++) {
-      const want = k === 12 || k === 13 || k === 14 ? ORIGIN[k - 12] - w[k - 12] : k % 5 === 0 ? 1 : 0;
+      const want = k >= 12 && k < 15 ? -w[k - 12] : k === 15 ? 1 : k % 5 === 0 ? 1 / SCALE : 0;
       if (Math.abs(ibm[b * 16 + k] - want) > 1e-6) fail(`${j}'s inverse bind matrix`);
     }
   });
-  // The vertices: types, bounds, unit normals, each on one bone; the triangles: winding, each rigid.
   const prim = json.meshes[0].primitives[0];
-  const at = prim.attributes;
-  const kinds = { POSITION: [5122, true, 'VEC3'], NORMAL: [5122, true, 'VEC3'], TEXCOORD_0: [5123, true, 'VEC2'], JOINTS_0: [5121, false, 'VEC4'], WEIGHTS_0: [5121, true, 'VEC4'] };
-  for (const [name, [ct, normed, type]] of Object.entries(kinds)) {
-    const a = json.accessors[at[name]];
-    if (!a || a.componentType !== ct || !!a.normalized !== normed || a.type !== type || a.count !== json.accessors[at.POSITION].count) fail(`${name} accessor`);
-  }
-  if (Object.keys(at).length !== 5) fail('unexpected attributes');
-  const pa = json.accessors[at.POSITION];
-  const Q = read(pa), Nq = read(json.accessors[at.NORMAL]), UV = read(json.accessors[at.TEXCOORD_0]), JO = read(json.accessors[at.JOINTS_0]), WE = read(json.accessors[at.WEIGHTS_0]), I = read(json.accessors[prim.indices]);
-  const count = pa.count;
-  const P = Q.map((q, i) => q / 32767 + ORIGIN[i % 3]);
-  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-  for (let k = 0; k < 3; k++) {
-    let a = Infinity, b = -Infinity;
-    for (let m = k; m < Q.length; m += 3) (a = Math.min(a, Q[m])), (b = Math.max(b, Q[m]));
-    if (a !== pa.min[k] || b !== pa.max[k]) fail('POSITION min/max');
-    lo[k] = a / 32767 + ORIGIN[k];
-    hi[k] = b / 32767 + ORIGIN[k];
-  }
-  for (let i = 0; i < count; i++) {
-    if (Math.abs(Math.hypot(Nq[i * 3], Nq[i * 3 + 1], Nq[i * 3 + 2]) / 32767 - 1) > 1e-4) fail('normal not unit');
-    if (JO[i * 4] >= BONES.length || JO[i * 4 + 1] || JO[i * 4 + 2] || JO[i * 4 + 3] || WE[i * 4] !== 255 || WE[i * 4 + 1] || WE[i * 4 + 2] || WE[i * 4 + 3]) fail('a vertex not wholly on one bone');
-  }
-  if (I.length % 3 || expect.tris.length !== I.length / 3) fail('index count');
-  for (const i of I) if (i >= count) fail('index out of range');
-  for (let m = 0; m < I.length; m += 3) {
-    if (JO[I[m] * 4] !== JO[I[m + 1] * 4] || JO[I[m] * 4] !== JO[I[m + 2] * 4]) fail('a triangle across two bones');
-    const [a, b, c] = [I[m], I[m + 1], I[m + 2]].map((i) => [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]);
-    const cr = cross(sub(b, a), sub(c, a));
-    const n = [Nq[I[m] * 3], Nq[I[m] * 3 + 1], Nq[I[m] * 3 + 2]];
-    if (dot(cr, n) <= 0 && len(cr) > 1e-6) fail(`triangle winding ${len(cr)}`);
-  }
-  // The material and its textures.
-  const mat = json.materials[0].pbrMetallicRoughness;
-  if (!mat || mat.baseColorFactor || mat.metallicFactor !== 1 || mat.roughnessFactor !== 1 || mat.baseColorTexture?.index !== 0 || mat.metallicRoughnessTexture?.index !== 1) fail('material');
-  const [albedo, mr] = json.textures.map((t) => {
-    const v = json.bufferViews[json.images[t.source].bufferView];
-    return unpng(bin.subarray(v.byteOffset, v.byteOffset + v.byteLength), fail);
-  });
-  if (albedo.w !== mr.w || albedo.h !== mr.h) fail('the images differ in size');
-  const { w: W, h: H } = albedo;
-  const texel = (img, x, y) => [...img.px.subarray((y * W + x) * 3, (y * W + x) * 3 + 3)];
-  const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-  // Every triangle's texels: a flat one's corners on one palette block, whose four texels (all a
-  // filter reads there) are its colour and shine; a patterned one's inside its region, the texel
-  // under each corner the one its pattern has there, its shine the cloth's.
-  for (let t = 0; t < I.length / 3; t++) {
-    const e = expect.tris[t];
-    const corners = [I[t * 3], I[t * 3 + 1], I[t * 3 + 2]].map((i) => [UV[i * 2] / 65535, UV[i * 2 + 1] / 65535, i]);
-    if (e.rgb) {
-      if (corners.some(([u, v]) => u !== corners[0][0] || v !== corners[0][1])) fail('a flat triangle\'s UVs differ');
-      const [u, v] = corners[0];
-      const x0 = Math.floor(u * W - 0.5), y0 = Math.floor(v * H - 0.5);
-      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-        if (!same(texel(albedo, x0 + dx, y0 + dy), e.rgb) || !same(texel(mr, x0 + dx, y0 + dy), e.mr)) fail(`triangle ${t}'s colour at (${x0 + dx}, ${y0 + dy})`);
-      }
-    } else {
-      const tile = e.tex.w;
-      for (const [u, v, i] of corners) {
-        const x = u * W, y = v * H;
-        const x0 = e.region * REGION * tile;
-        if (x < x0 + tile / 2 - 0.01 || x > x0 + (REGION - 0.5) * tile + 0.01 || y < tile / 2 - 0.01 || y > (REGION - 0.5) * tile + 0.01) fail(`patterned triangle ${t} outside its region`);
-        if (!same(texel(mr, Math.floor(x), Math.floor(y)), e.mr)) fail(`patterned triangle ${t}'s shine`);
-        const [u0, v0] = expect.patternUV.get(i);
-        const s = [(u0 - Math.floor(u0)) * tile, (v0 - Math.floor(v0)) * tile];
-        const edge = (c) => Math.abs(c - Math.round(c)) < 0.02;
-        if (edge(s[0]) || edge(s[1]) || edge(x) || edge(y)) continue;
-        const want = [0, 1, 2].map((c) => e.tex.px[(Math.floor(s[1]) * tile + Math.floor(s[0])) * 4 + c]);
-        if (!same(texel(albedo, Math.floor(x), Math.floor(y)), want)) fail(`patterned vertex ${i}: the pattern out of phase`);
-      }
-    }
+  const P = read(json.accessors[prim.attributes.POSITION]), N = read(json.accessors[prim.attributes.NORMAL]);
+  const JO = read(json.accessors[prim.attributes.JOINTS_0]), WE = read(json.accessors[prim.attributes.WEIGHTS_0]), I = read(json.accessors[prim.indices]);
+  const count = json.accessors[prim.attributes.POSITION].count;
+  for (let i = 0; i < count; i++) if (JO[i * 4] >= BONES.length || JO[i * 4 + 1] || JO[i * 4 + 2] || JO[i * 4 + 3] || WE[i * 4] !== 255 || WE[i * 4 + 1] || WE[i * 4 + 2] || WE[i * 4 + 3]) fail('a vertex not wholly on one bone');
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 1; i < P.length; i += 3) (lo = Math.min(lo, P[i])), (hi = Math.max(hi, P[i]));
+  for (let t = 0; t < I.length; t += 3) {
+    const [a, b2, c] = [I[t], I[t + 1], I[t + 2]];
+    if (a >= count || b2 >= count || c >= count) fail('index out of range');
+    if (JO[a * 4] !== JO[b2 * 4] || JO[a * 4] !== JO[c * 4]) fail('a triangle across two bones');
+    const e1 = [0, 1, 2].map((k) => P[b2 * 3 + k] - P[a * 3 + k]), e2 = [0, 1, 2].map((k) => P[c * 3 + k] - P[a * 3 + k]);
+    const cr = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    if (cr[0] * N[a * 3] + cr[1] * N[a * 3 + 1] + cr[2] * N[a * 3 + 2] <= 0) fail('triangle winding');
   }
   const tris = I.length / 3;
   if (tris > MAX_TRIS) fail(`${tris} triangles (budget ${MAX_TRIS})`);
   if (buf.length > MAX_BYTES) fail(`${buf.length} bytes (budget ${MAX_BYTES})`);
-  if (lo[1] < -0.002 || hi[1] > 2.0 || hi[1] < 1.75) fail(`height ${lo[1]}..${hi[1]}`);
-  return { tris, count, lo, hi, atlas: `${W}x${H}` };
+  const height = (hi - lo) / SCALE;
+  if (lo !== 0 || height < 1.7 || height > 2.05) fail(`height ${lo / SCALE}..${hi / SCALE}`);
+  return { tris, count, height };
 }
 
 // ---------------------------------------------------------------------------------------------
 
-const only = process.argv.slice(2);
+const only = argv.filter((a) => !a.startsWith('--'));
 mkdirSync(OUT, { recursive: true });
 for (const d of OUTFITS) {
   if (only.length && !only.includes(d.id)) continue;
-  const fig = makeFighter(d);
-  const { bytes, expect, atlas: A } = glb(fig);
+  const { bytes, stats, at } = glb(d);
   const file = join(OUT, `${d.id}.glb`);
   writeFileSync(file, bytes);
-  const v = validate(readFileSync(file), fig, expect);
-  const fmt = (p) => p.map((x) => x.toFixed(3)).join(', ');
-  const look = `${A.colours} colours${A.patterns ? ` + ${A.patterns} pattern${A.patterns > 1 ? 's' : ''}` : ''} in a ${v.atlas} atlas`;
-  console.log(`${d.id}.glb  ${d.name} (${d.build}): ${v.tris} tris, ${v.count} vertices, ${look}, ${(bytes.length / 1024).toFixed(1)} KB, bounds (${fmt(v.lo)}) .. (${fmt(v.hi)})`);
+  const v = validate(readFileSync(file), d, at);
+  console.log(`${d.id}.glb  ${d.name} (${d.build}): ${stats.voxels} voxels, ${stats.faces} faces as ${stats.quads} quads, ${v.tris} tris (${stats.hidden} faces hidden at rest${stats.duplicates ? `, ${stats.duplicates} duplicate faces dropped` : ''}), ${stats.tiles} tiles in ${stats.atlas}, ${(bytes.length / 1024).toFixed(1)} KB, ${v.height.toFixed(2)} m tall`);
 }
-if (!only.length) {
+if (!only.length && OUT === join(HERE, '../../models/fighters')) {
   const lines = [
     ...OUTFITS.map((d) => `import ${d.id} from './${d.id}.glb?url';`),
     '',

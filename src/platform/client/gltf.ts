@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { GltfSpec, HeldModelSpec, ModelSpec } from '../api/types';
@@ -98,7 +99,8 @@ const DEG = Math.PI / 180;
  */
 export class GltfLibrary {
   private files = new Map<string, File>();
-  private loader = new GLTFLoader();
+  /** Compressed files (EXT_meshopt_compression, as gltfpack writes them) decode as they load. */
+  private loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   private shadows = new Map<THREE.Texture, THREE.RawShaderMaterial>();
   private skinShadows = new Map<THREE.Texture, THREE.RawShaderMaterial>();
   private swatches = new Map<string, THREE.Texture>();

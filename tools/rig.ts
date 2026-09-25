@@ -5,6 +5,7 @@
  * `joints=mixamo` (or a JSON joint map) for a skeleton named its own way; `style=<JSON>` for
  * `HumanoidPoses`; the poses ending in a clip's name (`wave`, `cheer`) play the model's clip.
  * `flat=0` shades every mesh by the file's normals (as the game does), `flat=1` faceted.
+ * `studio=1`: a product shot's light (a soft room's reflections, a soft key light, a grey backdrop).
  *
  * Any item and any clip:
  * - `item=<glb url>` puts that model in the hand wherever a pose holds a gun (High Noon's
@@ -15,6 +16,8 @@
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { HumanoidJoints } from '../src/platform/api/models';
 import type { ClipOptions, HumanoidJoint, HumanoidPoses } from '../src/platform/api/types';
@@ -29,6 +32,7 @@ const GUNS = '/src/games/callofblocky/models/';
 const JOINTS: Partial<Record<HumanoidJoint, string>> | undefined = q.get('joints') === 'mixamo' ? HumanoidJoints.mixamo() : q.has('joints') ? JSON.parse(q.get('joints')!) : undefined;
 const STYLE: HumanoidPoses | undefined = q.has('style') ? JSON.parse(q.get('style')!) : undefined;
 const FLAT = q.get('flat');
+const STUDIO = q.has('studio');
 /** An item of any game's to hold instead of Call of Blocky's guns, and how it's held. */
 const ITEM = q.get('item');
 const KIND = q.get('kind') === 'melee' ? 'melee' : null;
@@ -55,10 +59,29 @@ const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 12), new THREE.MeshStan
 floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 scene.add(floor);
+if (STUDIO) {
+  // Soft: a room's light all round, a gentle key from the front left, a grey backdrop the floor fades into.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+    const grey = 0x8b8d93;
+  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.75;
+  scene.background = new THREE.Color(grey);
+  scene.fog = new THREE.Fog(grey, 9, 26);
+  (floor.material as THREE.MeshStandardMaterial).color.set(0x9a9ca2);
+  (floor.material as THREE.MeshStandardMaterial).roughness = 0.75;
+  floor.scale.set(3, 4, 1);
+  sun.intensity = 1.6;
+  sun.position.set(-3, 7, 6);
+  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.radius = 6;
+  for (const l of scene.children) if ((l as THREE.HemisphereLight).isHemisphereLight) (l as THREE.HemisphereLight).intensity = 0.35;
+}
 
 const base = (): AnimState => ({ walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 1, stance: 0, speed: 0, moveX: 0, moveZ: 1, ads: 0, shotT: 9 });
 interface Pose { name: string; gun: string | null; state: (t: number) => Partial<AnimState>; clip?: { name: string } & ClipOptions }
 const POSES: Pose[] = [
+  { name: 'stand', gun: null, state: () => ({ aim: 0 }) },
   { name: 'idle rifle', gun: 'rifle', state: () => ({}) },
   { name: 'look up', gun: 'rifle', state: () => ({ headPitch: -0.6 }) },
   { name: 'aim (ADS)', gun: 'rifle', state: () => ({ ads: 1 }) },
@@ -88,7 +111,7 @@ const POSES: Pose[] = [
   { name: 'crouch cheer', gun: null, state: () => ({ stance: 1, aim: 0 }), clip: { name: 'cheer', layer: 'upper', loop: true } },
 ];
 
-const loader = new GLTFLoader();
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const load = (url: string) => loader.loadAsync(url);
 const figures: { rig: HumanoidRig; root: THREE.Object3D; pose: Pose; state: AnimState; label: HTMLElement }[] = [];
 
@@ -146,9 +169,9 @@ async function main() {
 const camera = new THREE.PerspectiveCamera(24, innerWidth / innerHeight, 0.1, 100);
 function frameCamera(cols: number) {
   const width = cols * 1.35 + 0.6;
-  const dist = Math.max(4.5, width / 2 / Math.tan(((24 / 2) * Math.PI) / 180) / camera.aspect) * 1.05;
-  camera.position.set(0, 1.35, dist);
-  camera.lookAt(0, 0.95, 0);
+  const dist = Math.max(STUDIO ? 5.6 : 4.5, width / 2 / Math.tan(((24 / 2) * Math.PI) / 180) / camera.aspect) * 1.05;
+  camera.position.set(0, STUDIO ? 1.25 : 1.35, dist);
+  camera.lookAt(0, STUDIO ? 0.98 : 0.95, 0);
 }
 const start = performance.now();
 let time = 0;
