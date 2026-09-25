@@ -19,6 +19,10 @@ const WEAPONS: Record<string, BotWeapon> = {
   katana: { range: 1.5, rush: true },
 };
 
+/** A lethal's lob (as `player.throw({ at })` makes it), and how far along it must be clear to throw. */
+const LOB = (40 * Math.PI) / 180;
+const CLEAR = 5;
+
 export interface Bots extends ShooterBots {
   /** Something everyone's after (the briefcase): bots head for it when there's no one to shoot. */
   objective: Vec3 | null;
@@ -33,7 +37,21 @@ export function makeBots(game: GameContext, nav: NavGrid, hotspots: Vec3[]): Bot
       goal: (_bot, mind) => (bots.objective && mind.skill > 0.5 !== Math.random() < 0.3 ? bots.objective : null),
       throw: (bot, at, mind) => {
         const item = Object.keys(LETHALS).find((id) => bot.inventory.count(id) > 0);
-        return !!item && bot.throw(item, { at, cook: item === 'frag' ? mind.skill * 1.4 : 0 });
+        if (!item) return false;
+        // Only a high lob (up at 40 degrees toward the spot, as `throw({ at })` makes it when it
+        // reaches: further, it throws flat into the cover they're behind), with its first few
+        // blocks clear and nobody at their elbow (a molotov breaks on the first thing it meets).
+        const eye = bot.eye;
+        const dx = at.x - eye.x;
+        const dz = at.z - eye.z;
+        const flat = Math.hypot(dx, dz) || 1;
+        const rise = flat * Math.tan(LOB) - (at.y - eye.y);
+        const speed = LETHALS[item].speed ?? 20;
+        if (!(rise > 0) || (LETHALS[item].physics?.gravity ?? 24) * flat * flat > 2 * Math.cos(LOB) ** 2 * rise * speed * speed) return false;
+        const dir = { x: (dx / flat) * Math.cos(LOB), y: Math.sin(LOB), z: (dz / flat) * Math.cos(LOB) };
+        if (game.world.raycast(eye, dir, CLEAR)) return false;
+        if (game.players.some((p) => p !== bot && p.alive && Math.hypot(p.position.x - bot.position.x, p.position.z - bot.position.z) < 2)) return false;
+        return bot.throw(item, { at, cook: item === 'frag' ? mind.skill * 1.4 : 0 });
       },
     }),
     { objective: null as Vec3 | null },
