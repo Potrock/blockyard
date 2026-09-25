@@ -43,6 +43,8 @@ src/games/
     index.ts            rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
     course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
     sounds.ts           checkpoint chime, pad boing, crumbling sand, cannons
+  moves/                dev-only movement lab (`?game=moves`): a course for three movement abilities
+    abilities.ts        a dash, a double jump, a wall-run with wall-jumps: pure steps to copy
 ```
 
 ## Hello, game
@@ -141,7 +143,7 @@ bp.set(x + 1, y, z, 'red_bed[facing=east,part=head]');
 
 `game.player` (one of `game.players`, see "Players and multiplayer") gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
 
-**Movement.** `player: { movement }` tunes how everyone moves (speeds in blocks a second; the defaults are Minecraft's). It's data rather than code because each player's own screen runs the same movement to predict them:
+**Movement.** `player: { movement }` tunes how everyone moves (speeds in blocks a second; the defaults are Minecraft's). It's data, and the moves you add are pure functions (*Movement abilities*, below), because each player's own screen runs the same movement to predict them:
 
 ```ts
 player: {
@@ -157,6 +159,42 @@ player: {
 ```
 
 `player.speed` multiplies one player's speeds (a power-up; guns have their own `mobility`), `player.crouching`, `sliding` and `aiming` say what they're doing, and `player.protect(seconds)` makes them ignore damage for a while (spawn protection). `hurtCooldown` (default 0.45, Minecraft's) is how long a player ignores further damage after a hit; shooters set it to 0.
+
+**Movement abilities.** Moves of your own (a dash, a double jump, a wall-run, a grapple, a ground pound, a blink) go in `movement.abilities`. Each is a `step` that runs inside every step of a player's movement, on the host and on the player's own screen alike, so it answers the moment they press the key, online too:
+
+```ts
+movement: {
+  abilities: {
+    // In the order given: each sees what the ones before it did this step.
+    dash: {
+      state: { left: 0, cool: 0, dx: 0, dz: 0 },  // plain data, a copy per player
+      step(s, controls, body, dt, world) {
+        s.cool = Math.max(0, s.cool - dt);
+        if (controls.pressed('KeyQ') && s.cool === 0) {
+          // Along the way the keys push them, else the way they face.
+          const w = Math.hypot(body.wish.x, body.wish.z);
+          [s.dx, s.dz] = w > 0.1 ? [body.wish.x / w, body.wish.z / w] : [-Math.sin(body.yaw), -Math.cos(body.yaw)];
+          [s.left, s.cool] = [0.2, 1.2];
+          body.trigger('dash');                        // the game hears it (`ability` event)
+        }
+        if (s.left <= 0) return;
+        s.left = Math.max(0, s.left - dt);
+        body.setVelocity({ x: s.dx * 22, y: 0, z: s.dz * 22 });
+        body.gravity = 0;                              // level while it lasts
+        body.control = 0;                              // and nothing steers or slows it
+      },
+    },
+  },
+},
+```
+
+- **What a step can read:** `controls` (`isDown`, `pressed`, `button`, `buttonPressed`, mouse deltas, and `consume` to hide a key from the abilities after it: a wall-jump's Space isn't also a double jump), `body` (`position`, `velocity`, `onGround`, `inWater`, `flying`, `crouching`, `sprinting`, `sliding`, `yaw`, `pitch`, `look`, and `time`, a movement clock both sides share), and `world` (the questions vehicles ask: `getBlock`, `raycast`, `surfaceY`…). `body.fits(p)` says whether their body would fit with its feet at `p` (a wall beside them is `!body.fits({ x: p.x + 0.15, y: p.y, z: p.z })`).
+- **What it can change, for this step:** `body.wish` (where the keys or stick push them, a direction on the ground; set it to steer, zero to coast), `body.jump` (`false` swallows the jump), `body.gravity` and `body.control` (times the game's gravity and how quickly speed follows the wish: 0 floats, 0 keeps the velocity as the ability left it), `body.speed`, and at once: `setVelocity` / `addVelocity` (upward speed lifts them off the ground) and `setPosition` (a blink).
+- **Timers and cooldowns live in the state**, counted down by `dt`. Abilities rest while the body is frozen (dead, a countdown).
+- **It must be pure**, like a vehicle's `step`: the same state, controls and blocks give the same result on the host and on the player's screen, which starts again from the host's state whenever a frame arrives and replays the inputs since. So no `Math.random`, no clock but `body.time`, nothing kept outside the state. Their movement memory (the abilities' states and timers) is rounded as frames carry it at the start of each step, on both sides, so a timer never runs out a step later on one than the other.
+- **Consequences are the game's:** `body.trigger(name)` fires the `ability` event on the host (`{ player, ability, name }`, heard once, after the step) for sounds and effects; `player.abilities.dash` is that player's live state to read for the HUD (a cooldown meter) or change (reset a cooldown, unlock a move: their screen follows). The HUD, sounds and effects arrive a round trip late online, but the move itself doesn't.
+
+`src/games/moves/abilities.ts` has a dash, a double jump and a wall-run with wall-jumps; in development, `?game=moves` is a short course that needs all three (online: `npm run server -- moves`, then `?server=ws://localhost:8787/moves`). `tests/headless/abilities.ts` runs that course with 100 ms of latency and checks the prediction holds.
 
 **Third person.** `player.camera.orbit(target, { offset, distance, min, max })` lets a walking player scroll out of their eyes to circle `target` with the mouse: a prop (the ship they steer) or a player (themselves).
 - `offset` is the point circled: in the prop's own space, or up from the player's feet. Players default to their eyes.
@@ -692,7 +730,7 @@ game.commands.run('/give pike'); // run one from code
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
-| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave', fn)` | Events (player events name the `player`) |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
 | `rng` | Seeded random numbers |
 
 **The HUD's look.** `hud` on the game definition sets how the HUD looks on every screen:

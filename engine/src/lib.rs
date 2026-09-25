@@ -307,13 +307,23 @@ impl VoxelWorld {
         };
     }
 
+    /// One step of a player's movement. `gravity` and `control` multiply the game's gravity and
+    /// how quickly speed follows the wish, for this step only (1, 1; movement abilities change them).
     #[allow(clippy::too_many_arguments)]
-    pub fn player_step(&mut self, i: u32, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, slide: bool, speed: f64, dt: f64) {
+    pub fn player_step(&mut self, i: u32, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, slide: bool, speed: f64, gravity: f64, control: f64, dt: f64) {
         let input = world::MoveInput { wish_x, wish_z, jump, sneak, sprint, slide, speed };
         let VoxelWorld { inner, players, .. } = self;
         if let Some(Some(p)) = players.get_mut(i as usize) {
+            p.gravity_scale = gravity;
+            p.control_scale = control;
             p.step(inner, &input, dt);
         }
+    }
+
+    /// Whether a player's body (0.6 x 1.8 x 0.6) fits with its feet at (x, y, z): no solid block,
+    /// block model or mover in the way (unloaded columns count as solid).
+    pub fn player_fits(&self, x: f64, y: f64, z: f64) -> bool {
+        !world::aabb_collides(&self.inner, [x, y, z], world::HALF_W, world::HEIGHT)
     }
 
     /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob, frozen,

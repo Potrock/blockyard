@@ -476,7 +476,7 @@ export class Runtime {
       this.server.onClose = () => this.disconnected();
       if (this.walker) {
         // Movement as the server moves them: the game's tuning, and what they hold (a heavy gun, aiming).
-        this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1));
+        this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1), worldQuery(this.chunks.world, this.registry));
         this.movers = new ClientMovers(this.chunks.world, this.content, this.registry, (b) => this.blockId(b));
       }
     } else {

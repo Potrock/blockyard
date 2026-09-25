@@ -14,6 +14,6 @@ export const games: GameDefinition[] = [callofblocky, arena, starfighter, skyshi
 /** Dev-only previews (open by id, e.g. `?game=shipyard`; not listed, not in production builds). */
 export async function devGames(): Promise<GameDefinition[]> {
   if (!import.meta.env.DEV) return [];
-  const [sf, bw, gallery, cob] = await Promise.all([import('./starfighter/previews'), import('./bedwars/previews'), import('./gallery'), import('./callofblocky/previews')]);
-  return [...sf.previews, ...bw.previews, gallery.default, ...cob.previews];
+  const [sf, bw, gallery, cob, moves] = await Promise.all([import('./starfighter/previews'), import('./bedwars/previews'), import('./gallery'), import('./callofblocky/previews'), import('./moves')]);
+  return [...sf.previews, ...bw.previews, gallery.default, ...cob.previews, moves.default];
 }

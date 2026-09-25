@@ -886,6 +886,11 @@ pub struct Player {
     pub ride: Ride,
     /// How they move (the game's `player.movement`).
     pub tune: Tuning,
+    /// This step's gravity and steering, as multiples of the tuning's (1, 1): a game's movement
+    /// abilities change them for a step (a wall-run's slow slide down, a dash that keeps its speed
+    /// with no steering or friction). `player_step` sets them every step.
+    pub gravity_scale: f64,
+    pub control_scale: f64,
 }
 
 pub const HALF_W: f64 = 0.3;
@@ -961,6 +966,8 @@ impl Player {
             bob: 0.0,
             ride: Ride::default(),
             tune: Tuning::MINECRAFT,
+            gravity_scale: 1.0,
+            control_scale: 1.0,
         }
     }
 
@@ -1043,7 +1050,7 @@ impl Player {
         };
 
         // Horizontal acceleration toward the wished velocity (exponential approach).
-        let k = 1.0 - (-accel * dt).exp();
+        let k = 1.0 - (-accel * self.control_scale.max(0.0) * dt).exp();
         let sliding = input.slide && self.on_ground;
         let tx = if sliding { 0.0 } else { wish[0] * target_speed };
         let tz = if sliding { 0.0 } else { wish[1] * target_speed };
@@ -1068,7 +1075,7 @@ impl Player {
             self.vel[0] *= hdrag;
             self.vel[2] *= hdrag;
         } else {
-            self.vel[1] -= t.gravity * dt;
+            self.vel[1] -= t.gravity * self.gravity_scale * dt;
             self.vel[1] = self.vel[1].max(-60.0);
             if input.jump && self.on_ground {
                 self.vel[1] = t.jump;
@@ -1294,6 +1301,35 @@ mod tests {
         }
         // Half a second at 1.4/s friction: still well above walking speed, and slowing.
         assert!(p.vel[0] > 4.5 && p.vel[0] < 10.0, "sliding: {:?}", p.vel);
+    }
+
+    #[test]
+    fn step_scales_gravity_and_control() {
+        let (w, top) = flat();
+        let idle = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
+        // In the air with no gravity, a body holds its height; at a tenth, it sinks slowly.
+        let fall = |scale: f64| {
+            let mut p = Player::new(8.5, top as f64 + 10.0, 8.5);
+            p.gravity_scale = scale;
+            for _ in 0..30 {
+                p.step(&w, &idle, 1.0 / 60.0);
+            }
+            top as f64 + 10.0 - p.pos[1]
+        };
+        assert!(fall(0.0).abs() < 1e-9, "floats: {}", fall(0.0));
+        assert!(fall(0.1) > 0.0 && fall(0.1) < fall(1.0) * 0.2, "sinks slowly: {} vs {}", fall(0.1), fall(1.0));
+        // On the ground with no control, a push keeps its speed (no friction, no steering).
+        let mut p = Player::new(-10.5, top as f64, 8.5);
+        walk(&w, &mut p, 0.0, 0.3);
+        p.impulse([12.0, 0.0, 0.0]);
+        p.control_scale = 0.0;
+        for _ in 0..10 {
+            p.step(&w, &idle, 1.0 / 60.0);
+        }
+        assert!((p.vel[0] - 12.0).abs() < 1e-9 && p.on_ground, "kept its speed: {:?}", p.vel);
+        p.control_scale = 1.0;
+        walk(&w, &mut p, 0.0, 0.5);
+        assert!(p.vel[0].abs() < 0.1, "stopped with control back: {:?}", p.vel);
     }
 
     #[test]
