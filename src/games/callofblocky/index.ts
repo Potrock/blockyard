@@ -430,9 +430,6 @@ function personalHud(game: GameContext, f: Fighter, dt: number) {
 // The game
 // -------------------------------------------------------------------------------------------------
 
-/** The map's middle (where the host generates the world first): everyone's placed from here. */
-const centre = { x: (MAP.bounds.min.x + MAP.bounds.max.x) / 2, z: (MAP.bounds.min.z + MAP.bounds.max.z) / 2 };
-
 export default defineGame({
   id: 'callofblocky',
   title: 'Call of Blocky',
@@ -453,8 +450,9 @@ export default defineGame({
     seed: MAP.seed,
     structures: MAP.structures,
     terraform: MAP.terraform,
-    spawn: { x: centre.x + 0.5, y: MAP.floorY + 0.05, z: centre.z + 0.5 },
-    spawnYaw: MAP.spawns[0]?.yaw ?? 0,
+    // The home page looks down the street from the west end, toward the diner (fighters spawn at the map's spawns).
+    spawn: { x: -30.5, y: MAP.floorY + 0.05, z: 0.5 },
+    spawnYaw: -Math.PI / 2,
     time: MAP.time,
     freezeTime: true,
   },

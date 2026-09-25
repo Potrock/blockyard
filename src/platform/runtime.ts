@@ -1410,7 +1410,7 @@ export class Runtime {
 
   private updateHand(dt: number, me: PlayerFrame) {
     // Nothing in hand while dead (someone out of the game watching sees only the game), or in third person.
-    this.held.scene.visible = !me.dead && !me.vehicle && !this.view.thirdPerson;
+    this.held.scene.visible = this.mode !== 'title' && !me.dead && !me.vehicle && !this.view.thirdPerson;
     this.held.draw = me.hand.drawing ? me.hand.charge : 0;
     const bobAmt = this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0;
     this.held.update(dt, {
