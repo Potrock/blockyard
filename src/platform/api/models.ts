@@ -1,4 +1,4 @@
-import type { HeldModelSpec, ModelPart, ModelSpec } from './types';
+import type { GltfSpec, HeldModelSpec, ModelPart, ModelSpec } from './types';
 
 /** Origins of the built-in skins in the `builtin` entity atlas. Games bring their own (`items.atlas`). */
 export const Skins = {
@@ -49,6 +49,18 @@ export const Models = {
     }
     for (const e of opts.extras ?? []) parts.push({ ...e, uv: add(o, e.uv) });
     return { rig: 'humanoid', parts, atlas: opts.atlas ?? 'builtin', scale: opts.scale ?? 1 };
+  },
+
+  /**
+   * A glTF or GLB model (a Blockbench or Blender export): `Models.gltf(zombie, { clips: { idle:
+   * 'idle', walk: 'walk', attack: 'attack' } })`, where `zombie` is the file's address (import it
+   * with `?url`). The figure plays `walk` (or `run` when it hurries) as it moves, `idle` when it
+   * doesn't and `attack` when it swings, turns its `head` node to look, and holds items at its
+   * `hand` node. It faces +z, as glTF models should (`yaw` turns one that doesn't).
+   */
+  gltf(url: string, opts: Omit<GltfSpec, 'url'> & { scale?: number } = {}): ModelSpec {
+    const { scale, ...rest } = opts;
+    return { rig: 'gltf', parts: [], atlas: '', scale: scale ?? 1, gltf: { url, ...rest } };
   },
 
   /** Eight legs (the Minecraft spider layout: head, thorax, abdomen, 16x2x2 legs). */

@@ -383,6 +383,37 @@ const z = game.entities.spawn('zombie', { x: 10, y: 71, z: 0 });
 
 Box models use the Minecraft skin UV layout, so any 64×64 humanoid skin works. The only built-in skin is `Skins.player`; mobs come from your own atlas. `extras` adds parts of your own to a humanoid (the Warden's crown is one, with `parent: 'head'`).
 
+## glTF and GLB models
+
+Models made in Blockbench or Blender (`.gltf` with its textures inside, or `.glb`) work as props and as figures. Import the file with `?url` so the build ships it, then use its address:
+
+```ts
+import slotUrl from './models/slot_machine.gltf?url';
+import guardUrl from './models/guard.glb?url';
+
+// A prop: spawn copies like a block build's, and loop one of its animations if it has any.
+const slot = game.props.gltf(slotUrl, { animation: 'spin' });
+const machine = game.props.spawn(slot, { position: { x: 4, y: 64, z: 0 } });
+machine.play(null); // or another of its animations
+
+// A figure: which of its animations play when, the node that looks and the one that holds.
+game.entities.define('guard', {
+  name: 'Guard',
+  model: Models.gltf(guardUrl, { clips: { idle: 'idle', walk: 'walk', run: 'run', attack: 'swing' }, head: 'head', hand: 'right_arm', yaw: Math.PI }),
+  hitbox: { width: 0.8, height: 1.9 },
+  health: 30,
+  speed: 3,
+  ai: Behaviors.melee({ damage: 4 }),
+});
+```
+
+- They're drawn like the platform's own models: sun and shadows, sky and torch light where they stand, fog, the hurt flash and the fade on death. The file supplies the geometry, the textures (pixel art stays sharp), an emissive texture if it has one, and the animations; other material settings are ignored.
+- A figure plays `walk` as it moves, in step with the ground it covers, and `run` (if it has one) when it goes faster than its usual `speed`. It plays `idle` when it stands. Missing clips fall back: `run` to `walk`, `walk` to `idle`. `attack` plays once for each swing (`self.animate('attack')`, or a melee hit), on top of whatever else it's doing, and `cast` while it casts or winds up. A list plays several together, for models split into upper and lower body: `walk: ['walk_upper', 'walk_lower']`.
+- Which way it faces: glTF models face +z, and figures walk that way. Blockbench models face -z (north), so give them `yaw: Math.PI`; turn props with their `quaternion`.
+- A node named `hitbox` (a collision box some exporters add) is never drawn; `hide: ['name', …]` hides others.
+- Each player's screen fetches the files itself, as soon as the game names them, and Play waits until they're here. The host never opens them, so give a prop's `radius` if your game needs one.
+- In development, `?game=gallery` shows a room of glTF props and an animated figure (`src/games/gallery/`).
+
 ## Your own art and sound
 
 The platform ships only generic basics. A game brings its own look and sound, and nothing about it goes into the core.

@@ -30,6 +30,8 @@ export interface PropFrame {
   bolt?: BoltSpec;
   /** The prop it rides on (`attach`): `p` and `q` are on that one. */
   parent?: number;
+  /** The glTF animation it loops (`play`), if any. */
+  anim?: string;
   /** Flying on its own (`launch`): from `p` at `v` since game clock `t`; fired `by` a player, at their input `seq`. */
   v?: [number, number, number];
   t?: number;
@@ -69,6 +71,8 @@ export class PropState implements Prop {
   by: { id: string; seq: number } | null = null;
   /** Where it was put last (moved since: the game took over). */
   readonly placed = new THREE.Vector3();
+  /** The glTF animation it loops (`play`). */
+  anim: string | null = null;
 
   constructor(
     readonly id: number,
@@ -85,6 +89,10 @@ export class PropState implements Prop {
     this.velocity = new THREE.Vector3(velocity.x, velocity.y, velocity.z);
     this.since = this.hooks.clock();
     this.by = opts.by ? this.hooks.ack(opts.by) : null;
+  }
+
+  play(animation: string | null) {
+    this.anim = animation;
   }
 
   /** Flying: on to where it is now (unless the game moved it, which stops the flight). */
@@ -128,6 +136,8 @@ export class PropState implements Prop {
  */
 export class PropSim implements PropApi {
   private props: PropState[] = [];
+  /** glTF models' default animations (`props.gltf`'s `animation`). */
+  private gltfAnims = new Map<number, string | null>();
   private nextModel = 1;
   private nextProp = 1;
 
@@ -174,9 +184,17 @@ export class PropSim implements PropApi {
 
   spawn(model: PropModel, opts: { position?: Vec3; scale?: number } = {}): Prop {
     const p = this.add((model as PropModelImpl).id, undefined);
+    p.anim = this.gltfAnims.get((model as PropModelImpl).id) ?? null;
     if (opts.position) p.position.set(opts.position.x, opts.position.y, opts.position.z);
     if (opts.scale) p.scale = opts.scale;
     return p;
+  }
+
+  gltf(url: string, opts: { scale?: number; radius?: number; animation?: string } = {}): PropModel {
+    const m = new PropModelImpl(this.nextModel++, opts.radius ?? 1, 0);
+    this.gltfAnims.set(m.id, opts.animation ?? null);
+    this.content.defineGltfModel(m.id, url, { scale: opts.scale, animation: opts.animation });
+    return m;
   }
 
   bolt(opts: BoltSpec): Prop {
@@ -216,6 +234,7 @@ export class PropSim implements PropApi {
       model: p.model,
       bolt: p.bolt,
       parent: p.parent?.id,
+      anim: p.anim ?? undefined,
       // Flying: where it started, and how (the same every tick, so nothing is sent while it flies).
       ...(p.velocity ? { v: [p.velocity.x, p.velocity.y, p.velocity.z] as [number, number, number], t: p.since, by: p.by?.id, seq: p.by?.seq } : {}),
       p: p.velocity ? [p.origin.x, p.origin.y, p.origin.z] : [p.position.x, p.position.y, p.position.z],

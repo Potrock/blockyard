@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { HeldModelSpec, ModelPart, ModelSpec, SpriteRef } from '../api/types';
 import { Shaders } from './shaders';
 import type { SharedUniforms } from './pipeline';
+import { GltfLibrary } from '../client/gltf';
 
 /** The built-in starter sprites (16x16, `builtin` atlas, row at y = 64). Games bring the rest. */
 export const BUILTIN_SPRITES: Record<string, [number, number]> = {
@@ -43,10 +44,21 @@ export class EntityGraphics {
   private iconCache = new Map<string, string>();
   private heldCache = new WeakMap<HeldModelSpec, THREE.BufferGeometry>();
 
-  constructor(private shared: SharedUniforms) {}
+  /** glTF and GLB model files, fetched once each. */
+  readonly gltf: GltfLibrary;
+
+  constructor(private shared: SharedUniforms) {
+    this.gltf = new GltfLibrary(shared);
+  }
+
+  /** A figure for an entity's model: boxes now, or glTF once its file is here (null till then). */
+  figure(spec: ModelSpec): Figure | null {
+    return spec.rig === 'gltf' ? this.gltf.figure(spec) : this.buildModel(spec);
+  }
 
   /** Free every atlas texture and cached geometry (a game is over). */
   dispose() {
+    this.gltf.dispose();
     for (const a of this.atlases.values()) {
       a.albedo.dispose();
       a.emissive.dispose();
@@ -321,6 +333,8 @@ export interface AnimState {
   /** Walk cycle phase (radians) and amount (0..1). */
   walkPhase: number;
   walkAmount: number;
+  /** Speed over its usual walking speed (above ~1.3 it's running). */
+  pace: number;
   /** Seconds since the last `attack` animation started (large = none). */
   attackT: number;
   /** Arms raised for a wind-up. */
@@ -334,7 +348,18 @@ export interface AnimState {
   time: number;
 }
 
-export class ModelInstance {
+/** A drawn figure: box model (`ModelInstance`) or glTF (`GltfFigure`). */
+export interface Figure {
+  readonly root: THREE.Group;
+  /** Its parts by name (`armR` holds items). */
+  readonly pivots: Map<string, THREE.Object3D>;
+  /** Its light, tint and fade uniforms (`uProbe`, `uTint`, `uOpacity`). */
+  readonly material: THREE.RawShaderMaterial;
+  animate(s: AnimState): void;
+  dispose(): void;
+}
+
+export class ModelInstance implements Figure {
   constructor(
     readonly root: THREE.Group,
     readonly pivots: Map<string, THREE.Object3D>,

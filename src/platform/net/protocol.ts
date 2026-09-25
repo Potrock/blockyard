@@ -104,7 +104,9 @@ export type ContentDef =
   | { kind: 'animation'; name: string; anim: ViewAnimation }
   | { kind: 'entity'; name: string; def: EntityDefinition }
   | { kind: 'item'; name: string; def: ItemDefinition }
-  | { kind: 'model'; id: number; blueprint: BlueprintData; opts: { scale?: number; pivot?: Vec3 } };
+  | { kind: 'model'; id: number; blueprint: BlueprintData; opts: { scale?: number; pivot?: Vec3 } }
+  /** A glTF prop model (`props.gltf`): each client fetches the file. */
+  | { kind: 'gltf'; id: number; url: string; opts: { scale?: number; animation?: string } };
 
 /** What a host tells a client, in the order it happened. */
 export type HostEvent =

@@ -23,6 +23,8 @@ const MARK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="#6fd35c" d
 /** What the home page shows for one game (and does when played or another game is picked). */
 export interface HomeGame {
   current: string;
+  /** Its name (for a game not in the list: a development preview). */
+  title?: string;
   onPlay: () => void;
   onPick: (id: string) => void;
   controls?: [string, string][];
@@ -82,7 +84,7 @@ export class TitleScreen {
   show(g: HomeGame) {
     this.game = g;
     const entry = this.games.find((x) => x.id === g.current);
-    this.title = entry?.title ?? 'the game';
+    this.title = entry?.title ?? g.title ?? 'the game';
     this.root.style.setProperty('--game', entry?.accent ?? '#7fd46b');
     this.root.classList.remove('hidden', 'ready');
     this.ready = false;

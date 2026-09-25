@@ -193,7 +193,7 @@ export class Runtime {
     // On a server, the title screen asks for a name (and says who's on).
     const online = server ? { server: server.url.replace(/\/[^/]*$/, ''), game: def.id } : null;
     this.title = carried?.title ?? new TitleScreen(ui, games);
-    this.title.show({ current: def.id, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, walks: this.walker, online });
+    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, walks: this.walker, online });
   }
 
   /**
@@ -282,6 +282,8 @@ export class Runtime {
     const biome = this.biome;
     this.renderer.uniforms.uVoid.value = def.world?.terrain === 'void' ? 1 : 0;
     this.graphics = new EntityGraphics(this.renderer.uniforms);
+    // Model files the game names (glTF props and figures): fetched at once, so they're here by play.
+    this.content.onModelFile((url) => this.graphics.gltf.load(url));
     this.loadEntityAtlas();
 
     this.pool = await poolPromise;
@@ -348,6 +350,7 @@ export class Runtime {
       fxScene: this.renderer.fxScene,
       world,
       content: this.content,
+      gltf: this.graphics.gltf,
     });
     this.entityView = new EntityView(this.graphics, this.renderer.entityScene, world, this.content);
     this.pickupView = new PickupView({
@@ -863,8 +866,9 @@ export class Runtime {
     const s = this.mine(this.frameData);
     if (this.worldReady || !s || !this.hostReady) return;
     const ready = this.chunks.readiness(s.x, s.z, Math.min(this.settings.renderDistance, 6));
-    this.title.progress(0.1 + 0.9 * ready, ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : 'Ready');
-    if (ready >= 0.999) {
+    const models = this.graphics.gltf.pending;
+    this.title.progress(0.1 + 0.9 * ready * (models ? 0.97 : 1), ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : models ? `Loading models… ${models} to go` : 'Ready');
+    if (ready >= 0.999 && !models) {
       this.worldReady = true;
       this.title.setReady();
       this.canvas.classList.remove('fading');

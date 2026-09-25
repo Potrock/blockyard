@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Content } from '../content';
-import type { AnimState, EntityGraphics, ModelInstance } from '../render/entities';
+import type { AnimState, EntityGraphics, Figure } from '../render/entities';
 import { Shaders } from '../render/shaders';
 import type { EntityFrame, ProjectileFrame } from '../sim/entities';
 
@@ -29,7 +29,7 @@ function boltMaterial(color: string): THREE.RawShaderMaterial {
 }
 
 interface Shown {
-  model: ModelInstance;
+  model: Figure;
   anim: AnimState;
   yaw: number;
   attacks: number;
@@ -76,11 +76,13 @@ export class EntityView {
       if (!v) {
         const def = this.content.entities.get(f.type);
         if (!def) continue;
-        const model = this.graphics.buildModel(def.model);
+        // A glTF model whose file hasn't arrived yet: drawn once it has.
+        const model = this.graphics.figure(def.model);
+        if (!model) continue;
         this.scene.add(model.root);
         v = {
           model,
-          anim: { walkPhase: 0, walkAmount: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0 },
+          anim: { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0 },
           yaw: f.yaw,
           attacks: f.attacks,
           probeTimer: Math.random() * 0.2,
@@ -139,6 +141,7 @@ export class EntityView {
       a.walkPhase += hs * dt * (4.2 / Math.max(0.6, v.scale));
     }
     a.walkAmount += (Math.min(1, hs / Math.max(1.2, v.speed * 0.7)) - a.walkAmount) * Math.min(1, dt * 8);
+    a.pace = hs / Math.max(0.1, v.speed);
     if (f.look) {
       const eyeY = f.y + v.height * 0.85;
       const dist = Math.hypot(f.look.x - f.x, f.look.z - f.z) || 1;

@@ -7,6 +7,7 @@ import type { SharedUniforms } from '../render/pipeline';
 import type { Content } from '../content';
 import type { PropFrame } from '../sim/props';
 import { Shaders } from '../render/shaders';
+import type { GltfFigure, GltfLibrary } from './gltf';
 
 export interface PropViewParts {
   shared: SharedUniforms;
@@ -18,6 +19,8 @@ export interface PropViewParts {
   fxScene: THREE.Scene;
   world: VoxelWorld;
   content: Content;
+  /** glTF model files (props made from them). */
+  gltf: GltfLibrary;
 }
 
 // Faces in engine order (+X, -X, +Y, -Y, +Z, -Z): normal, and in-plane axes u (right) and v (up)
@@ -47,6 +50,8 @@ interface Shown {
   flicker: number;
   /** Grows past this distance from the camera. */
   far: number;
+  /** A glTF model's copy (its animations). */
+  figure?: GltfFigure;
 }
 
 /** A pose this client knows better than the frame (its own vehicle's model, predicted). */
@@ -229,6 +234,7 @@ export class PropView {
   }
 
   private drop(v: Shown) {
+    if (v.figure) return v.figure.dispose();
     v.object.removeFromParent();
     if (v.material) v.material.dispose();
     else ((v.object.children[0] as THREE.Mesh).material as THREE.Material).dispose();
@@ -238,7 +244,7 @@ export class PropView {
     let g = this.geometries.get(model);
     if (!g) {
       const m = this.s.content.models.get(model);
-      if (!m) return null;
+      if (!m || !('blueprint' in m)) return null;
       g = this.mesh(m.blueprint, m.opts);
       this.geometries.set(model, g);
     }
@@ -274,13 +280,24 @@ export class PropView {
       seen.add(f.id);
       let v = this.shown.get(f.id);
       if (!v) {
+        const def = f.model !== undefined ? this.s.content.models.get(f.model) : undefined;
         if (f.bolt) v = this.boltMesh(f.bolt);
-        else {
+        else if (def && 'url' in def) {
+          // A glTF model: drawn once its file is here.
+          const figure = this.s.gltf.prop(def.url, def.opts);
+          if (!figure) continue;
+          this.s.scene.add(figure.root);
+          v = { object: figure.root, material: figure.material, probeTimer: Math.random() * 0.2, flicker: 0, far: 0, figure };
+        } else {
           const g = f.model !== undefined ? this.geometry(f.model) : null;
           if (!g) continue;
           v = this.blockMesh(g);
         }
         this.shown.set(f.id, v);
+      }
+      if (v.figure) {
+        v.figure.loop(f.anim ?? null);
+        v.figure.update(dt);
       }
       const o = v.object;
       const own = overrides?.get(f.id);

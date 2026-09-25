@@ -21,13 +21,14 @@ export class Content {
   readonly entities = new Map<string, EntityDefinition>();
   /** Items: their icons and how they're held. */
   readonly items = new Map<string, ItemDefinition>();
-  /** Prop models (`props.model`): the blueprint to mesh. */
-  readonly models = new Map<number, { blueprint: Blueprint; opts: { scale?: number; pivot?: Vec3 } }>();
+  /** Prop models: a blueprint to mesh (`props.model`), or a glTF file (`props.gltf`). */
+  readonly models = new Map<number, { blueprint: Blueprint; opts: { scale?: number; pivot?: Vec3 } } | { url: string; opts: { scale?: number; animation?: string } }>();
   /** Set by a host: each definition, as data for its clients. */
   forward: ((def: ContentDef) => void) | null = null;
   private soundListeners: Listener<SynthVoice>[] = [];
   private atlasListeners: Listener<AtlasSource>[] = [];
   private animationListeners: Listener<ViewAnimation>[] = [];
+  private modelFileListeners: Listener<string>[] = [];
   private inline = 0;
 
   defineSound(name: string, voice: SynthVoice) {
@@ -51,6 +52,12 @@ export class Content {
     this.forward?.({ kind: 'model', id, blueprint: blueprint.toData(), opts: wire(opts) });
   }
 
+  defineGltfModel(id: number, url: string, opts: { scale?: number; animation?: string }) {
+    this.models.set(id, { url, opts });
+    for (const l of this.modelFileListeners) l(url, url);
+    this.forward?.({ kind: 'gltf', id, url, opts: wire(opts) });
+  }
+
   defineItem(id: string, def: ItemDefinition) {
     this.items.set(id, def);
     this.forward?.({ kind: 'item', name: id, def: wire(def) });
@@ -58,6 +65,8 @@ export class Content {
 
   defineEntity(type: string, def: EntityDefinition) {
     this.entities.set(type, def);
+    const file = def.model.gltf?.url;
+    if (file) for (const l of this.modelFileListeners) l(file, file);
     this.forward?.({ kind: 'entity', name: type, def: wire(def) });
   }
 
@@ -89,6 +98,8 @@ export class Content {
         return this.defineItem(d.name, d.def);
       case 'model':
         return this.defineModel(d.id, Blueprint.fromData(d.blueprint), d.opts);
+      case 'gltf':
+        return this.defineGltfModel(d.id, d.url, d.opts);
     }
   }
 
@@ -101,6 +112,13 @@ export class Content {
   onAtlas(fn: Listener<AtlasSource>) {
     for (const [n, v] of this.atlases) fn(n, v);
     this.atlasListeners.push(fn);
+  }
+
+  /** Every model file content names (glTF props and figures), so a client can fetch them early. */
+  onModelFile(fn: Listener<string>) {
+    for (const m of this.models.values()) if ('url' in m) fn(m.url, m.url);
+    for (const e of this.entities.values()) if (e.model.gltf) fn(e.model.gltf.url, e.model.gltf.url);
+    this.modelFileListeners.push(fn);
   }
 
   onAnimation(fn: Listener<ViewAnimation>) {

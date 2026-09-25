@@ -237,6 +237,8 @@ export interface Prop {
    * from where their (predicted) guns were when they fired, rather than where the server had them.
    */
   launch(from: Vec3, velocity: Vec3, opts?: { by?: Player }): void;
+  /** Loop one of its glTF model's animations (by name), or stop with null. */
+  play(animation: string | null): void;
   remove(): void;
 }
 
@@ -249,6 +251,14 @@ export interface PropApi {
    */
   model(blueprint: Blueprint, opts?: { scale?: number; pivot?: Vec3 }): PropModel;
   spawn(model: PropModel, opts?: { position?: Vec3; scale?: number }): Prop;
+  /**
+   * A glTF or GLB model (tables, machines, anything made in Blockbench or Blender), drawn lit and
+   * shadowed like the world's blocks; spawn copies with `spawn`. Each player's screen fetches the
+   * file itself (import it: `import slot from './models/slot.gltf?url'`); the host doesn't open
+   * it, so give its `radius` if you need one. `animation` loops one of its animations on every
+   * copy (see `Prop.play`).
+   */
+  gltf(url: string, opts?: { scale?: number; radius?: number; animation?: string }): PropModel;
   /**
    * A glowing streak pointing along its -z (lasers, tracers, engine flames). Length and width in
    * blocks; `flicker` (0..1) makes it waver in length on its own (flames); past `far` blocks from
@@ -737,12 +747,38 @@ export interface ItemApi {
 
 /** Box model description (see `Models`). Units are texels, 16 per block. */
 export interface ModelSpec {
-  rig: 'humanoid' | 'spider' | 'static';
+  rig: 'humanoid' | 'spider' | 'static' | 'gltf';
   parts: ModelPart[];
   /** Skin atlas (`builtin` or a name registered with `items.atlas`). */
   atlas: string;
   /** Uniform scale applied to the whole model. */
   scale: number;
+  /** A glTF model (`Models.gltf`) instead of boxes. */
+  gltf?: GltfSpec;
+}
+
+/**
+ * A glTF / GLB model for a figure (`Models.gltf`): the file, and which of its animations play
+ * when. Each player's screen fetches the file itself (a game imports it: `import zombie from
+ * './models/zombie.gltf?url'`); a host never opens it.
+ */
+export interface GltfSpec {
+  /** Where the file is: a game's own (imported with `?url`) or any address. */
+  url: string;
+  /**
+   * The model's animations (by name) for what the figure does. A list plays together (a model
+   * split into upper and lower body: `['walk_upper', 'walk_lower']`). Missing ones fall back:
+   * `run` to `walk`, `walk` to `idle`; without `idle`, the model stands still.
+   */
+  clips?: { idle?: string | string[]; walk?: string | string[]; run?: string | string[]; attack?: string | string[]; cast?: string | string[] };
+  /** Turn the model this far about its up axis (radians) if it doesn't face +z like glTF models should. */
+  yaw?: number;
+  /** The node that turns to look (its name in the file). */
+  head?: string;
+  /** The node a held item hangs from (its name in the file). */
+  hand?: string;
+  /** Nodes not to draw (by name). A node named `hitbox` (a collision box) is never drawn. */
+  hide?: string[];
 }
 
 export interface ModelPart {

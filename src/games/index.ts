@@ -11,6 +11,6 @@ export const games: GameDefinition[] = [arena, starfighter, bedwars, sandbox, he
 /** Dev-only previews (open by id, e.g. `?game=shipyard`; not listed, not in production builds). */
 export async function devGames(): Promise<GameDefinition[]> {
   if (!import.meta.env.DEV) return [];
-  const [sf, bw] = await Promise.all([import('./starfighter/previews'), import('./bedwars/previews')]);
-  return [...sf.previews, ...bw.previews];
+  const [sf, bw, gallery] = await Promise.all([import('./starfighter/previews'), import('./bedwars/previews'), import('./gallery')]);
+  return [...sf.previews, ...bw.previews, gallery.default];
 }
