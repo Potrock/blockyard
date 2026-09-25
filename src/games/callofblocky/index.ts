@@ -497,6 +497,12 @@ export default defineGame({
   },
 
   setup(game) {
+    // A fresh game (a page can host one game after another): nothing carries over.
+    fighters = new Map();
+    running = false;
+    phase = 'playing';
+    nav = null;
+    briefcase = null;
     defineArt(game);
     defineWeapons(game);
     defineBriefcase(game);
