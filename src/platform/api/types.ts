@@ -98,8 +98,15 @@ export interface HudTheme {
    * backgrounds; `text`; `danger`: damage and low health; `good`: health and healing.
    */
   colors?: { accent?: string; ink?: string; paper?: string; text?: string; danger?: string; good?: string };
-  /** Comic-book style: hard offset shadows and outlines on text and panels. */
-  comic?: boolean;
+  /**
+   * The game's own stylesheet for its HUD: it restyles the platform's pieces by their classes
+   * (`.stat`, `.banner-title`, `.scoreboard`, `.menu-card`, `.hotbar`…), the menus and result
+   * screens, and the game's widgets. It reaches only those (not the home page or the pause menu)
+   * and each rule counts one class more than written, so `.stat { … }` wins over the platform's
+   * own `.stat`. Keep it in a file: `import css from './hud.css?raw'`. No `@import`, fonts (use
+   * `fonts`) or pictures from other sites.
+   */
+  css?: string;
 }
 
 export interface WorldOptions {

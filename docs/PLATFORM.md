@@ -707,10 +707,12 @@ hud: {
     text: "'Archivo', system-ui, sans-serif",
     fonts: ['Bangers', 'Archivo'],              // fetched from Google Fonts
     colors: { accent: '#ffcc00', ink: '#111', paper: '#fdf1d6', text: '#111', danger: '#e63946', good: '#ffcc00' },
-    comic: true,                                // ink outlines, hard shadows, paper panels
+    css: hudCss,                                // import hudCss from './hud.css?raw': the game's own look
   },
 },
 ```
+
+**A stylesheet of the game's own.** `theme.css` restyles the platform's HUD by its classes: `.stat`, `.objective`, `.banner-title`, `.hud-pop-text`, `.feed-line`, `.scoreboard` and `.sb-table`, `.healthbar-track`, `.ammo-mag`, `.hotbar` and `.slot`, `.menu-card` and `.menu-entry`, `.result-card`, and the rest (find them with the browser's inspector). The platform keeps it to the HUD, the menus, the result screens and the game's widgets (the home page and pause menu stay the platform's), and each rule counts one class more than written, so `.stat { … }` beats the platform's own `.stat`. The `colors` above are there as `var(--hud-ink)`, `--hud-paper`, `--hud-accent`, `--hud-fg`, `--hud-danger` and `--hud-good`, the fonts as `var(--pixel)` (display) and `var(--sans)`. Call of Blocky's comic-book look (ink outlines, hard shadows, paper panels) is all in `src/games/callofblocky/hud.css`: copy it to start from. Left out: `@import`, `@font-face` (use `fonts`), pictures from other sites (`url()` takes `data:` images and files on this site), and anything that could run code.
 
 ## Testing a game headless
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { h } from './dom';
+import { scopeCss } from './markup';
 import type { FeedPart, HudApi, HudTheme, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3 } from '../api/types';
 import type { AnchorRef, RadarWire } from '../net/protocol';
 
@@ -830,7 +831,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
 
 /**
  * A game's HUD theme (`hud.theme`): fonts and colours as CSS variables on the HUD, menus and
- * result screens, the fonts fetched from Google Fonts, and the comic look as a class.
+ * result screens, the fonts fetched from Google Fonts, and the game's own stylesheet, kept to
+ * the HUD (see `scopeCss`).
  */
 export function applyTheme(ui: HTMLElement, theme: HudTheme | undefined): () => void {
   if (!theme) return () => {};
@@ -856,10 +858,18 @@ export function applyTheme(ui: HTMLElement, theme: HudTheme | undefined): () => 
   };
   for (const [k, v] of Object.entries(vars)) if (v) ui.style.setProperty(k, v);
   ui.classList.add('hud-themed');
-  if (theme.comic) ui.classList.add('hud-comic');
+  // After the platform's stylesheet, so the game's rules win where they're as specific.
+  let sheet: HTMLStyleElement | null = null;
+  if (theme.css) {
+    sheet = document.createElement('style');
+    sheet.dataset.hudTheme = '';
+    sheet.textContent = scopeCss(theme.css, { theme: true });
+    document.head.append(sheet);
+  }
   return () => {
     for (const k of Object.keys(vars)) ui.style.removeProperty(k);
-    ui.classList.remove('hud-themed', 'hud-comic');
+    ui.classList.remove('hud-themed');
     for (const l of links) l.remove();
+    sheet?.remove();
   };
 }

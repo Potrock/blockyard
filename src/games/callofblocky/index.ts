@@ -7,6 +7,7 @@ import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, PRIMARIES, WEAPONS, type Primary } from './weapons';
 import { GUNS } from './models';
 import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
+import hudCss from './hud.css?raw';
 
 /** Each outfit's fighter (in the same order as `OUTFITS`): a model on the platform's humanoid rig, animated by it. */
 const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfit % FIGHTER_MODELS.length].url, { rig: 'humanoid' });
@@ -504,7 +505,8 @@ export default defineGame({
       text: "'Archivo', 'Helvetica Neue', system-ui, sans-serif",
       fonts: ['Bangers', 'Archivo'],
       colors: { accent: COLORS.gold, ink: COLORS.ink, paper: COLORS.cream, text: COLORS.ink, danger: COLORS.red, good: COLORS.gold },
-      comic: true,
+      // The comic-book look: ink outlines, hard shadows, paper panels.
+      css: hudCss,
     },
   },
 
