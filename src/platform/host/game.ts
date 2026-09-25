@@ -449,6 +449,7 @@ export class GameHost {
         const n = c.input;
         i.active = n.active;
         i.down = n.down;
+        i.move = n.move;
         i.buttons = n.buttons;
         i.yaw = n.yaw;
         i.pitch = n.pitch;

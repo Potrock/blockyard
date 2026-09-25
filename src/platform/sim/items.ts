@@ -150,6 +150,21 @@ export class Inventory implements InventoryApi {
     this.onChange?.();
   }
 
+  /** The next slot with something in it (`by` of them on, or back for a negative), round the end. */
+  cycle(by: number) {
+    let at = this.selected;
+    for (let n = Math.abs(by); n > 0; n--) {
+      for (let i = 1; i <= 9; i++) {
+        const s = (((at + Math.sign(by) * i) % 9) + 9) % 9;
+        if (this.slots[s] || i === 9) {
+          at = s;
+          break;
+        }
+      }
+    }
+    this.select(at);
+  }
+
   clear() {
     this.slots.fill(null);
     this.selected = 0;

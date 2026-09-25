@@ -48,6 +48,11 @@ export class SimInput implements InputApi {
     return this.state.seen ?? null;
   }
 
+  /** A controller's left stick ([right, forward]), while it's pushed. */
+  get move(): [number, number] | null {
+    return this.state.active ? (this.state.move ?? null) : null;
+  }
+
   /** The buttons held, as a bit mask (1 left, 2 middle, 4 right). */
   get buttons(): number {
     return this.state.active ? this.state.buttons & ~this.consumedButtons : 0;

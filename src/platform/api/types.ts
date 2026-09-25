@@ -31,6 +31,15 @@ export interface GameDefinition {
   /** Control hints for the title screen, e.g. `[['LMB', 'attack']]` (movement keys are always shown). */
   controls?: [string, string][];
   /**
+   * Controllers: what each button does, over the platform's layout (see `PadAction`; `A` jump,
+   * `B` crouch, `X` R, `Y` / `RB` next slot, `LB` previous, `LT` right mouse, `RT` left mouse,
+   * `L3` sprint, `R3` middle mouse, `View` Tab, `Menu` pause, D-pad ↑ E, ↓ F, ← → slots). A
+   * controller drives the same keys and mouse buttons the keyboard and mouse do, so a game reads
+   * them all the same way; its hints on the home page come from `controls` (the entry for the
+   * key a button presses), or give one: `{ Up: ['KeyL', 'loadout'] }`.
+   */
+  gamepad?: Partial<Record<PadButton, PadAction | [PadAction, string]>>;
+  /**
    * Allow the built-in cheat commands (`/give`, `/tp`, `/spawn`, `/kill`, `/heal`, `/time`, `/fly`)
    * in production builds. They're always available in development.
    */
@@ -291,6 +300,17 @@ export interface OrbitOptions {
   min?: number;
   max?: number;
 }
+
+/** A controller's buttons (the standard layout: Xbox names; `Back` is View, `Start` is Menu). */
+export type PadButton = 'A' | 'B' | 'X' | 'Y' | 'LB' | 'RB' | 'LT' | 'RT' | 'Back' | 'Start' | 'L3' | 'R3' | 'Up' | 'Down' | 'Left' | 'Right';
+
+/**
+ * What a controller button does: press a key (KeyboardEvent.code, e.g. `'KeyL'`) or a mouse
+ * button (`'LMB'`, `'MMB'`, `'RMB'`); or `'jump'`, `'crouch'`, `'sprint'` (the player's movement
+ * keys; sprint stays on until the stick lets go), `'next'` / `'prev'` (hotbar slot, skipping
+ * empty ones for items), `'pause'`; or null for nothing.
+ */
+export type PadAction = string | null;
 
 export interface InputApi {
   /** Key held (KeyboardEvent.code: 'KeyW', 'Space', 'ShiftLeft'…). */
@@ -1003,7 +1023,18 @@ export interface GunItem extends ItemBase {
    * through the optic's window (`color`, default red; model the optic with its window open and
    * its `sight` point in the window's middle); or a `scope` (the view fills with the scope).
    */
-  aim?: { zoom?: number; time?: number; move?: number; sight?: 'iron' | 'dot' | 'holo' | 'scope'; color?: string };
+  aim?: {
+    zoom?: number;
+    time?: number;
+    move?: number;
+    sight?: 'iron' | 'dot' | 'holo' | 'scope';
+    color?: string;
+    /**
+     * Aim assist for someone on a controller (0 none, 1 strong; default 0.6): the view slows
+     * over a player in sight and turns a little with them as they move. Mouse aim is never helped.
+     */
+    assist?: number;
+  };
   /** Blocks. Default 150. */
   range?: number;
   /** Movement speed while it's held (a heavy gun is slower). Default 1. */

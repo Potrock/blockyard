@@ -74,6 +74,11 @@ export interface PlayerInput {
   mouseX: number;
   mouseY: number;
   wheel: number;
+  /**
+   * A controller's left stick, when it's pushed: [right, forward], each -1..1 (length at most 1).
+   * Walking goes that way, as fast as it's pushed; the arrow keys and WASD still work alongside.
+   */
+  move?: [number, number];
   /** Where the player is looking (radians; yaw 0 looks toward -z). */
   yaw: number;
   pitch: number;

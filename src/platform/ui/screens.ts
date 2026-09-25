@@ -32,6 +32,8 @@ export interface HomeGame {
   onPlay: () => void;
   onPick: (id: string) => void;
   controls?: [string, string][];
+  /** The same on a controller (shown instead while one is in use). */
+  pad?: [string, string][];
   walks?: boolean;
   online?: OnlineOptions | null;
 }
@@ -114,12 +116,13 @@ export class TitleScreen {
     this.start.replaceChildren(
       ...[tag, name, this.button, rooms, this.status].filter((x): x is HTMLElement => !!x),
       h(
-        'div.home-controls',
+        'div.home-controls.keys-only',
         {},
         ...(walks ? [h('span', {}, h('kbd', {}, 'WASD'), ' move'), h('span', {}, h('kbd', {}, 'Space'), ' jump')] : []),
         ...controls.map(([k, v]) => h('span', {}, h('kbd', {}, k), ` ${v}`)),
         h('span', {}, h('kbd', {}, '/'), ' commands'),
       ),
+      h('div.home-controls.pad-only', {}, ...(g.pad ?? []).map(([k, v]) => h('span', {}, h('kbd', {}, k), ` ${v}`))),
     );
     this.loading(`Loading ${this.title}…`);
     this.status.textContent = '';
@@ -283,6 +286,7 @@ export class PauseMenu {
   readonly root: HTMLElement;
   private settings: Settings;
   private timeSlider!: HTMLInputElement;
+  private padKeys: HTMLElement;
   onTime: ((t: number) => void) | null = null;
   onNewWorld: ((seed: number | null) => void) | null = null;
   onRestart: (() => void) | null = null;
@@ -325,6 +329,7 @@ export class PauseMenu {
     this.timeSlider = h('input', { type: 'range', min: 0, max: 1, step: 0.001, value: '0.3' }) as HTMLInputElement;
     this.timeSlider.addEventListener('input', () => this.onTime?.(Number(this.timeSlider.value)));
     const seedInput = h('input.seed-input', { type: 'text', placeholder: 'seed (blank = random)' }) as HTMLInputElement;
+    this.padKeys = h('div.keys.pad-only');
 
     this.root = h(
       'div.screen.pause-screen.hidden',
@@ -358,6 +363,9 @@ export class PauseMenu {
             slider('Field of view', 'fov', 55, 110, 1, (v) => `${v}°`),
             slider('Mouse sensitivity', 'sensitivity', 0.2, 3, 0.05, (v) => v.toFixed(2)),
             toggle('View bobbing', 'viewBobbing'),
+            h('h3', {}, 'Controller'),
+            slider('Stick sensitivity', 'stickSensitivity', 0.3, 2.5, 0.05, (v) => v.toFixed(2)),
+            h('div.toggles', {}, toggle('Invert look', 'invertY'), toggle('Vibration', 'vibration'), toggle('Aim assist', 'aimAssist')),
           ),
           h(
             'section',
@@ -381,10 +389,11 @@ export class PauseMenu {
           'div.panel-foot',
           {},
           h(
-            'div.keys',
+            'div.keys.keys-only',
             {},
             'WASD move · Space jump / fly up · Shift sneak / fly down · Ctrl or double-tap W sprint · F fly · 1-9 / wheel select · MMB pick · E blocks · F1 hide HUD · F3 debug · [ ] time',
           ),
+          this.padKeys,
           h('div.new-world', {}, seedInput, h('button.btn', { onclick: () => {
             const v = seedInput.value.trim();
             const n = v === '' ? null : Number.isFinite(Number(v)) ? Number(v) >>> 0 : hashString(v);
@@ -394,6 +403,11 @@ export class PauseMenu {
       ),
     );
     parent.append(this.root);
+  }
+
+  /** What the controller's buttons do in this game (shown while one is in use). */
+  setPadHints(hints: [string, string][]) {
+    this.padKeys.textContent = ['A select', 'B back', ...hints.map(([k, v]) => `${k} ${v}`)].join(' · ');
   }
 
   show(time: number) {

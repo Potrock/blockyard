@@ -100,7 +100,7 @@ export class Combat {
     this.cooldown = Math.max(0, this.cooldown - dt);
     const inv = this.me.inventory;
     if (active) {
-      if (input.wheel !== 0) inv.select(inv.selected + input.wheel);
+      if (input.wheel !== 0) inv.cycle(input.wheel);
       for (let i = 0; i < 9; i++) if (input.pressed(`Digit${i + 1}`)) inv.select(i);
     }
     const stack = inv.held;

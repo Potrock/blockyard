@@ -113,6 +113,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
   private ammoKey = '';
   /** An open menu's key listener, removed when it closes, however it closes. */
   private unhooks = new Map<HTMLElement, () => void>();
+  /** Each open menu's close (B on a controller backs out of the top one). */
+  private menuClosers = new Map<HTMLElement, () => void>();
 
   constructor(parent: HTMLElement, private iconFor: (ref: IconRef) => string) {
     this.hearts = h('div.hearts');
@@ -673,6 +675,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     };
     const close = () => {
       if (!open) return;
+      this.menuClosers.delete(el);
       this.unhooks.get(el)?.();
       el.classList.add('closing');
       window.setTimeout(() => el.remove(), 150);
@@ -681,6 +684,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
       current.onClose?.();
     };
     closeBtn.onclick = close;
+    this.menuClosers.set(el, close);
     el.onclick = (ev) => {
       if (ev.target === el) close();
     };
@@ -706,8 +710,18 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     };
   }
 
+  /** Back out of the top menu (a controller's B), if a menu is on top. */
+  back(): boolean {
+    const top = this.screens[this.screens.length - 1];
+    const close = top && this.menuClosers.get(top);
+    if (!close) return false;
+    close();
+    return true;
+  }
+
   closeScreens() {
     for (const unhook of [...this.unhooks.values()]) unhook();
+    this.menuClosers.clear();
     for (const s of this.screens) s.remove();
     if (this.screens.length) this.onScreen?.(false);
     this.screens = [];

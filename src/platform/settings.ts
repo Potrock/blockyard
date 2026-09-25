@@ -13,6 +13,11 @@ export interface Settings {
   renderScale: number;
   fov: number;
   sensitivity: number;
+  /** Controllers: how fast the right stick turns (1 = the platform's), pulling it down looks down (false) or up, rumble, aim assist with guns. */
+  stickSensitivity: number;
+  invertY: boolean;
+  vibration: boolean;
+  aimAssist: boolean;
   viewBobbing: boolean;
   dayMinutes: number;
   occlusion: boolean;
@@ -33,6 +38,10 @@ export function defaultSettings(): Settings {
     renderScale: dpr > 1.5 ? 0.75 : 1,
     fov: 75,
     sensitivity: 1,
+    stickSensitivity: 1,
+    invertY: false,
+    vibration: true,
+    aimAssist: true,
     viewBobbing: true,
     dayMinutes: 20,
     occlusion: true,

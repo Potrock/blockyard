@@ -2095,3 +2095,30 @@ input[type='range']::-moz-range-thumb {
 .gun-reticle.holo .gun-reticle-ring {
   display: block;
 }
+
+/* ---------------------------------------------------------------------------------------------
+   Controllers: hints for the device in use, the menu highlight, no cursor while one plays
+   --------------------------------------------------------------------------------------------- */
+body.pad-mode .keys-only,
+body:not(.pad-mode) .pad-only {
+  display: none !important;
+}
+
+.pad-focus {
+  outline: 3px solid var(--hud-accent, var(--game, #ffd23f)) !important;
+  outline-offset: 3px;
+  /* A dark ring between: it shows on light cards and on an accent-coloured (chosen) one. */
+  box-shadow: 0 0 0 3px rgba(8, 10, 16, 0.9), 0 0 24px color-mix(in srgb, var(--hud-accent, var(--game, #ffd23f)) 55%, transparent) !important;
+  transform: scale(1.03);
+  position: relative;
+  z-index: 1;
+}
+
+input[type='range'].pad-focus {
+  outline-offset: 6px;
+}
+
+body.pad-playing,
+body.pad-playing canvas {
+  cursor: none;
+}

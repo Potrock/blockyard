@@ -6,6 +6,8 @@ export interface MoveControls {
   readonly active: boolean;
   isDown(code: string): boolean;
   pressed(code: string): boolean;
+  /** A controller's stick ([right, forward]): it walks that way, as fast as it's pushed. */
+  readonly move?: [number, number] | null;
 }
 
 /** What movement remembers between steps: taps (double-tap sprinting and flying) and a slide. */
@@ -94,6 +96,12 @@ export function stepMovement(
     if (c.isDown('KeyS') || c.isDown('ArrowDown')) f -= 1;
     if (c.isDown('KeyD') || c.isDown('ArrowRight')) s += 1;
     if (c.isDown('KeyA') || c.isDown('ArrowLeft')) s -= 1;
+    // A stick: its direction and how far it's pushed (over the keys, which it also presses).
+    const stick = c.move;
+    if (stick && (stick[0] !== 0 || stick[1] !== 0)) {
+      s = stick[0];
+      f = stick[1];
+    }
     jump = c.isDown('Space');
     crouch = any(tune.crouchKeys, (k) => c.isDown(k));
     crouchPressed = any(tune.crouchKeys, (k) => c.pressed(k));
@@ -102,7 +110,13 @@ export function stepMovement(
       m.lastForwardTap = m.time;
     }
     if (f <= 0) m.sprintLatched = false;
-    sprint = (any(tune.sprintKeys, (k) => c.isDown(k)) || m.sprintLatched) && f > 0 && !crouch && !mods.noSprint;
+    // Sprinting runs forward (a stick has to be mostly forward), at full speed.
+    sprint = (any(tune.sprintKeys, (k) => c.isDown(k)) || m.sprintLatched) && f > 0.3 && f >= Math.abs(s) * 0.6 && !crouch && !mods.noSprint;
+    if (sprint && stick) {
+      const len = Math.hypot(f, s);
+      f /= len;
+      s /= len;
+    }
     const flying = () => world.player_state(slot)[10] > 0.5;
     if (c.pressed('Space') && allowFlight) {
       if (m.time - m.lastJumpTap < 0.3) {

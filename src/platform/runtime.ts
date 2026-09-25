@@ -26,6 +26,8 @@ import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
 import { blockIdOf, DEFAULT_TINT, loadRegistry, variant, type Registry } from './world/registry';
 import { Input } from './player/input';
+import { padBindings, padHints, rumble } from './player/gamepad';
+import { PadNav } from './ui/padnav';
 import { Effects } from './fx/effects';
 import { Sfx } from './audio/sfx';
 import { Hud } from './ui/hud';
@@ -45,7 +47,7 @@ import type { EntityFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
-import type { BlockRef, GameContext, GameDefinition, ItemDefinition, ItemStack, Vec3 } from './api/types';
+import type { BlockRef, GameContext, GameDefinition, ItemDefinition, ItemStack, PadAction, PadButton, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -196,6 +198,16 @@ export class Runtime {
   private unTheme: () => void = () => {};
   /** Average colours of blocks' textures (bullet chips), by block id. */
   private blockColors = new Map<number, [number, number, number]>();
+  /** A controller in the menus: the highlighted control. */
+  private padNav = new PadNav(document.body);
+  /** Other players on show, where a controller's aim assist looks for them (chest height). */
+  private targets: { id: string; x: number; y: number; z: number }[] = [];
+  /** Aim assist: who it's on, and which way they were last frame (it turns with them). */
+  private assistOn: { id: string; yaw: number; pitch: number } | null = null;
+  /** How long the right stick has been pushed all the way sideways (turning round speeds up). */
+  private fullTilt = 0;
+  /** Our health last frame (the controller rumbles when it drops). */
+  private lastHealth = -1;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -218,13 +230,16 @@ export class Runtime {
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
     this.tune = resolveMovement(def.player?.movement);
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
+    const padKeys = { jump: 'Space', crouch: this.tune.crouchKeys[0] ?? 'ShiftLeft', sprint: this.tune.sprintKeys[0] ?? 'ControlLeft' };
+    this.input.padBindings = padBindings(def.gamepad);
+    this.input.padKeysFor = padKeys;
     // On a server, the title screen asks for a name and says who's on; a game with rooms of
     // players' own offers one (or, in one, the link to it and the way back).
     const room = server?.welcome.room && server.welcome.room !== 'public' ? server.welcome.room : null;
     this.room = room;
     const online = server ? { server: new URL(server.url).origin, game: def.id, room, onRoom: def.instances ? (own: boolean) => this.switchGame(def.id, own ? newRoomCode() : null) : undefined } : null;
     this.title = carried?.title ?? new TitleScreen(ui, games);
-    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, walks: this.walker, online });
+    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, padKeys), walks: this.walker, online });
   }
 
   /**
@@ -383,8 +398,8 @@ export class Runtime {
     };
     this.gameHud.onScreen = (open) => {
       if (open) this.input.unlock();
-      // Closed by a button click: grab the mouse again (needs a user gesture).
-      else if (this.mode === 'playing' && navigator.userActivation?.isActive) this.input.lock();
+      // Closed by a button click: grab the mouse again (needs a user gesture), or give the controller the game back.
+      else if (this.mode === 'playing' && (this.input.device === 'pad' || navigator.userActivation?.isActive)) this.input.lock();
     };
     this.gameHud.onCrosshair = (v) => this.hud.setCrosshair(v);
     this.gameHud.player = this.playerId;
@@ -505,6 +520,13 @@ export class Runtime {
 
     this.input.onLockChange = (locked) => this.onLockChange(locked);
     this.input.onKey = (code, e) => this.onKey(code, e);
+    this.input.onDevice = (d) => {
+      document.body.classList.toggle('pad-mode', d === 'pad');
+      if (d === 'mouse') this.padNav.clear();
+    };
+    this.input.onPadButton = (b, a) => this.onPadButton(b, a);
+    document.body.classList.toggle('pad-mode', this.input.device === 'pad');
+    this.pause.setPadHints(padHints(def, this.walker, this.input.padKeysFor));
     const life = { signal: this.life.signal };
     this.canvas.addEventListener('click', () => {
       this.sfx.unlock();
@@ -513,7 +535,8 @@ export class Runtime {
         return;
       }
       if (this.gameHud.screenOpen) return;
-      const unlockedPlay = this.mode === 'playing' && !this.input.locked;
+      // (Clicking while a controller plays hands the game to the mouse.)
+      const unlockedPlay = this.mode === 'playing' && !this.input.pointerLocked;
       if (this.mode === 'paused' || unlockedPlay || (this.mode === 'title' && this.worldReady)) this.input.lock();
     }, life);
     window.addEventListener('resize', () => this.resize(), life);
@@ -747,6 +770,7 @@ export class Runtime {
   private avatars(f: SimFrame, me: PlayerFrame): EntityFrame[] {
     const out: EntityFrame[] = [];
     const seen = new Set<string>();
+    this.targets = [];
     for (const other of f.players) {
       // Only people on foot get a figure: a driver is their vehicle's model. Our own shows in
       // third person, where we're shown (predicted) facing where we look.
@@ -787,6 +811,7 @@ export class Runtime {
         stance: p.sliding ? 2 : p.sneaking ? 1 : 0,
       });
       if (mine) continue;
+      if (!p.dead) this.targets.push({ id: p.id, x: p.x, y: p.y + (p.sliding ? 0.55 : p.sneaking ? 0.95 : 1.25), z: p.z });
       const tags = this.def.hud?.nameTags ?? 'always';
       if (tags === 'never' || p.dead) continue;
       const top = { x: p.x, y: p.y + (p.sliding ? 1.45 : p.sneaking ? 1.95 : 2.25), z: p.z };
@@ -1027,6 +1052,11 @@ export class Runtime {
 
   private onKey(code: string, e?: KeyboardEvent) {
     if (this.mode === 'console') return;
+    // Playing with a controller there's no pointer lock for Esc to leave: it pauses here.
+    if (code === 'Escape' && this.mode === 'playing' && this.input.padCaptured && !this.gameHud.screenOpen) {
+      this.input.unlock();
+      return;
+    }
     // Match the character, not the key position: '/' is Shift+7 on many layouts.
     if ((e?.key === '/' || code === 'Slash' || code === 'KeyT') && this.mode === 'playing') {
       e?.preventDefault();
@@ -1058,6 +1088,98 @@ export class Runtime {
       if (code === 'BracketLeft') this.link.send({ t: 'env', time: (t - 1 / 24 + 1) % 1 });
       if (code === 'BracketRight') this.link.send({ t: 'env', time: (t + 1 / 24) % 1 });
     }
+  }
+
+  /**
+   * A controller button in the menus (or its pause button anywhere): the D-pad and stick move the
+   * highlight, A presses, B goes back, Menu pauses and resumes.
+   */
+  private onPadButton(b: PadButton, a: PadAction) {
+    if (this.mode === 'console') return;
+    const back = () => {
+      if (this.gameHud.back()) return;
+      if (this.mode === 'paused') this.input.lock();
+      else if (this.mode === 'picker') this.closePicker();
+    };
+    if (a === 'pause') {
+      if (this.mode === 'playing' && this.input.locked && !this.gameHud.screenOpen) this.input.unlock();
+      else if (this.mode === 'title') this.play();
+      else if (this.mode === 'playing' && !this.gameHud.screenOpen) this.input.lock();
+      else back();
+      return;
+    }
+    if (b === 'Up' || b === 'Down' || b === 'Left' || b === 'Right') this.padNav.move(b);
+    else if (b === 'A') this.padNav.press();
+    else if (b === 'B') back();
+  }
+
+  /**
+   * The right stick turns the view, as mouse movement would (so whatever reads the mouse, a
+   * vehicle say, reads it too): faster with a longer push, faster still held all the way round,
+   * slower aiming down the sights; with a gun, aim assist on the player in the crosshair.
+   */
+  private padAim(dt: number) {
+    const [lx, ly] = this.input.padLook;
+    this.fullTilt = Math.abs(lx) > 0.95 ? this.fullTilt + dt : 0;
+    const boost = Math.min(1, Math.max(0, (this.fullTilt - 0.2) / 0.3));
+    const s = this.settings.stickSensitivity / Math.pow(this.view.aimZoom, 0.85);
+    const help = this.aimAssist();
+    const yaw = lx * 3.6 * s * (1 + 0.8 * boost) * help.slow * dt - help.yaw;
+    const pitch = ly * (this.settings.invertY ? -1 : 1) * 2.5 * s * help.slow * dt - help.pitch;
+    // As mouse movement (the view turns by it, at the mouse's sensitivity).
+    const k = 0.0022 * this.view.sensitivity;
+    this.input.mouseDX += yaw / k;
+    this.input.mouseDY += pitch / k;
+  }
+
+  /**
+   * Aim assist (a controller, holding a gun, the setting on): over a player in sight near the
+   * crosshair the stick turns slower, and while the sticks are moving the view turns a little
+   * with them as they (or we) move. The strength is the gun's `aim.assist`. `yaw` and `pitch`:
+   * how far to turn the view with the target this frame (radians).
+   */
+  private aimAssist(): { slow: number; yaw: number; pitch: number } {
+    const none = { slow: 1, yaw: 0, pitch: 0 };
+    const g = this.guns.g;
+    const strength = g && this.settings.aimAssist && this.walker && !this.view.thirdPerson ? g.aim.assist : 0;
+    if (strength <= 0) {
+      this.assistOn = null;
+      return none;
+    }
+    const c = this.camera.position;
+    const cp = Math.cos(this.view.pitch);
+    const fx = -Math.sin(this.view.yaw) * cp;
+    const fy = Math.sin(this.view.pitch);
+    const fz = -Math.cos(this.view.yaw) * cp;
+    let best: { id: string; yaw: number; pitch: number } | null = null;
+    let bestOff = Infinity;
+    for (const t of this.targets) {
+      const dx = t.x - c.x;
+      const dy = t.y - c.y;
+      const dz = t.z - c.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d < 0.8 || d > g!.range) continue;
+      const off = Math.acos(Math.max(-1, Math.min(1, (dx * fx + dy * fy + dz * fz) / d)));
+      // About a block round them, a little more far off.
+      const cone = Math.atan2(1.1, d) + 0.025;
+      if (off > cone || off / cone >= bestOff) continue;
+      if (!this.chunks.world.line_clear(c.x, c.y, c.z, t.x, t.y, t.z)) continue;
+      bestOff = off / cone;
+      best = { id: t.id, yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
+    }
+    const was = this.assistOn;
+    this.assistOn = best;
+    if (!best) return none;
+    const aiming = (this.guns.state?.aim ?? 0) > 0.5;
+    const slow = 1 - strength * (aiming ? 0.6 : 0.45) * (1 - 0.4 * bestOff);
+    if (!was || was.id !== best.id || !(this.input.padTilt > 0.05 || this.input.padMoving)) return { slow, yaw: 0, pitch: 0 };
+    let turn = best.yaw - was.yaw;
+    turn -= Math.round(turn / (2 * Math.PI)) * 2 * Math.PI;
+    const tilt = best.pitch - was.pitch;
+    // A jump (a respawn, a teleport) isn't followed.
+    if (Math.abs(turn) > 0.15 || Math.abs(tilt) > 0.15) return { slow, yaw: 0, pitch: 0 };
+    const k = strength * (aiming ? 0.6 : 0.4);
+    return { slow, yaw: turn * k, pitch: tilt * k };
   }
 
   private closePicker() {
@@ -1211,6 +1333,15 @@ export class Runtime {
     const t0 = performance.now();
     const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
     this.last = now;
+    // A controller: in the game (its buttons press keys, its sticks walk and look), else the menus.
+    const drives = this.mode === 'playing' && this.input.locked && !this.gameHud.screenOpen;
+    this.input.pollPad(drives);
+    if (drives) {
+      // (A menu opens with its highlight where it starts.)
+      this.padNav.clear();
+      if (this.input.device === 'pad') this.padAim(dt);
+    } else if (this.input.device === 'pad' && this.mode !== 'console') this.padNav.sync();
+    document.body.classList.toggle('pad-playing', this.input.padCaptured);
     const playing = this.mode === 'playing';
     const started = this.frameData?.started ?? false;
     const running = playing && started;
@@ -1312,7 +1443,11 @@ export class Runtime {
       if (this.mode !== 'title') this.titleSpin = 0;
     }
     // A server's game runs on while this client is paused: its figures keep walking.
+    if (f.players.length < 2) this.targets = [];
     this.entityView.sync(f.players.length > 1 || this.view.thirdPerson ? [...f.entities, ...this.avatars(f, me)] : f.entities, f.projectiles, dt, this.server ? started : running);
+    // A controller rumbles when we're hurt.
+    if (me.health < this.lastHealth && this.lastHealth > 0 && this.input.device === 'pad' && this.settings.vibration) rumble(0.55, 0.3, 170);
+    this.lastHealth = me.health;
     this.pickupView.sync(f.pickups, dt);
     // Our own vehicle's model where prediction has it, not where the (older) frame does.
     const own = this.vehicles.active && this.vehicles.prop !== null ? new Map([[this.vehicles.prop, this.vehicles.pose()]]) : undefined;
@@ -1488,6 +1623,8 @@ export class Runtime {
       },
       (name) => this.sfx.play(name, { volume: 0.8 }),
     );
+    const kick = this.guns.g?.recoil.up ?? 1;
+    if (shots.length && this.input.device === 'pad' && this.settings.vibration) rumble(Math.min(1, kick / 5), 0.3 + Math.min(0.5, kick / 6), 55 + kick * 18);
     for (const _ of shots) {
       this.held.fire(1);
       this.sfx.play(def?.sounds?.use ?? 'gunshot', { volume: 0.9, pitch: 0.97 + Math.random() * 0.06 });

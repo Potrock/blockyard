@@ -9,6 +9,9 @@ class Controls implements MoveControls {
   get active() {
     return this.i.active;
   }
+  get move() {
+    return this.i.active ? (this.i.move ?? null) : null;
+  }
   isDown(code: string) {
     return this.i.down.includes(code);
   }

@@ -39,7 +39,7 @@ export interface Gun {
   interval: number;
   spread: { hip: number; aim: number; move: number; air: number; bloom: number };
   recoil: { up: number; side: number; recover: number };
-  aim: { zoom: number; time: number; move: number; sight: 'iron' | 'dot' | 'holo' | 'scope'; color: string };
+  aim: { zoom: number; time: number; move: number; sight: 'iron' | 'dot' | 'holo' | 'scope'; color: string; assist: number };
   reserve: number;
   mobility: number;
 }
@@ -61,7 +61,7 @@ export function gun(def: GunItem): Gun {
     interval: 60 / Math.max(1, def.rpm),
     spread: { hip: 2.5, aim: 0.25, move: 1.5, air: 3, bloom: 0.35, ...def.spread },
     recoil: { up: 1, side: 0.35, recover: 0.75, ...def.recoil },
-    aim: { zoom: 1.3, time: 0.2, move: 0.6, sight: 'iron', color: '#ff2a2a', ...def.aim },
+    aim: { zoom: 1.3, time: 0.2, move: 0.6, sight: 'iron', color: '#ff2a2a', assist: 0.6, ...def.aim },
     reserve: def.reserve ?? def.magazine * 3,
     mobility: def.mobility ?? 1,
   };

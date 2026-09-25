@@ -445,6 +445,13 @@ export default defineGame({
     ['L', 'loadout'],
     ['Tab', 'scores'],
   ],
+  // Controllers: the platform's shooter layout (RT fire, LT aim, X reload, B crouch and slide,
+  // L3 sprint, LB / RB / Y switch weapons), with the loadout on the D-pad and the katana on R3.
+  gamepad: {
+    R3: ['Digit3', 'katana'],
+    Up: 'KeyL',
+    Down: null,
+  },
   instances: true,
   world: {
     seed: MAP.seed,
