@@ -16,6 +16,8 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 
 ![Skyship: the airship moored off Home Isle](docs/skyship.png)
 
+![Call of Blocky: firing down Jackrabbit Lane toward Slim's diner, and the scoreboard mid-match](docs/callofblocky.png)
+
 ![First-person view: diamond sword mid-slash, battle axe, two-handed pike, health potion](docs/viewmodel.png)
 
 ## Games
