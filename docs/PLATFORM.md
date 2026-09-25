@@ -104,9 +104,13 @@ Register it in `src/games/index.ts` and open `?game=heart-hunt`. The launcher li
 | `start(game)` | when the player first clicks play, and after `game.restart()` | reset state, give the starting kit, schedule the first beat |
 | `update(game, dt)` | every frame while running (not paused) | rules, spawning, HUD |
 
-`game.restart()` clears entities, props, pickups, timers, the inventory and HUD, puts back any blocks broken, placed or shot into this session (unless the game sets `world.persist`), revives the player at the spawn point and calls `start` again. Keep your game state in plain module variables and reset it in `start`.
+`game.restart()` clears entities, props, pickups, timers, the inventory and HUD, puts back any blocks broken, placed or shot into this session (unless the game sets `world.persist`), revives the player at the spawn point, lets go of any `freeze`, and calls `start` again. Keep your game state in plain module variables and reset it in `start`.
 
-Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it over `setTimeout`.
+Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it over `setTimeout`. There are two clocks:
+- `clock.now` is the match's: seconds of play since `start`, and a restart puts it back to 0 (clearing the timers with it). Times you keep from it (`roundStartedAt = game.clock.now`) belong to this match: reset them in `start`, or a round that began at 90 s looks 90 s in the future after a restart.
+- `clock.total` is all the game's time since it first started, and a restart doesn't touch it: for what outlives a match (a cooldown across restarts, when someone joined).
+
+A person's screen coming into play is its own moment: `playerReady` (after `start` for the first player, and right after `playerJoin` for anyone joining a server) is the place for what needs their screen, like a modal widget (see Presentation).
 
 ## World
 
@@ -219,6 +223,8 @@ Under the hood `world/blocks.ts` turns the definitions into the engine's block v
 
 `game.player` (one of `game.players`, see "Players and multiplayer") gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
 
+**Freezing.** `player.freeze(true)` stops their body (a countdown, a cutscene) and `freeze(false)` lets it go; their weapons still work. `freeze(true, { weapons: true })` locks their weapons as well, for as long as the freeze lasts: they can't switch slots, aim, reload, fire or use items, their own screen doesn't fire, and any shot it sends anyway is refused, so no rounds are spent (a duel's standoff, a between-rounds pause). The lock ends with the freeze: `freeze(false)`, a `revive`, or a restart. A freeze put on as they join (`playerJoin`, before they've pressed Play) holds once they do. `player.frozen` says whether their body is frozen (by a freeze, or dead, driving, not yet in play), and `player.reloading` whether the gun they hold is reloading.
+
 **Movement.** `player: { movement }` tunes how everyone moves (speeds in blocks a second; the defaults are Minecraft's). It's data, and the moves you add are pure functions (*Movement abilities*, below), because each player's own screen runs the same movement to predict them:
 
 ```ts
@@ -279,9 +285,23 @@ movement: {
 
 - **What a step can read:** `controls` (`isDown`, `pressed`, `button`, `buttonPressed`, mouse deltas, and `consume` to hide a key from the abilities after it: a wall-jump's Space isn't also a double jump), `body` (`position`, `velocity`, `onGround`, `inWater`, `flying`, `crouching`, `sprinting`, `sliding`, `yaw`, `pitch`, `look`, and `time`, a movement clock both sides share), and `world` (the questions vehicles ask: `getBlock`, `raycast`, `surfaceY`…). `body.fits(p)` says whether their body would fit with its feet at `p` (a wall beside them is `!body.fits({ x: p.x + 0.15, y: p.y, z: p.z })`).
 - **What it can change, for this step:** `body.wish` (where the keys or stick push them, a direction on the ground; set it to steer, zero to coast), `body.jump` (`false` swallows the jump), `body.gravity` and `body.control` (times the game's gravity and how quickly speed follows the wish: 0 floats, 0 keeps the velocity as the ability left it), `body.speed`, and at once: `setVelocity` / `addVelocity` (upward speed lifts them off the ground) and `setPosition` (a blink).
+- **How low they are:** `body.stance` is `'stand'`, `'crouch'` or `'low'` (a slide's height). It starts as the platform's movement has it, and an ability can change it for the step: a dodge roll goes `'low'`. It's their hitbox for bullets, the height of their eyes (their camera, and where their shots start), and how their figure looks to everyone else (crouched, or low as in a slide), so `player.crouching` / `sliding` follow it. It isn't how they move: speeds are the ability's to set.
+- **Their camera:** `body.camera` tips their own view for the step: `roll` tilts it (radians, positive leans right, as a head tilts), `pitch` nods it (radians, up is positive; where they aim stays put), `dip` lowers it (blocks). They start at 0 each step, so set them on every step they should show; their screen eases in and out of them. On their screen only, and predicted like the rest, so it moves the moment they do.
+- **A clip:** `body.trigger('roll', { clip: 'tumble' })` also plays their model's `tumble` clip on their figure, with `player.animate`'s options (`layer`, `fade`, `speed`): at once on their own screen (in third person), and for everyone else from the host.
+
+High Noon's dodge roll (`src/games/highnoon/abilities.ts`) does the first two:
+
+```ts
+if (s.left > 0) {
+  body.stance = 'low';                                             // under a standing head's bullets
+  const arc = Math.sin((1 - s.left / ROLL.time) * Math.PI);          // over and back
+  body.camera.roll = right * arc * 0.42;                             // leaning the way they roll
+  body.camera.pitch = -Math.max(0, ahead) * arc * 0.3;               // nose down rolling forward
+}
+```
 - **Timers and cooldowns live in the state**, counted down by `dt`. Abilities rest while the body is frozen (dead, a countdown).
 - **It must be pure**, like a vehicle's `step`: the same state, controls and blocks give the same result on the host and on the player's screen, which starts again from the host's state whenever a frame arrives and replays the inputs since. So no `Math.random`, no clock but `body.time`, nothing kept outside the state. Their movement memory (the abilities' states and timers) is rounded as frames carry it at the start of each step, on both sides, so a timer never runs out a step later on one than the other.
-- **Consequences are the game's:** `body.trigger(name)` fires the `ability` event on the host (`{ player, ability, name }`, heard once, after the step) for sounds and effects; `player.abilities.dash` is that player's live state to read for the HUD (a cooldown meter) or change (reset a cooldown, unlock a move: their screen follows). The HUD, sounds and effects arrive a round trip late online, but the move itself doesn't.
+- **Consequences are the game's:** `body.trigger(name)` fires the `ability` event on the host (`{ player, ability, name }`, heard once, after the step) for sounds and effects; `player.abilities.dash` is that player's live state to read for the HUD (a cooldown meter) or change (reset a cooldown, unlock a move: their screen follows). Sounds and effects arrive a round trip late online, but the move itself doesn't, and neither does a widget bound to the state on their screen: `{{$ability.dash.cool}}` (see Presentation).
 
 `src/games/moves/abilities.ts` has a dash, a double jump and a wall-run with wall-jumps; in development, `?game=moves` is a short course that needs all three (online: `npm run server -- moves`, then `?server=ws://localhost:8787/moves`). `tests/headless/abilities.ts` runs that course with 100 ms of latency and checks the prediction holds.
 
@@ -304,7 +324,7 @@ Games are written so the same code works with one player or many:
 - **Who did it.** Damage sources, killers and block events are an `Actor`: an `Entity`, a `Player`, or `'world'`. Tell them apart with `kind` (`'entity'` or `'player'`): `if (killer !== 'world' && killer?.kind === 'player') kills++`.
 - **Callbacks name the player**: `use(game, player)`, `onPickup(game, count, player)`, command `run(args, game, player)`, the `pickup`, `playerDamage` and `playerDeath` events, and the kits' handlers. Use that player rather than `game.player`, and a potion heals whoever drank it.
 - **Mobs pick their target**: `self.nearestPlayer()`, then `moveTo`, `lookAt`, `canSee`, `distanceTo`, `shoot` and `damage` it. The built-in `Behaviors` all hunt the nearest player.
-- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`, and the array stays up to date as players come and go.
+- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`, and the array stays up to date as players come and go. `playerReady` follows when a person's screen is in play: on a server, straight after their `playerJoin` (their browser joins when they press Play); in single-player, when they first press Play, after `start`. Bots have no screen and don't get one. Anything you put on their screen at `playerJoin` reaches it, but `playerReady` reads better for a welcome or a modal (an outfit picker, a team choice).
 - **Player against player.** With `player: { pvp: true }`, players' swords and arrows hit other players too (never the shooter); without it, players can't hurt each other. Monsters' shots always hit any player. Who hit whom arrives as usual: `playerDamage` and `playerDeath` name the attacker as `source`.
 
 **Playing together.** Any game can be hosted by the game server, and players join from their browsers:
@@ -314,6 +334,8 @@ npm run server -- sandbox --port 8787          # add --cheats for /tp, /give…,
 # then each player opens:
 http://localhost:5173/?server=ws://localhost:8787&game=sandbox
 ```
+
+With no games named, a server hosts every game in the launcher. Development games (the ones behind `?game=` alone, like High Noon, `moves` or the previews) are hosted only when named: `npm run server -- highnoon`, then `?server=ws://localhost:8787&game=highnoon`.
 
 The server runs the game at 30 steps a second whether or not anyone's watching a given frame. The first to join is `game.player`; everyone else arrives at the spawn and the game hears `playerJoin`. When the first player leaves, the next to join takes their place, so `game.player` always works. Everyone sees everyone else as a figure with their name above it, wearing the game's player skin (or their own, `player.setSkin`). Your own movement is predicted: it happens the moment you press a key, and the server's word only corrects it when something you couldn't know about happened (a knockback, a teleport). A restart (from any player's pause menu or a "Play again" button) restarts the game for everyone. `game.exit()` sends back to the launcher only the player whose button or command called it.
 
@@ -753,7 +775,7 @@ game.items.define('cutlass', {
   - It holds a gun in both hands, aimed where it looks, with its fists on the gun's `grip` and `grip2`. It carries the gun low across its chest to sprint, tips it to reload while the support hand fetches a magazine, and kicks with each shot.
   - It swings a sword two-handed and falls when it dies.
   - A player on such a model sees its own forearms and fists on the gun in first person. `firstPerson` fits them to the model: `Models.gltf(url, { rig: 'humanoid', firstPerson: { scale: 1.2, reach: [0.55, 0.72], support: [0.01, -0.012, 0] } })` (those are the defaults): `scale` times life size (a little bigger reads better round a gun), how far the firing and support arms `reach` from the fist to leave the screen (blocks), and where the `support` fist sits from the handguard's near side (the model's blocks, along the gun: out to the side we see, up, toward the muzzle). It goes with the model, so each player's (`player.setModel`) brings its own.
-  - Give `rig: 'humanoid'` in `Models.gltf`, or leave out `clips` and a model with the joints is taken to be one. `tools/rig.html?model=<url>` (in development) shows a model in a row of poses (`&joints=mixamo`, `&style=<poses as JSON>`, and poses like `wave` and `cheer` that play a clip), and `scripts/mannequin.mjs` builds plain ones to start from: rigid, skinned, and skinned on a Mixamo-style skeleton, the last two with `wave` and `cheer` clips.
+  - Give `rig: 'humanoid'` in `Models.gltf`, or leave out `clips` and a model with the joints is taken to be one. `tools/rig.html?model=<url>` (in development) shows a model in a row of poses (`&joints=mixamo`, `&style=<poses as JSON>`, and poses like `wave` and `cheer` that play a clip), with any item in its hand (`&item=<glb url>`, `&kind=melee` for a blade) and any of its clips (`&clips=victory,tip_hat`, or `&clips=all`; `&layer=upper` over the legs' own motion), and `scripts/mannequin.mjs` builds plain ones to start from: rigid, skinned, and skinned on a Mixamo-style skeleton, the last two with `wave` and `cheer` clips.
   - **Its style is the game's.** `poses` (`HumanoidPoses`) sets how it holds and moves: the rifle and pistol stances (from the hip and down the sights), which guns are pistols (shorter than `pistolUnder`, or say so per item with `hold: { stance: 'pistol' }`), the kick, the sprint carry, the reload, the sword and its swing, the fall on death (`death.backward`), the gait, and a held item's size (`heldScale`). What's left out is the platform's own (Call of Blocky's); give every model the same object for a game-wide style. `docs/HUMANOID.md` lists every value.
   - **Other skeletons.** `joints` maps the rig's joints onto a skeleton named its own way: `Models.gltf(url, { rig: 'humanoid', joints: HumanoidJoints.mixamo() })`. It may rest in any pose (a T-pose, each bone turned its own way, under a scaled armature, as Mixamo and Blender export them): the rig works out its poses on a skeleton of its own standing straight, and the model's bones follow it, each keeping its own turn.
   - **Skinned characters.** A skinned mesh (one mesh on a skeleton of bones) works like rigid parts: the rig turns the bones, and the platform's shading skins the mesh and its shadow on the GPU. A skinned player's first-person arms are cut from the skin into rigid pieces (each triangle goes with the bone that weighs most on it).
@@ -866,7 +888,7 @@ game.commands.run('/give pike'); // run one from code
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
-| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerReady' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
 | `rng` | Seeded random numbers |
 
 **The HUD's look.** `hud` on the game definition sets how the HUD looks on every screen:
@@ -915,7 +937,26 @@ update(game) {
 
 Its CSS is kept to it: `.row` means its own `.row`, `:scope` the widget itself (nudge it from its place with `:scope { margin-top: 20px }`), and its `@keyframes` are its own. It can't restyle anything outside (that's what `theme.css` is for), but the platform's classes and the game's theme do reach in, so pick class names of your own (`.stat` would come out as a stat chip). The theme's colours and fonts are there: `var(--hud-accent)`, `var(--pixel)` and the rest.
 
-`hud.widget(name, data)` returns a handle: `set(data)` (merged in, records field by field; `null` clears a field), `remove()`, `shown` and `data`. A player's own call on everyone's widget (`player.hud.widget('score', …)`) gives them a copy of their own from then on. A restart takes widgets down; they stay defined.
+`hud.widget(name, data)` returns a handle: `set(data)` (merged in, records field by field; `null` clears a field), `remove()`, `shown` and `data`. Calling `widget` again (or `set`) on a widget that's up sends only what changed; on one that's down (never put up, taken down, closed by the player, or after a restart) it goes up whole. A restart takes widgets down; they stay defined.
+
+**Everyone's widget and a player's own.** A widget can be up for everyone (`game.hud.widget`) and differ on some players' screens (`player.hud.widget`):
+- A player's own call on everyone's widget (`player.hud.widget('duel', { count: 2 })`) gives them a copy of their own, starting from everyone's, with their change on top. Only their screen sees their changes.
+- Everyone's calls still reach every screen, copies included: each changes the fields it names, everywhere (a player's own fields that everyone's call doesn't name stay theirs).
+- `player.hud.widget(name).remove()` takes it off their screen alone, and a modal they close is off theirs alone. The next `game.hud.widget(name, …)` puts it back there (whole, as everyone has it), so a modal you keep calling `game.hud.widget` for every tick can't be closed: call it once, or give each player their own.
+- `game.hud.widget(name).remove()` takes it off every screen, copies too.
+
+**Bound to the player's own screen.** A shot, a reload, a dash's cooldown: things the player's own screen knows the moment they happen, while the host's word takes a round trip (a widget's ammo counter would lag the platform's by a fifth of a second). A widget can bind them directly with names starting `$`, filled in by each player's screen from its own (predicted) state, never sent:
+
+| Name | What |
+| --- | --- |
+| `$gun` | The gun in their hand, as their screen fires and reloads it (null with no gun, dead or driving): `$gun.mag` (rounds in it), `$gun.size` (a full magazine), `$gun.reserve`, `$gun.reloading`, `$gun.reload` (how far through the reload, 0..1), `$gun.aim` (down the sights, 0..1), `$gun.item` (its id) and `$gun.name` |
+| `$ability.<name>.<field>` | Their movement abilities' states as their screen predicts them (`$ability.dash.cool`) |
+| `$health`, `$maxHealth`, `$dead` | Their health, as the newest frame has it |
+| `$crouching`, `$sliding`, `$sprinting` | What their body is doing, predicted |
+
+They work wherever a name does, beside the widget's own data: `{{$gun.mag}}`, `data-if="$gun.reloading"`, `data-if="$i < $gun.mag"` in a list, `style="--mag: {{$gun.mag}}"`. The game still sends what only it knows (a list to lay the rounds out by), and can put the widget up once and leave it: High Noon's cylinder (`src/games/highnoon/hud.ts`) turns a chamber the frame a shot goes off. A widget that binds none of them costs nothing extra.
+
+**Modal widgets online.** A modal widget works like any other on a server, put up whenever you like (`playerJoin` included). As a person's screen comes into play (they pressed Play) the modals up on it are sent again whole, in case it wasn't there to take them; `playerReady` is the natural moment to put one up.
 
 **Buttons, and modal widgets.** With `modal: true` a widget works like a menu: it frees the mouse while it's up, a controller's D-pad moves between its buttons (and anything with `data-action`) and A presses, and Esc, B or a click outside closes it (`onClose(player)` hears). A press reaches the game as the player who pressed it, only while the widget is on their screen and only for actions its markup names; the value comes from their screen, so check it like any input. A widget that isn't modal has working buttons only while the mouse is free (a menu is open).
 
@@ -942,6 +983,7 @@ export default function myGame() {
 }
 ```
 
+- `launch(id)` finds the launcher's games and the development ones (`launch('highnoon')`), or takes a game's definition itself (`launch(myGame)`).
 - `h.run(seconds, { pilot, until, dt })` steps the simulation at 60 ticks per second. `h.step(dt, input)` steps once.
 - `pilot` returns the local player's controls as a `PlayerInput`: `down` for keys held, `pressed` for keys pressed this tick, `clicked` for the buttons clicked this tick as a bitmask (1 = left), and `yaw` / `pitch` to aim. Return `{}` to stand still.
 - `h.calls` records every presentation call (banners, feeds, screens, sounds), and `h.find('hud', 'banner')` filters them. `lastScreen(h)` is the title of the last `hud.screen`.

@@ -1,5 +1,5 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { AbilityBody, AbilityControls, MovementAbility, Vec3, VehicleWorld } from '../api/types';
+import type { AbilityBody, AbilityControls, AbilityStance, AbilityTriggerOptions, ClipOptions, MovementAbility, Vec3, VehicleWorld } from '../api/types';
 import { quantize } from '../net/delta';
 import type { MoveControls, MoveMemory } from './movement';
 
@@ -37,6 +37,18 @@ export function roundMemory(m: MoveMemory) {
   roundInPlace(m as unknown as Record<string, unknown>);
 }
 
+/** A clip an ability asked their figure to play (`trigger(name, { clip })`). */
+export interface AbilityClip {
+  name: string;
+  opts: ClipOptions;
+}
+
+/** What an ability `trigger`ed: [ability, name], and the clip it asked for, if any. */
+export type AbilityEvent = [string, string, AbilityClip?];
+
+/** The camera an ability asked for this step, on the player's own screen: [roll, pitch, dip]. */
+export type AbilityCamera = [number, number, number];
+
 /** What one step of the abilities hands on to the body's step. */
 export interface AbilityResult {
   wx: number;
@@ -45,8 +57,12 @@ export interface AbilityResult {
   gravity: number;
   control: number;
   speed: number;
-  /** What they `trigger`ed, as [ability, name]. */
-  events: [string, string][];
+  /** How low the body is this step (the platform's, or what an ability made it). */
+  stance: AbilityStance;
+  /** Their camera's tilt, pitch and dip this step (null: none). */
+  camera: AbilityCamera | null;
+  /** What they `trigger`ed. */
+  events: AbilityEvent[];
 }
 
 /** What the platform's movement made of this step's controls, before the abilities have their say. */
@@ -113,6 +129,8 @@ class StepBody implements AbilityBody {
   gravity = 1;
   control = 1;
   speed: number;
+  stance: AbilityStance;
+  camera = { roll: 0, pitch: 0, dip: 0 };
   readonly yaw: number;
   readonly pitch: number;
   readonly crouching: boolean;
@@ -120,7 +138,7 @@ class StepBody implements AbilityBody {
   readonly sliding: boolean;
   /** The ability stepping now (what it triggers is its). */
   current = '';
-  readonly events: [string, string][] = [];
+  readonly events: AbilityEvent[] = [];
   private st: ArrayLike<number>;
 
   constructor(
@@ -138,6 +156,7 @@ class StepBody implements AbilityBody {
     this.crouching = s.crouching;
     this.sprinting = s.sprinting;
     this.sliding = s.sliding;
+    this.stance = s.sliding ? 'low' : s.crouching ? 'crouch' : 'stand';
   }
 
   get frozen() {
@@ -192,12 +211,16 @@ class StepBody implements AbilityBody {
     return this.world.player_fits(p.x, p.y, p.z);
   }
 
-  trigger(name: string) {
-    this.events.push([this.current, String(name)]);
+  trigger(name: string, opts?: AbilityTriggerOptions) {
+    const clip = typeof opts?.clip === 'string' && opts.clip ? opts.clip : null;
+    if (!clip) return void this.events.push([this.current, String(name)]);
+    const { clip: _clip, ...o } = opts!;
+    this.events.push([this.current, String(name), { name: clip, opts: o }]);
   }
 }
 
 const IDLE: AbilityResult['events'] = [];
+const STANCES: readonly AbilityStance[] = ['stand', 'crouch', 'low'];
 
 /**
  * One step of a player's movement abilities, in order, on this side (host or prediction): each
@@ -230,6 +253,11 @@ export function stepAbilities(
     wx /= len;
     wz /= len;
   }
+  // The camera an ability asked for, kept within reason (a quarter turn, two blocks).
+  const cam = body.camera;
+  const roll = Math.max(-1.6, Math.min(1.6, finite(cam?.roll, 0)));
+  const pitch = Math.max(-1.6, Math.min(1.6, finite(cam?.pitch, 0)));
+  const dip = Math.max(-2, Math.min(2, finite(cam?.dip, 0)));
   return {
     wx,
     wz,
@@ -237,6 +265,8 @@ export function stepAbilities(
     gravity: finite(body.gravity, 1),
     control: Math.max(0, finite(body.control, 1)),
     speed: Math.max(0, finite(body.speed, s.speed)),
+    stance: STANCES.includes(body.stance) ? body.stance : 'stand',
+    camera: roll || pitch || dip ? [roll, pitch, dip] : null,
     events: body.events.length ? body.events : IDLE,
   };
 }

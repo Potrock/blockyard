@@ -6,10 +6,12 @@ import type { MovementAbility } from '@platform';
  * again for a while. A pure step: the platform runs it on the host and, ahead of it, on the
  * player's own screen, so it answers the moment Q goes down, online too.
  *
- * What it can't do (see the game's notes): drop the roller's hitbox the way a crouch does, or tip
- * their first-person camera through the roll. It swallows jumps while it lasts.
+ * While it lasts the roller is low (`body.stance`: a slide's hitbox, eyes and figure, so bullets
+ * aimed at a standing head go over), and their own camera tips through the tumble (`body.camera`:
+ * leaning the way they roll, nose down rolling forward). It swallows jumps while it lasts.
  */
-export const ROLL = { key: 'KeyQ', speed: 12.5, time: 0.34, exit: 7, cooldown: 2.2 };
+/** The roll: its key, speed and length, its exit speed, the wait for the next, and how far the camera leans and nods (radians). */
+export const ROLL = { key: 'KeyQ', speed: 12.5, time: 0.34, exit: 7, cooldown: 2.2, lean: 0.42, nod: 0.3 };
 
 export interface RollState {
   /** Seconds of roll left (0: not rolling), and until the next. */
@@ -39,5 +41,14 @@ export const roll: MovementAbility<RollState> = {
     body.setVelocity({ x: s.dx * speed, z: s.dz * speed });
     body.control = 0;
     body.jump = false;
+    if (s.left <= 0) return;
+    // Low through the tumble, and the camera with it: over and back, leaning the way they roll
+    // (how much of the roll is to their right, as they look now) and dipping its nose going forward.
+    body.stance = 'low';
+    const arc = Math.sin((1 - s.left / ROLL.time) * Math.PI);
+    const right = s.dx * Math.cos(body.yaw) - s.dz * Math.sin(body.yaw);
+    const ahead = -s.dx * Math.sin(body.yaw) - s.dz * Math.cos(body.yaw);
+    body.camera.roll = right * arc * ROLL.lean;
+    body.camera.pitch = -Math.max(0, ahead) * arc * ROLL.nod;
   },
 };

@@ -34,6 +34,7 @@ import { Effects } from './fx/effects';
 import { Sfx } from './audio/sfx';
 import { Hud } from './ui/hud';
 import { applyTheme, GameHud } from './ui/hudkit';
+import { plainRecord, type PlainData } from './ui/markup';
 import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
 import { Content } from './content';
@@ -45,7 +46,7 @@ import { PropView } from './client/props';
 import type { Sim, SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
 import { newRoomCode, ROOM_CODE, type HostBatch, type SaveState, type TimedBatch } from './net/protocol';
-import type { EntityFrame } from './sim/entities';
+import { clipFrame, type ClipFrame, type EntityFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -209,6 +210,8 @@ export class Runtime {
   private ownShots: FiredShot[] = [];
   /** The host time of the frame last drawn (shots hit where others were then). */
   private shownT = 0;
+  /** A clip our own movement abilities started (`trigger(name, { clip })`), shown on our figure until the host's word arrives. */
+  private ownClip: ClipFrame | null = null;
   /** The game's movement, for prediction and a gun's spread. */
   private tune: MoveTune;
   /** Undo the game's HUD theme (switching games). */
@@ -790,6 +793,7 @@ export class Runtime {
       vehicle: null,
       creative: null,
       frozen: true,
+      locked: false,
       canFly: false,
       swings: 0,
       ack: -1,
@@ -856,7 +860,7 @@ export class Runtime {
         sprint: p.sprinting,
         reloading: gunUp && (p.hand.gun?.reload ?? -1) >= 0,
         ads: gunUp ? (p.hand.gun?.aim ?? 0) : 0,
-        clip: p.clip ?? undefined,
+        clip: (mine && this.ownClip) || p.clip || undefined,
       });
       if (mine) continue;
       if (!p.dead) this.targets.push({ id: p.id, x: p.x, y: p.y + (p.sliding ? 0.55 : p.sneaking ? 0.95 : 1.25), z: p.z });
@@ -1449,7 +1453,8 @@ export class Runtime {
     }
     // The held gun fires on this screen at once; its shots go with the next controls sent.
     const latest = this.walker && this.itemMode ? this.mine(this.frameData) : undefined;
-    this.ownShots = latest ? this.gunFrame(dt, active, latest) : [];
+    // (A weapons-locked freeze: the gun doesn't answer here either, so nothing is fired to be refused.)
+    this.ownShots = latest ? this.gunFrame(dt, active && !latest.locked, latest) : [];
     for (const shot of this.ownShots) this.shotQueue.push([shot.serial, shot.yaw, shot.pitch, shot.spread]);
     // A server keeps its own clock: it gets the controls every frame. Otherwise one tick at a time:
     // while one is on its way, frame time (and input) adds up for the next. In this page the
@@ -1481,6 +1486,14 @@ export class Runtime {
     if (f) this.shownT = f.t;
     this.updateReadiness();
     const played = this.mine(f);
+    // A clip our own abilities started plays on our figure at once, numbered as the host will
+    // number it (so its arrival doesn't start it again); gone once the host's word is in.
+    const clips = this.predictor?.takeClips();
+    if (clips?.length && f) {
+      const c = clips[clips.length - 1];
+      this.ownClip = clipFrame(Math.max(played?.clip?.seq ?? 0, this.ownClip?.seq ?? 0) + 1, c.name, c.opts, f.t);
+    }
+    if (this.ownClip && f && ((played?.clip?.seq ?? 0) >= this.ownClip.seq || f.t - this.ownClip.at > 3)) this.ownClip = null;
     // Our own player where prediction has them (a server), else as the frame says.
     const predicted = this.predictor?.shown();
     let me = played && predicted ? { ...played, ...predicted } : played;
@@ -1508,6 +1521,8 @@ export class Runtime {
       this.camera.updateMatrixWorld();
     } else if (this.walker) {
       this.view.setOrbit(this.mode === 'title' ? null : me.orbit);
+      // A movement ability's camera: as prediction has it (a server), else the newest frame's.
+      this.view.tilt = this.mode === 'title' || me.dead ? null : this.predictor ? this.predictor.tilt : (me.tilt ?? null);
       this.view.follow(dt, me, this.orbitPoint(f, me));
       if (this.mode === 'title') {
         this.camera.position.y += 22;
@@ -1567,6 +1582,7 @@ export class Runtime {
     if (this.walker) this.updateHand(dt, me);
     this.drawOwnShots();
     this.gunHud(me);
+    if (this.gameHud.wantsLocal) this.gameHud.setLocal(this.localState(me));
     this.gameHud.holdScoreboard(this.mode === 'playing' && this.input.isDown('Tab'));
     // Camera effects: shake and the death tilt (which rights itself after a moment, for someone
     // out of the game a while to watch).
@@ -1849,6 +1865,33 @@ export class Runtime {
     // An optic's reticle lights up as the window comes to the eye.
     const optic = sight.sight === 'dot' || sight.sight === 'holo' ? sight.sight : null;
     this.hud.setReticle(optic, Math.max(0, Math.min(1, (st.aim - 0.75) / 0.2)), sight.color);
+  }
+
+  /**
+   * What the game's widgets can bind from this screen's own state (`{{$gun.mag}}`, `{{$health}}`):
+   * the held gun as this screen fires and reloads it, the movement abilities as it predicts them,
+   * health and stance as the newest frame (and prediction) have them. No round trip: a widget
+   * bound to `$gun.mag` changes on the frame the shot goes off.
+   */
+  private localState(me: PlayerFrame): PlainData {
+    const st = this.guns.state;
+    const def = this.guns.def;
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    const gun =
+      st && def && !me.dead && !me.vehicle
+        ? { item: this.guns.item, name: def.name, mag: st.mag, size: def.magazine, reserve: st.reserve, reloading: st.reload >= 0, reload: r2(Math.max(0, this.guns.reloadProgress)), aim: r2(st.aim) }
+        : null;
+    const abilities = plainRecord(this.predictor?.abilities ?? me.move.abilities ?? {});
+    return {
+      $gun: gun,
+      $ability: abilities,
+      $health: me.health,
+      $maxHealth: me.maxHealth,
+      $dead: me.dead,
+      $crouching: me.sneaking,
+      $sliding: me.sliding,
+      $sprinting: me.sprinting,
+    };
   }
 
   /** Render, HUD, autosave, debug overlay, end of input frame. */
