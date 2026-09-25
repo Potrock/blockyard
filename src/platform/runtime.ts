@@ -282,7 +282,8 @@ export class Runtime {
     const given = url.searchParams.get('server');
     // A server (then as a build with one), or one game's address on it.
     const base = given ? (Runtime.gameAddress(given) ? null : given.replace(/\/+$/, '')) : online;
-    const listed = games.find((g) => g.id === picked) ?? games[0];
+    // (A development game too, as a server names it: `?server=ws://host&game=highnoon`.)
+    const listed = [...games, ...hidden].find((g) => g.id === picked) ?? games[0];
     const room = url.searchParams.get('room');
     const own = room && listed.instances && ROOM_CODE.test(room) ? room : null;
     const address = base ? `${base}/${listed.id}${own ? `/${own}` : ''}` : given;
