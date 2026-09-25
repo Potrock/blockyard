@@ -15,13 +15,19 @@ import { MemoryStore, type SavedPlayer, type Store } from './store';
 
 /** Columns generated straight away around the spawn, before the first tick. */
 const CORE = 4;
-/** Columns kept past the radius before they're dropped (so walking back and forth is free). */
+/** Columns always kept past the radius (so walking back and forth is free). */
 const SLACK = 2;
+/**
+ * Columns kept once made, however far everyone goes, before the farthest are dropped (about 10 to
+ * 25 KB each). Generating is most of what a room costs, and fliers cross a battle's whole sky
+ * again and again: kept, a bounded map is made once (Starfighter's is about 4000).
+ */
+const KEEP = 4096;
 
 /**
  * The simulation's own copy of the world: columns generated on the spot around the players (no
- * workers, no meshes), nearest first and a few per tick, and dropped when everyone is far away.
- * Edits survive dropping (the engine keeps them per column).
+ * workers, no meshes), nearest first and a few per tick, and kept until there are too many, when
+ * the farthest from everyone go. Edits survive dropping (the engine keeps them per column).
  */
 export class GeneratedWorld {
   readonly world = new VoxelWorld();
@@ -43,9 +49,10 @@ export class GeneratedWorld {
 
   /**
    * Generate up to `budget` missing columns within `radius` of the given points, nearest first,
-   * and now and then drop those beyond reach. Returns how many were generated.
+   * and now and then, if there are more than `keep`, drop the farthest beyond reach. Returns how
+   * many were generated.
    */
-  update(points: { x: number; z: number }[], radius: number, budget: number): number {
+  update(points: { x: number; z: number }[], radius: number, budget: number, keep = KEEP): number {
     const centres = points.map((p) => [Math.floor(p.x / 16), Math.floor(p.z / 16)] as const);
     const key = `${radius}|${centres.join(';')}`;
     let n = 0;
@@ -71,12 +78,15 @@ export class GeneratedWorld {
       }
       if (!missing) this.settled = key;
     }
-    if (++this.sweep >= 120) {
+    if (++this.sweep >= 120 && this.loaded.size > keep) {
       this.sweep = 0;
-      for (const [k, [cx, cz]] of this.loaded) {
-        if (centres.some(([px, pz]) => Math.max(Math.abs(cx - px), Math.abs(cz - pz)) <= radius + SLACK)) continue;
-        this.world.remove_column(cx, cz);
-        this.loaded.delete(k);
+      const far = [...this.loaded]
+        .map(([k, [cx, cz]]) => ({ k, cx, cz, d: Math.min(...centres.map(([px, pz]) => Math.max(Math.abs(cx - px), Math.abs(cz - pz)))) }))
+        .filter((c) => c.d > radius + SLACK)
+        .sort((a, b) => b.d - a.d);
+      for (const c of far.slice(0, this.loaded.size - keep)) {
+        this.world.remove_column(c.cx, c.cz);
+        this.loaded.delete(c.k);
       }
     }
     return n;
