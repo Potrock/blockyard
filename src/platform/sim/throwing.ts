@@ -133,7 +133,7 @@ export class ThrowSim {
     const b = l.t.blast;
     if (b) {
       h.guard(() => h.hurt(at, b.radius, b.near, b.far, b.knockback, l.by, l.item));
-      h.fx.explosion(at, { size: Math.min(1.4, Math.max(1, b.radius / 4)) });
+      h.fx.explosion(at, { size: b.size });
       if (b.carve > 0) h.blow(at, b.carve, l.by);
     }
     const fire = l.t.fire;

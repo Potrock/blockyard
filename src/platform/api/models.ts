@@ -142,7 +142,9 @@ export const HeldModels = {
    * A glTF or GLB model held in the hand (a Blockbench item, say), in first person and by others:
    * `hold: { model: HeldModels.gltf(swordUrl, { grip: [0, 0, 2] }) }`. It should run along +z to
    * its tip with its handle near the origin; `rotation` (degrees about X, Y, Z) and `scale` fix
-   * one that doesn't. `grip` is the point in the fist, in pixels (a sixteenth of a block).
+   * one that doesn't. `grip` is the point in the fist, in pixels (a sixteenth of a block), and
+   * `grip2` the other hand's: each over the empty node the file marks (`grip`, `grip2`), in first
+   * person and in figures' hands alike.
    */
   gltf(url: string, opts: { grip?: [number, number, number]; grip2?: [number, number, number]; rotation?: [number, number, number]; scale?: number } = {}): HeldModelSpec {
     return { parts: [], grip: opts.grip, grip2: opts.grip2, gltf: { url, rotation: opts.rotation, scale: opts.scale } };

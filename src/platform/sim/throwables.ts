@@ -33,7 +33,7 @@ export interface Throwable {
   drag: number;
   radius: number;
   cooldown: number;
-  blast: { radius: number; near: number; far: number; knockback: number; carve: number } | null;
+  blast: { radius: number; near: number; far: number; knockback: number; carve: number; size: number } | null;
   fire: { radius: number; duration: number; damage: number; color: string } | null;
 }
 
@@ -59,7 +59,7 @@ export function throwable(def: ThrowableItem): Throwable {
     drag: Math.max(0, p.drag ?? 0.1),
     radius: Math.min(0.45, Math.max(0.02, p.radius ?? 0.1)),
     cooldown: Math.max(0.05, def.cooldown ?? 0.8),
-    blast: b ? { radius: Math.max(0.5, b.radius), near, far, knockback: b.knockback ?? 1, carve: Math.max(0, b.carve ?? 0) } : null,
+    blast: b ? { radius: Math.max(0.5, b.radius), near, far, knockback: b.knockback ?? 1, carve: Math.max(0, b.carve ?? 0), size: Math.min(4, Math.max(0.2, b.size ?? Math.min(1.4, Math.max(1, b.radius / 4)))) } : null,
     fire: def.fire ? { radius: Math.max(0.5, def.fire.radius), duration: Math.max(0, def.fire.duration), damage: def.fire.damage, color: def.fire.color ?? '#ff8a2a' } : null,
   };
   cache.set(def, t);

@@ -159,14 +159,10 @@ export class Inventory implements InventoryApi {
    */
   cycle(by: number) {
     let at = this.selected;
-    const skip = (s: ItemStack | null) => {
-      const d = s ? this.defs.get(s.item) : undefined;
-      return d?.kind === 'throwable' && !!d.key;
-    };
     for (let n = Math.abs(by); n > 0; n--) {
       for (let i = 1; i <= 9; i++) {
         const s = (((at + Math.sign(by) * i) % 9) + 9) % 9;
-        if ((this.slots[s] && !skip(this.slots[s])) || i === 9) {
+        if (this.slots[s] || i === 9) {
           at = s;
           break;
         }

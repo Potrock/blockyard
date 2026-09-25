@@ -39,18 +39,18 @@ const COLORS = { brass: '#d9a441', cream: '#f4e6c4', blood: '#b3262c', ink: '#2b
 
 /**
  * How Dry Gulch's gunslingers carry themselves (`HumanoidPoses`, every figure the same): the
- * Peacemaker held out at arm's length in one hand, body turned side-on like a duellist; guns
- * carried muzzle-down by the thigh at a run; a revolver's hard muzzle flip; a slow dramatic fall,
- * nearly always backwards; a loose, rolling walk.
+ * Peacemaker held out at arm's length in one hand, body turned side-on like a duellist, the free
+ * hand hovering by the belt; guns carried muzzle-down by the thigh at a run; a revolver's hard
+ * muzzle flip; a slow dramatic fall, nearly always backwards; a loose, rolling walk. (Each gun's
+ * reload is its own: `hold.poses` in weapons.ts.)
  */
 const STYLE: HumanoidPoses = {
   heldScale: 0.5,
   pistolUnder: 0.5,
-  pistol: { hip: [-0.2, -0.1, 0.42], ads: [-0.14, 0.02, 0.52], twist: -0.42, cheek: 0.06 },
+  pistol: { hip: [-0.2, -0.1, 0.42], ads: [-0.14, 0.02, 0.52], twist: -0.42, cheek: 0.06, offHand: { offset: [0.2, -0.48, 0.1], turn: [0.5, 0, 0.2] } },
   rifle: { hip: [-0.13, -0.16, 0.26], ads: [-0.05, -0.04, 0.25], twist: -0.24, cheek: 0.14 },
   kick: { back: 0.03, tip: 0.38, decay: 13 },
   sprint: { offset: [-0.2, -0.42, 0.1], turn: [1.15, 0.1, 0] },
-  reload: { offset: [-0.06, -0.16, 0.32], turn: [-0.75, 0.35, 0.9], cycle: 0.45 },
   death: { time: 1.05, backward: 0.85 },
   gait: { sway: 0.03, width: 0.12, armSwing: [0.35, 0.85], lean: [0.02, 0.13], bob: [0.018, 0.05] },
 };

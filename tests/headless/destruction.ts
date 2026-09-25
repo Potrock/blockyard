@@ -174,7 +174,8 @@ export default function destruction() {
       taken += w.get_block(x, y, -6) === 0 ? 4096 : 4096 - left;
       check(w.get_block(x, y, -6) === client.world.get_block(x, y, -6) && left === client.world.damage_left(x, y, -6), `the client's copy has the same crater at ${x},${y}`);
     }
-  check(w.damage_count() > damageBefore && bitten >= 3 && taken > 4096, `a crater in the wall: ${taken} little voxels, ${gone} blocks gone, ${bitten} bitten`);
+  // (The Pineapple blows clean through: blocks gone, several blocks' worth of voxels.)
+  check(w.damage_count() > damageBefore && bitten >= 3 && gone >= 1 && taken > 4096 * 4, `a crater through the wall: ${taken} little voxels, ${gone} blocks gone, ${bitten} bitten`);
   // Every block it bit into or blew away was told of (`blockChange`: what a nav grid follows).
   let heard = 0;
   for (let y = FLOOR; y <= FLOOR + 3; y++) for (let x = -4; x <= 4; x++) if (w.damage_left(x, y, -6) < 4096 || w.get_block(x, y, -6) === 0) heard += changed.has(`${x},${y},-6`) ? 1 : 0;

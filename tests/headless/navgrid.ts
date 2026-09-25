@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { WEAPONS } from '../../src/games/callofblocky/weapons';
+import { LETHALS, WEAPONS } from '../../src/games/callofblocky/weapons';
 import { Blueprint, defineGame, type Bot, type Vec3 } from '../../src/platform';
 import { navGrid, shooterBots, type NavCell, type NavGrid, type ShooterBots } from '../../src/platform/kits';
 import { Headless } from '../../src/platform/host/headless';
@@ -29,6 +29,7 @@ const walled = defineGame({
   player: { health: 100, hurtCooldown: 0, hotbar: 'items', pvp: true },
   setup(game) {
     game.items.define('pistol', WEAPONS.pistol);
+    game.items.define('frag', LETHALS.frag);
   },
   update(_game, dt) {
     tick?.(dt);
@@ -51,7 +52,8 @@ function hole(h: Headless, x: number, w: number, bottom: number, top: number) {
  * standing round it) becomes a way through, a block put in it closes it, a block broken out of
  * the wall opens another, and a restart puts the wall back. A `shooterBots` bot walks through the
  * hole, and sees and shoots someone through a hole too small to walk through (holding still so it
- * doesn't lose the line).
+ * doesn't lose the line). And it keeps out of a live grenade: it runs from one dropped beside it,
+ * and waits short of one lying where it was going.
  */
 export default function navgrid() {
   // Bots draw on Math.random: seeded, so a run plays out the same whatever ran before it.
@@ -143,7 +145,58 @@ export default function navgrid() {
   check(moved < 0.6, `the bot should hold still at a peephole (it moved ${moved.toFixed(2)})`);
   console.log(`  through a peephole: ${shots} shots, ${(5000 - me.health).toFixed(0)} damage, the bot moved ${moved.toFixed(2)}`);
   hostile = false;
+
+  // ---- A grenade beside it: it gets out of reach before it goes off ----
+  /** Drop a frag at `at` (thrown straight down from there); the time it went off, and where. */
+  const drop = (at: Vec3) => {
+    me.teleport(at, 0, 0);
+    me.inventory.give('frag');
+    check(me.throw('frag', { pitch: -Math.PI / 2 }), 'the frag should be thrown');
+    me.teleport({ x: 11.5, y: FLOOR, z: 8.5 }, 0, 0);
+  };
+  const frag = LETHALS.frag.blast!.radius;
+  // (Told to stay where it is.)
+  goal = A;
+  bot.teleport(A, 0, 0);
+  bots.reset(bot);
+  bot.health = bot.maxHealth;
+  h.run(0.5);
+  drop({ x: A.x + 1.5, y: FLOOR, z: A.z });
+  let far = 0;
+  h.run(4, {
+    pilot: () => null,
+    until: () => {
+      const t = g.items.thrown[0];
+      if (t) far = Math.hypot(bot.position.x - t.position.x, bot.position.z - t.position.z);
+      return false;
+    },
+  });
+  check(far > frag && bot.health === bot.maxHealth, `the bot should run clear of a grenade beside it (${far.toFixed(1)} blocks off as it went, health ${bot.health})`);
+  // ---- One lying where it was going: it waits short of it, and goes on once it's gone off ----
+  const start = { x: -8.5, y: FLOOR, z: 5.5 };
+  goal = start;
+  if (!bot.alive) bot.revive();
+  bot.health = bot.maxHealth;
+  bot.teleport(start, 0, 0);
+  bots.reset(bot);
+  h.run(0.3);
+  drop(B);
+  goal = B;
+  let closest = Infinity;
+  let live = true;
+  h.run(8, {
+    pilot: () => null,
+    until: () => {
+      live = g.items.thrown.length > 0;
+      if (live) closest = Math.min(closest, Math.hypot(bot.position.x - B.x, bot.position.z - B.z));
+      return !live && Math.hypot(bot.position.x - B.x, bot.position.z - B.z) < 1;
+    },
+  });
+  check(closest > frag && bot.health === bot.maxHealth, `the bot should wait out of reach of a grenade where it's going (came within ${closest.toFixed(1)})`);
+  check(Math.hypot(bot.position.x - B.x, bot.position.z - B.z) < 1, 'and get there once it has gone off');
+  console.log(`  grenades: ran ${far.toFixed(1)} blocks clear of one beside it; waited ${closest.toFixed(1)} short of one on its way, then went on`);
   tick = null;
+  goal = null;
   me.teleport({ x: 0.5, y: FLOOR, z: 8.5 }, 0, 0);
 
   // ---- A block put in the hole closes it; one broken out of the wall opens another ----

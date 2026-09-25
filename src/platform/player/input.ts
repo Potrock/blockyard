@@ -24,7 +24,9 @@ export class Input {
   /** Mouse movement this frame (mouse look). */
   mouseDX = 0;
   mouseDY = 0;
+  /** Hotbar steps from the mouse wheel (see `WheelSteps`). */
   wheel = 0;
+  private wheelSteps = new WheelSteps();
   /** Mouse movement from frames that sent no `snapshot` (the host was still busy), for the next. */
   private carryDX = 0;
   private carryDY = 0;
@@ -114,7 +116,7 @@ export class Input {
       'wheel',
       (e) => {
         if (!this.pointer) return;
-        this.wheel += Math.sign(e.deltaY);
+        this.wheel += this.wheelSteps.step(e);
       },
       { passive: true, signal },
     );
@@ -375,4 +377,40 @@ export class Input {
 
 function isGameKey(code: string): boolean {
   return code === 'Space' || code === 'Tab' || code.startsWith('Arrow') || code === 'F3' || code === 'F1' || code === 'KeyE';
+}
+
+/** What a wheel step needs of a `WheelEvent`. */
+export type WheelLike = Pick<WheelEvent, 'deltaY' | 'deltaMode' | 'timeStamp'> & { wheelDeltaY?: number };
+
+/**
+ * Hotbar steps from the mouse wheel. A notched wheel's click is an event of its own (in lines, or
+ * a multiple of 120 in `wheelDeltaY`) and is a step each. A trackpad, or a mouse that scrolls
+ * smoothly, sends a burst of small events for one flick or click (and a trackpad's momentum after
+ * it): that's one step, as it starts, and another only for a fresh push inside the burst (an event
+ * well bigger than the last, a moment after the last step) or a turn the other way.
+ */
+export class WheelSteps {
+  private t = -1e9;
+  private dir = 0;
+  private size = 0;
+  private stepped = -1e9;
+
+  /** Steps (-1, 0 or 1) for one event. */
+  step(e: WheelLike): number {
+    const px = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
+    if (!(px !== 0)) return 0;
+    const dir = Math.sign(px);
+    const size = Math.abs(px);
+    const t = e.timeStamp;
+    const legacy = e.wheelDeltaY;
+    const notch = e.deltaMode === 1 || (typeof legacy === 'number' && legacy !== 0 && legacy % 120 === 0);
+    const fresh = t - this.t > 120 || dir !== this.dir;
+    const push = size > this.size * 1.5 && t - this.stepped > 150;
+    this.t = t;
+    this.dir = dir;
+    this.size = size;
+    if (!notch && !fresh && !push) return 0;
+    this.stepped = t;
+    return dir;
+  }
 }

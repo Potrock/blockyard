@@ -376,6 +376,26 @@ class Brains implements ShooterBots {
     }
   }
 
+  /**
+   * A live grenade (`items.thrown`, as far as its blast reaches, and a step) or a fire (`items.fires`,
+   * its flames and a step) covering `p`: the nearest, or null. Bots get out, and don't go in.
+   */
+  private danger(p: Vec3): { at: Vec3; reach: number } | null {
+    let best: { at: Vec3; reach: number } | null = null;
+    let near = Infinity;
+    const check = (at: Vec3, reach: number) => {
+      if (Math.abs(p.y - at.y) > 3) return;
+      const d = Math.hypot(p.x - at.x, p.z - at.z);
+      if (d < reach && d < near) {
+        near = d;
+        best = { at, reach };
+      }
+    };
+    for (const t of this.game.items.thrown) check(t.position, t.radius + 1);
+    for (const f of this.game.items.fires) check(f.position, f.radius + 1);
+    return best;
+  }
+
   private weapon(id: string): BotWeapon {
     return this.opts.weapons?.[id] ?? {};
   }
@@ -566,6 +586,16 @@ class Brains implements ShooterBots {
           b.slideCool = 3;
         }
       }
+      // A live grenade or a fire where it stands: out of there, still shooting.
+      const threat = this.danger(pos);
+      if (threat) {
+        const ax = pos.x - threat.at.x;
+        const az = pos.z - threat.at.z;
+        const ad = Math.hypot(ax, az) || 1;
+        moveX = ax / ad;
+        moveZ = az / ad;
+        b.crouchT = 0;
+      }
       b.path = null;
       this.opts.fight?.(bot, b, dist);
     } else {
@@ -583,6 +613,19 @@ class Brains implements ShooterBots {
       // Where to: the game's idea, a shot it heard, where it last saw someone, or somewhere worth being.
       const nav = this.nav();
       b.replan -= dt;
+      // A live grenade or fire where it stands: away first (planned, round walls), and again
+      // until it's out.
+      const threat = this.danger(pos);
+      if (nav && threat && (!b.goal || this.danger(b.goal))) {
+        const ax = pos.x - threat.at.x;
+        const az = pos.z - threat.at.z;
+        const ad = Math.hypot(ax, az) || 1;
+        const out = threat.reach - ad + 2;
+        b.goal = { x: pos.x + (ax / ad) * out, y: pos.y, z: pos.z + (az / ad) * out };
+        b.path = nav.path(pos, b.goal);
+        b.step = 0;
+        b.replan = 0.6;
+      }
       if (nav && (!b.path || b.step >= b.path.length || b.replan <= 0)) {
         let goal = this.opts.goal?.(bot, b) ?? null;
         if (goal) {
@@ -594,6 +637,14 @@ class Brains implements ShooterBots {
           goal = Math.random() < moves.hotspot && hotspots.length ? hotspots[Math.floor(Math.random() * hotspots.length)] : (nav.random(Math.random)?.at ?? pos);
           b.wander = moves.wander[0] + Math.random() * (moves.wander[1] - moves.wander[0]);
         } else goal = b.goal;
+        // Not into a live grenade or a fire: the near side of it, to wait it out.
+        const there = goal && this.danger(goal);
+        if (goal && there) {
+          const ax = pos.x - there.at.x;
+          const az = pos.z - there.at.z;
+          const ad = Math.hypot(ax, az) || 1;
+          goal = { x: there.at.x + (ax / ad) * (there.reach + 1), y: goal.y, z: there.at.z + (az / ad) * (there.reach + 1) };
+        }
         b.goal = goal;
         b.path = nav.path(pos, goal);
         b.step = 0;
@@ -621,8 +672,11 @@ class Brains implements ShooterBots {
         const dx = wp.at.x - pos.x;
         const dz = wp.at.z - pos.z;
         const d = Math.hypot(dx, dz) || 1;
-        moveX = dx / d;
-        moveZ = dz / d;
+        // (A grenade or a fire landed on the way since it planned: stop short, and plan again.)
+        const blocked = !threat && this.danger(wp.at);
+        moveX = blocked ? 0 : dx / d;
+        moveZ = blocked ? 0 : dz / d;
+        if (blocked) b.replan = Math.min(b.replan, 0.3);
         const prev = b.step > 0 ? path[b.step - 1] : null;
         if (wp.y > pos.y + 0.6 && (prev === null || nav.needsJump(prev, wp) || wp.y - pos.y > 0.9) && d < 1.6) wantJump = true;
         sprint = path.length - b.step > 5;
