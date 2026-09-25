@@ -8,6 +8,8 @@
  * build it element by element from this tree.
  */
 
+import type { WidgetAnchor } from '../api/types';
+
 // -------------------------------------------------------------------------------------------------
 // Markup
 // -------------------------------------------------------------------------------------------------
@@ -297,7 +299,7 @@ export function parseTemplate(s: string): TemplatePart[] {
   return out;
 }
 
-type Operand = { path: Path } | { value: WidgetValue };
+type Operand = { path: Path } | { value: PlainValue };
 
 /** A `data-if`: a value (true unless false, 0, empty, null or missing), or a comparison with another; `!` in front turns it round. */
 export interface Condition {
@@ -336,18 +338,18 @@ export function parseCondition(src: string): Condition | null {
 
 /** Where a template looks names up: a list item's fields first, then the lists around it, then the widget's data. */
 export interface Scope {
-  data: WidgetData;
-  item?: WidgetValue;
+  data: PlainData;
+  item?: PlainValue;
   index?: number;
   up?: Scope;
 }
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
-const isRecord = (v: unknown): v is Record<string, WidgetValue> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isRecord = (v: unknown): v is Record<string, PlainValue> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-export function lookup(path: Path, scope: Scope): WidgetValue | undefined {
+export function lookup(path: Path, scope: Scope): PlainValue | undefined {
   const [head, ...rest] = path;
-  let v: WidgetValue | undefined;
+  let v: PlainValue | undefined;
   if (head === '.') v = scope.item;
   else if (head === '$i') v = scope.index;
   else if (head === '$n') v = scope.index === undefined ? undefined : scope.index + 1;
@@ -368,7 +370,7 @@ export function lookup(path: Path, scope: Scope): WidgetValue | undefined {
 }
 
 /** How a value reads in text: numbers and strings as they are, nothing for missing, lists or objects. */
-export function show(v: WidgetValue | undefined): string {
+export function show(v: PlainValue | undefined): string {
   if (v === undefined || v === null) return '';
   if (typeof v === 'string') return v;
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
@@ -381,7 +383,7 @@ export function fill(parts: TemplatePart[], scope: Scope): string {
   return s;
 }
 
-const truthy = (v: WidgetValue | undefined) => !(v === undefined || v === null || v === false || v === 0 || v === '' || (Array.isArray(v) && v.length === 0));
+const truthy = (v: PlainValue | undefined) => !(v === undefined || v === null || v === false || v === 0 || v === '' || (Array.isArray(v) && v.length === 0));
 
 export function test(c: Condition, scope: Scope): boolean {
   const get = (o: Operand) => ('path' in o ? lookup(o.path, scope) : o.value);
@@ -734,15 +736,31 @@ export function scopeCss(css: string, scope: CssScope): string {
 // Widget data
 // -------------------------------------------------------------------------------------------------
 
-/** What a widget shows is filled in from plain data: text, numbers, flags, lists and records of them. */
-export type WidgetValue = string | number | boolean | null | WidgetValue[] | { [key: string]: WidgetValue };
-export type WidgetData = { [key: string]: WidgetValue };
+/** A widget's data as it crosses and is kept: text, numbers, flags, lists and records of them. */
+export type PlainValue = string | number | boolean | null | PlainValue[] | { [key: string]: PlainValue };
+export type PlainData = { [key: string]: PlainValue };
+
+export const WIDGET_ANCHORS: readonly WidgetAnchor[] = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'];
+
+/** A widget as it's sent to screens: the data of its definition (its actions stay with the game). */
+export interface WidgetWire {
+  html: string;
+  css?: string;
+  at?: WidgetAnchor;
+  modal?: boolean;
+}
+
+/** Data a game passed (anything), as plain data: a record, or empty. */
+export const plainRecord = (v: unknown): PlainData => {
+  const p = plainData(v);
+  return isRecord(p) ? p : {};
+};
 
 /**
  * A copy with only what can cross to a screen: strings, finite numbers, booleans, null, lists
  * and plain records (functions and `undefined` left out, other numbers null), not too deep.
  */
-export function plainData(v: unknown, depth = 0): WidgetValue | undefined {
+export function plainData(v: unknown, depth = 0): PlainValue | undefined {
   if (v === null) return null;
   switch (typeof v) {
     case 'string':
@@ -754,7 +772,7 @@ export function plainData(v: unknown, depth = 0): WidgetValue | undefined {
     case 'object': {
       if (depth > 8) return undefined;
       if (Array.isArray(v)) return v.map((x) => plainData(x, depth + 1) ?? null);
-      const out: { [k: string]: WidgetValue } = {};
+      const out: { [k: string]: PlainValue } = {};
       for (const [k, x] of Object.entries(v as object)) {
         if (k === '__proto__') continue;
         const c = plainData(x, depth + 1);
@@ -767,7 +785,7 @@ export function plainData(v: unknown, depth = 0): WidgetValue | undefined {
   }
 }
 
-function same(a: WidgetValue | undefined, b: WidgetValue | undefined): boolean {
+function same(a: PlainValue | undefined, b: PlainValue | undefined): boolean {
   if (a === b) return true;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
   if (Array.isArray(a) || Array.isArray(b)) {
@@ -783,25 +801,26 @@ function same(a: WidgetValue | undefined, b: WidgetValue | undefined): boolean {
  * What `next` changes in `cur`: its fields that differ (records compared field by field, so only
  * the changed ones go; lists and everything else whole), or null if nothing does.
  */
-export function diffData(cur: WidgetData, next: WidgetData): WidgetData | null {
-  let out: WidgetData | null = null;
+export function diffData(cur: PlainData, next: PlainData): PlainData | null {
+  let out: PlainData | null = null;
   for (const [k, v] of Object.entries(next)) {
     const was = own(cur, k) ? cur[k] : undefined;
     if (same(was, v)) continue;
-    const d = isRecord(was) && isRecord(v) ? diffData(was, v) : v;
-    if (d === null) continue;
-    (out ??= {})[k] = d;
+    if (isRecord(was) && isRecord(v)) {
+      const d = diffData(was, v);
+      if (d) (out ??= {})[k] = d;
+    } else (out ??= {})[k] = v;
   }
   return out;
 }
 
 /** Apply a change to data, in place: records merge field by field; anything else is replaced. */
-export function mergeData(into: WidgetData, patch: WidgetData): WidgetData {
+export function mergeData(into: PlainData, patch: PlainData): PlainData {
   for (const [k, v] of Object.entries(patch)) {
     if (k === '__proto__') continue;
     const was = own(into, k) ? into[k] : undefined;
     if (isRecord(was) && isRecord(v)) mergeData(was, v);
-    else into[k] = isRecord(v) ? mergeData({}, v) : Array.isArray(v) ? (plainData(v) as WidgetValue[]) : v;
+    else into[k] = isRecord(v) ? mergeData({}, v) : Array.isArray(v) ? (plainData(v) as PlainValue[]) : v;
   }
   return into;
 }

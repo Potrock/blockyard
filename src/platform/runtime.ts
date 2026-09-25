@@ -439,6 +439,7 @@ export class Runtime {
     // The game's content reaches the client's renderer and audio as it's defined.
     this.content.onSound((name, voice) => this.sfx.define(name, voice));
     this.content.onAnimation((name, anim) => this.held.define(name, anim));
+    this.content.onWidget((name, widget) => this.gameHud.defineWidget(name, widget));
     this.content.onAtlas((name, source) => {
       if ('pixels' in source) this.graphics.addAtlas(name, source.width, source.height, source.pixels, source.emissive);
       else this.graphics.addCanvasAtlas(name, source);

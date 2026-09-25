@@ -1,4 +1,5 @@
 import type { PresentCall } from '../net/protocol';
+import { mergeData, type PlainData } from '../ui/markup';
 
 /**
  * Which presentation calls set something that stays on screen (an objective, a stat, a marker)
@@ -22,6 +23,11 @@ function keyOf(c: PresentCall): string | null {
       case 'meter':
       case 'marker':
         return `${c.method}:${String(c.args[0])}`;
+      // A game's widget: up with its data, changed by patches, or down.
+      case 'widget':
+      case 'widgetSet':
+      case 'widgetRemove':
+        return `widget:${String(c.args[0])}`;
     }
   }
   if (c.target === 'view' && (c.method === 'visible' || c.method === 'setSkin')) return `view.${c.method}`;
@@ -54,6 +60,11 @@ export class PresentState {
     }
     const key = keyOf(c);
     if (key === null) return true;
+    if (c.method === 'widgetSet') {
+      // A change the host worked out already: kept merged in, for screens that catch up later.
+      this.patch(key, c);
+      return true;
+    }
     const json = c.method + JSON.stringify(c.args);
     if (c.to === null) {
       // After a personal call with this key, the screens differ: send the next one to everyone.
@@ -77,6 +88,30 @@ export class PresentState {
       if (k) out.push(k.call);
     }
     return out;
+  }
+
+  /**
+   * A widget patch merged into what's kept: everyone's widget and each player's own for one for
+   * everyone; for one player, theirs (their own copy of everyone's, if that's what they had).
+   */
+  private patch(key: string, c: PresentCall) {
+    const change = c.args[1] as PlainData;
+    const merged = (k: Kept, to: string | null): Kept => {
+      if (k.call.method !== 'widget') return k;
+      const call: PresentCall = { ...k.call, to, args: [k.call.args[0], mergeData(structuredClone(k.call.args[1] as PlainData), change)] };
+      return { call, json: call.method + JSON.stringify(call.args) };
+    };
+    const all = this.everyone.get(key);
+    const mine = this.personal.get(key);
+    if (c.to === null) {
+      if (all) this.everyone.set(key, merged(all, null));
+      if (mine) for (const [p, k] of mine) mine.set(p, merged(k, p));
+      return;
+    }
+    const base = mine?.get(c.to) ?? all;
+    if (!base) return;
+    if (mine) mine.set(c.to, merged(base, c.to));
+    else this.personal.set(key, new Map([[c.to, merged(base, c.to)]]));
   }
 
   /** A player left for good. */

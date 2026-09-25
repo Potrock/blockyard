@@ -1911,8 +1911,94 @@ input[type='range']::-moz-range-thumb {
   object-fit: contain;
 }
 
+/* ---------- A game's own widgets (hud.define, hud.widget) ---------- */
+/* Their own layer: whatever z-index a widget's CSS uses stays inside it, under menus and the pause screen. */
+.gw-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  isolation: isolate;
+}
+/* One place per anchor, 18px in from the edges; widgets there stack. */
+.gw-slot {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gw-top-left {
+  left: 18px;
+  top: 18px;
+  align-items: flex-start;
+}
+.gw-top {
+  left: 50%;
+  top: 18px;
+  transform: translateX(-50%);
+  align-items: center;
+}
+.gw-top-right {
+  right: 18px;
+  top: 18px;
+  align-items: flex-end;
+}
+.gw-left {
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  align-items: flex-start;
+}
+.gw-center {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  align-items: center;
+}
+.gw-right {
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  align-items: flex-end;
+}
+.gw-bottom-left {
+  left: 18px;
+  bottom: 18px;
+  align-items: flex-start;
+}
+.gw-bottom {
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  align-items: center;
+}
+.gw-bottom-right {
+  right: 18px;
+  bottom: 18px;
+  align-items: flex-end;
+}
+/* data-if: hidden whatever the widget's CSS says about display. */
+.gw [hidden] {
+  display: none !important;
+}
+.gw [data-action] {
+  pointer-events: auto;
+  cursor: pointer;
+}
+/* A widget's buttons start plain, in its own text (no specificity: its CSS wins). */
+:where(.gw) button {
+  font: inherit;
+  color: inherit;
+}
+/* A modal widget: a screen of its own, like a menu. */
+.widget-screen {
+  background: rgba(4, 6, 10, 0.45);
+  backdrop-filter: blur(2px);
+  isolation: isolate;
+  animation: menu-in 120ms ease-out;
+}
+
 /* ---------- A game's HUD theme (hud.theme): fonts and colours ---------- */
-.hud-themed :is(.hud, .gamehud, .result-screen, .menu-screen) {
+.hud-themed :is(.hud, .gamehud, .result-screen, .menu-screen, .widget-screen) {
   --pixel: var(--hud-display, 'Silkscreen', ui-monospace, monospace);
   --sans: var(--hud-text, 'Inter', system-ui, sans-serif);
   --accent: var(--hud-accent, #7fd46b);

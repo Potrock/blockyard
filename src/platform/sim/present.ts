@@ -8,14 +8,19 @@ import type {
   MenuEntry,
   MenuHandle,
   MenuOptions,
+  Player,
   RadarData,
   ScreenOptions,
   Vec3,
   ViewAnimation,
   ViewModelApi,
+  WidgetData,
+  WidgetDefinition,
+  WidgetHandle,
 } from '../api/types';
 import type { Content } from '../content';
 import type { AnchorRef, CallbackRef, ClientMessage, PresentCall, PresentTarget, RadarWire } from '../net/protocol';
+import { diffData, mergeData, parseMarkup, plainRecord, WIDGET_ANCHORS, WIDGET_NAME, type PlainData, type WidgetWire } from '../ui/markup';
 
 export type Sink = (call: PresentCall) => void;
 
@@ -54,6 +59,63 @@ class MenuProxy implements MenuHandle {
   }
 }
 
+/** A widget the game defined: what went to the screens (to skip sending it again), and its actions. */
+interface WidgetKind {
+  def: WidgetDefinition;
+  json: string;
+  /** The actions its markup's buttons name (a player can ask for no other). */
+  actions: Set<string>;
+}
+
+/**
+ * What one widget shows: on everyone's screens (null: it isn't up), and on the screens of players
+ * who see something else (their own data, or nothing).
+ */
+class WidgetScreens {
+  all: PlainData | null = null;
+  mine = new Map<string, PlainData | null>();
+
+  of(player: string): PlainData | null {
+    return this.mine.has(player) ? this.mine.get(player)! : this.all;
+  }
+
+  /** Every screen it's up on, as the data each shows. */
+  shown(): PlainData[] {
+    const out = this.all ? [this.all] : [];
+    for (const d of this.mine.values()) if (d) out.push(d);
+    return out;
+  }
+}
+
+class WidgetProxy implements WidgetHandle {
+  constructor(
+    readonly name: string,
+    private hub: Presentation,
+    private to: string | null,
+  ) {}
+
+  private get current(): PlainData | null {
+    const s = this.hub.widgetScreens.get(this.name);
+    return (s && (this.to === null ? s.all : s.of(this.to))) ?? null;
+  }
+
+  get shown(): boolean {
+    return this.current !== null;
+  }
+
+  get data(): WidgetData {
+    return structuredClone(this.current ?? {});
+  }
+
+  set(data: WidgetData) {
+    this.hub.setWidget(this.to, this.name, data);
+  }
+
+  remove() {
+    this.hub.removeWidget(this.to, this.name);
+  }
+}
+
 /**
  * The simulation's side of presentation: the game's `hud`, `fx`, `audio` and `viewModel` calls
  * become plain-data `PresentCall`s for the clients. Callbacks (menu entries, screen buttons) are
@@ -64,6 +126,12 @@ export class Presentation {
   private nextId = 1;
   private callbacks = new Map<number, () => void>();
   readonly menus = new Map<number, MenuProxy>();
+  private widgetKinds = new Map<string, WidgetKind>();
+  /** What each widget shows where (its handles read it). */
+  readonly widgetScreens = new Map<string, WidgetScreens>();
+  private widgetHandles = new Map<string, WidgetProxy>();
+  /** A player by id, for a widget's actions (the simulation sets this). */
+  playerOf: (id: string) => Player | undefined = () => undefined;
   /**
    * An anchor as data: a spot as it is, or what to follow by id. The simulation (which knows its
    * props, entities and players) sets this.
@@ -113,13 +181,118 @@ export class Presentation {
   receive(m: ClientMessage) {
     if (m.t === 'callback') this.callbacks.get(m.id)?.();
     else if (m.t === 'menuClosed') this.menus.get(m.menu)?.closed();
+    else if (m.t === 'widgetAction') {
+      // Only a button they can see: the widget's up on their screen, and its markup has it.
+      const kind = this.widgetKinds.get(m.widget);
+      const fn = kind?.def.actions?.[m.action];
+      if (!kind || !fn || !kind.actions.has(m.action) || !this.widgetScreens.get(m.widget)?.of(m.player)) return;
+      const player = this.playerOf(m.player);
+      if (player) fn(player, m.value);
+    } else if (m.t === 'widgetClosed') {
+      const kind = this.widgetKinds.get(m.widget);
+      const s = this.widgetScreens.get(m.widget);
+      if (!kind?.def.modal || !s?.of(m.player)) return;
+      // Down on their screen already; said again so a screen that catches up later agrees.
+      this.removeWidget(m.player, m.widget);
+      const player = this.playerOf(m.player);
+      if (player) kind.def.onClose?.(player);
+    }
   }
 
-  /** A restart: menus and screens are gone, their callbacks with them. */
+  /** A restart: menus, screens and widgets are gone, callbacks with them (widgets stay defined). */
   reset() {
     for (const m of [...this.menus.values()]) m.open = false;
     this.menus.clear();
     this.callbacks.clear();
+    this.widgetScreens.clear();
+  }
+
+  /** A player left for good: what their screen showed goes. */
+  forget(player: string) {
+    for (const s of this.widgetScreens.values()) s.mine.delete(player);
+    for (const k of [...this.widgetHandles.keys()]) if (k.endsWith(`\u0000${player}`)) this.widgetHandles.delete(k);
+  }
+
+  /** `hud.define`: checked here (a mistake shows in the game's console), sent to screens if it's new or changed. */
+  defineWidget(name: string, def: WidgetDefinition) {
+    if (!WIDGET_NAME.test(name)) throw new Error(`hud.define: "${name}" can't name a widget (a letter, then letters, digits, _ or -)`);
+    if (typeof def?.html !== 'string') throw new Error(`hud.define("${name}"): it needs its html`);
+    if (def.at !== undefined && !WIDGET_ANCHORS.includes(def.at)) throw new Error(`hud.define("${name}"): at must be one of ${WIDGET_ANCHORS.join(', ')}`);
+    const wire: WidgetWire = { html: def.html };
+    if (def.css) wire.css = def.css;
+    if (def.at) wire.at = def.at;
+    if (def.modal) wire.modal = true;
+    const json = JSON.stringify(wire);
+    const was = this.widgetKinds.get(name);
+    const parsed = parseMarkup(def.html);
+    this.widgetKinds.set(name, { def, json, actions: new Set(parsed.actions) });
+    if (was?.json === json) return;
+    if (parsed.dropped.length) console.warn(`hud.define("${name}"): left out ${parsed.dropped.join(', ')}`);
+    this.content.defineWidget(name, wire);
+  }
+
+  private widgetHandle(to: string | null, name: string): WidgetProxy {
+    const key = `${name}\u0000${to ?? ''}`;
+    let h = this.widgetHandles.get(key);
+    if (!h) this.widgetHandles.set(key, (h = new WidgetProxy(name, this, to)));
+    return h;
+  }
+
+  /**
+   * A widget's data changes on these screens (everyone's, or one player's). Not up there yet: it
+   * goes up with this data. Up: only what differs goes, as a patch each screen merges in.
+   */
+  setWidget(to: string | null, name: string, input: WidgetData) {
+    if (!this.widgetKinds.has(name)) throw new Error(`hud.widget: there's no widget "${name}" (hud.define it first)`);
+    const data = plainRecord(input);
+    let s = this.widgetScreens.get(name);
+    if (!s) this.widgetScreens.set(name, (s = new WidgetScreens()));
+    if (to === null) {
+      if (s.all === null) {
+        // Up for everyone, with this data (whatever players saw before).
+        s.all = mergeData({}, data);
+        s.mine.clear();
+        this.send(null, 'hud', 'widget', [name, structuredClone(s.all)]);
+        return;
+      }
+      // What differs on any screen it's up on.
+      const screens = s.shown();
+      let patch: PlainData | null = null;
+      for (const d of screens) {
+        const p = diffData(d, data);
+        if (p) patch = mergeData(patch ?? {}, p);
+      }
+      if (!patch) return;
+      for (const d of screens) mergeData(d, patch);
+      this.send(null, 'hud', 'widgetSet', [name, patch]);
+      return;
+    }
+    const cur = s.of(to);
+    if (cur === null) {
+      const d = mergeData({}, data);
+      s.mine.set(to, d);
+      this.send(to, 'hud', 'widget', [name, structuredClone(d)]);
+      return;
+    }
+    const patch = diffData(cur, data);
+    if (!patch) return;
+    // Their own copy from here on (it may have been everyone's).
+    s.mine.set(to, mergeData(s.mine.has(to) ? cur : structuredClone(cur), patch));
+    this.send(to, 'hud', 'widgetSet', [name, patch]);
+  }
+
+  removeWidget(to: string | null, name: string) {
+    const s = this.widgetScreens.get(name);
+    if (!s) return;
+    if (to === null) {
+      if (!s.shown().length) return;
+      s.all = null;
+      s.mine.clear();
+    } else {
+      if (!s.of(to)) return;
+      s.mine.set(to, null);
+    }
+    this.send(to, 'hud', 'widgetRemove', [name]);
   }
 
   hud(to: string | null): HudApi {
@@ -157,6 +330,12 @@ export class Presentation {
         this.menus.set(m.id, m);
         send('menu', m.id, this.encodeMenu(opts, m.cbs));
         return m;
+      },
+      define: (name: string, widget: WidgetDefinition) => this.defineWidget(name, widget),
+      widget: (name: string, data?: WidgetData) => {
+        const w = this.widgetHandle(to, name);
+        w.set(data ?? {});
+        return w;
       },
     };
   }

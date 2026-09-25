@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { h } from './dom';
-import { scopeCss } from './markup';
-import type { FeedPart, HudApi, HudTheme, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3 } from '../api/types';
+import { mergeData, plainRecord, scopeCss, type WidgetWire } from './markup';
+import { compileWidget, WidgetView, type CompiledWidget } from './widgets';
+import type { FeedPart, HudApi, HudTheme, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3, WidgetAnchor } from '../api/types';
 import type { AnchorRef, RadarWire } from '../net/protocol';
 
 interface Marker {
@@ -47,11 +48,18 @@ interface HurtArrow {
   age: number;
 }
 
+/** A game's widget up on this screen: its elements, and the screen it's in if it's modal. */
+interface ShownWidget {
+  view: WidgetView;
+  screen: HTMLElement | null;
+}
+
 /**
  * Game-facing HUD widgets layered over the base HUD. (Markers and the radar take anchors as they
- * come over the wire, and place what they follow every frame with `locate`.)
+ * come over the wire, and place what they follow every frame with `locate`.) The game's own
+ * widgets (`hud.define`) arrive as definitions, then as data: `widget`, `widgetSet`, `widgetRemove`.
  */
-export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> {
+export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' | 'define' | 'widget'> {
   readonly root: HTMLElement;
   private hearts: HTMLElement;
   private heartEls: HTMLElement[] = [];
@@ -116,6 +124,15 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
   private unhooks = new Map<HTMLElement, () => void>();
   /** Each open menu's close (B on a controller backs out of the top one). */
   private menuClosers = new Map<HTMLElement, () => void>();
+  /** The game's widgets: a layer of its own (its stacking kept inside), a place for each anchor, their CSS. */
+  private widgetLayer: HTMLElement;
+  private widgetSheet: HTMLStyleElement;
+  private widgetSlots = new Map<WidgetAnchor, HTMLElement>();
+  private widgetDefs = new Map<string, CompiledWidget>();
+  private widgetsUp = new Map<string, ShownWidget>();
+  /** A button in a widget was pressed; a modal widget was closed by the player (the presenter tells the host). */
+  onWidgetAction: ((widget: string, action: string, value: string) => void) | null = null;
+  onWidgetClosed: ((widget: string) => void) | null = null;
 
   constructor(parent: HTMLElement, private iconFor: (ref: IconRef) => string) {
     this.hearts = h('div.hearts');
@@ -144,6 +161,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     this.barEl.style.display = 'none';
     this.ammoEl = h('div.ammo');
     this.ammoEl.style.display = 'none';
+    this.widgetSheet = h('style') as HTMLStyleElement;
+    this.widgetLayer = h('div.gw-layer', {}, this.widgetSheet);
     this.root = h(
       'div.gamehud',
       {},
@@ -163,6 +182,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
       this.popEl,
       this.barEl,
       this.ammoEl,
+      this.widgetLayer,
       this.boardEl,
     );
     parent.append(this.root);
@@ -723,6 +743,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
   closeScreens() {
     for (const unhook of [...this.unhooks.values()]) unhook();
     this.menuClosers.clear();
+    for (const [name, up] of this.widgetsUp) if (up.screen) this.widgetsUp.delete(name);
     for (const s of this.screens) s.remove();
     if (this.screens.length) this.onScreen?.(false);
     this.screens = [];
@@ -825,7 +846,99 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     for (const a of this.hurts) a.el.remove();
     this.hurts = [];
     this.popEl.classList.remove('show');
+    for (const name of [...this.widgetsUp.keys()]) this.widgetRemove(name);
     this.closeScreens();
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // The game's own widgets
+  // -----------------------------------------------------------------------------------------------
+
+  /** A widget's definition (new, or changed: redrawn where it's up, with what it showed). */
+  defineWidget(name: string, wire: WidgetWire) {
+    const def = compileWidget(name, wire);
+    if (!def) return;
+    this.widgetDefs.set(name, def);
+    this.widgetSheet.textContent = [...this.widgetDefs.values()].map((d) => d.css).join('\n');
+    const up = this.widgetsUp.get(name);
+    if (up) this.widget(name, up.view.data);
+  }
+
+  /** Up on this screen (again, from scratch), filled in from `data`. */
+  widget(name: string, data: unknown) {
+    const def = this.widgetDefs.get(name);
+    if (!def) return;
+    this.widgetRemove(name);
+    const view = new WidgetView(def, mergeData({}, plainRecord(data)), (action, value) => this.onWidgetAction?.(name, action, value));
+    const screen = def.modal ? this.widgetScreen(name, view) : null;
+    if (!screen) this.widgetSlot(def.at).append(view.root);
+    this.widgetsUp.set(name, { view, screen });
+  }
+
+  /** What it shows changes: merged in, and only what reads differently is touched. */
+  widgetSet(name: string, patch: unknown) {
+    const up = this.widgetsUp.get(name);
+    if (!up) return;
+    mergeData(up.view.data, plainRecord(patch));
+    up.view.update();
+  }
+
+  widgetRemove(name: string) {
+    const up = this.widgetsUp.get(name);
+    if (!up) return;
+    this.widgetsUp.delete(name);
+    if (up.screen) this.dropScreen(up.screen);
+    else up.view.root.remove();
+  }
+
+  /** The place for widgets at one anchor (they stack there). */
+  private widgetSlot(at: WidgetAnchor): HTMLElement {
+    let slot = this.widgetSlots.get(at);
+    if (!slot) {
+      slot = h(`div.gw-slot.gw-${at}`);
+      this.widgetSlots.set(at, slot);
+      this.widgetLayer.append(slot);
+    }
+    return slot;
+  }
+
+  /**
+   * A modal widget: in a screen of its own, like a menu. It frees the mouse, a controller moves
+   * between its buttons, and Esc, B or a click outside closes it (the host hears).
+   */
+  private widgetScreen(name: string, view: WidgetView): HTMLElement {
+    const el = h('div.screen.widget-screen', {}, view.root);
+    const close = () => {
+      if (this.widgetsUp.get(name)?.screen !== el) return;
+      this.widgetRemove(name);
+      this.onWidgetClosed?.(name);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.stopPropagation();
+      close();
+    };
+    el.onclick = (ev) => {
+      if (ev.target === el) close();
+    };
+    window.addEventListener('keydown', onKey, true);
+    this.unhooks.set(el, () => {
+      window.removeEventListener('keydown', onKey, true);
+      this.unhooks.delete(el);
+    });
+    this.menuClosers.set(el, close);
+    this.root.parentElement!.append(el);
+    this.screens.push(el);
+    this.onScreen?.(true);
+    return el;
+  }
+
+  private dropScreen(el: HTMLElement) {
+    this.menuClosers.delete(el);
+    this.unhooks.get(el)?.();
+    el.remove();
+    this.screens = this.screens.filter((x) => x !== el);
+    if (this.screens.length === 0) this.onScreen?.(false);
   }
 }
 

@@ -335,7 +335,10 @@ export class GameHost {
     if (!p) return;
     this.guard(() => this.keepPlayer(p));
     this.guard(() => this.sim.leave(p.id));
-    if (p !== this.sim.local) this.state.forget(p.id);
+    if (p !== this.sim.local) {
+      this.state.forget(p.id);
+      this.sim.presentation.forget(p.id);
+    }
   }
 
   /** Whether this game keeps its world (and players' places) across restarts. */

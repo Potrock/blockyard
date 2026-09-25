@@ -1369,6 +1369,85 @@ export interface HudApi {
    * `progress` goes 0..1. `null` hides it. It stays until moved or hidden.
    */
   highlight(at: Vec3 | null, opts?: { progress?: number }): void;
+  /**
+   * Define a widget of the game's own: its markup, styles, place and buttons (see
+   * `WidgetDefinition`). Once, in `setup`, from `game.hud` or any player's (a widget is the
+   * game's, whoever shows it). Defining it again with other markup redraws it wherever it's up.
+   */
+  define(name: string, widget: WidgetDefinition): void;
+  /**
+   * Put a defined widget up on these screens (everyone's from `game.hud`, one player's from
+   * `player.hud`), filled in from `data`, and get its handle. Calling it again (every tick is
+   * fine) changes what it shows: only what changed goes to the screens.
+   */
+  widget(name: string, data?: WidgetData): WidgetHandle;
+}
+
+/**
+ * What a widget is filled in from: text, numbers, flags, and lists and records of them (anything
+ * else, a function say, is left out).
+ */
+export type WidgetData = { readonly [key: string]: unknown };
+
+/** Where a widget sits: a corner, the middle of an edge, or the centre (widgets in one place stack). */
+export type WidgetAnchor = 'top-left' | 'top' | 'top-right' | 'left' | 'center' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right';
+
+/**
+ * A HUD widget of the game's own: HTML and CSS, filled in from data on each player's screen.
+ *
+ * ```ts
+ * game.hud.define('streak', {
+ *   at: 'bottom-left',
+ *   html: `<div class="card" data-if="streak > 0">Streak <b>{{streak}}</b>
+ *            <span class="pip" data-each="pips" style="--c: {{color}}"></span></div>`,
+ *   css: `.card { background: #111c; padding: 6px 10px } .pip { background: var(--c) }`,
+ * });
+ * player.hud.widget('streak', { streak: 3, pips: [{ color: 'gold' }, { color: 'gold' }] });
+ * ```
+ *
+ * The markup's template: `{{name}}` in text and attributes (`me.kills`, `rows.0.name`; in a list,
+ * the item's fields, `.` for the item itself, `$i` / `$n` for its place from 0 / 1);
+ * `data-if="cond"` shows an element while `cond` holds (`uav`, `!uav`, `kills >= 3`,
+ * `state == 'low'`); `data-each="rows"` repeats an element for each item of a list (a
+ * scoreboard's rows). Bind CSS variables in `style` (`style="--fill: {{hp}}"`) to drive bars and
+ * colours from data. Scripts, `on…` attributes, links, frames, forms and pictures from other
+ * sites are left out; `id` and `name` too.
+ */
+export interface WidgetDefinition {
+  html: string;
+  /**
+   * Its styles, kept to it: `.row` is its own `.row`, `:scope` the widget itself. Its
+   * `@keyframes` are its own; `@media` and `@supports` work; `@import` and `@font-face` don't.
+   */
+  css?: string;
+  /** Where it sits (default `top-left`); its `:scope` CSS can nudge it from there (`margin-top`). */
+  at?: WidgetAnchor;
+  /**
+   * Takes the mouse while it's up, like a menu: the player can click its buttons (a controller's
+   * D-pad moves between them, A presses), and Esc, B or a click outside closes it.
+   */
+  modal?: boolean;
+  /**
+   * What its buttons do: `<button data-action="buy" data-value="{{id}}">` calls `buy(player,
+   * value)`, with the player who pressed it (only while it's on their screen). The value comes
+   * from their screen: check it like any input.
+   */
+  actions?: Record<string, (player: Player, value: string) => void>;
+  /** A `modal` widget closed by the player (it's off their screen now). */
+  onClose?(player: Player): void;
+}
+
+/** A widget on some screens (`hud.widget`): change it, or take it down. */
+export interface WidgetHandle {
+  readonly name: string;
+  /** Change what it shows (it's merged in, records field by field; `null` clears a field). Only what differs goes out. */
+  set(data: WidgetData): void;
+  /** Take it off these screens (`widget(name, data)` puts it back). */
+  remove(): void;
+  /** Whether it's up on these screens. */
+  readonly shown: boolean;
+  /** What it shows there now. */
+  readonly data: WidgetData;
 }
 
 /**

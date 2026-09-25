@@ -2,6 +2,7 @@ import type { AtlasPixels, EntityDefinition, ItemDefinition, SynthVoice, Vec3, V
 import { Blueprint } from './api/blueprint';
 import type { ContentDef } from './net/protocol';
 import { playRecorded, recordVoice } from './audio/voice';
+import type { WidgetWire } from './ui/markup';
 
 type Listener<T> = (name: string, value: T) => void;
 type AtlasSource = HTMLCanvasElement | OffscreenCanvas | AtlasPixels;
@@ -21,6 +22,8 @@ export class Content {
   readonly entities = new Map<string, EntityDefinition>();
   /** Items: their icons and how they're held. */
   readonly items = new Map<string, ItemDefinition>();
+  /** HUD widgets of the game's own (`hud.define`): markup and styles, for each screen to check and build. */
+  readonly widgets = new Map<string, WidgetWire>();
   /** Prop models: a blueprint to mesh (`props.model`), or a glTF file (`props.gltf`). */
   readonly models = new Map<number, { blueprint: Blueprint; opts: { scale?: number; pivot?: Vec3 } } | { url: string; opts: { scale?: number; animation?: string } }>();
   /** Set by a host: each definition, as data for its clients. */
@@ -29,6 +32,7 @@ export class Content {
   private atlasListeners: Listener<AtlasSource>[] = [];
   private animationListeners: Listener<ViewAnimation>[] = [];
   private modelFileListeners: Listener<string>[] = [];
+  private widgetListeners: Listener<WidgetWire>[] = [];
   private inline = 0;
 
   defineSound(name: string, voice: SynthVoice) {
@@ -76,6 +80,12 @@ export class Content {
     this.forward?.({ kind: 'animation', name, anim: 'sample' in anim ? bake(anim) : wire(anim) });
   }
 
+  defineWidget(name: string, def: WidgetWire) {
+    this.widgets.set(name, def);
+    for (const l of this.widgetListeners) l(name, def);
+    this.forward?.({ kind: 'widget', name, def });
+  }
+
   /** An animation passed inline to `viewModel.play`: stored under a generated name. */
   inlineAnimation(anim: ViewAnimation): string {
     const name = `inline:${++this.inline}`;
@@ -100,6 +110,8 @@ export class Content {
         return this.defineModel(d.id, Blueprint.fromData(d.blueprint), d.opts);
       case 'gltf':
         return this.defineGltfModel(d.id, d.url, d.opts);
+      case 'widget':
+        return this.defineWidget(d.name, d.def);
     }
   }
 
@@ -124,6 +136,11 @@ export class Content {
   onAnimation(fn: Listener<ViewAnimation>) {
     for (const [n, v] of this.animations) fn(n, v);
     this.animationListeners.push(fn);
+  }
+
+  onWidget(fn: Listener<WidgetWire>) {
+    for (const [n, v] of this.widgets) fn(n, v);
+    this.widgetListeners.push(fn);
   }
 }
 
