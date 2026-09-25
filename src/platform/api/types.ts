@@ -1698,7 +1698,12 @@ export interface Entity {
   setSpeed(multiplier: number): void;
   /** Tint the model (flash on wind-up). */
   glow(color: string | null): void;
-  shoot(spec: ProjectileSpec, target: Player | Entity | Vec3, opts?: { spread?: number; lead?: boolean }): void;
+  /**
+   * Fire a projectile at a target, arcing for its gravity. `spread`: radians of error either way.
+   * `lead`: allow for a moving target's motion while it flies (`true`: most of it, 0.8; or the
+   * fraction, 0 to 1).
+   */
+  shoot(spec: ProjectileSpec, target: Player | Entity | Vec3, opts?: { spread?: number; lead?: boolean | number }): void;
 }
 
 export interface EntityApi {

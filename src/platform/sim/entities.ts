@@ -378,16 +378,17 @@ class EntityImpl implements Entity {
     this.glowColor = color;
   }
 
-  shoot(spec: ProjectileSpec, target: Target, opts: { spread?: number; lead?: boolean } = {}) {
+  shoot(spec: ProjectileSpec, target: Target, opts: { spread?: number; lead?: boolean | number } = {}) {
     const p = this.position;
     const from = { x: p.x, y: p.y + this.height * 0.82 * Math.min(1.4, this.def.model.scale), z: p.z };
     let tp = { ...this.m.aimPoint(target) };
     if (isPlayer(target)) tp.y -= 0.35;
     const dist = Math.hypot(tp.x - from.x, tp.y - from.y, tp.z - from.z);
     const t = dist / spec.speed;
-    if (opts.lead && (isPlayer(target) || isEntity(target))) {
+    const lead = opts.lead === true ? 0.8 : opts.lead || 0;
+    if (lead && (isPlayer(target) || isEntity(target))) {
       const v = target.velocity;
-      tp = { x: tp.x + v.x * t * 0.8, y: tp.y, z: tp.z + v.z * t * 0.8 };
+      tp = { x: tp.x + v.x * t * lead, y: tp.y, z: tp.z + v.z * t * lead };
     }
     const g = spec.gravity ?? 20;
     tp.y += 0.5 * g * t * t;

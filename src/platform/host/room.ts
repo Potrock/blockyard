@@ -6,6 +6,9 @@ import type { SimFrame } from '../sim/sim';
 import { GameHost } from './game';
 import type { SavedPlayer, SavedWorld, Store } from './store';
 
+/** Longest step a room takes (seconds): a stall longer than this is lost time. */
+const MAX_STEP = 0.1;
+
 /** Which room: a game, and its public game or one of its own ones (`instance`). */
 export interface RoomSpec {
   game: string;
@@ -96,8 +99,17 @@ export class RoomCore {
     });
     if (store) this.host.persist();
     out.log(kept ? `started, carrying on the kept world (seed ${this.host.seed})` : `started a new world (seed ${this.host.seed})`);
+    // Each step as long as it's been since the last: a busy machine (or a slow tick) steps less
+    // often but keeps time, rather than the game slowing down while players' screens (predicting
+    // their own ships and walks on the wall clock) run on ahead of it. Past MAX_STEP, it loses time.
     const dt = 1 / spec.tickRate;
-    this.timer = setInterval(() => this.step(dt), 1000 * dt);
+    let last = performance.now();
+    this.timer = setInterval(() => {
+      const now = performance.now();
+      const elapsed = (now - last) / 1000;
+      last = now;
+      this.step(Math.min(MAX_STEP, elapsed));
+    }, 1000 * dt);
   }
 
   /** A client watching (they join with `start`): their welcome and a batch catching them up. */

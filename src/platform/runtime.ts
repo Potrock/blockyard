@@ -48,7 +48,8 @@ import { newRoomCode, ROOM_CODE, type HostBatch, type SaveState, type TimedBatch
 import type { EntityFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
-import { loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
+import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
+import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
 import type { BlockRef, GameContext, GameDefinition, ItemDefinition, ItemStack, PadAction, PadButton, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
@@ -90,6 +91,9 @@ const toB64 = (u: Uint8Array) => {
 };
 const fromB64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
+/** The screen's pixels per point, up to 2 (more costs a lot and shows little). */
+const deviceDpr = () => Math.min(window.devicePixelRatio || 1, 2);
+
 /**
  * The browser runtime: the client (renderer, streaming world, HUD, audio, input, first-person
  * view). The game itself runs in a `GameHost`, in a worker (or in this page with `?host=page`).
@@ -100,6 +104,9 @@ const fromB64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 export class Runtime {
   mode: Mode = 'title';
   private settings: Settings;
+  /** Graphics lowered while frames are slow, and the settings as they're drawn. */
+  private quality = new AutoQuality();
+  private look: Look | null = null;
   private renderer!: Renderer;
   private env = new Environment();
   private camera: THREE.PerspectiveCamera;
@@ -1342,8 +1349,17 @@ export class Runtime {
   }
 
   private applySettings(s: Settings, persist = true) {
+    const was = this.look ? this.settings : null;
     this.settings = { ...s };
-    this.renderer.applySettings(toRenderSettings(s));
+    this.quality.enabled = s.autoQuality;
+    // Where this machine settled last time; the player changing their graphics starts it again from the top.
+    if (!was) this.quality.reset(savedQuality());
+    else if (GRAPHICS.some((k) => was[k] !== s[k])) {
+      this.quality.reset();
+      saveQuality(0);
+    }
+    this.look = this.quality.apply(s, deviceDpr());
+    this.renderer.applySettings(toRenderSettings(this.look.settings));
     const rd = this.viewDistance(s);
     if (this.chunks.renderDistance !== rd) this.chunks.setRenderDistance(rd);
     this.chunks.occlusion = s.occlusion;
@@ -1362,11 +1378,20 @@ export class Runtime {
   private resize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = this.look?.dpr ?? deviceDpr();
     this.renderer.setSize(w, h, dpr);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.particles?.setViewport(h * dpr * this.settings.renderScale, this.camera.fov);
+    this.particles?.setViewport(h * dpr * (this.look?.settings ?? this.settings).renderScale, this.camera.fov);
+  }
+
+  /** Auto quality moved a notch: draw the settings as it has them now. */
+  private applyQuality() {
+    saveQuality(this.quality.level);
+    const was = this.look;
+    this.look = this.quality.apply(this.settings, deviceDpr());
+    this.renderer.applySettings(toRenderSettings(this.look.settings));
+    if (!was || was.dpr !== this.look.dpr || was.settings.renderScale !== this.look.settings.renderScale) this.resize();
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1378,6 +1403,8 @@ export class Runtime {
     requestAnimationFrame((t) => this.frame(t));
     const t0 = performance.now();
     const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
+    // Frames while playing (not a menu, not a hidden tab) tell auto quality how the graphics keep up.
+    if (this.mode === 'playing' && this.worldReady && document.visibilityState === 'visible' && this.quality.frame(now - this.last)) this.applyQuality();
     this.last = now;
     // A controller: in the game (its buttons press keys, its sticks walk and look), else the menus.
     const drives = this.mode === 'playing' && this.input.locked && !this.gameHud.screenOpen;
@@ -1862,7 +1889,7 @@ export class Runtime {
       `Workers  ${this.pool.size} · gen ${c.generating} (${c.genMs.toFixed(2)} ms) · mesh ${c.meshing} (${c.meshMs.toFixed(2)} ms)`,
       `Draws    ${r.stats.calls} (shadow ${r.stats.shadowCalls}) · ${(r.stats.triangles / 1e6).toFixed(2)}M tris`,
       `Culling  ${c.visibleSections} sections visible · cave culling ${this.chunks.occlusion ? 'on' : 'off'}`,
-      `Render   ${Math.round(r.width * rs.renderScale)}x${Math.round(r.height * rs.renderScale)} · MSAA ${rs.msaa}x · shadows ${rs.shadowRes || 'off'}`,
+      `Render   ${Math.round(r.width * rs.renderScale)}x${Math.round(r.height * rs.renderScale)} · MSAA ${rs.msaa}x · shadows ${rs.shadowRes || 'off'}${this.quality.level ? ` · auto quality -${this.quality.level}` : ''}`,
       mem ? `JS heap  ${(mem.usedJSHeapSize / 1048576).toFixed(0)} MB` : '',
     ]);
   }

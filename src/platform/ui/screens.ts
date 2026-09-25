@@ -371,6 +371,7 @@ export class PauseMenu {
             'section',
             {},
             h('h3', {}, 'Graphics'),
+            h('div.toggles', {}, toggle('Auto quality (lowers these when frames are slow)', 'autoQuality')),
             h('div.row', {}, h('span.name', {}, 'Shadows'), seg),
             slider('Resolution', 'renderScale', 0.4, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
             h(
