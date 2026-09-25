@@ -182,7 +182,7 @@ export class Bots {
       const v = t.velocity;
       const dist = Math.hypot(aim.x - eye.x, aim.y - eye.y, aim.z - eye.z);
       const lead = Math.min(0.12, dist / 300);
-      const settle = Math.exp(-dt * (1.2 + b.skill * 2.8));
+      const settle = Math.exp(-dt * (0.9 + b.skill * 2.2));
       b.err = { x: b.err.x * settle, y: b.err.y * settle, z: b.err.z * settle };
       const jitter = (1 - b.skill) * 0.25 + (bot.aiming ? 0 : 0.15);
       const px = aim.x + v.x * lead + b.err.x + (Math.random() - 0.5) * jitter;

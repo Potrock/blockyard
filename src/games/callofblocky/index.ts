@@ -508,7 +508,7 @@ export default defineGame({
     bots = new Bots(game, () => nav, MAP.hotspots);
     game.events.on('playerJoin', ({ player }) => {
       const f = fighters.get(player.id) ?? addFighter(game, player);
-      if (player.bot) bots.add(player as Bot, 0.45 + game.rng.next() * 0.45);
+      if (player.bot) bots.add(player as Bot, 0.3 + game.rng.next() * 0.5);
       if (running && phase === 'playing') spawn(game, f);
       if (!player.bot) {
         if (running) loadoutMenu(game, f);

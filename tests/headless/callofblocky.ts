@@ -13,10 +13,12 @@ export default function callofblocky() {
   let shots = 0;
   let deaths = 0;
   let heads = 0;
+  let mine = 0;
   const byWeapon = new Map<string, number>();
   g.events.on('shot', () => shots++);
   g.events.on('playerDeath', (e) => {
     deaths++;
+    if (!e.player.bot) mine++;
     if (e.headshot) heads++;
     if (e.weapon) byWeapon.set(e.weapon, (byWeapon.get(e.weapon) ?? 0) + 1);
   });
@@ -32,7 +34,7 @@ export default function callofblocky() {
   const wall = (performance.now() - t0) / 1000;
   const cases = h.find('hud', 'feed').filter((c) => JSON.stringify(c.args[0]).includes('has the briefcase')).length;
   const weapons = [...byWeapon].map(([w, n]) => `${w} ${n}`).join(', ');
-  console.log(`  ${simulated.toFixed(0)} s in ${wall.toFixed(1)} s: ${shots} shots, ${deaths} deaths (${heads} headshots; ${weapons}), bots visited ${visited.size} 4x4 cells, the briefcase taken ${cases}×`);
+  console.log(`  ${simulated.toFixed(0)} s in ${wall.toFixed(1)} s: ${shots} shots, ${deaths} deaths (${mine} of them the idle player; ${heads} headshots; ${weapons}), bots visited ${visited.size} 4x4 cells, the briefcase taken ${cases}×`);
   check(shots > 40, `bots hardly fired (${shots} shots)`);
   check(deaths >= 3, `bots should kill each other (${deaths} deaths)`);
   check(visited.size > 25, `bots should roam the map (${visited.size} cells)`);
