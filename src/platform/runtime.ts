@@ -26,7 +26,7 @@ import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
 import { gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from './world/blocks';
-import { blockIdOf, DEFAULT_TINT, loadRegistry, variant, type Registry } from './world/registry';
+import { blockIdOf, DEFAULT_TINT, destructibleIds, loadRegistry, variant, type Registry } from './world/registry';
 import { Input } from './player/input';
 import { padBindings, padHints, rumble } from './player/gamepad';
 import { PadNav } from './ui/padnav';
@@ -50,7 +50,7 @@ import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
-import type { BlockRef, GameContext, GameDefinition, ItemDefinition, ItemStack, PadAction, PadButton, Vec3 } from './api/types';
+import type { BlockRef, GameContext, GameDefinition, GunItem, ItemDefinition, ItemStack, PadAction, PadButton, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -113,6 +113,8 @@ export class Runtime {
   private pool!: WorkerPool;
   private chunks!: ChunkManager;
   private registry!: Registry;
+  /** Which blocks bullets carve (`world.destructible`): the ids, and only above this height. */
+  private carving: { ids: Uint8Array; above: number } | null = null;
   /** The game's own blocks (`def.blocks`). */
   private blocks!: GameBlocks;
   private textures!: TextureSet;
@@ -334,6 +336,8 @@ export class Runtime {
     this.blocks = gameBlocks(def, this.server?.welcome.blocks);
     useGameBlocks(this.blocks);
     this.registry = loadRegistry(this.blocks);
+    const destructible = def.world?.destructible;
+    this.carving = destructible ? { ids: destructibleIds(this.registry, destructible), above: destructible.above ?? -1 } : null;
     if (def.world?.persist) {
       try {
         localStorage.setItem(`voxel.${def.id}.lastSeed`, String(this.seed));
@@ -676,6 +680,9 @@ export class Runtime {
         case 'edits':
           this.chunks.mirrorEdits(e.cells);
           break;
+        case 'damage':
+          this.chunks.applyDamage(e.data);
+          break;
         case 'revert':
           this.chunks.revertEdits();
           break;
@@ -702,6 +709,8 @@ export class Runtime {
           break;
       }
     }
+    // The batch's shots show together.
+    this.chunks.flushDamage();
     if (b.frame) {
       this.frameData = b.frame;
       this.ticking = false;
@@ -1725,7 +1734,7 @@ export class Runtime {
       shot.dirs.forEach((d, i) => {
         const end = this.bulletEnd(eye, d, g.range, others);
         if (def.tracer !== false && (i === 0 || i % 3 === 0)) this.fx.tracer(from, end.point, def.tracer ?? '#ffd27a');
-        if (end.block >= 0) this.fx.impact(end.point, end.normal, this.blockColor(end.block));
+        if (end.block >= 0) this.fx.impact(end.point, end.normal, this.blockColor(end.block), false, !this.carves(def, end.block, end.point, end.normal));
       });
     }
     this.ownShots = [];
@@ -1785,10 +1794,17 @@ export class Runtime {
       // Not on our own body (we'd see the puff from inside it): the HUD says we were hit.
       if (Math.hypot(x - cam.x, y - cam.y, z - cam.z) < 2.2) return;
       if (kind === 1 && w.blocks[i] >= 0) {
-        const n = w.normals[i];
-        this.fx.impact(at, n ? { x: n[0], y: n[1], z: n[2] } : null, this.blockColor(w.blocks[i]));
+        const n = w.normals[i] ? { x: w.normals[i]![0], y: w.normals[i]![1], z: w.normals[i]![2] } : null;
+        this.fx.impact(at, n, this.blockColor(w.blocks[i]), false, !(def?.kind === 'gun' && this.carves(def, w.blocks[i], at, n)));
       } else if (kind === 2) this.fx.impact(at, null, [0.75, 0.05, 0.08], true);
     });
+  }
+
+  /** Whether a bullet from `gun` that hit `block` at `at` (on its face `normal`) carves it (then the pit it leaves is its mark). */
+  private carves(gun: GunItem, block: number, at: Vec3, normal: Vec3 | null): boolean {
+    const c = this.carving;
+    if (!c || gun.carve === false || !c.ids[block]) return false;
+    return Math.floor(at.y - (normal?.y ?? 0) * 1e-3) > c.above;
   }
 
   /** A block's average colour (linear), for the chips a bullet knocks off it. */

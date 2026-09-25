@@ -73,6 +73,8 @@ export class ChunkManager {
   private candidates: { col: Column; score: number; mesh: boolean }[] = [];
   private viewX = 0;
   private viewZ = -1;
+  /** Columns blocks were shot into since the last remesh (see `applyDamage`): whether light changed too. */
+  private damaged = new Map<number, [number, number, boolean]>();
 
   constructor(
     private pool: WorkerPool,
@@ -127,6 +129,7 @@ export class ChunkManager {
       this.centerZ = ccz;
       this.refreshWanted();
     }
+    this.flushDamage();
     this.dispatch(px, pz);
     this.flushBatches(false);
     this.applyPending();
@@ -432,6 +435,32 @@ export class ChunkManager {
     if (batch.need.size > 0) this.batches.push(batch);
   }
 
+  /**
+   * Blocks shot into in the simulation's copy of the world (`damage` events): taken from this
+   * copy too (whether or not their columns are here yet), and the columns whose meshes changed
+   * remeshed at the next `flushDamage`, all of a batch's shots together.
+   */
+  applyDamage(data: Uint8Array) {
+    const t = this.world.apply_damage(data);
+    for (let i = 0; i < t.length; i += 3) {
+      const k = keyOf(t[i], t[i + 1]);
+      this.damaged.set(k, [t[i], t[i + 1], (this.damaged.get(k)?.[2] ?? false) || t[i + 2] === 1]);
+    }
+  }
+
+  /**
+   * Remesh the columns damage changed since the last time, in one batch: just the column for a
+   * block chipped (its light is the same), and the ones around it for a block that went.
+   */
+  flushDamage() {
+    if (!this.damaged.size) return;
+    const around: [number, number][] = [];
+    const own: [number, number][] = [];
+    for (const [cx, cz, relight] of this.damaged.values()) (relight ? around : own).push([cx, cz]);
+    this.damaged.clear();
+    this.remeshAround(around, own);
+  }
+
   /** Undo every block edit made this session (restart) and remesh what changed together. */
   revertEdits(): number {
     const flat = this.world.revert_edits();
@@ -441,24 +470,25 @@ export class ChunkManager {
     return cols.length;
   }
 
-  /** Remesh the given columns and their neighbours (light spreads across borders) in one batch. */
-  private remeshAround(columns: Iterable<[number, number]>) {
+  /**
+   * Remesh the given columns and their neighbours (light spreads across borders), and the `only`
+   * columns alone, in one batch.
+   */
+  private remeshAround(columns: Iterable<[number, number]>, only: Iterable<[number, number]> = []) {
     const batch: Batch = { need: new Map(), ready: new Map(), created: performance.now() };
     const seen = new Set<number>();
-    for (const [cx, cz] of columns) {
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const col = this.cols.get(keyOf(cx + dx, cz + dz));
-          if (!col || col.state !== STATE_READY || seen.has(col.key)) continue;
-          seen.add(col.key);
-          col.version++;
-          if (col.shownVersion >= 0 && this.meshable(col)) {
-            batch.need.set(col.key, col.version);
-            this.requestMesh(col);
-          }
-        }
+    const remesh = (cx: number, cz: number) => {
+      const col = this.cols.get(keyOf(cx, cz));
+      if (!col || col.state !== STATE_READY || seen.has(col.key)) return;
+      seen.add(col.key);
+      col.version++;
+      if (col.shownVersion >= 0 && this.meshable(col)) {
+        batch.need.set(col.key, col.version);
+        this.requestMesh(col);
       }
-    }
+    };
+    for (const [cx, cz] of columns) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) remesh(cx + dx, cz + dz);
+    for (const [cx, cz] of only) remesh(cx, cz);
     if (batch.need.size > 0) this.batches.push(batch);
   }
 

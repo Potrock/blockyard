@@ -455,6 +455,8 @@ export class Sim {
           seen,
           shooter,
         ),
+      // Guns carve where their bullets land, if the world's blocks can be carved.
+      carve: this.def.world?.destructible ? (point, dir, opts, by) => this.carve(point, dir, { ...opts, by }) : null,
       id,
       name,
       world: this.host.world,
@@ -601,6 +603,37 @@ export class Sim {
     return n;
   }
 
+  /**
+   * Carve little voxels out of destructible blocks (`world.carve`): a channel from `point` along
+   * `dir`. Blocks carved to nothing are gone with debris, what hung on them or stood on them goes
+   * too, and each fires `blockBreak`. Returns how many little voxels went.
+   */
+  carve(point: Vec3, dir: Vec3, opts: { radius?: number; depth?: number; by?: Actor } = {}): number {
+    const world = this.host.world;
+    const reg = this.registry;
+    const { removed, emptied } = this.host.carve([point.x, point.y, point.z], [dir.x, dir.y, dir.z], opts.radius ?? 0.1, opts.depth ?? 0.2);
+    if (!emptied.length) return removed;
+    const by = opts.by ?? 'world';
+    const gone = new Set(emptied.map(([x, y, z]) => `${x},${y},${z}`));
+    const loose: [number, number, number, number][] = [];
+    for (const [x, y, z, id] of emptied) {
+      this.debris(x, y, z, id);
+      this.emit('blockBreak', { x, y, z, block: reg.blocks[id]?.name ?? 'unknown', by });
+      for (const [a, b, c] of dependents(reg, x, y, z, id, (i, j, k) => world.get_block(i, j, k))) {
+        const k = `${a},${b},${c}`;
+        if (gone.has(k)) continue;
+        gone.add(k);
+        loose.push([a, b, c, world.get_block(a, b, c)]);
+      }
+    }
+    if (loose.length) this.host.editMany(loose.map(([x, y, z]) => [x, y, z, 0]));
+    for (const [x, y, z, id] of loose) {
+      this.debris(x, y, z, id);
+      this.emit('blockBreak', { x, y, z, block: reg.blocks[id]?.name ?? 'unknown', by });
+    }
+    return removed;
+  }
+
   /** Break a block: debris, a sound, what hung on it or stood on it (and a bed's other half), the events. */
   breakBlockAt(x: number, y: number, z: number, by: Actor): boolean {
     const world = this.host.world;
@@ -702,6 +735,7 @@ export class Sim {
         lineOfSight: (a, b) => world.line_clear(a.x, a.y, a.z, b.x, b.y, b.z),
         surfaceY: (x, z) => sim.surfaceY(Math.floor(x), Math.floor(z)),
         explode: (c, r, opts) => sim.explode(c, r, opts),
+        carve: (point, dir, opts) => sim.carve(point, dir, opts),
         breakBlock: (x, y, z, opts) => sim.breakBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), opts?.by ?? 'world'),
         placeBlock: (x, y, z, block, opts) => {
           const f = opts?.facing && FACING_DIR[opts.facing];

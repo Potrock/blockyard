@@ -156,6 +156,28 @@ export interface WorldOptions {
   maxViewDistance?: number;
   /** Save block edits and the player position between sessions. Default false. */
   persist?: boolean;
+  /**
+   * Blocks you can shoot holes in. Each block is really a 16 x 16 x 16 grid of little voxels, one
+   * per pixel of its texture: guns chip them away where their bullets land (see `GunItem.carve`)
+   * and `world.carve` does it on purpose (a blast, a melee strike). Players collide with what's
+   * left, walk through a hole big enough, and see and shoot through one; a block carved to nothing
+   * is gone. Only solid, opaque, full blocks carve (not glass, slabs, stairs, plants or liquids).
+   *
+   * `above`: only blocks higher than this y (keep the ground you stand on whole, so nobody falls
+   * out of the world). `blocks`: which (by name, every variant; default `'all'`), less `except`.
+   * Off by default. Damage is undone with the rest of the world on `restart`, and isn't saved.
+   */
+  destructible?: DestructibleOptions;
+}
+
+/** Which blocks can be shot into (`WorldOptions.destructible`). */
+export interface DestructibleOptions {
+  /** Only blocks higher than this y. Default: every height. */
+  above?: number;
+  /** The blocks that carve, by name. Default `'all'`. */
+  blocks?: string[] | 'all';
+  /** Blocks that don't, by name. */
+  except?: string[];
 }
 
 export interface PlayerOptions {
@@ -687,6 +709,15 @@ export interface WorldApi {
    * passed on to the `blockBreak` events. Returns blocks removed.
    */
   explode(center: Vec3, radius: number, opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor }): number;
+  /**
+   * Carve little voxels out of destructible blocks (`world.destructible`): a rounded channel
+   * from `point` along `dir`, `depth` blocks long (default 0.2) and `radius` round (default 0.1),
+   * through every block it reaches, like a bullet's (a big radius blows a hole, a long depth
+   * drills). Blocks it carves to nothing are gone (and fire `blockBreak`, from `by`). Everyone
+   * sees the same holes. Returns how many little voxels went (4096 make a block): 0 when there
+   * was nothing it could take, so doing it again changes nothing.
+   */
+  carve(point: Vec3, dir: Vec3, opts?: { radius?: number; depth?: number; by?: Actor }): number;
   /**
    * Break a block with debris and a sound (and the plant on top), and fire `blockBreak`.
    * Bedrock and liquids don't break. Returns false if nothing was broken. (`setBlock` is the
@@ -1320,6 +1351,15 @@ export interface GunItem extends ItemBase {
   /** The tracer's colour, or false for none. Default a warm yellow. */
   tracer?: string | false;
   knockback?: number;
+  /**
+   * In a world with destructible blocks (`world.destructible`), what each bullet (each pellet)
+   * carves out where it hits one: a channel `radius` round and `depth` deep, in blocks (see
+   * `world.carve`). Each shot on the same spot goes about `depth + radius` further in (the next
+   * one lands at the bottom of the last one's pit). Default `{ radius: 0.1, depth: 0.05 }`: a
+   * pit a few pixels across, and about seven shots on one spot through a block. `false`: this
+   * gun doesn't carve.
+   */
+  carve?: { radius?: number; depth?: number } | false;
 }
 
 /**

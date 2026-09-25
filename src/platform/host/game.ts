@@ -9,7 +9,7 @@ import type { WorldHost } from '../sim/world';
 import { applyWorldConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
 import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from '../world/blocks';
-import { blockIdOf, loadRegistry, type Registry } from '../world/registry';
+import { blockIdOf, destructibleIds, loadRegistry, type Registry } from '../world/registry';
 import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
 import { PresentState } from './state';
 import { MemoryStore, type SavedPlayer, type Store } from './store';
@@ -196,6 +196,8 @@ export class GameHost {
     const cfg = worldGenConfig(def, blockId);
     const gw = (this.world = new GeneratedWorld(seed, cfg));
     const w = gw.world;
+    const destructible = def.world?.destructible;
+    if (destructible) w.set_destructible(destructible.above ?? -1, destructibleIds(registry, destructible));
     const edited = (cells: [number, number, number, number][]) => this.events.push({ t: 'edits', cells });
     const host: WorldHost = {
       world: w,
@@ -212,6 +214,27 @@ export class GameHost {
       revert: () => {
         this.events.push({ t: 'revert' });
         return w.revert_edits().length / 2;
+      },
+      carve: (o, d, radius, depth) => {
+        const out = w.carve(o[0], o[1], o[2], d[0], d[1], d[2], radius, depth);
+        const v = new DataView(out.buffer, out.byteOffset, out.byteLength);
+        const n = v.getUint32(4, true);
+        const emptied: [number, number, number, number][] = [];
+        for (let i = 0, at = 8; i < n; i++, at += 16) emptied.push([v.getInt32(at, true), v.getInt32(at + 4, true), v.getInt32(at + 8, true), v.getInt32(at + 12, true)]);
+        // What's left of the blocks it chipped, as changes every client takes from its own copy
+        // (a tick's carves go together); the blocks it carved away, as edits.
+        const changes = out.subarray(8 + n * 16);
+        if (changes.length) {
+          const last = this.events[this.events.length - 1];
+          if (last?.t === 'damage') {
+            const both = new Uint8Array(last.data.length + changes.length);
+            both.set(last.data);
+            both.set(changes, last.data.length);
+            last.data = both;
+          } else this.events.push({ t: 'damage', data: changes.slice() });
+        }
+        if (emptied.length) edited(emptied.map(([x, y, z]) => [x, y, z, 0]));
+        return { removed: v.getUint32(0, true), emptied };
       },
     };
     const content = new Content();
@@ -313,7 +336,11 @@ export class GameHost {
     }
     this.clients.set(id, client);
     // Ready (the game's defaults applied) before what's on screen, which may change them (a skin).
-    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }, { t: 'ready' }, ...this.flushFor(id)];
+    const w = this.world.world;
+    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(w.export_edits()) }];
+    // Blocks shot into so far: everything missing from each.
+    if (w.damage_count()) events.push({ t: 'damage', data: w.export_damage() });
+    events.push({ t: 'ready' }, ...this.flushFor(id));
     for (const call of this.state.snapshot(client.player?.id ?? '')) events.push({ t: 'call', call });
     return { id, player: client.player?.id ?? null, batch: { events, frame: this.sim.frame() } };
   }

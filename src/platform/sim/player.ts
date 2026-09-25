@@ -116,6 +116,8 @@ export interface PlayerSimParts {
   props: { byId(id: number): Prop | null };
   /** Guns: a bullet's path from this player (see `castBullet`). */
   bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player): BulletHit;
+  /** Guns: carve where a bullet hit a block (`Sim.carve`); null when the world's blocks don't carve. */
+  carve: ((point: Vec3, dir: Vec3, opts: { radius: number; depth: number }, by: Player) => void) | null;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   /** Host time (`SimFrame.t`). */
@@ -248,6 +250,7 @@ export class PlayerSim {
           return me.sliding ? 2 : me.sneaking ? 1 : 0;
         },
         bullet: (from, dir, range, seen) => p.bullet(from, dir, range, seen, me.api),
+        carve: p.carve && ((point, dir, opts) => p.carve!(point, dir, opts, me.api)),
         shotSeen: (shot: ShotWire, sound: string, at: Vec3) => {
           present.send(null, 'client', 'shot', [shot], this.id);
           present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z } }], this.id);

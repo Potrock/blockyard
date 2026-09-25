@@ -104,7 +104,7 @@ Register it in `src/games/index.ts` and open `?game=heart-hunt`. The launcher li
 | `start(game)` | when the player first clicks play, and after `game.restart()` | reset state, give the starting kit, schedule the first beat |
 | `update(game, dt)` | every frame while running (not paused) | rules, spawning, HUD |
 
-`game.restart()` clears entities, props, pickups, timers, the inventory and HUD, puts back any blocks broken or placed this session (unless the game sets `world.persist`), revives the player at the spawn point and calls `start` again. Keep your game state in plain module variables and reset it in `start`.
+`game.restart()` clears entities, props, pickups, timers, the inventory and HUD, puts back any blocks broken, placed or shot into this session (unless the game sets `world.persist`), revives the player at the spawn point and calls `start` again. Keep your game state in plain module variables and reset it in `start`.
 
 Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it over `setTimeout`.
 
@@ -120,10 +120,11 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 - `maxViewDistance`: hold the player's view distance to this many chunks. A game played in a small space has nothing further to load, mesh and draw (the haze follows it, so keep backdrop landmarks within it).
 - `spawn`, `spawnYaw`, `time` (0 = midnight, 0.5 = noon), `freezeTime`, `seed`, `persist` (save block edits and position; Sandbox uses it).
 - `viewDistance`: a minimum view distance in chunks for games that see far (flight). The player's own setting wins if it's higher.
+- `destructible`: blocks you can shoot holes in (see Blocks you can shoot holes in, below). Off by default.
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
 
 ### Block shapes and states
 
@@ -137,6 +138,26 @@ bp.set(x + 1, y, z, 'red_bed[facing=east,part=head]');
 ```
 
 `placeBlock` with a plain name turns the block the way a player's hand would: pass `against` (the `raycast` hit being aimed at) and a torch hangs on the side of the block aimed at (or stands on the floor), a slab or stairs take the upper half when aimed at a ceiling or high on a side, a slab aimed at the open side of the same kind of slab fills it in to a full block, and a log lies along the axis aimed along. Stairs climb, and a bed's head points, toward `facing` (or the way `by` is looking). A bed takes its two cells or none. Breaking a block (`breakBlock`, explosions) takes what hangs on it or stands on it with it, and either half of a bed takes the other; each gets its own `blockBreak`. The building kit and Sandbox place this way. `RayHit.point` is where exactly a ray met a block.
+
+### Blocks you can shoot holes in
+
+With `world.destructible`, every block is really a 16 x 16 x 16 grid of little voxels, one per pixel of its texture. A block nobody has hit is just a block (it costs nothing); a bullet that lands on one chips a pit out of it, pixel by pixel, and enough of them punch a hole right through. Players collide with what's left and walk through a hole big enough, bullets and line of sight go through holes, and a block carved to nothing is gone (with debris, and a `blockBreak`; a torch on it falls). Everyone sees the same holes: the host carves and each client takes the same change (a player who joins later gets them all), and a client predicting its own movement walks through a hole just as the host does.
+
+```ts
+defineGame({
+  world: {
+    destructible: {
+      above: 63,                    // only blocks higher than this (keep the ground whole: nobody falls out of the world)
+      blocks: 'all',                // or ['oak_planks', 'bricks']: by name, every variant
+      except: ['iron_block'],
+    },
+  },
+});
+```
+
+Only solid, opaque, full blocks carve: not glass, leaves, slabs, stairs, torches, plants or liquids. Guns carve where their bullets land (each gun's `carve`, see Guns). `game.world.carve(point, dir, { radius, depth, by })` does it on purpose: a rounded channel from `point` along `dir`, `radius` round and `depth` long (blocks, defaults 0.1 and 0.2), through every block it reaches: a blast with a big radius, a drill with a long depth. It returns how many little voxels went (4096 make a block), 0 when there was nothing it could take, so carving the same place twice changes nothing the second time.
+
+`restart` makes every block whole again with the rest of the world. Damage isn't saved (a block carved away altogether is an edit, and a `persist` world keeps that). A damaged block keeps light out as it did (it's lit inside by what reaches it), so a hole through a roof lets you see the sky but not its light. Creatures' pathfinding treats a damaged block as whole until it's gone. Call of Blocky makes everything above its street destructible.
 
 ### Blocks of your own
 
@@ -353,6 +374,7 @@ The platform does the rest:
 - **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself (unless `guns.autoReload` is off). Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up. On a controller the triggers fire and aim, X reloads, and there's aim assist (`aim.assist`, see Controllers).
 - **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people). The `damage` event (see Player) can change or cancel a hit before it lands.
 - **Sights.** `iron` sights are the model's own. A `dot` or `holo` sight lights its reticle (a red dot, or a holo's ring and dot; `aim.color`) at the aim point as the optic's window comes up to the eye: model the optic with its window open and its `sight` point in the window's middle. A `scope` fills the view with the scope.
+- **Walls.** In a world with destructible blocks (`world.destructible`), each bullet (each pellet) carves a pit where it lands: `carve: { radius, depth }` in blocks, default `{ radius: 0.1, depth: 0.05 }`; `carve: false` for a gun that doesn't. The next shot on the same spot lands at the bottom of the last one's pit, so each goes about `radius + depth` further in: seven or eight on one spot hole a block. Call of Blocky's: rifle and pistol `{ 0.09, 0.04 }` (eight shots down the sights through a block-thick wall), SMG `{ 0.1, 0.025 }` (ten), sniper `{ 0.12, 0.42 }` (two), shotgun pellets `{ 0.07, 0.01 }` (a spray of small pits). The pit is the bullet's mark: no bullet-hole decal on a block that carves.
 - **The HUD.** An ammo counter replaces the hotbar's job, and the crosshair opens with the spread (and goes when aiming).
 - **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
 - **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working a pump. `hold.scale` multiplies its size (0.42 of the model's own), and `hold.gun` moves its poses (next). A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. Call of Blocky builds its guns in code (`src/games/callofblocky/tools/guns/build.mjs`) and writes them as GLB files that way.

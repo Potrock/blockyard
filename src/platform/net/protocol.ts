@@ -138,7 +138,12 @@ export type HostEvent =
   | { t: 'call'; call: PresentCall }
   /** Blocks changed: [x, y, z, block id]. */
   | { t: 'edits'; cells: [number, number, number, number][] }
-  /** Every edit this session was undone (a restart). */
+  /**
+   * Blocks were shot into (`world.carve`, guns): the little voxels taken from each, in the
+   * engine's damage format (`VoxelWorld.apply_damage`). Taking them again changes nothing.
+   */
+  | { t: 'damage'; data: Uint8Array }
+  /** Every edit this session was undone (a restart), and the damage with it. */
   | { t: 'revert' }
   /** Set up and placed: play can begin. */
   | { t: 'ready' }

@@ -42,7 +42,12 @@ export interface Gun {
   aim: { zoom: number; time: number; move: number; sight: 'iron' | 'dot' | 'holo' | 'scope'; color: string };
   reserve: number;
   mobility: number;
+  /** What each bullet carves out of a destructible block it hits (null: nothing). */
+  carve: { radius: number; depth: number } | null;
 }
+
+/** A bullet's carve unless the gun says (`GunItem.carve`): about seven on one spot hole a block. */
+export const DEFAULT_CARVE = { radius: 0.1, depth: 0.05 };
 
 const cache = new WeakMap<GunItem, Gun>();
 
@@ -64,6 +69,7 @@ export function gun(def: GunItem): Gun {
     aim: { zoom: def.aim?.zoom ?? 1.3, time: def.aim?.time ?? 0.2, move: def.aim?.move ?? 0.6, sight: def.aim?.sight ?? 'iron', color: def.aim?.color ?? '#ff2a2a' },
     reserve: def.reserve ?? def.magazine * 3,
     mobility: def.mobility ?? 1,
+    carve: def.carve === false ? null : { radius: Math.max(0, def.carve?.radius ?? DEFAULT_CARVE.radius), depth: Math.max(0, def.carve?.depth ?? DEFAULT_CARVE.depth) },
   };
   cache.set(def, g);
   return g;
