@@ -209,8 +209,8 @@ function teamIsland(color: TeamColor, [dx, dz]: [number, number], seed: number):
     },
   };
 
-  // The bed's two blocks always pair up along x (the bed texture's pillows line up that way);
-  // on the x-axis islands the second block goes outward so every bed is 42..43 from the centre.
+  // The bed's two blocks pair up along x, foot then head; on the x-axis islands the head goes
+  // outward so every bed is 42..43 from the centre.
   const bedCell = toWorld(0, BED_R);
   const bedCell2 = { x: bedCell.x + (dx < 0 ? -1 : 1), z: bedCell.z };
   const bedCells = [bedCell, bedCell2].map((c) => toLocal(c.x, c.z));
@@ -251,7 +251,9 @@ function teamIsland(color: TeamColor, [dx, dz]: [number, number], seed: number):
     { x: bedCell.x, y: FEET, z: bedCell.z },
     { x: bedCell2.x, y: FEET, z: bedCell2.z },
   ];
-  for (const b of bed) bp.set(b.x, b.y, b.z, `${color}_bed`);
+  const facing = bedCell2.x > bedCell.x ? 'east' : 'west';
+  bp.set(bed[0].x, bed[0].y, bed[0].z, `${color}_bed[facing=${facing},part=foot]`);
+  bp.set(bed[1].x, bed[1].y, bed[1].z, `${color}_bed[facing=${facing},part=head]`);
 
   // Resource generator.
   const g = toWorld(GEN.a, GEN.r);

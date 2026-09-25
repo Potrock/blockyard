@@ -23,6 +23,16 @@ void main() {
   vec2 dx = dFdx(vUV);
   vec2 dy = dFdy(vUV);
   vec2 tuv = vec2(fract(vUV.x), 1.0 - fract(vUV.y));
+  if ((vFlags & 4u) != 0u) {
+    // A block model's face shows part of one tile, and its texture needn't tile (a bed's top).
+    // Its coordinates are already the tile's (0..1): clamp rather than wrap them (multisampling
+    // reads edge pixels a little outside the face), and keep the filtering (mip blends,
+    // anisotropic taps) from reaching round to the far edge.
+    float lod = log2(max(max(length(dx), length(dy)) * 16.0, 1.0));
+    float h = min(0.5, 0.5 * max(exp2(ceil(lod)) / 16.0, max(max(abs(dx.x), abs(dy.x)), max(abs(dx.y), abs(dy.y)))));
+    vec2 c = clamp(vUV, vec2(h), vec2(1.0 - h));
+    tuv = vec2(c.x, 1.0 - c.y);
+  }
   float layer = float(vLayer);
   vec4 albedo = textureGrad(uAlbedo, vec3(tuv, layer), dx, dy);
   bool isCross = (vFlags & 1u) != 0u;

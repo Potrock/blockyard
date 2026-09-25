@@ -11,6 +11,7 @@ pub mod gen;
 pub mod mesher;
 pub mod noise;
 pub mod noisetex;
+pub mod shapes;
 pub mod texgen;
 pub mod world;
 
@@ -224,12 +225,12 @@ impl VoxelWorld {
         self.inner.edit_count() as u32
     }
 
-    /// [hit, bx, by, bz, nx, ny, nz, block]
+    /// [hit, bx, by, bz, nx, ny, nz, block, distance]
     #[allow(clippy::too_many_arguments)]
-    pub fn raycast(&self, ox: f64, oy: f64, oz: f64, dx: f64, dy: f64, dz: f64, max_dist: f64) -> Vec<i32> {
+    pub fn raycast(&self, ox: f64, oy: f64, oz: f64, dx: f64, dy: f64, dz: f64, max_dist: f64) -> Vec<f64> {
         match self.inner.raycast([ox, oy, oz], [dx, dy, dz], max_dist) {
-            Some((p, n, b)) => vec![1, p[0], p[1], p[2], n[0], n[1], n[2], b as i32],
-            None => vec![0; 8],
+            Some((p, n, b, t)) => vec![1.0, p[0] as f64, p[1] as f64, p[2] as f64, n[0] as f64, n[1] as f64, n[2] as f64, b as f64, t],
+            None => vec![0.0; 9],
         }
     }
 
@@ -395,14 +396,20 @@ impl VoxelWorld {
         entities::line_clear(&self.inner, [ax, ay, az], [bx, by, bz])
     }
 
-    /// Whether a unit block at (x, y, z) would overlap any player's body.
-    pub fn player_overlaps(&self, x: i32, y: i32, z: i32) -> bool {
+    /// Whether block `id` at (x, y, z) would overlap any player's body (only its solid boxes:
+    /// a bottom slab leaves room above it).
+    pub fn player_overlaps(&self, x: i32, y: i32, z: i32, id: u8) -> bool {
+        let k = 1.0 / 16.0;
         self.players.iter().flatten().any(|p| {
             let p = &p.pos;
             let (x0, x1) = (p[0] - world::HALF_W, p[0] + world::HALF_W);
             let (y0, y1) = (p[1], p[1] + world::HEIGHT);
             let (z0, z1) = (p[2] - world::HALF_W, p[2] + world::HALF_W);
-            (x as f64) < x1 && (x + 1) as f64 > x0 && (y as f64) < y1 && (y + 1) as f64 > y0 && (z as f64) < z1 && (z + 1) as f64 > z0
+            world::collision_boxes(id).iter().any(|b| {
+                let (bx0, by0, bz0) = (x as f64 + b[0] as f64 * k, y as f64 + b[1] as f64 * k, z as f64 + b[2] as f64 * k);
+                let (bx1, by1, bz1) = (x as f64 + b[3] as f64 * k, y as f64 + b[4] as f64 * k, z as f64 + b[5] as f64 * k);
+                bx0 < x1 && bx1 > x0 && by0 < y1 && by1 > y0 && bz0 < z1 && bz1 > z0
+            })
         })
     }
 }

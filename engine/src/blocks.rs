@@ -1,6 +1,11 @@
 //! Block registry: ids, render / physics / light properties and texture layers.
 //!
 //! Face order used everywhere in the engine: 0 = +X, 1 = -X, 2 = +Y, 3 = -Y, 4 = +Z, 5 = -Z.
+//!
+//! A block id is one byte, and a block with orientations or parts (a torch on a wall, the head
+//! of a bed facing east, the top half of a slab) has one id per variant. Every variant of a family
+//! shares the family's `name` and differs in its `state` (`"facing=east,part=head"`), the way
+//! Minecraft writes block states. Ids never change once given out: saved worlds store them.
 
 /// Texture array layers. Order here is the order of layers in the generated texture array.
 pub mod tex {
@@ -77,16 +82,33 @@ pub mod tex {
     pub const RED_CONCRETE: u16 = 70;
     pub const IRON_BLOCK: u16 = 71;
     pub const END_STONE: u16 = 72;
-    pub const RED_BED_TOP: u16 = 73;
-    pub const RED_BED_SIDE: u16 = 74;
-    pub const BLUE_BED_TOP: u16 = 75;
-    pub const BLUE_BED_SIDE: u16 = 76;
-    pub const GREEN_BED_TOP: u16 = 77;
-    pub const GREEN_BED_SIDE: u16 = 78;
-    pub const YELLOW_BED_TOP: u16 = 79;
-    pub const YELLOW_BED_SIDE: u16 = 80;
+    pub const RED_BED_HEAD_TOP: u16 = 73;
+    pub const RED_BED_HEAD_SIDE: u16 = 74;
+    pub const BLUE_BED_HEAD_TOP: u16 = 75;
+    pub const BLUE_BED_HEAD_SIDE: u16 = 76;
+    pub const GREEN_BED_HEAD_TOP: u16 = 77;
+    pub const GREEN_BED_HEAD_SIDE: u16 = 78;
+    pub const YELLOW_BED_HEAD_TOP: u16 = 79;
+    pub const YELLOW_BED_HEAD_SIDE: u16 = 80;
+    pub const RED_BED_FOOT_TOP: u16 = 81;
+    pub const RED_BED_FOOT_SIDE: u16 = 82;
+    pub const RED_BED_HEAD_END: u16 = 83;
+    pub const RED_BED_FOOT_END: u16 = 84;
+    pub const BLUE_BED_FOOT_TOP: u16 = 85;
+    pub const BLUE_BED_FOOT_SIDE: u16 = 86;
+    pub const BLUE_BED_HEAD_END: u16 = 87;
+    pub const BLUE_BED_FOOT_END: u16 = 88;
+    pub const GREEN_BED_FOOT_TOP: u16 = 89;
+    pub const GREEN_BED_FOOT_SIDE: u16 = 90;
+    pub const GREEN_BED_HEAD_END: u16 = 91;
+    pub const GREEN_BED_FOOT_END: u16 = 92;
+    pub const YELLOW_BED_FOOT_TOP: u16 = 93;
+    pub const YELLOW_BED_FOOT_SIDE: u16 = 94;
+    pub const YELLOW_BED_HEAD_END: u16 = 95;
+    pub const YELLOW_BED_FOOT_END: u16 = 96;
+    pub const WALL_TORCH: u16 = 97;
 
-    pub const COUNT: usize = 81;
+    pub const COUNT: usize = 98;
 
     pub const NAMES: [&str; COUNT] = [
         "stone", "grass_top", "grass_side", "dirt", "cobblestone", "oak_planks", "bedrock", "sand",
@@ -100,8 +122,13 @@ pub mod tex {
         "white_wool", "red_wool", "yellow_wool", "green_wool", "blue_wool", "black_wool",
         "sea_lantern", "spruce_planks", "birch_planks", "brown_mushroom", "red_mushroom",
         "white_concrete", "light_gray_concrete", "gray_concrete", "black_concrete", "red_concrete", "iron_block",
-        "end_stone", "red_bed_top", "red_bed_side", "blue_bed_top", "blue_bed_side", "green_bed_top", "green_bed_side",
-        "yellow_bed_top", "yellow_bed_side",
+        "end_stone", "red_bed_head_top", "red_bed_head_side", "blue_bed_head_top", "blue_bed_head_side",
+        "green_bed_head_top", "green_bed_head_side", "yellow_bed_head_top", "yellow_bed_head_side",
+        "red_bed_foot_top", "red_bed_foot_side", "red_bed_head_end", "red_bed_foot_end",
+        "blue_bed_foot_top", "blue_bed_foot_side", "blue_bed_head_end", "blue_bed_foot_end",
+        "green_bed_foot_top", "green_bed_foot_side", "green_bed_head_end", "green_bed_foot_end",
+        "yellow_bed_foot_top", "yellow_bed_foot_side", "yellow_bed_head_end", "yellow_bed_foot_end",
+        "wall_torch",
     ];
 }
 
@@ -110,10 +137,31 @@ pub enum Shape {
     Air,
     /// Full cube.
     Cube,
-    /// Two diagonal quads (plants, torch).
+    /// Two diagonal quads (plants).
     Cross,
     /// Full cube with a lowered surface when exposed (water, lava).
     Liquid,
+    /// Boxes on a 1/16 grid (torches, slabs, stairs, beds): see `ModelKind` and `shapes`.
+    Model,
+}
+
+/// What a `Shape::Model` block looks like (built in `shapes`). Facings: 0 north (-Z), 1 east
+/// (+X), 2 south (+Z), 3 west (-X).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModelKind {
+    None,
+    /// A standing torch. `tex[0]`: the torch; `tex[3]`: its underside.
+    Torch,
+    /// A torch on a wall, pointing toward the facing (the wall is behind it). `tex[0]`: the
+    /// wall torch texture; `tex[3]`: its underside.
+    WallTorch(u8),
+    /// Half a block; true = the upper half. Faces use `tex` by direction.
+    Slab(bool),
+    /// Stairs climbing toward the facing; true = upside down. Faces use `tex` by direction.
+    Stairs(u8, bool),
+    /// Half of a bed whose head points toward the facing; true = the head half.
+    /// `tex`: [top, side, end, underside, legs, -].
+    Bed(u8, bool),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -123,19 +171,32 @@ pub enum Layer {
     Translucent = 2,
 }
 
+/// Texture transforms (`Block::uvt`, and per face of a model): swap u and v, then negate u,
+/// then negate v. Together they make the 8 rotations and mirror images of a texture.
+pub const UV_SWAP: u8 = 1;
+pub const UV_NEG_U: u8 = 2;
+pub const UV_NEG_V: u8 = 4;
+
 #[derive(Clone, Copy)]
 pub struct Block {
+    /// The family name, shared by all its variants (`red_bed`).
     pub name: &'static str,
     pub label: &'static str,
+    /// Which variant of the family (`facing=east,part=head`); empty for the default of a plain block.
+    pub state: &'static str,
     pub shape: Shape,
+    pub model: ModelKind,
     pub layer: Layer,
-    /// Texture layer per face: +X -X +Y -Y +Z -Z.
+    /// Texture layer per face: +X -X +Y -Y +Z -Z (models: see `ModelKind`).
     pub tex: [u16; 6],
+    /// Texture transform per face (`UV_*`), for cubes (a log lying on its side).
+    pub uvt: [u8; 6],
     /// Full opaque cube: hides neighbour faces, casts ambient occlusion, blocks all light.
     pub opaque: bool,
     /// Collides with entities.
     pub solid: bool,
-    /// Light attenuation when light passes through (0..=15). Opaque blocks use 15.
+    /// Light attenuation when light passes through (0..=15). Opaque blocks use 15. A model that
+    /// blocks light (a slab) still gets light itself, from its neighbours.
     pub opacity: u8,
     /// Light emission (0..=15).
     pub emit: u8,
@@ -149,17 +210,22 @@ pub struct Block {
     pub leaves: bool,
     /// Can be replaced by placing a block into it (plants, liquids).
     pub replaceable: bool,
-    /// Shown in the creative inventory.
+    /// Shown in the creative inventory (one variant per family).
     pub placeable: bool,
+    /// A slab: the block two halves make together.
+    pub double: u8,
 }
 
 const fn base(name: &'static str, label: &'static str, t: [u16; 6]) -> Block {
     Block {
         name,
         label,
+        state: "",
         shape: Shape::Cube,
+        model: ModelKind::None,
         layer: Layer::Opaque,
         tex: t,
+        uvt: [0; 6],
         opaque: true,
         solid: true,
         opacity: 15,
@@ -170,6 +236,7 @@ const fn base(name: &'static str, label: &'static str, t: [u16; 6]) -> Block {
         leaves: false,
         replaceable: false,
         placeable: true,
+        double: 0,
     }
 }
 
@@ -205,6 +272,12 @@ const fn plant(name: &'static str, label: &'static str, t: u16, tint: bool, anim
         replaceable: true,
         ..cube(name, label, t)
     }
+}
+
+/// A model block: not a full cube, so it neither hides its neighbours' faces wholesale nor
+/// darkens them; `opacity` 15 still keeps light out (slabs and stairs make roofs).
+const fn model(b: Block, kind: ModelKind, state: &'static str, opacity: u8) -> Block {
+    Block { shape: Shape::Model, model: kind, state, opaque: false, opacity, ..b }
 }
 
 use tex as T;
@@ -275,14 +348,105 @@ pub const BLACK_CONCRETE_B: u8 = 62;
 pub const RED_CONCRETE_B: u8 = 63;
 pub const IRON_BLOCK_B: u8 = 64;
 pub const END_STONE_B: u8 = 65;
+/// The foot of each bed facing north (red, blue, green, yellow); the other variants are at
+/// `BED_VARIANTS` (see `bed_id`).
 pub const RED_BED_B: u8 = 66;
 pub const BLUE_BED_B: u8 = 67;
 pub const GREEN_BED_B: u8 = 68;
 pub const YELLOW_BED_B: u8 = 69;
+/// Torches on walls, by facing (north, east, south, west).
+pub const WALL_TORCH_B: u8 = 70;
+/// Seven more variants of each bed colour.
+pub const BED_VARIANTS: u8 = 74;
+/// Slabs: bottom then top half, per `SLABS` material.
+pub const SLAB_B: u8 = 102;
+/// Stairs: per `STAIRS` material, per facing, the right way up then upside down.
+pub const STAIRS_B: u8 = 118;
+/// Logs lying along x, then along z, per `LOGS`.
+pub const LOG_AXIS_B: u8 = 166;
 
-pub const BLOCK_COUNT: usize = 70;
+pub const BLOCK_COUNT: usize = 172;
 
-pub static BLOCKS: [Block; BLOCK_COUNT] = [
+/// Horizontal facings in id order, and the face (+X -X +Y -Y +Z -Z order) each one points out of.
+pub const FACING_NAMES: [&str; 4] = ["north", "east", "south", "west"];
+pub const FACING_FACE: [usize; 4] = [5, 0, 4, 1];
+
+pub const BED_COLORS: usize = 4;
+/// Beds by colour: [head top, head side, head end, foot top, foot side, foot end].
+const BED_TEX: [[u16; 6]; BED_COLORS] = [
+    [T::RED_BED_HEAD_TOP, T::RED_BED_HEAD_SIDE, T::RED_BED_HEAD_END, T::RED_BED_FOOT_TOP, T::RED_BED_FOOT_SIDE, T::RED_BED_FOOT_END],
+    [T::BLUE_BED_HEAD_TOP, T::BLUE_BED_HEAD_SIDE, T::BLUE_BED_HEAD_END, T::BLUE_BED_FOOT_TOP, T::BLUE_BED_FOOT_SIDE, T::BLUE_BED_FOOT_END],
+    [T::GREEN_BED_HEAD_TOP, T::GREEN_BED_HEAD_SIDE, T::GREEN_BED_HEAD_END, T::GREEN_BED_FOOT_TOP, T::GREEN_BED_FOOT_SIDE, T::GREEN_BED_FOOT_END],
+    [T::YELLOW_BED_HEAD_TOP, T::YELLOW_BED_HEAD_SIDE, T::YELLOW_BED_HEAD_END, T::YELLOW_BED_FOOT_TOP, T::YELLOW_BED_FOOT_SIDE, T::YELLOW_BED_FOOT_END],
+];
+
+/// Slab and stair materials: (family name, label, the full block they're cut from).
+pub const SLABS: [(&str, &str, u8); 8] = [
+    ("stone_slab", "Stone Slab", STONE),
+    ("cobblestone_slab", "Cobblestone Slab", COBBLESTONE),
+    ("oak_slab", "Oak Slab", OAK_PLANKS_B),
+    ("spruce_slab", "Spruce Slab", SPRUCE_PLANKS_B),
+    ("birch_slab", "Birch Slab", BIRCH_PLANKS_B),
+    ("stone_brick_slab", "Stone Brick Slab", STONE_BRICKS_B),
+    ("brick_slab", "Brick Slab", BRICKS_B),
+    ("sandstone_slab", "Sandstone Slab", SANDSTONE_B),
+];
+pub const STAIRS: [(&str, &str, u8); 6] = [
+    ("oak_stairs", "Oak Stairs", OAK_PLANKS_B),
+    ("spruce_stairs", "Spruce Stairs", SPRUCE_PLANKS_B),
+    ("birch_stairs", "Birch Stairs", BIRCH_PLANKS_B),
+    ("cobblestone_stairs", "Cobblestone Stairs", COBBLESTONE),
+    ("stone_brick_stairs", "Stone Brick Stairs", STONE_BRICKS_B),
+    ("brick_stairs", "Brick Stairs", BRICKS_B),
+];
+pub const LOGS: [u8; 3] = [OAK_LOG_B, BIRCH_LOG_B, SPRUCE_LOG_B];
+
+const FACING_STATES: [&str; 4] = ["facing=north", "facing=east", "facing=south", "facing=west"];
+const BED_STATES: [&str; 8] = [
+    "facing=north,part=foot",
+    "facing=north,part=head",
+    "facing=east,part=foot",
+    "facing=east,part=head",
+    "facing=south,part=foot",
+    "facing=south,part=head",
+    "facing=west,part=foot",
+    "facing=west,part=head",
+];
+const SLAB_STATES: [&str; 2] = ["type=bottom", "type=top"];
+const STAIR_STATES: [&str; 8] = [
+    "facing=north,half=bottom",
+    "facing=north,half=top",
+    "facing=east,half=bottom",
+    "facing=east,half=top",
+    "facing=south,half=bottom",
+    "facing=south,half=top",
+    "facing=west,half=bottom",
+    "facing=west,half=top",
+];
+
+pub const fn bed_id(color: u8, facing: u8, head: bool) -> u8 {
+    let k = facing * 2 + head as u8;
+    if k == 0 {
+        RED_BED_B + color
+    } else {
+        BED_VARIANTS + color * 7 + k - 1
+    }
+}
+
+pub const fn slab_id(material: u8, top: bool) -> u8 {
+    SLAB_B + material * 2 + top as u8
+}
+
+pub const fn stairs_id(material: u8, facing: u8, top: bool) -> u8 {
+    STAIRS_B + material * 8 + facing * 2 + top as u8
+}
+
+/// Axis 0 = x, 1 = z (a standing log is the log's own id).
+pub const fn log_id(log: u8, axis: u8) -> u8 {
+    LOG_AXIS_B + log * 2 + axis
+}
+
+const BASE: [Block; 70] = [
     Block {
         shape: Shape::Air,
         opaque: false,
@@ -300,7 +464,7 @@ pub static BLOCKS: [Block; BLOCK_COUNT] = [
     Block { placeable: false, ..cube("bedrock", "Bedrock", T::BEDROCK) },
     cube("sand", "Sand", T::SAND),
     cube("gravel", "Gravel", T::GRAVEL),
-    cube3("oak_log", "Oak Log", T::OAK_LOG_TOP, T::OAK_LOG, T::OAK_LOG_TOP),
+    Block { state: "axis=y", ..cube3("oak_log", "Oak Log", T::OAK_LOG_TOP, T::OAK_LOG, T::OAK_LOG_TOP) },
     leaves("oak_leaves", "Oak Leaves", T::OAK_LEAVES, true),
     Block {
         layer: Layer::Cutout,
@@ -337,9 +501,9 @@ pub static BLOCKS: [Block; BLOCK_COUNT] = [
     cube("diamond_ore", "Diamond Ore", T::DIAMOND_ORE),
     cube("redstone_ore", "Redstone Ore", T::REDSTONE_ORE),
     cube("lapis_ore", "Lapis Ore", T::LAPIS_ORE),
-    cube3("birch_log", "Birch Log", T::BIRCH_LOG_TOP, T::BIRCH_LOG, T::BIRCH_LOG_TOP),
+    Block { state: "axis=y", ..cube3("birch_log", "Birch Log", T::BIRCH_LOG_TOP, T::BIRCH_LOG, T::BIRCH_LOG_TOP) },
     leaves("birch_leaves", "Birch Leaves", T::BIRCH_LEAVES, false),
-    cube3("spruce_log", "Spruce Log", T::SPRUCE_LOG_TOP, T::SPRUCE_LOG, T::SPRUCE_LOG_TOP),
+    Block { state: "axis=y", ..cube3("spruce_log", "Spruce Log", T::SPRUCE_LOG_TOP, T::SPRUCE_LOG, T::SPRUCE_LOG_TOP) },
     leaves("spruce_leaves", "Spruce Leaves", T::SPRUCE_LEAVES, false),
     cube3("cactus", "Cactus", T::CACTUS_TOP, T::CACTUS_SIDE, T::CACTUS_TOP),
     plant("short_grass", "Grass", T::SHORT_GRASS, true, 2),
@@ -356,7 +520,7 @@ pub static BLOCKS: [Block; BLOCK_COUNT] = [
     cube3("snowy_grass", "Snowy Grass", T::SNOW, T::GRASS_SNOW_SIDE, T::DIRT),
     cube("obsidian", "Obsidian", T::OBSIDIAN),
     cube3("bookshelf", "Bookshelf", T::OAK_PLANKS, T::BOOKSHELF, T::OAK_PLANKS),
-    Block { emit: 14, replaceable: false, ..plant("torch", "Torch", T::TORCH, false, 0) },
+    torch(),
     cube("granite", "Granite", T::GRANITE),
     cube("diorite", "Diorite", T::DIORITE),
     cube("andesite", "Andesite", T::ANDESITE),
@@ -380,11 +544,111 @@ pub static BLOCKS: [Block; BLOCK_COUNT] = [
     cube("red_concrete", "Red Concrete", T::RED_CONCRETE),
     cube("iron_block", "Block of Iron", T::IRON_BLOCK),
     cube("end_stone", "End Stone", T::END_STONE),
-    cube3("red_bed", "Red Bed", T::RED_BED_TOP, T::RED_BED_SIDE, T::OAK_PLANKS),
-    cube3("blue_bed", "Blue Bed", T::BLUE_BED_TOP, T::BLUE_BED_SIDE, T::OAK_PLANKS),
-    cube3("green_bed", "Green Bed", T::GREEN_BED_TOP, T::GREEN_BED_SIDE, T::OAK_PLANKS),
-    cube3("yellow_bed", "Yellow Bed", T::YELLOW_BED_TOP, T::YELLOW_BED_SIDE, T::OAK_PLANKS),
+    bed(0, 0, false),
+    bed(1, 0, false),
+    bed(2, 0, false),
+    bed(3, 0, false),
 ];
+
+const fn torch() -> Block {
+    let t = T::TORCH;
+    Block {
+        layer: Layer::Cutout,
+        solid: false,
+        emit: 14,
+        ..model(base("torch", "Torch", [t, t, t, T::OAK_PLANKS, t, t]), ModelKind::Torch, "", 0)
+    }
+}
+
+const fn wall_torch(facing: u8) -> Block {
+    let t = T::WALL_TORCH;
+    Block {
+        layer: Layer::Cutout,
+        solid: false,
+        emit: 14,
+        placeable: false,
+        ..model(base("torch", "Torch", [t, t, t, T::OAK_PLANKS, t, t]), ModelKind::WallTorch(facing), FACING_STATES[facing as usize], 0)
+    }
+}
+
+const BED_NAMES: [(&str, &str); BED_COLORS] = [("red_bed", "Red Bed"), ("blue_bed", "Blue Bed"), ("green_bed", "Green Bed"), ("yellow_bed", "Yellow Bed")];
+
+const fn bed(color: usize, facing: u8, head: bool) -> Block {
+    let t = &BED_TEX[color];
+    let o = if head { 0 } else { 3 };
+    let tex = [t[o], t[o + 1], t[o + 2], T::OAK_PLANKS, T::SPRUCE_PLANKS, 0];
+    let (name, label) = BED_NAMES[color];
+    Block {
+        placeable: facing == 0 && !head,
+        ..model(base(name, label, tex), ModelKind::Bed(facing, head), BED_STATES[(facing * 2 + head as u8) as usize], 0)
+    }
+}
+
+pub static BLOCKS: [Block; BLOCK_COUNT] = build();
+
+const fn build() -> [Block; BLOCK_COUNT] {
+    let mut out = [BASE[0]; BLOCK_COUNT];
+    let mut i = 0;
+    while i < BASE.len() {
+        out[i] = BASE[i];
+        i += 1;
+    }
+    let mut f = 0u8;
+    while f < 4 {
+        out[(WALL_TORCH_B + f) as usize] = wall_torch(f);
+        f += 1;
+    }
+    let mut c = 0u8;
+    while c < BED_COLORS as u8 {
+        let mut k = 1u8;
+        while k < 8 {
+            out[bed_id(c, k / 2, k % 2 == 1) as usize] = bed(c as usize, k / 2, k % 2 == 1);
+            k += 1;
+        }
+        c += 1;
+    }
+    let mut m = 0;
+    while m < SLABS.len() {
+        let (name, label, full) = SLABS[m];
+        let t = BASE[full as usize].tex;
+        let mut top = 0;
+        while top < 2 {
+            out[slab_id(m as u8, top == 1) as usize] = Block {
+                placeable: top == 0,
+                double: full,
+                ..model(base(name, label, t), ModelKind::Slab(top == 1), SLAB_STATES[top], 15)
+            };
+            top += 1;
+        }
+        m += 1;
+    }
+    let mut m = 0;
+    while m < STAIRS.len() {
+        let (name, label, full) = STAIRS[m];
+        let t = BASE[full as usize].tex;
+        let mut k = 0u8;
+        while k < 8 {
+            let (facing, top) = (k / 2, k % 2 == 1);
+            out[stairs_id(m as u8, facing, top) as usize] = Block {
+                placeable: k == 0,
+                ..model(base(name, label, t), ModelKind::Stairs(facing, top), STAIR_STATES[k as usize], 15)
+            };
+            k += 1;
+        }
+        m += 1;
+    }
+    let mut l = 0;
+    while l < LOGS.len() {
+        let log = BASE[LOGS[l] as usize];
+        let (top, side) = (log.tex[2], log.tex[0]);
+        // Bark grain runs along the image's v: turn it to run along the log.
+        let s = UV_SWAP;
+        out[log_id(l as u8, 0) as usize] = Block { state: "axis=x", placeable: false, tex: [top, top, side, side, side, side], uvt: [0, 0, s, s, s, s], ..log };
+        out[log_id(l as u8, 1) as usize] = Block { state: "axis=z", placeable: false, tex: [side, side, side, side, top, top], uvt: [s, s, 0, 0, 0, 0], ..log };
+        l += 1;
+    }
+    out
+}
 
 const fn table<const F: u8>() -> [u8; 256] {
     let mut t = [0u8; 256];
@@ -402,7 +666,10 @@ const fn table<const F: u8>() -> [u8; 256] {
                 Shape::Cube => 1,
                 Shape::Cross => 2,
                 Shape::Liquid => 3,
+                Shape::Model => 4,
             },
+            // Blocks light yet is lit itself: light reaches in but doesn't carry on through.
+            6 => (!b.opaque && b.opacity >= 15 && matches!(b.shape, Shape::Model)) as u8,
             _ => 0,
         };
         i += 1;
@@ -432,13 +699,16 @@ pub static EMIT: [u8; 256] = table::<2>();
 pub static SOLID: [u8; 256] = table::<3>();
 /// Render layer (see [`Layer`]).
 pub static LAYER: [u8; 256] = table::<4>();
-/// Shape id: 0 air, 1 cube, 2 cross, 3 liquid.
+/// Shape id: 0 air, 1 cube, 2 cross, 3 liquid, 4 model.
 pub static SHAPE: [u8; 256] = table::<5>();
+/// 1 for a model that keeps light out but is lit itself (slabs, stairs).
+pub static LIT_INSIDE: [u8; 256] = table::<6>();
 
 pub const SHAPE_AIR: u8 = 0;
 pub const SHAPE_CUBE: u8 = 1;
 pub const SHAPE_CROSS: u8 = 2;
 pub const SHAPE_LIQUID: u8 = 3;
+pub const SHAPE_MODEL: u8 = 4;
 
 #[inline(always)]
 pub fn block(id: u8) -> &'static Block {
@@ -450,9 +720,11 @@ pub fn block(id: u8) -> &'static Block {
     }
 }
 
-/// JSON description of the registry for the UI (names, textures, flags).
+/// JSON description of the registry for the UI (names, states, textures, shapes, flags).
 pub fn registry_json() -> String {
-    let mut s = String::with_capacity(8192);
+    use crate::shapes::{shapes, FULL_SIDE, NO_TEX};
+    let shapes = shapes();
+    let mut s = String::with_capacity(65536);
     s.push_str("{\"blocks\":[");
     for (i, b) in BLOCKS.iter().enumerate() {
         if i > 0 {
@@ -463,12 +735,54 @@ pub fn registry_json() -> String {
             Shape::Cube => "cube",
             Shape::Cross => "cross",
             Shape::Liquid => "liquid",
+            Shape::Model => "model",
+        };
+        let kind = match b.model {
+            ModelKind::None => "",
+            ModelKind::Torch => "torch",
+            ModelKind::WallTorch(_) => "wall_torch",
+            ModelKind::Slab(_) => "slab",
+            ModelKind::Stairs(..) => "stairs",
+            ModelKind::Bed(..) => "bed",
+        };
+        // Small attachments (plants, torches) break at a touch and show as flat items.
+        let small = matches!(b.shape, Shape::Cross) || matches!(b.model, ModelKind::Torch | ModelKind::WallTorch(_));
+        // Sides solid enough to hang a torch on or stand one on (bit per face, +X -X +Y -Y +Z -Z).
+        let sturdy = match &shapes.models[i] {
+            _ if !b.solid => 0,
+            Some(m) => (0..6).fold(0u8, |a, f| a | (((m.cover[f] == FULL_SIDE) as u8) << f)),
+            None if b.shape == Shape::Cube => 63,
+            None => 0,
         };
         s.push_str(&format!(
-            "{{\"id\":{},\"name\":\"{}\",\"label\":\"{}\",\"shape\":\"{}\",\"layer\":{},\"tex\":[{},{},{},{},{},{}],\"tint\":{},\"emit\":{},\"solid\":{},\"replaceable\":{},\"placeable\":{}}}",
-            i, b.name, b.label, shape, b.layer as u8, b.tex[0], b.tex[1], b.tex[2], b.tex[3], b.tex[4], b.tex[5],
-            b.tint, b.emit, b.solid, b.replaceable, b.placeable
+            "{{\"id\":{},\"name\":\"{}\",\"label\":\"{}\",\"state\":\"{}\",\"shape\":\"{}\",\"model\":\"{}\",\"layer\":{},\"tex\":[{},{},{},{},{},{}],\"uvt\":[{},{},{},{},{},{}],\"tint\":{},\"emit\":{},\"solid\":{},\"replaceable\":{},\"placeable\":{},\"small\":{},\"double\":{},\"sturdy\":{}",
+            i, b.name, b.label, b.state, shape, kind, b.layer as u8, b.tex[0], b.tex[1], b.tex[2], b.tex[3], b.tex[4], b.tex[5],
+            b.uvt[0], b.uvt[1], b.uvt[2], b.uvt[3], b.uvt[4], b.uvt[5], b.tint, b.emit, b.solid, b.replaceable, b.placeable, small, b.double, sturdy
         ));
+        if let Some(m) = &shapes.models[i] {
+            s.push_str(",\"boxes\":[");
+            for (k, bx) in m.bounds.iter().enumerate() {
+                if k > 0 {
+                    s.push(',');
+                }
+                s.push_str(&format!("[{},{},{},{},{},{}]", bx[0], bx[1], bx[2], bx[3], bx[4], bx[5]));
+            }
+            s.push_str("],\"parts\":[");
+            for (k, p) in m.parts.iter().enumerate() {
+                if k > 0 {
+                    s.push(',');
+                }
+                let t = |f: usize| if p.faces[f].tex == NO_TEX { -1 } else { p.faces[f].tex as i32 };
+                s.push_str(&format!(
+                    "[{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}]",
+                    p.from[0], p.from[1], p.from[2], p.to[0], p.to[1], p.to[2],
+                    t(0), t(1), t(2), t(3), t(4), t(5),
+                    p.faces[0].uvt, p.faces[1].uvt, p.faces[2].uvt, p.faces[3].uvt, p.faces[4].uvt, p.faces[5].uvt
+                ));
+            }
+            s.push(']');
+        }
+        s.push('}');
     }
     s.push_str("],\"textures\":[");
     for (i, n) in tex::NAMES.iter().enumerate() {
@@ -501,6 +815,33 @@ mod tests {
         assert_eq!(BLOCKS[IRON_BLOCK_B as usize].name, "iron_block");
         assert_eq!(tex::NAMES[tex::IRON_BLOCK as usize], "iron_block");
         assert_eq!(BLOCKS[YELLOW_BED_B as usize].name, "yellow_bed");
-        assert_eq!(tex::NAMES[tex::YELLOW_BED_SIDE as usize], "yellow_bed_side");
+        assert_eq!(tex::NAMES[tex::WALL_TORCH as usize], "wall_torch");
+        assert_eq!(tex::NAMES[tex::YELLOW_BED_FOOT_END as usize], "yellow_bed_foot_end");
+    }
+
+    #[test]
+    fn variants_fill_their_ranges() {
+        // Every id below BLOCK_COUNT is a real block, and each (family, state) pair appears once.
+        let mut seen = std::collections::HashSet::new();
+        for b in BLOCKS.iter() {
+            assert!(seen.insert((b.name, b.state)), "duplicate {}[{}]", b.name, b.state);
+        }
+        assert_eq!(BLOCKS[(WALL_TORCH_B + 3) as usize].state, "facing=west");
+        assert_eq!(BLOCKS[bed_id(3, 3, true) as usize].name, "yellow_bed");
+        assert_eq!(BLOCKS[bed_id(3, 3, true) as usize].state, "facing=west,part=head");
+        assert_eq!(bed_id(3, 3, true) as usize, SLAB_B as usize - 1);
+        assert_eq!(BLOCKS[slab_id(7, true) as usize].name, "sandstone_slab");
+        assert_eq!(slab_id(7, true) as usize, STAIRS_B as usize - 1);
+        assert_eq!(BLOCKS[stairs_id(5, 3, true) as usize].state, "facing=west,half=top");
+        assert_eq!(stairs_id(5, 3, true) as usize, LOG_AXIS_B as usize - 1);
+        assert_eq!(BLOCKS[log_id(2, 1) as usize].name, "spruce_log");
+        assert_eq!(log_id(2, 1) as usize, BLOCK_COUNT - 1);
+        // One placeable variant per family.
+        let mut families = std::collections::HashMap::new();
+        for b in BLOCKS.iter().filter(|b| b.placeable) {
+            assert!(families.insert(b.name, ()).is_none(), "{} placeable twice", b.name);
+        }
+        assert_eq!(LIT_INSIDE[slab_id(0, false) as usize], 1);
+        assert_eq!(LIT_INSIDE[TORCH_B as usize], 0);
     }
 }

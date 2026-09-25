@@ -116,14 +116,31 @@ fn make(id: u16) -> Tx {
         T::RED_CONCRETE => concrete(0x8e2121, 701),
         T::IRON_BLOCK => iron_block(),
         T::END_STONE => speckled(&END_STONE_PAL, 721, 0.55),
-        T::RED_BED_TOP => bed_top(0xa32b26, 731),
-        T::RED_BED_SIDE => bed_side(0xa32b26, 733),
-        T::BLUE_BED_TOP => bed_top(0x353d9c, 735),
-        T::BLUE_BED_SIDE => bed_side(0x353d9c, 737),
-        T::GREEN_BED_TOP => bed_top(0x587a22, 739),
-        T::GREEN_BED_SIDE => bed_side(0x587a22, 741),
-        T::YELLOW_BED_TOP => bed_top(0xe9b52a, 743),
-        T::YELLOW_BED_SIDE => bed_side(0xe9b52a, 745),
+        T::RED_BED_HEAD_TOP => bed_top(RED_BED, 731, true),
+        T::RED_BED_HEAD_SIDE => bed_side(RED_BED, 733, true),
+        T::RED_BED_HEAD_END => bed_end(RED_BED, 747, true),
+        T::RED_BED_FOOT_TOP => bed_top(RED_BED, 731, false),
+        T::RED_BED_FOOT_SIDE => bed_side(RED_BED, 733, false),
+        T::RED_BED_FOOT_END => bed_end(RED_BED, 747, false),
+        T::BLUE_BED_HEAD_TOP => bed_top(BLUE_BED, 735, true),
+        T::BLUE_BED_HEAD_SIDE => bed_side(BLUE_BED, 737, true),
+        T::BLUE_BED_HEAD_END => bed_end(BLUE_BED, 749, true),
+        T::BLUE_BED_FOOT_TOP => bed_top(BLUE_BED, 735, false),
+        T::BLUE_BED_FOOT_SIDE => bed_side(BLUE_BED, 737, false),
+        T::BLUE_BED_FOOT_END => bed_end(BLUE_BED, 749, false),
+        T::GREEN_BED_HEAD_TOP => bed_top(GREEN_BED, 739, true),
+        T::GREEN_BED_HEAD_SIDE => bed_side(GREEN_BED, 741, true),
+        T::GREEN_BED_HEAD_END => bed_end(GREEN_BED, 751, true),
+        T::GREEN_BED_FOOT_TOP => bed_top(GREEN_BED, 739, false),
+        T::GREEN_BED_FOOT_SIDE => bed_side(GREEN_BED, 741, false),
+        T::GREEN_BED_FOOT_END => bed_end(GREEN_BED, 751, false),
+        T::YELLOW_BED_HEAD_TOP => bed_top(YELLOW_BED, 743, true),
+        T::YELLOW_BED_HEAD_SIDE => bed_side(YELLOW_BED, 745, true),
+        T::YELLOW_BED_HEAD_END => bed_end(YELLOW_BED, 753, true),
+        T::YELLOW_BED_FOOT_TOP => bed_top(YELLOW_BED, 743, false),
+        T::YELLOW_BED_FOOT_SIDE => bed_side(YELLOW_BED, 745, false),
+        T::YELLOW_BED_FOOT_END => bed_end(YELLOW_BED, 753, false),
+        T::WALL_TORCH => wall_torch(),
         _ => stone(),
     }
 }
@@ -1877,28 +1894,39 @@ fn blanket(c: Col, x: i32, y: i32, seed: u32) -> Col {
     }
 }
 
-/// A bed seen from above: a white pillow at the head (top rows) on a blanket in the team colour,
-/// with a turned-down sheet between them and a darker frame line around the edge.
-fn bed_top(base: u32, seed: u32) -> Tx {
+const RED_BED: u32 = 0xa32b26;
+const BLUE_BED: u32 = 0x353d9c;
+const GREEN_BED: u32 = 0x587a22;
+const YELLOW_BED: u32 = 0xe9b52a;
+const SHEET: u32 = 0xe9e6de;
+
+/// The top of half a bed, head end up (the model turns it to face the bed's way): the head half
+/// has the pillow on a white sheet and the blanket turned down over it, the foot half is all
+/// blanket. The long edges are darker where the blanket falls over the sides.
+fn bed_top(base: u32, seed: u32, head: bool) -> Tx {
     let mut t = Tx::new(20, 0.6);
     t.wrap = false;
     let c = hexc(base);
-    let sheet = hexc(0xe9e6de);
+    let sheet = hexc(SHEET);
     for i in 0..P {
         let (x, y) = xy(i);
-        let edge = x == 0 || x == 15 || y == 0 || y == 15;
-        let pillow = (1..=5).contains(&y) && (2..=13).contains(&x);
-        let fold = y == 6 || y == 7;
-        let (col, h) = if edge {
+        let side = x == 0 || x == 15;
+        let (col, h) = if head && y <= 8 {
+            let pillow = (2..=6).contains(&y) && (2..=13).contains(&x);
+            if pillow {
+                // Plump: brighter in the middle, a crease line.
+                let d = ((x as f32 - 7.5).abs() / 6.5).max((y as f32 - 4.0).abs() / 2.5);
+                let crease = x == 7 || x == 8;
+                let v = 1.0 - 0.14 * d * d - if crease { 0.06 } else { 0.0 } - 0.03 * rnd(x, y, seed + 3);
+                (mulc(sheet, v), 0.9 - 0.3 * d)
+            } else {
+                (mulc(sheet, if side { 0.78 } else { 0.9 - 0.03 * rnd(x, y, seed + 4) }), 0.45)
+            }
+        } else if head && y == 9 {
+            // The blanket's turned-down edge.
+            (mixc(blanket(c, x, y, seed), [255.0; 3], 0.22), 0.8)
+        } else if side || (!head && y == 15) {
             (mulc(blanket(c, x, y, seed), 0.62), 0.2)
-        } else if pillow {
-            // Plump: brighter in the middle, a crease line.
-            let d = ((x as f32 - 7.5).abs() / 6.5).max((y as f32 - 3.0).abs() / 2.5);
-            let crease = x == 7 || x == 8;
-            let v = 1.0 - 0.14 * d * d - if crease { 0.06 } else { 0.0 } - 0.03 * rnd(x, y, seed + 3);
-            (mulc(sheet, v), 0.9 - 0.3 * d)
-        } else if fold {
-            (mulc(sheet, if y == 6 { 0.95 } else { 0.8 }), 0.7)
         } else {
             (blanket(c, x, y, seed), 0.5)
         };
@@ -1908,26 +1936,47 @@ fn bed_top(base: u32, seed: u32) -> Tx {
     t
 }
 
-/// A bed from the side: blanket hanging over the top (rows 0..9, a lit top edge), then the
-/// wooden frame, with darker legs at the corners.
-fn bed_side(base: u32, seed: u32) -> Tx {
+/// The long side of half a bed, head end to the right. Only rows 7..12 show (the mattress is
+/// 3..9 high): the blanket's lit top edge, its folds, a dark hem; the head half ends in the white
+/// sheet round the pillow.
+fn bed_side(base: u32, seed: u32, head: bool) -> Tx {
     let mut t = Tx::new(25, 0.7);
     t.wrap = false;
     let c = hexc(base);
+    let sheet = hexc(SHEET);
     for i in 0..P {
         let (x, y) = xy(i);
-        let (col, h) = if y <= 1 {
-            (mixc(blanket(c, x, y, seed), [255.0; 3], if y == 0 { 0.18 } else { 0.08 }), 0.8)
-        } else if y <= 9 {
-            // Folds in the hanging blanket.
-            let fold = (x % 5 == 2) as i32 as f32;
-            (mulc(blanket(c, x, y, seed), 0.93 - 0.08 * fold - 0.015 * y as f32), 0.6 - 0.1 * fold)
-        } else if y == 10 {
-            (mulc(hexc(0x896a3d), 0.9), 0.4)
+        let fabric = if head && x >= 10 { mulc(sheet, 0.92 - 0.03 * rnd(x, y, seed + 6)) } else { blanket(c, x, y, seed) };
+        let fold = (x % 5 == 2 && !(head && x >= 10)) as i32 as f32;
+        let (col, h) = if y <= 7 {
+            (mixc(fabric, [255.0; 3], 0.16), 0.8)
+        } else if y >= 12 {
+            (mulc(fabric, 0.6), 0.3)
         } else {
-            let leg = x <= 2 || x >= 13;
-            let wood = pick(&OAK_PLANK_PAL, (2.0 + 2.0 * rnd(x / 3, y, seed + 5)) as i32);
-            (if leg { mulc(wood, 0.85) } else { mulc(wood, 0.62 - 0.03 * (y - 11) as f32) }, if leg { 0.6 } else { 0.2 })
+            (mulc(fabric, 0.93 - 0.08 * fold - 0.02 * (y - 8) as f32), 0.6 - 0.1 * fold)
+        };
+        t.c[i] = if head && x == 10 && y > 7 { mulc(col, 0.85) } else { col };
+        t.h[i] = h;
+    }
+    t
+}
+
+/// The end of a bed (rows 7..12 show): white sheet at the head, blanket at the foot.
+fn bed_end(base: u32, seed: u32, head: bool) -> Tx {
+    let mut t = Tx::new(25, 0.7);
+    t.wrap = false;
+    let c = hexc(base);
+    let sheet = hexc(SHEET);
+    for i in 0..P {
+        let (x, y) = xy(i);
+        let fabric = if head { mulc(sheet, 0.9 - 0.03 * rnd(x, y, seed + 8)) } else { blanket(c, x, y, seed) };
+        let edge = x == 0 || x == 15;
+        let (col, h) = if y <= 7 {
+            (mixc(fabric, [255.0; 3], 0.16), 0.8)
+        } else if y >= 12 {
+            (mulc(fabric, 0.6), 0.3)
+        } else {
+            (mulc(fabric, if edge { 0.8 } else { 0.95 - 0.02 * (y - 8) as f32 }), 0.6)
         };
         t.c[i] = col;
         t.h[i] = h;
@@ -2101,27 +2150,57 @@ fn dead_bush() -> Tx {
     t
 }
 
+/// Torch stick colours (lit side, shaded side) and flame colours, shared by both torches.
+const STICK: [(u32, u32); 2] = [(0x94693a, 0x86602f), (0x61421f, 0x573b1b)];
+/// Flame rows, top down: the pixels a torch's top three rows show (left, right).
+const FLAME: [(u32, u32); 3] = [(0xffe27a, 0xffcf4a), (0xfffae0, 0xffe890), (0xf5a431, 0xe8841e)];
+
+/// A torch: a stick two pixels wide (columns 7-8) with its flame in rows 6-8. The 3D torch is a
+/// box 2x10x2 in the middle of the block, so its sides show rows 6..15 of these columns and its
+/// top rows 7-8; the item shows the whole picture, with a flame tip and glow round it.
 fn torch() -> Tx {
     let mut t = Tx::sprite(20);
-    for y in 7..=15 {
+    for y in 9..=15 {
         let v = rnd(0, y, 471) < 0.3;
-        t.put(7, y, hexc(if v { 0x94693a } else { 0x86602f }));
-        t.put(8, y, hexc(if v { 0x61421f } else { 0x573b1b }));
+        for (k, &(a, b)) in STICK.iter().enumerate() {
+            t.put(7 + k as i32, y, hexc(if v { a } else { b }));
+        }
     }
-    // flame: white-yellow 2x2 core with an orange rim
-    let flame: [(i32, i32, u32); 10] = [
-        (7, 4, 0xf5a431),
-        (8, 4, 0xe8841e),
-        (6, 5, 0xe8801e),
-        (7, 5, 0xfffae0),
-        (8, 5, 0xffe890),
-        (9, 5, 0xdc6e18),
-        (6, 6, 0xf08c22),
-        (7, 6, 0xffe27a),
-        (8, 6, 0xffcf4a),
-        (9, 6, 0xe2761a),
-    ];
-    for &(x, y, c) in &flame {
+    for (r, &(a, b)) in FLAME.iter().enumerate() {
+        for (k, c) in [a, b].into_iter().enumerate() {
+            t.put(7 + k as i32, 6 + r as i32, hexc(c));
+            t.em[idx(7 + k as i32, 6 + r as i32)] = 255;
+        }
+    }
+    // Only the flat item shows these: the flame's tip and its orange rim.
+    for &(x, y, c) in &[(7, 5, 0xf08c22), (8, 5, 0xe8801e), (6, 6, 0xe8801e), (9, 6, 0xdc6e18), (6, 7, 0xf08c22), (9, 7, 0xe2761a)] {
+        t.put(x, y, hexc(c));
+        t.em[idx(x, y)] = 255;
+    }
+    t
+}
+
+/// A torch on a wall: an upright 2x10x2 stick against the wall, 3..13 high (see
+/// `shapes::ModelKind::WallTorch`). Texture maps from world position and the stick sits at the
+/// edge of its block, so its four sides show three different column pairs: the stick is drawn at
+/// all three (0-1, 7-8, 14-15, rows 3..12, flame on top), and the top shows rows 0-1 of columns 7-8.
+fn wall_torch() -> Tx {
+    let mut t = Tx::sprite(20);
+    for x0 in [0, 7, 14] {
+        for y in 6..=12 {
+            let v = rnd(0, y, 471) < 0.3;
+            for (k, &(a, b)) in STICK.iter().enumerate() {
+                t.put(x0 + k as i32, y, hexc(if v { a } else { b }));
+            }
+        }
+        for (r, &(a, b)) in FLAME.iter().enumerate() {
+            for (k, c) in [a, b].into_iter().enumerate() {
+                t.put(x0 + k as i32, 3 + r as i32, hexc(c));
+                t.em[idx(x0 + k as i32, 3 + r as i32)] = 255;
+            }
+        }
+    }
+    for (x, y, c) in [(7, 0, FLAME[0].0), (8, 0, FLAME[0].1), (7, 1, FLAME[1].0), (8, 1, FLAME[1].1)] {
         t.put(x, y, hexc(c));
         t.em[idx(x, y)] = 255;
     }
@@ -2296,7 +2375,8 @@ const RED_MUSHROOM_INK: Ink = Ink(&[
 mod tests {
     use super::*;
 
-    const CUTOUT: [u16; 13] = [
+    const CUTOUT: [u16; 14] = [
+        tex::WALL_TORCH,
         tex::OAK_LEAVES,
         tex::BIRCH_LEAVES,
         tex::SPRUCE_LEAVES,

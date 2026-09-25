@@ -3,14 +3,15 @@ import type { Actor, Anchor, BlockRef, Entity, GameContext, GameDefinition, Game
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
-import type { Registry } from '../world/registry';
+import { blockIdOf, type Registry } from '../world/registry';
+import { dependents, FACING_DIR, placement, type PlaceHow } from '../world/placement';
 import { CreativeBuild } from './creative';
 import { EntitySim, type EntityFrame, type ProjectileFrame } from './entities';
 import { ItemSim, type PickupFrame } from './items';
 import { PlayerSim, type PlayerFrame } from './player';
 import { Presentation, type Sink } from './present';
 import { PropSim, PropState, type PropFrame } from './props';
-import { worldQuery } from './worldquery';
+import { rayHit, surfaceY, worldQuery } from './worldquery';
 import type { WorldHost } from './world';
 
 function mulberry32(seed: number): Rng {
@@ -184,10 +185,7 @@ export class Sim {
   }
 
   blockId(b: BlockRef): number {
-    if (typeof b === 'number') return b;
-    const def = this.registry.byName.get(b);
-    if (!def) throw new Error(`unknown block "${b}"`);
-    return def.id;
+    return blockIdOf(this.registry, b);
   }
 
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]) {
@@ -345,7 +343,15 @@ export class Sim {
       ctx: () => this.ctx,
       emit: (k, e) => this.emit(k, e),
     });
-    if (this.def.player?.build) p.creative = new CreativeBuild(this.host, this.host.world, this.registry, this.presentation, p, (x, y, z) => this.breakBlockAt(x, y, z, p.api));
+    if (this.def.player?.build)
+      p.creative = new CreativeBuild(
+        this.host.world,
+        this.registry,
+        this.presentation,
+        p,
+        (x, y, z) => this.breakBlockAt(x, y, z, p.api),
+        (x, y, z, id, against) => this.placeBlockAt(x, y, z, id, p.api, { against }),
+      );
     return p;
   }
 
@@ -442,7 +448,19 @@ export class Sim {
           cells.push([x, y, z, 0]);
           removed.push([x, y, z, id]);
         }
-    const n = this.host.editMany(cells);
+    let n = this.host.editMany(cells);
+    // Torches on the walls that went, plants on the ground that went, the rest of broken beds.
+    const gone = new Set(cells.map(([x, y, z]) => `${x},${y},${z}`));
+    const loose: [number, number, number, number][] = [];
+    for (const [x, y, z, id] of removed)
+      for (const [dx, dy, dz] of dependents(this.registry, x, y, z, id, (a, b, c) => world.get_block(a, b, c))) {
+        const k = `${dx},${dy},${dz}`;
+        if (gone.has(k)) continue;
+        gone.add(k);
+        loose.push([dx, dy, dz, world.get_block(dx, dy, dz)]);
+      }
+    if (loose.length) n += this.host.editMany(loose.map(([x, y, z]) => [x, y, z, 0]));
+    removed.push(...loose);
     for (const [x, y, z, id] of removed) this.emit('blockBreak', { x, y, z, block: this.registry.blocks[id].name, by: opts.by ?? 'world' });
     // Debris from a sample of what was destroyed.
     for (let i = 0; i < Math.min(12, removed.length); i++) {
@@ -453,56 +471,79 @@ export class Sim {
     return n;
   }
 
-  /** Break a block: debris, a sound, the plant on top, the event. */
+  /** Break a block: debris, a sound, what hung on it or stood on it (and a bed's other half), the events. */
   breakBlockAt(x: number, y: number, z: number, by: Actor): boolean {
     const world = this.host.world;
     const id = world.get_block(x, y, z);
     if (id === 0 || id === 255) return false;
     const def = this.registry.blocks[id];
     if (!def || def.name === 'bedrock' || def.shape === 'liquid') return false;
+    const loose = dependents(this.registry, x, y, z, id, (a, b, c) => world.get_block(a, b, c)).map(([a, b, c]) => [a, b, c, world.get_block(a, b, c)]);
     if (!this.host.edit(x, y, z, 0)) return false;
     this.debris(x, y, z, id);
     this.ctx.audio.play('hit', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.45, pitch: 1.6 });
-    const above = world.get_block(x, y + 1, z);
-    if (this.registry.blocks[above]?.shape === 'cross') this.host.edit(x, y + 1, z, 0);
     this.emit('blockBreak', { x, y, z, block: def.name, by });
+    for (const [a, b, c, was] of loose) {
+      if (!this.host.edit(a, b, c, 0)) continue;
+      this.debris(a, b, c, was);
+      this.emit('blockBreak', { x: a, y: b, z: c, block: this.registry.blocks[was].name, by });
+    }
     return true;
   }
 
-  /** Place a block: a free cell nobody is standing in, ground under plants, a sound, the event. */
-  placeBlockAt(x: number, y: number, z: number, block: BlockRef, by: Actor): boolean {
+  /**
+   * Place a block the way a player would (see `placement`): turned to face the right way when
+   * `block` names a family rather than one of its variants, in cells that are free (air, plants)
+   * and nobody is standing in, a plant on ground, a torch on something; with a sound and the
+   * events. A bed takes two cells.
+   */
+  placeBlockAt(x: number, y: number, z: number, block: BlockRef, by: Actor, how: PlaceHow = {}): boolean {
     const world = this.host.world;
+    const reg = this.registry;
     const id = this.blockId(block);
-    const def = this.registry.blocks[id];
-    if (!def || y < 0 || y > 255) return false;
-    const cur = world.get_block(x, y, z);
-    if (cur === 255 || !(this.registry.blocks[cur]?.replaceable ?? false)) return false;
-    if (def.solid) {
-      if (world.player_overlaps(x, y, z)) return false;
-      for (const e of this.entities.near({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, 3)) {
-        const p = e.position;
-        const box = this.entities.hitbox(e);
-        const hw = box.width / 2;
-        // A little slack so a body standing on the block's top face (or brushing its side) doesn't count.
-        if (Math.abs(p.x - (x + 0.5)) < 0.49 + hw && Math.abs(p.z - (z + 0.5)) < 0.49 + hw && p.y < y + 0.98 && p.y + box.height > y + 0.02) return false;
-      }
+    const def = reg.blocks[id];
+    if (!def) return false;
+    // A family name, or its default variant's id, gets turned; anything else goes as named.
+    const exact = typeof block === 'string' ? block.includes('[') : reg.byName.get(def.name) !== def;
+    if (!how.look && typeof by === 'object') how = { ...how, look: 'look' in by ? by.look : by.velocity };
+    const plan = placement(reg, def, x, y, z, how, exact, (a, b, c) => world.get_block(a, b, c));
+    if (!plan) return false;
+    for (const [cx, cy, cz, cid] of plan.cells) {
+      const d = reg.blocks[cid];
+      if (!d || cy < 0 || cy > 255) return false;
+      const cur = world.get_block(cx, cy, cz);
+      if (cur === 255 || !(plan.join || (reg.blocks[cur]?.replaceable ?? false))) return false;
+      if (d.solid && this.occupied(cx, cy, cz, cid)) return false;
+      if (d.shape === 'cross' && !reg.blocks[world.get_block(cx, cy - 1, cz)]?.solid) return false;
     }
-    if (def.shape === 'cross' && !this.registry.blocks[world.get_block(x, y - 1, z)]?.solid) return false;
-    if (!this.host.edit(x, y, z, id)) return false;
-    this.ctx.audio.play('click', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.5, pitch: 0.7 });
-    this.emit('blockPlace', { x, y, z, block: def.name, by });
+    for (const [cx, cy, cz, cid] of plan.cells) {
+      if (!this.host.edit(cx, cy, cz, cid)) return false;
+      this.emit('blockPlace', { x: cx, y: cy, z: cz, block: reg.blocks[cid].name, by });
+    }
+    const [cx, cy, cz] = plan.cells[0];
+    this.ctx.audio.play('click', { at: { x: cx + 0.5, y: cy + 0.5, z: cz + 0.5 }, volume: 0.5, pitch: 0.7 });
     return true;
+  }
+
+  /** Whether block `id` at (x, y, z) would be in someone's way: a player's or an entity's body. */
+  private occupied(x: number, y: number, z: number, id: number): boolean {
+    if (this.host.world.player_overlaps(x, y, z, id)) return true;
+    // Its boxes' height: a bottom slab leaves room above it.
+    const boxes = this.registry.blocks[id]?.boxes;
+    const y0 = y + (boxes ? Math.min(...boxes.map((b) => b[1])) / 16 : 0);
+    const y1 = y + (boxes ? Math.max(...boxes.map((b) => b[4])) / 16 : 1);
+    for (const e of this.entities.near({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }, 3)) {
+      const p = e.position;
+      const box = this.entities.hitbox(e);
+      const hw = box.width / 2;
+      // A little slack so a body standing on the block's top face (or brushing its side) doesn't count.
+      if (Math.abs(p.x - (x + 0.5)) < 0.49 + hw && Math.abs(p.z - (z + 0.5)) < 0.49 + hw && p.y < y1 - 0.02 && p.y + box.height > y0 + 0.02) return true;
+    }
+    return false;
   }
 
   surfaceY(x: number, z: number): number {
-    const w = this.host.world;
-    for (let y = 255; y > 0; y--) {
-      const id = w.get_block(x, y, z);
-      if (id === 255) return -1;
-      const d = this.registry.blocks[id];
-      if (d && d.shape !== 'air' && d.shape !== 'cross') return y;
-    }
-    return 0;
+    return surfaceY(this.host.world, this.registry, x, z);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -524,18 +565,26 @@ export class Sim {
         setBlock: (x, y, z, block) => sim.host.edit(Math.floor(x), Math.floor(y), Math.floor(z), sim.blockId(block)),
         blockId: (name) => sim.blockId(name),
         blockName: (id) => reg.blocks[id]?.name ?? 'unknown',
-        raycast: (o, d, max) => {
-          const r = world.raycast(o.x, o.y, o.z, d.x, d.y, d.z, max);
-          return r[0] ? { x: r[1], y: r[2], z: r[3], normal: { x: r[4], y: r[5], z: r[6] }, block: r[7] } : null;
-        },
+        raycast: (o, d, max) => rayHit(world, o, d, max),
         lineOfSight: (a, b) => world.line_clear(a.x, a.y, a.z, b.x, b.y, b.z),
         surfaceY: (x, z) => sim.surfaceY(Math.floor(x), Math.floor(z)),
         explode: (c, r, opts) => sim.explode(c, r, opts),
         breakBlock: (x, y, z, opts) => sim.breakBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), opts?.by ?? 'world'),
-        placeBlock: (x, y, z, block, opts) => sim.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world'),
+        placeBlock: (x, y, z, block, opts) => {
+          const f = opts?.facing && FACING_DIR[opts.facing];
+          const look = f ? { x: f[0], y: 0, z: f[1] } : undefined;
+          return sim.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world', { against: opts?.against, look });
+        },
         blockInfo: (block) => {
-          const d = reg.blocks[typeof block === 'number' ? block : reg.byName.get(block)?.id ?? -1];
-          return d ? { id: d.id, name: d.name, label: d.label, solid: d.solid, liquid: d.shape === 'liquid', plant: d.shape === 'cross', replaceable: d.replaceable, light: d.emit } : null;
+          let d;
+          try {
+            d = reg.blocks[blockIdOf(reg, block)];
+          } catch {
+            return null;
+          }
+          return d
+            ? { id: d.id, name: d.name, label: d.label, state: d.state, variant: d.key, solid: d.solid, liquid: d.shape === 'liquid', plant: d.small, replaceable: d.replaceable, light: d.emit }
+            : null;
         },
         seaLevel: engine.sea_level(),
       },

@@ -8,7 +8,7 @@ import { Sim } from '../sim/sim';
 import type { WorldHost } from '../sim/world';
 import { applyWorldConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
-import { loadRegistry } from '../world/registry';
+import { blockIdOf, loadRegistry } from '../world/registry';
 import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
 import { PresentState } from './state';
 import { MemoryStore, type SavedPlayer, type Store } from './store';
@@ -175,12 +175,7 @@ export class GameHost {
     this.onError = o.onError;
     this.radius = o.radius ?? 8;
     this.budget = o.budget ?? 4;
-    const blockId = (b: BlockRef) => {
-      if (typeof b === 'number') return b;
-      const d = registry.byName.get(b);
-      if (!d) throw new Error(`unknown block "${b}"`);
-      return d.id;
-    };
+    const blockId = (b: BlockRef) => blockIdOf(registry, b);
     const cfg = worldGenConfig(def, blockId);
     const gw = (this.world = new GeneratedWorld(seed, cfg));
     const w = gw.world;

@@ -354,14 +354,27 @@ export interface CommandApi {
 // World
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * A block: its id, its name (`'oak_stairs'`), or a name with a state, Minecraft style, for one
+ * variant of a block that has several (`'oak_stairs[facing=east,half=top]'`,
+ * `'red_bed[facing=south,part=head]'`, `'torch[facing=west]'` on a wall, `'oak_log[axis=x]'`).
+ * States left out are the default's. `world.blockInfo` tells a block's state.
+ */
 export type BlockRef = number | string;
 
+/** Horizontal directions: north is -z, east +x. */
+export type Facing = 'north' | 'east' | 'south' | 'west';
+
 export interface RayHit {
+  /** The block hit. */
   x: number;
   y: number;
   z: number;
+  /** The face hit: which way it faces. */
   normal: Vec3;
   block: number;
+  /** Exactly where the ray hit it. */
+  point: Vec3;
 }
 
 export interface WorldApi {
@@ -394,10 +407,18 @@ export interface WorldApi {
    */
   breakBlock(x: number, y: number, z: number, opts?: { by?: Actor }): boolean;
   /**
-   * Place a block if the cell is free (air or a plant), nobody is standing in it, and a plant has
-   * ground under it; with a sound, and fire `blockPlace`. Returns false if it couldn't.
+   * Place a block the way a player would, if the cell is free (air or a plant), nobody is standing
+   * in it, a plant has ground under it and a torch something to stand or hang on; with a sound,
+   * and fire `blockPlace`. Returns false if it couldn't.
+   *
+   * Given by name (`'torch'`, `'oak_stairs'`), a block is turned the Minecraft way: `against`
+   * (the face aimed at, a `raycast` hit) hangs a torch on the side of a block, puts a slab or
+   * stairs in the upper half (aiming at a ceiling or high on a side) and lays a log along the
+   * axis aimed along; stairs and beds face `facing`, else the way `by` is looking. A bed takes
+   * two cells, its head beyond (x, y, z). A slab placed on the same kind of slab makes a full
+   * block. Given with a state (`'oak_stairs[facing=east]'`), it goes as it is.
    */
-  placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Actor }): boolean;
+  placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Actor; against?: RayHit; facing?: Facing }): boolean;
 }
 
 export interface BlockInfo {
@@ -405,10 +426,14 @@ export interface BlockInfo {
   name: string;
   /** Display name, e.g. "Oak Planks". */
   label: string;
+  /** Which variant it is, for blocks with several: `{ facing: 'east', half: 'top' }`; else `{}`. */
+  state: Record<string, string>;
+  /** Exactly this variant, as a block reference (`'oak_stairs[facing=east,half=top]'`). */
+  variant: string;
   /** Bodies collide with it. */
   solid: boolean;
   liquid: boolean;
-  /** A cross-shaped plant (flowers, grass, torches). */
+  /** Something small that breaks at a touch and you walk through: plants, torches. */
   plant: boolean;
   /** Placing a block here replaces it (air, plants, liquids). */
   replaceable: boolean;

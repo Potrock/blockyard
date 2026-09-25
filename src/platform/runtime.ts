@@ -17,7 +17,7 @@ import { BlockHighlight } from './render/highlight';
 import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
-import { DEFAULT_TINT, loadRegistry, type Registry } from './world/registry';
+import { blockIdOf, DEFAULT_TINT, loadRegistry, variant, type Registry } from './world/registry';
 import { Input } from './player/input';
 import { Effects } from './fx/effects';
 import { Sfx } from './audio/sfx';
@@ -240,10 +240,7 @@ export class Runtime {
   // ---------------------------------------------------------------------------------------------
 
   private blockId(b: BlockRef): number {
-    if (typeof b === 'number') return b;
-    const def = this.registry.byName.get(b);
-    if (!def) throw new Error(`unknown block "${b}"`);
-    return def.id;
+    return blockIdOf(this.registry, b);
   }
 
   private async init() {
@@ -299,7 +296,12 @@ export class Runtime {
     this.renderer.opaqueScene.add(this.particles.points);
 
     const icons = new Map<number, string>();
-    for (const b of this.registry.blocks) if (b.id !== 0) icons.set(b.id, blockIcon(b, this.textures.albedoData));
+    for (const b of this.registry.blocks) {
+      if (b.id === 0) continue;
+      // A bed's icon shows it whole: the head too.
+      const head = b.model === 'bed' ? variant(this.registry, b, { part: 'head' }) ?? undefined : undefined;
+      icons.set(b.id, blockIcon(b, this.textures.albedoData, head));
+    }
     this.blockIcons = icons;
     this.hud = new Hud(this.ui, this.registry, icons);
     this.gameHud = new GameHud(this.ui, (ref) => (typeof ref === 'object' && 'block' in ref ? this.blockIcons.get(this.blockId(ref.block)) ?? '' : this.graphics.icon(ref, 96)));
@@ -520,11 +522,18 @@ export class Runtime {
     }
   }
 
+  /** Show a block in the hand (a bed whole: its head too). */
+  private holdBlock(id: number) {
+    const def = this.registry.blocks[id];
+    this.held.setBlock(def, def?.model === 'bed' ? (variant(this.registry, def, { part: 'head' }) ?? undefined) : undefined);
+  }
+
   /** `hud.highlight`: outline a block, with break cracks at `progress`. */
   private setHighlight(at: Vec3 | null, progress?: number) {
     if (!at) return this.highlight.set(null);
     const id = this.chunks.world.get_block(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z));
-    this.highlight.set(at, this.registry.blocks[id]?.shape === 'cross', progress);
+    const def = this.registry.blocks[id];
+    this.highlight.set(at, def?.shape === 'cross' ? 'cross' : (def?.boxes ?? null), progress);
   }
 
   /** Reset game state and call `start` again. */
@@ -997,7 +1006,7 @@ export class Runtime {
         const announce = this.shown.creative !== '' && !this.shown.creative.endsWith(`|${creative.selected}`);
         this.shown.creative = key;
         this.hud.setHotbar(creative.hotbar, creative.selected, announce);
-        this.held.setBlock(this.registry.blocks[creative.hotbar[creative.selected]]);
+        this.holdBlock(creative.hotbar[creative.selected]);
       }
     }
     if (me.hotbar) this.showHotbar(me.hotbar.slots, me.hotbar.selected, me.hand);
@@ -1033,7 +1042,7 @@ export class Runtime {
     }
     if (typeof def.icon === 'object' && 'block' in def.icon) {
       // Looks like a block: held as a little cube of it.
-      this.held.setBlock(this.registry.blocks[this.blockId(def.icon.block)]);
+      this.holdBlock(this.blockId(def.icon.block));
       return;
     }
     const look = this.graphics.itemLook(def, drawn);

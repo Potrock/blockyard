@@ -53,18 +53,48 @@ function crackStages(): THREE.DataTexture[] {
   return out;
 }
 
+/** Outline and crack geometry for a set of boxes (1/16 of a block, cell-local), centred on the cell. */
+function boxGeometry(boxes: number[][]): { edges: THREE.BufferGeometry; crack: THREE.BufferGeometry } {
+  const lines: number[] = [];
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const index: number[] = [];
+  for (const [x0, y0, z0, x1, y1, z1] of boxes) {
+    // A hair bigger than the box, so the outline isn't buried in its faces.
+    const g = new THREE.BoxGeometry((x1 - x0) / 16 + 0.004, (y1 - y0) / 16 + 0.004, (z1 - z0) / 16 + 0.004);
+    g.translate((x0 + x1) / 32 - 0.5, (y0 + y1) / 32 - 0.5, (z0 + z1) / 32 - 0.5);
+    lines.push(...(new THREE.EdgesGeometry(g).getAttribute('position').array as Float32Array));
+    const base = pos.length / 3;
+    pos.push(...(g.getAttribute('position').array as Float32Array));
+    uv.push(...(g.getAttribute('uv').array as Float32Array));
+    for (const i of g.getIndex()!.array) index.push(base + i);
+  }
+  const edges = new THREE.BufferGeometry();
+  edges.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+  const crack = new THREE.BufferGeometry();
+  crack.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  crack.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  crack.setIndex(index);
+  return { edges, crack };
+}
+
 /** The block the player is aiming at: a thin outline, with break cracks while it's being mined. */
 export class BlockHighlight {
   readonly object = new THREE.Group();
+  private edges: THREE.LineSegments;
   private crack: THREE.Mesh;
   private crackMat: THREE.MeshBasicMaterial;
   private stages = crackStages();
+  private cube: { edges: THREE.BufferGeometry; crack: THREE.BufferGeometry };
+  /** Outlines of block models, by their boxes. */
+  private shapes = new Map<string, { edges: THREE.BufferGeometry; crack: THREE.BufferGeometry }>();
 
   constructor() {
-    const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)),
+    this.cube = { edges: new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)), crack: new THREE.BoxGeometry(1.002, 1.002, 1.002) };
+    const edges = (this.edges = new THREE.LineSegments(
+      this.cube.edges,
       new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55, depthWrite: false }),
-    );
+    ));
     edges.renderOrder = 10;
     this.crackMat = new THREE.MeshBasicMaterial({
       color: 0x000000,
@@ -75,17 +105,28 @@ export class BlockHighlight {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
     });
-    this.crack = new THREE.Mesh(new THREE.BoxGeometry(1.002, 1.002, 1.002), this.crackMat);
+    this.crack = new THREE.Mesh(this.cube.crack, this.crackMat);
     this.crack.renderOrder = 9;
     this.object.add(edges, this.crack);
     this.object.visible = false;
   }
 
-  /** Show it on block (x, y, z) (`cross`: a plant, drawn smaller), or hide it with null. */
-  set(at: { x: number; y: number; z: number } | null, cross = false, progress?: number) {
+  /**
+   * Show it on block (x, y, z), or hide it with null. `shape`: `'cross'` for a plant (drawn
+   * smaller), or a block model's boxes (1/16 of a block) to outline them.
+   */
+  set(at: { x: number; y: number; z: number } | null, shape: 'cross' | number[][] | null = null, progress?: number) {
     this.object.visible = !!at;
     if (!at) return;
+    const cross = shape === 'cross';
     const s = cross ? 0.72 : 1;
+    let geo = this.cube;
+    if (Array.isArray(shape)) {
+      const key = shape.join(';');
+      geo = this.shapes.get(key) ?? this.shapes.set(key, boxGeometry(shape)).get(key)!;
+    }
+    this.edges.geometry = geo.edges;
+    this.crack.geometry = geo.crack;
     this.object.position.set(Math.floor(at.x) + 0.5, Math.floor(at.y) + (cross ? 0.45 : 0.5), Math.floor(at.z) + 0.5);
     this.object.scale.set(s, cross ? 0.9 : 1, s);
     // The scene it lives in doesn't update matrices by itself.

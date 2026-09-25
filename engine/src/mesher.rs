@@ -13,11 +13,18 @@
 //! Output (`Vec<u32>`): `MESH_HEADER` words of header followed by vertex data of the opaque,
 //! cutout and translucent layers. Each quad is 4 vertices x 2 words:
 //! ```text
-//! w0: x(5) | z(5)<<5 | y(9)<<10 | normal(3)<<19 | ao(2)<<22 | anim(2)<<24 | tint<<26 | xmax/umax<<27 | zmax/vmax<<28 | cutout<<29
-//! w1: texture layer(12) | sky*4 (6)<<12 | block*4 (6)<<18
+//! w0: x(5) | z(5)<<5 | y(9)<<10 | normal(3)<<19 | ao(2)<<22 | anim(2)<<24 | tint<<26 | xmax/umax<<27 | zmax/vmax<<28 | cutout<<29 | fine<<30 | uvt.0<<31
+//! w1: texture layer(10) | uvt.1-2 (2)<<10 | sky*4 (6)<<12 | block*4 (6)<<18 | fx(4)<<24 | fz(4)<<28
 //! ```
 //! normal: 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z, 6/7 cross planes. anim: 0 none, 1 leaves, 2 plant
 //! top vertex, 3 liquid surface vertex (lowered). xmax/zmax flag cross vertices on the far corner.
+//! uvt: texture transform (`UV_*` in `blocks`).
+//!
+//! A `fine` vertex (block models: torches, slabs, stairs, beds) is a point of its block's cell on
+//! the 1/16 grid: the cell (x 4 bits, z 4 bits, y 8 bits, each field's top bit spare) and the
+//! offset into it in sixteenths, 0..=16 (5 bits each): ox = fx | x.4 << 4, oz = fz | z.4 << 4,
+//! oy = (anim bits) | (umax/vmax bits) << 2 | y.8 << 4. Knowing its cell, the shader maps the
+//! texture exactly within that block's tile. Fine quads don't animate or widen.
 //!
 //! Header:
 //! ```text
@@ -27,6 +34,7 @@
 //! ```
 
 use crate::blocks::*;
+use crate::shapes::{on_side, shapes, side_mask, Cuboid, Model, FULL_SIDE, NO_TEX, OPPOSITE};
 
 pub const RW: usize = 48;
 const SZ: usize = RW;
@@ -72,6 +80,8 @@ const PAIR: [[u8; 6]; 6] = pair_table();
 pub const ALL_CONNECTED: u32 = 0x7fff;
 /// Vertex flag (w0 bit 29): quad belongs to the alpha-tested cutout layer.
 pub const CUTOUT_FLAG: u32 = 1 << 29;
+/// Vertex flag (w0 bit 30): a block model vertex, on the 1/16 grid.
+pub const FINE_FLAG: u32 = 1 << 30;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Corner {
@@ -188,6 +198,8 @@ impl Mesher {
                     if op < 15 {
                         sky[i] = 15 - op;
                         queue.push(i as u32);
+                    } else if LIT_INSIDE[blocks[i] as usize] == 1 {
+                        sky[i] = 15;
                     }
                     break;
                 }
@@ -325,6 +337,8 @@ impl Mesher {
     fn mesh_section(&mut self, s: usize) -> (bool, u32) {
         let mut sunlit = false;
         let mut opaque_count = 0u32;
+        let shapes = shapes();
+        let cover = &shapes.cover;
         self.slice_used = [false; 96];
         let y0 = s * 16;
         for ly in 0..16 {
@@ -345,7 +359,7 @@ impl Mesher {
                         SHAPE_CUBE if def.layer == Layer::Opaque => {
                             for f in 0..6 {
                                 let q = (i as isize + FACE_OFF[f]) as usize;
-                                if OPAQUE[self.blocks[q] as usize] == 1 {
+                                if cover[self.blocks[q] as usize][OPPOSITE[f]] == FULL_SIDE {
                                     continue;
                                 }
                                 let c = self.corners(q, f);
@@ -353,6 +367,7 @@ impl Mesher {
                                     sunlit = true;
                                 }
                                 let tex = def.tex[f] as u32;
+                                let uvt = def.uvt[f] as u32;
                                 let (slice, u, v) = match f {
                                     0 | 1 => (lx, lz, ly),
                                     2 | 3 => (ly, lx, lz),
@@ -364,14 +379,15 @@ impl Mesher {
                                         | ((def.tint as u32) << 12)
                                         | ((c[0].ao as u32) << 13)
                                         | ((c[0].sky as u32) << 15)
-                                        | ((c[0].blk as u32) << 21);
+                                        | ((c[0].blk as u32) << 21)
+                                        | (uvt << 27);
                                     let si = f * 16 + slice;
                                     self.greedy[si * 256 + v * 16 + u] = key;
                                     self.slice_used[si] = true;
                                 } else {
                                     let plane = slice + if f % 2 == 0 { 1 } else { 0 };
                                     let tint = def.tint as u32;
-                                    emit_quad(&mut self.out[0], f, plane, u, v, u + 1, v + 1, y0, &c, tex, tint, [0; 4], 0);
+                                    emit_quad(&mut self.out[0], f, plane, u, v, u + 1, v + 1, y0, &c, tex, tint, uvt, [0; 4], 0);
                                 }
                             }
                         }
@@ -380,7 +396,7 @@ impl Mesher {
                             for f in 0..6 {
                                 let q = (i as isize + FACE_OFF[f]) as usize;
                                 let nb = self.blocks[q];
-                                if OPAQUE[nb as usize] == 1 {
+                                if cover[nb as usize][OPPOSITE[f]] == FULL_SIDE {
                                     continue;
                                 }
                                 if def.cull_self && nb == b {
@@ -400,7 +416,7 @@ impl Mesher {
                                 };
                                 let plane = slice + if f % 2 == 0 { 1 } else { 0 };
                                 let anim = def.anim;
-                                emit_quad(&mut self.out[1], f, plane, u, v, u + 1, v + 1, y0, &c, def.tex[f] as u32, def.tint as u32, [anim; 4], CUTOUT_FLAG);
+                                emit_quad(&mut self.out[1], f, plane, u, v, u + 1, v + 1, y0, &c, def.tex[f] as u32, def.tint as u32, def.uvt[f] as u32, [anim; 4], CUTOUT_FLAG);
                             }
                         }
                         SHAPE_CROSS => {
@@ -417,7 +433,7 @@ impl Mesher {
                             for f in 0..6 {
                                 let q = (i as isize + FACE_OFF[f]) as usize;
                                 let nb = self.blocks[q];
-                                if nb == b || OPAQUE[nb as usize] == 1 {
+                                if nb == b || cover[nb as usize][OPPOSITE[f]] == FULL_SIDE {
                                     continue;
                                 }
                                 let c = self.corners(q, f);
@@ -436,7 +452,14 @@ impl Mesher {
                                 } else {
                                     [0, 0, 3, 3]
                                 };
-                                emit_quad(&mut self.out[layer], f, plane, u, v, u + 1, v + 1, y0, &c, def.tex[f] as u32, 0, lowered, 0);
+                                emit_quad(&mut self.out[layer], f, plane, u, v, u + 1, v + 1, y0, &c, def.tex[f] as u32, 0, 0, lowered, 0);
+                            }
+                        }
+                        SHAPE_MODEL => {
+                            if let Some(m) = &shapes.models[b as usize] {
+                                if self.mesh_model(m, def, i, lx, y, lz, cover) {
+                                    sunlit = true;
+                                }
                             }
                         }
                         _ => {}
@@ -480,12 +503,44 @@ impl Mesher {
                         }
                     }
                     let c = Corner { ao: ((k >> 13) & 3) as u8, sky: ((k >> 15) & 63) as u8, blk: ((k >> 21) & 63) as u8 };
-                    emit_quad(&mut self.out[0], f, plane, u, v, u + w, v + h, y0, &[c; 4], k & 4095, (k >> 12) & 1, [0; 4], 0);
+                    emit_quad(&mut self.out[0], f, plane, u, v, u + w, v + h, y0, &[c; 4], k & 1023, (k >> 12) & 1, (k >> 27) & 7, [0; 4], 0);
                     u += w;
                 }
             }
         }
         (sunlit, opaque_count)
+    }
+
+    /// Emit a block model's boxes. Returns whether the sky lights any of it.
+    #[allow(clippy::too_many_arguments)]
+    fn mesh_model(&mut self, m: &Model, def: &Block, i: usize, lx: usize, y: usize, lz: usize, cover: &[[u16; 6]; 256]) -> bool {
+        let layer = if def.layer == Layer::Opaque { 0 } else { 1 };
+        let flags = if layer == 1 { CUTOUT_FLAG } else { 0 };
+        let own = Corner { ao: 3, sky: self.sky[i] * 4, blk: self.blk[i] * 4 };
+        let cell = [lx as u32, y as u32, lz as u32];
+        let mut sunlit = false;
+        for p in &m.parts {
+            for f in 0..6 {
+                let face = p.faces[f];
+                if face.tex == NO_TEX {
+                    continue;
+                }
+                let q = (i as isize + FACE_OFF[f]) as usize;
+                let nb = self.blocks[q] as usize;
+                // Against the cell's side: hidden if the neighbour fills that part of it.
+                if on_side(p, f) && (side_mask(p, f, false) & !cover[nb][OPPOSITE[f]]) == 0 {
+                    continue;
+                }
+                // Lit smoothly from the cell it faces, like a cube face; from its own cell where
+                // that one's solid (under a top slab) and for small things (torches).
+                let c = if m.flat_light || OPAQUE[nb] == 1 { [own; 4] } else { self.corners(q, f) };
+                if c.iter().any(|c| c.sky > 0) {
+                    sunlit = true;
+                }
+                emit_fine(&mut self.out[layer], f, p, cell, &c, face.tex as u32, def.tint as u32, face.uvt as u32, flags);
+            }
+        }
+        sunlit
     }
 
     /// Which pairs of section faces are connected through non-opaque blocks.
@@ -599,8 +654,13 @@ fn bfs(blocks: &[u8], light: &mut [u8], queue: &mut Vec<u32>) {
         let z = (i / RW) % RW;
         let y = i / SY;
         let mut visit = |n: usize, queue: &mut Vec<u32>| {
-            let op = OPACITY[blocks[n] as usize];
+            let b = blocks[n] as usize;
+            let op = OPACITY[b];
             if op >= 15 {
+                // A slab or stairs: lit, but the light goes no further.
+                if LIT_INSIDE[b] == 1 && l - 1 > light[n] {
+                    light[n] = l - 1;
+                }
                 return;
             }
             let nl = l as i32 - (op.max(1)) as i32;
@@ -660,6 +720,7 @@ fn emit_quad(
     corners: &[Corner; 4],
     tex: u32,
     tint: u32,
+    uvt: u32,
     anim: [u8; 4],
     flags: u32,
 ) {
@@ -677,8 +738,53 @@ fn emit_quad(
         // Corner side along u / v (bits 27, 28) lets the shader expand quads a hair to hide
         // T-junction cracks between greedy-merged faces.
         let side = (((k == 1 || k == 2) as u32) << 27) | (((k >= 2) as u32) << 28);
-        let w0 = x | (z << 5) | (y << 10) | ((face as u32) << 19) | ((c.ao as u32) << 22) | ((anim[k] as u32) << 24) | (tint << 26) | side | flags;
-        let w1 = tex | ((c.sky as u32) << 12) | ((c.blk as u32) << 18);
+        let w0 = x | (z << 5) | (y << 10) | ((face as u32) << 19) | ((c.ao as u32) << 22) | ((anim[k] as u32) << 24) | (tint << 26) | side | flags | ((uvt & 1) << 31);
+        let w1 = tex | ((uvt >> 1) << 10) | ((c.sky as u32) << 12) | ((c.blk as u32) << 18);
+        out.push(w0);
+        out.push(w1);
+    }
+}
+
+/// Emit one face of a model box in block `cell` (x and z section-local, y absolute).
+/// `corners` follow the (u, v) corner order, like `emit_quad`.
+#[allow(clippy::too_many_arguments)]
+fn emit_fine(out: &mut Vec<u32>, face: usize, p: &Cuboid, cell: [u32; 3], corners: &[Corner; 4], tex: u32, tint: u32, uvt: u32, flags: u32) {
+    let lo = [p.from[0] as u32, p.from[1] as u32, p.from[2] as u32];
+    let hi = [p.to[0] as u32, p.to[1] as u32, p.to[2] as u32];
+    // The face's plane and its (u, v) extent, laid out as `pos` reads them.
+    let (plane, u0, v0, u1, v1) = match face {
+        0 => (hi[0], lo[2], lo[1], hi[2], hi[1]),
+        1 => (lo[0], lo[2], lo[1], hi[2], hi[1]),
+        2 => (hi[1], lo[0], lo[2], hi[0], hi[2]),
+        3 => (lo[1], lo[0], lo[2], hi[0], hi[2]),
+        4 => (hi[2], lo[0], lo[1], hi[0], hi[1]),
+        _ => (lo[2], lo[0], lo[1], hi[0], hi[1]),
+    };
+    let uv = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)];
+    let mut order: [usize; 4] = if REVERSE[face] { [0, 3, 2, 1] } else { [0, 1, 2, 3] };
+    let b = |k: usize| brightness(&corners[order[k]]);
+    if b(0) + b(2) > b(1) + b(3) {
+        order = [order[1], order[2], order[3], order[0]];
+    }
+    for &k in &order {
+        let (u, v) = uv[k];
+        let (ox, oy, oz) = pos(face, plane as usize, u as usize, v as usize);
+        let c = &corners[k];
+        let w0 = cell[0]
+            | ((ox >> 4) << 4)
+            | (cell[2] << 5)
+            | ((oz >> 4) << 9)
+            | (cell[1] << 10)
+            | ((oy >> 4) << 18)
+            | ((face as u32) << 19)
+            | ((c.ao as u32) << 22)
+            | ((oy & 3) << 24)
+            | (tint << 26)
+            | (((oy >> 2) & 3) << 27)
+            | flags
+            | FINE_FLAG
+            | ((uvt & 1) << 31);
+        let w1 = tex | ((uvt >> 1) << 10) | ((c.sky as u32) << 12) | ((c.blk as u32) << 18) | ((ox & 15) << 24) | ((oz & 15) << 28);
         out.push(w0);
         out.push(w1);
     }
@@ -750,7 +856,7 @@ mod tests {
         let out = m.mesh(&data);
         let opaque = out[1];
         assert!(opaque > 0 && opaque <= 256, "opaque quads {opaque}");
-        assert_eq!(out[2], 2, "torch cross = 2 quads");
+        assert_eq!(out[2], 5, "torch box: 5 faces (the underside is on the stone)");
         // Torch light: block light at the torch cell is 14.
         assert_eq!(m.blk[ri(24, 2, 24)], 14);
         assert_eq!(m.sky[ri(24, 5, 24)], 15);

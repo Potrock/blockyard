@@ -3,6 +3,7 @@ import type { BlockDef } from '../world/registry';
 import { DEFAULT_TINT } from '../world/registry';
 import type { HeldModelSpec, HoldSpec, HoldStyle, ViewAnimation, ViewKey, ViewModelApi } from '../api/types';
 import { boxGeometry, type EntityGraphics } from './entities';
+import { itemFaces } from './blockmodel';
 
 /**
  * First-person view model, built from Minecraft's own transforms: the arm is posed exactly like
@@ -26,15 +27,18 @@ in vec3 position;
 in vec3 normal;
 in vec2 uv;
 in float face;
+in float layer;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform mat3 normalMatrix;
 out vec2 vUv;
 out float vShade;
 flat out int vFace;
+flat out float vLayer;
 void main() {
   vUv = uv;
   vFace = int(face + 0.5);
+  vLayer = layer;
   vec3 n = normalize(normalMatrix * normal);
   vShade = 0.55 + 0.45 * clamp(dot(n, normalize(vec3(0.35, 0.9, 0.45))), 0.0, 1.0);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -54,10 +58,13 @@ uniform vec3 uLight;
 in vec2 vUv;
 in float vShade;
 flat in int vFace;
+flat in float vLayer;
 layout(location = 0) out vec4 fragColor;
 void main() {
-  float layer = uLayers[vFace];
-  vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+  // A block model's faces carry their own texture; a cube's come from uLayers by face.
+  float layer = vLayer >= 0.0 ? vLayer : uLayers[vFace];
+  // A model's faces show part of one tile, which needn't tile: keep off its far edge.
+  vec2 uv = vLayer >= 0.0 ? clamp(vec2(vUv.x, 1.0 - vUv.y), 1.0 / 64.0, 1.0 - 1.0 / 64.0) : vec2(vUv.x, 1.0 - vUv.y);
   vec4 a = texture(uAlbedo, vec3(uv, layer));
   if (uCutout > 0.5 && a.a < 0.5) discard;
   vec3 base = a.rgb;
@@ -676,6 +683,8 @@ interface HeldSprite {
 interface HeldBlock {
   kind: 'block';
   def: BlockDef;
+  /** A bed's head half, to show it whole. */
+  partner?: BlockDef;
 }
 type Held = HeldSprite | HeldBlock | { kind: 'empty' };
 
@@ -696,6 +705,9 @@ export class ViewModel implements ViewModelApi {
   private spriteMesh: THREE.Mesh;
   private spriteMaterial: THREE.RawShaderMaterial;
   private cube: THREE.Mesh;
+  private cubeGeometry: THREE.BufferGeometry;
+  /** Block models' geometry (slabs, stairs, beds), by block id. */
+  private models = new Map<number, THREE.BufferGeometry>();
   private cross: THREE.Mesh;
   private blockMaterial: THREE.RawShaderMaterial;
   private light = new THREE.Vector3(1, 1, 1);
@@ -751,11 +763,13 @@ export class ViewModel implements ViewModelApi {
     const blockMaterial = (side: THREE.Side) =>
       new THREE.RawShaderMaterial({ vertexShader: blockVert, fragmentShader: blockFrag, glslVersion: THREE.GLSL3, side, uniforms: blockUniforms });
     this.blockMaterial = blockMaterial(THREE.FrontSide);
-    const box = new THREE.BoxGeometry(1, 1, 1);
+    const box = (this.cubeGeometry = new THREE.BoxGeometry(1, 1, 1));
     box.setAttribute('face', new THREE.BufferAttribute(new Float32Array(Array.from({ length: 24 }, (_, i) => Math.floor(i / 4))), 1));
+    box.setAttribute('layer', new THREE.BufferAttribute(new Float32Array(24).fill(-1), 1));
     this.cube = new THREE.Mesh(box, this.blockMaterial);
     const plane = new THREE.PlaneGeometry(1, 1);
     plane.setAttribute('face', new THREE.BufferAttribute(new Float32Array(4), 1));
+    plane.setAttribute('layer', new THREE.BufferAttribute(new Float32Array(4).fill(-1), 1));
     this.cross = new THREE.Mesh(plane, blockMaterial(THREE.DoubleSide));
 
     this.spriteMaterial = this.makeSpriteMaterial(THREE.DoubleSide);
@@ -860,11 +874,48 @@ export class ViewModel implements ViewModelApi {
     if (target.kind !== 'empty') this.pending = { kind: 'empty' };
   }
 
-  setBlock(def: BlockDef | undefined) {
+  /** Hold a block (`partner`: a bed's head half, to show the bed whole). */
+  setBlock(def: BlockDef | undefined, partner?: BlockDef) {
     if (!def) return;
     const target = this.pending ?? this.held;
     if (target.kind === 'block' && target.def === def) return;
-    this.pending = { kind: 'block', def };
+    this.pending = { kind: 'block', def, partner };
+  }
+
+  /** A block model (slab, stairs, a whole bed) as geometry the size a held cube is, centred like it. */
+  private modelGeometry(def: BlockDef, partner?: BlockDef): THREE.BufferGeometry {
+    const cached = this.models.get(def.id);
+    if (cached) return cached;
+    const faces = itemFaces(def, partner);
+    const pos: number[] = [];
+    const nrm: number[] = [];
+    const uv: number[] = [];
+    const layer: number[] = [];
+    const index: number[] = [];
+    // A bed is two blocks long: shrink it to a block's length.
+    const zs = faces.flatMap((f) => f.corners.map((c) => c[2]));
+    const [z0, z1] = [Math.min(...zs), Math.max(...zs)];
+    const k = 1 / Math.max(1, z1 - z0);
+    const zc = (z0 + z1) / 2;
+    for (const f of faces) {
+      const base = pos.length / 3;
+      f.corners.forEach((c, i) => {
+        pos.push((c[0] - 0.5) * k, (c[1] - 0.5) * k, (c[2] - zc) * k);
+        nrm.push(...f.normal);
+        uv.push(...f.uv[i]);
+        layer.push(f.layer);
+      });
+      index.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setAttribute('face', new THREE.Float32BufferAttribute(new Float32Array(layer.length), 1));
+    g.setAttribute('layer', new THREE.Float32BufferAttribute(layer, 1));
+    g.setIndex(index);
+    this.models.set(def.id, g);
+    return g;
   }
 
   setLight(c: THREE.Vector3) {
@@ -928,7 +979,8 @@ export class ViewModel implements ViewModelApi {
       this.spriteMesh.visible = true;
     } else if (h.kind === 'block') {
       const def = h.def;
-      const cross = def.shape === 'cross';
+      const cross = def.small;
+      this.cube.geometry = def.parts && !cross ? this.modelGeometry(def, h.partner) : this.cubeGeometry;
       const u = this.blockMaterial.uniforms;
       (u.uLayers.value as number[]).splice(0, 6, ...def.tex);
       u.uTintMode.value = def.tint ? (def.layer === 0 ? 1 : 2) : 0;

@@ -7,6 +7,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use crate::blocks::*;
 use crate::gen::HEADER_BYTES;
 use crate::mesher::REGION_HEADER;
+use crate::shapes::shapes;
 
 /// The original block of an edit mirrored before its column loaded (filled in when it loads).
 const UNKNOWN: u8 = 255;
@@ -417,8 +418,17 @@ impl World {
         }
         let mut t = 0.0;
         loop {
-            if SOLID[self.get_or(p[0], p[1], p[2], STONE) as usize] == 1 {
-                return Some(t);
+            let b = self.get_or(p[0], p[1], p[2], STONE);
+            if SOLID[b as usize] == 1 {
+                if SHAPE[b as usize] != SHAPE_MODEL {
+                    return Some(t);
+                }
+                // A slab or a bed: only its boxes stop the ray.
+                if let Some((tb, _)) = ray_boxes(o, d, p, collision_boxes(b)) {
+                    if tb <= max_dist {
+                        return Some(tb);
+                    }
+                }
             }
             let a = if t_max[0] < t_max[1] {
                 if t_max[0] < t_max[2] {
@@ -440,8 +450,9 @@ impl World {
         }
     }
 
-    /// DDA voxel raycast. Returns (block pos, face normal, block id) of the first targetable block.
-    pub fn raycast(&self, o: [f64; 3], d: [f64; 3], max_dist: f64) -> Option<([i32; 3], [i32; 3], u8)> {
+    /// DDA voxel raycast. Returns (block pos, face normal, block id, distance) of the first
+    /// targetable block: a model (torch, slab, bed) only where the ray meets its boxes.
+    pub fn raycast(&self, o: [f64; 3], d: [f64; 3], max_dist: f64) -> Option<([i32; 3], [i32; 3], u8, f64)> {
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         if len < 1e-9 {
             return None;
@@ -466,7 +477,14 @@ impl World {
         while t <= max_dist {
             let b = self.get(p[0], p[1], p[2]);
             if b != AIR && b != WATER_B && b != LAVA_B {
-                return Some((p, normal, b));
+                if SHAPE[b as usize] != SHAPE_MODEL {
+                    return Some((p, normal, b, t));
+                }
+                if let Some((tb, n)) = ray_boxes(o, d, p, target_boxes(b)) {
+                    if tb <= max_dist {
+                        return Some((p, n, b, tb));
+                    }
+                }
             }
             let a = if t_max[0] < t_max[1] {
                 if t_max[0] < t_max[2] {
@@ -489,26 +507,83 @@ impl World {
     }
 }
 
+const FULL_BOX: [[u8; 6]; 1] = [[0, 0, 0, 16, 16, 16]];
+
+/// The boxes a block collides with, in 1/16 of a block within its cell (none if it isn't
+/// solid): the whole cell, or a model's own (a slab's half, a bed 9/16 high).
 #[inline]
-fn solid_at(world: &World, x: i32, y: i32, z: i32) -> bool {
-    // Unloaded columns are solid so bodies never fall into ungenerated terrain.
-    let b = world.get_or(x, y, z, STONE);
-    SOLID[b as usize] == 1
+pub fn collision_boxes(b: u8) -> &'static [[u8; 6]] {
+    if SOLID[b as usize] == 0 {
+        return &[];
+    }
+    target_boxes(b)
+}
+
+/// The boxes you aim at in a block: the whole cell, or a model's own (a torch's stick).
+#[inline]
+pub fn target_boxes(b: u8) -> &'static [[u8; 6]] {
+    if SHAPE[b as usize] == SHAPE_MODEL {
+        if let Some(m) = &shapes().models[b as usize] {
+            return &m.bounds;
+        }
+    }
+    &FULL_BOX
+}
+
+/// A box of a cell in world coordinates: (min, max).
+#[inline]
+fn world_box(cell: [i32; 3], b: &[u8; 6]) -> ([f64; 3], [f64; 3]) {
+    let k = 1.0 / 16.0;
+    (
+        [cell[0] as f64 + b[0] as f64 * k, cell[1] as f64 + b[1] as f64 * k, cell[2] as f64 + b[2] as f64 * k],
+        [cell[0] as f64 + b[3] as f64 * k, cell[1] as f64 + b[4] as f64 * k, cell[2] as f64 + b[5] as f64 * k],
+    )
+}
+
+/// The nearest of a cell's boxes that a ray (unit `d`) meets: its distance and the normal of the
+/// face it enters (zero if the ray starts inside).
+pub fn ray_boxes(o: [f64; 3], d: [f64; 3], cell: [i32; 3], boxes: &[[u8; 6]]) -> Option<(f64, [i32; 3])> {
+    let mut best: Option<(f64, [i32; 3])> = None;
+    'boxes: for b in boxes {
+        let (lo, hi) = world_box(cell, b);
+        let (mut t0, mut t1) = (0.0f64, f64::INFINITY);
+        let mut n = [0i32; 3];
+        for a in 0..3 {
+            if d[a].abs() < 1e-12 {
+                if o[a] < lo[a] || o[a] > hi[a] {
+                    continue 'boxes;
+                }
+                continue;
+            }
+            let (ta, tb) = ((lo[a] - o[a]) / d[a], (hi[a] - o[a]) / d[a]);
+            let (near, far) = if ta < tb { (ta, tb) } else { (tb, ta) };
+            if near > t0 {
+                t0 = near;
+                n = [0; 3];
+                n[a] = if d[a] > 0.0 { -1 } else { 1 };
+            }
+            t1 = t1.min(far);
+        }
+        if t0 <= t1 && best.is_none_or(|(bt, _)| t0 < bt) {
+            best = Some((t0, n));
+        }
+    }
+    best
 }
 
 /// Whether an axis-aligned box (feet at `p`, half width `hw`, height `h`) overlaps solid blocks.
+/// Unloaded columns count as solid so bodies never fall into ungenerated terrain.
 pub fn aabb_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
-    let x0 = (p[0] - hw + EPS).floor() as i32;
-    let x1 = (p[0] + hw - EPS).floor() as i32;
-    let y0 = (p[1] + EPS).floor() as i32;
-    let y1 = (p[1] + h - EPS).floor() as i32;
-    let z0 = (p[2] - hw + EPS).floor() as i32;
-    let z1 = (p[2] + hw - EPS).floor() as i32;
-    for y in y0..=y1 {
-        for z in z0..=z1 {
-            for x in x0..=x1 {
-                if solid_at(world, x, y, z) {
-                    return true;
+    let lo = [p[0] - hw + EPS, p[1] + EPS, p[2] - hw + EPS];
+    let hi = [p[0] + hw - EPS, p[1] + h - EPS, p[2] + hw - EPS];
+    for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
+        for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
+            for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
+                for b in collision_boxes(world.get_or(x, y, z, STONE)) {
+                    let (bl, bh) = world_box([x, y, z], b);
+                    if (0..3).all(|a| bl[a] < hi[a] && bh[a] > lo[a]) {
+                        return true;
+                    }
                 }
             }
         }
@@ -516,32 +591,69 @@ pub fn aabb_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
     false
 }
 
-/// Move a box along one axis, snapping flush against the first solid block. Returns true if
+/// How near two faces may be and still count as touching rather than overlapping.
+const TOUCH: f64 = 1e-7;
+
+/// Move a box along one axis, stopping flush against the first solid block (or block model box)
+/// in its way. Boxes it's already inside don't stop it, so it can always get out. Returns true if
 /// the move was blocked.
 pub fn aabb_move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, hw: f64, h: f64) -> bool {
     if delta == 0.0 {
         return false;
     }
-    let mut p = *pos;
-    p[axis] += delta;
-    if !aabb_collides(world, p, hw, h) {
-        *pos = p;
+    let min = [pos[0] - hw, pos[1], pos[2] - hw];
+    let max = [pos[0] + hw, pos[1] + h, pos[2] + hw];
+    let (mut lo, mut hi) = (min, max);
+    if delta > 0.0 {
+        hi[axis] += delta;
+    } else {
+        lo[axis] += delta;
+    }
+    let mut d = delta;
+    for y in (lo[1] - TOUCH).floor() as i32..=(hi[1] + TOUCH).floor() as i32 {
+        for z in (lo[2] - TOUCH).floor() as i32..=(hi[2] + TOUCH).floor() as i32 {
+            for x in (lo[0] - TOUCH).floor() as i32..=(hi[0] + TOUCH).floor() as i32 {
+                for b in collision_boxes(world.get_or(x, y, z, STONE)) {
+                    let (bl, bh) = world_box([x, y, z], b);
+                    if !(0..3).all(|a| a == axis || (bl[a] < max[a] - TOUCH && bh[a] > min[a] + TOUCH)) {
+                        continue;
+                    }
+                    if delta > 0.0 && bl[axis] >= max[axis] - TOUCH {
+                        d = d.min(bl[axis] - max[axis]);
+                    } else if delta < 0.0 && bh[axis] <= min[axis] + TOUCH {
+                        d = d.max(bh[axis] - min[axis]);
+                    }
+                }
+            }
+        }
+    }
+    let blocked = d != delta;
+    // Never backwards.
+    pos[axis] += if delta > 0.0 { d.max(0.0) } else { d.min(0.0) };
+    blocked
+}
+
+/// Up to this high, a walking body steps up onto what's in its way (a slab, a stair).
+pub const STEP_UP: f64 = 0.6;
+
+/// A walking box that was blocked going sideways from `start` (to `pos`) steps up onto what's in
+/// its way if that's low enough: up, across, back down. Returns true if it did.
+pub fn step_up(world: &World, pos: &mut [f64; 3], start: [f64; 3], axis: usize, delta: f64, hw: f64, h: f64) -> bool {
+    let mut p = start;
+    aabb_move_axis(world, &mut p, 1, STEP_UP, hw, h);
+    let rise = p[1] - start[1];
+    if rise <= EPS {
         return false;
     }
-    let (lo, hi) = match axis {
-        1 => (0.0, h),
-        _ => (-hw, hw),
-    };
-    if delta > 0.0 {
-        let edge = (pos[axis] + hi + delta).floor();
-        p[axis] = edge - hi - EPS * 2.0;
-    } else {
-        let edge = (pos[axis] + lo + delta).floor() + 1.0;
-        p[axis] = edge - lo + EPS * 2.0;
+    aabb_move_axis(world, &mut p, axis, delta, hw, h);
+    if (p[axis] - start[axis]).abs() <= (pos[axis] - start[axis]).abs() + EPS {
+        return false;
     }
-    if ((delta > 0.0 && p[axis] >= pos[axis]) || (delta < 0.0 && p[axis] <= pos[axis])) && !aabb_collides(world, p, hw, h) {
-        *pos = p;
+    aabb_move_axis(world, &mut p, 1, -rise, hw, h);
+    if p[1] <= start[1] + EPS {
+        return false;
     }
+    *pos = p;
     true
 }
 
@@ -716,7 +828,11 @@ impl Player {
                     continue;
                 }
             }
+            let before = self.pos;
             if self.move_axis(world, axis, d) {
+                if self.on_ground && !self.flying && step_up(world, &mut self.pos, before, axis, d, HALF_W, HEIGHT) {
+                    continue;
+                }
                 // Climb out of water onto a ledge.
                 if self.in_water && input.jump {
                     self.vel[1] = self.vel[1].max(5.0);
@@ -800,6 +916,71 @@ mod tests {
         w2.import_edits(&e);
         w2.insert_column(0, 0, &d);
         assert_eq!(w2.get(3, 200, 4), GLOWSTONE_B);
+    }
+
+    /// A flat world (3x3 columns round the origin) and the height of its first air block.
+    fn flat() -> (World, i32) {
+        let mut g = Generator::new(1);
+        g.set_flat(64.0);
+        let mut w = World::new();
+        for cz in -1..=1 {
+            for cx in -1..=1 {
+                let d = g.generate(cx, cz);
+                w.insert_column(cx, cz, &d);
+            }
+        }
+        let top = (0..256).find(|&y| w.get(8, y, 8) == AIR).unwrap();
+        (w, top)
+    }
+
+    fn walk(w: &World, p: &mut Player, wish_x: f64, secs: f64) {
+        let input = MoveInput { wish_x, wish_z: 0.0, jump: false, sneak: false, sprint: false };
+        for _ in 0..(secs * 60.0) as usize {
+            p.step(w, &input, 1.0 / 60.0);
+        }
+    }
+
+    #[test]
+    fn walks_up_slabs_and_stairs_but_not_blocks() {
+        let (mut w, top) = flat();
+        // A bottom slab, then oak stairs climbing east, then a full block past the stairs' top.
+        w.set(10, top, 8, slab_id(0, false));
+        w.set(12, top, 8, stairs_id(0, 1, false));
+        w.set(13, top + 1, 8, STONE);
+        let mut p = Player::new(8.5, top as f64, 8.5);
+        walk(&w, &mut p, 0.0, 0.5);
+        assert!(p.on_ground && (p.pos[1] - top as f64).abs() < 1e-6, "standing on the ground: {:?}", p.pos);
+        walk(&w, &mut p, 1.0, 0.6);
+        assert!(p.pos[0] > 10.4 && (p.pos[1] - (top as f64 + 0.5)).abs() < 1e-6, "on the slab: {:?}", p.pos);
+        walk(&w, &mut p, 1.0, 1.0);
+        // Up the stairs' lower step (another half), then the block stops it.
+        assert!((p.pos[1] - (top as f64 + 1.0)).abs() < 1e-6, "on the stairs: {:?}", p.pos);
+        assert!(p.pos[0] <= 13.0 - HALF_W + 1e-6 && p.pos[0] > 12.5, "stopped by the block past the stairs: {:?}", p.pos);
+        // A box sitting on the slab's top doesn't collide; one reaching into it does.
+        assert!(!aabb_collides(&w, [10.5, top as f64 + 0.5, 8.5], 0.3, 1.8));
+        assert!(aabb_collides(&w, [10.5, top as f64 + 0.4, 8.5], 0.3, 1.8));
+    }
+
+    #[test]
+    fn rays_hit_model_boxes() {
+        let (mut w, top) = flat();
+        w.set(8, top, 8, slab_id(0, false));
+        w.set(8, top, 9, TORCH_B);
+        let y = top as f64;
+        // Straight down onto the slab's top face, halfway down its cell.
+        let (p, n, b, t) = w.raycast([8.5, y + 3.0, 8.5], [0.0, -1.0, 0.0], 6.0).unwrap();
+        assert_eq!((p, n, b), ([8, top, 8], [0, 1, 0], slab_id(0, false)));
+        assert!((t - 2.5).abs() < 1e-9);
+        // Over the slab's empty upper half and past the torch's stick: nothing.
+        assert!(w.raycast([8.5, y + 0.75, 5.0], [0.0, 0.0, 1.0], 3.4).is_none());
+        assert!(w.raycast([8.05, y + 0.25, 9.5], [1.0, 0.0, 0.0], 0.2).is_none(), "beside the torch");
+        let (p, _, b, _) = w.raycast([8.5, y + 0.25, 7.2], [0.0, 0.0, 1.0], 3.0).unwrap();
+        assert_eq!((p, b), ([8, top, 8], slab_id(0, false)), "the slab's side");
+        let (p, n, b, _) = w.raycast([8.5, y + 0.5, 11.0], [0.0, 0.0, -1.0], 3.0).unwrap();
+        assert_eq!((p, n, b), ([8, top, 9], [0, 0, 1], TORCH_B), "the torch's stick");
+        // Solid rays (arrows, line of sight) pass over the slab and through the torch.
+        assert!(w.raycast_solid([8.5, y + 0.75, 5.0], [0.0, 0.0, 1.0], 6.0).is_none());
+        assert!(w.raycast_solid([8.5, y + 0.25, 5.0], [0.0, 0.0, 1.0], 6.0).is_some());
     }
 
     #[test]

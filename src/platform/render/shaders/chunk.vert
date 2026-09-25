@@ -32,7 +32,7 @@ void main() {
   vBitangent = v.bitangent;
   vLight = vec4(v.sky, v.blk, v.ao, v.tint);
   vLayer = v.layer;
-  vFlags = (v.normalIdx >= 6u ? 1u : 0u) | (v.cutout > 0.5 ? 2u : 0u);
+  vFlags = (v.normalIdx >= 6u ? 1u : 0u) | (v.cutout > 0.5 ? 2u : 0u) | (v.fine ? 4u : 0u);
   float off = uShadowParams.z * (v.normalIdx >= 6u ? 0.25 : 1.0);
   vShadowCoord = uShadowFromView * vec4(viewPos.xyz + viewRot * v.normal * off, 1.0);
 }

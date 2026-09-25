@@ -132,7 +132,7 @@ export function building(game: GameContext, opts: BuildingOptions = {}): Buildin
       const x = into ? hit.x : hit.x + hit.normal.x;
       const y = into ? hit.y : hit.y + hit.normal.y;
       const z = into ? hit.z : hit.z + hit.normal.z;
-      if (placeBlock(x, y, z, places, player)) {
+      if (canPlace({ x, y, z }, places, player) && world.placeBlock(x, y, z, places, { by: player, against: hit })) {
         player.inventory.take(held.item, 1);
         swing(player);
       }

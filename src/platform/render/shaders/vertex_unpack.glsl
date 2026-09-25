@@ -1,8 +1,11 @@
 // ---------------------------------------------------------------------------------------------
 // Packed chunk vertex decoding + vertex animation (shared by terrain, water and shadow passes).
 //   w0: x(5) | z(5)<<5 | y(9)<<10 | normal(3)<<19 | ao(2)<<22 | anim(2)<<24 | tint<<26
-//       | xmax<<27 | zmax<<28 | cutout<<29
-//   w1: layer(12) | sky*4(6)<<12 | block*4(6)<<18
+//       | xmax<<27 | zmax<<28 | cutout<<29 | fine<<30 | uvt.0<<31
+//   w1: layer(10) | uvt.1-2<<10 | sky*4(6)<<12 | block*4(6)<<18 | fx(4)<<24 | fz(4)<<28
+// A fine vertex (block models: torches, slabs, stairs, beds) is its block's cell (x 4 bits, z 4, y 8)
+// and an offset into it in sixteenths, 0..16 (see `mesher.rs`), so its texture maps exactly within
+// the block's own tile. uvt turns the texture: 1 swaps u and v, 2 negates u, 4 negates v.
 // ---------------------------------------------------------------------------------------------
 in uvec2 aData;
 
@@ -23,6 +26,7 @@ struct Vtx {
   float tint;
   float cutout;
   float plantV;  // 0 for cross-plane plants, -1 for cube faces
+  bool fine;     // a block model's face (torch, slab, bed): part of one texture tile
 };
 
 vec3 windOffset(vec3 w, float amount) {
@@ -42,12 +46,25 @@ Vtx unpackVertex(vec3 chunkOrigin) {
   uint w1 = aData.y;
   vec3 p = vec3(float(w0 & 31u), float((w0 >> 10u) & 511u), float((w0 >> 5u) & 31u));
   uint n = (w0 >> 19u) & 7u;
-  uint anim = (w0 >> 24u) & 3u;
+  bool fine = ((w0 >> 30u) & 1u) == 1u;
+  v.fine = fine;
+  uint anim = fine ? 0u : (w0 >> 24u) & 3u;
+  uint uvt = ((w0 >> 31u) & 1u) | (((w1 >> 10u) & 3u) << 1u);
+  // Where in its block's cell a fine vertex is, 0..1.
+  vec3 inCell = vec3(0.0);
+  if (fine) {
+    p = vec3(float(w0 & 15u), float((w0 >> 10u) & 255u), float((w0 >> 5u) & 15u));
+    uint ox = ((w1 >> 24u) & 15u) | (((w0 >> 4u) & 1u) << 4u);
+    uint oy = ((w0 >> 24u) & 3u) | (((w0 >> 27u) & 3u) << 2u) | (((w0 >> 18u) & 1u) << 4u);
+    uint oz = ((w1 >> 28u) & 15u) | (((w0 >> 9u) & 1u) << 4u);
+    inCell = vec3(float(ox), float(oy), float(oz)) / 16.0;
+    p += inCell;
+  }
   v.normalIdx = n;
   v.ao = float((w0 >> 22u) & 3u) / 3.0;
   v.tint = float((w0 >> 26u) & 1u);
   v.cutout = float((w0 >> 29u) & 1u);
-  v.layer = w1 & 4095u;
+  v.layer = w1 & 1023u;
   v.sky = float((w1 >> 12u) & 63u) / 60.0;
   v.blk = float((w1 >> 18u) & 63u) / 60.0;
   v.plantV = -1.0;
@@ -85,7 +102,36 @@ Vtx unpackVertex(vec3 chunkOrigin) {
     v.plantV = 0.0;
   }
 
-  if (n < 6u) {
+  if (uvt != 0u) {
+    if ((uvt & 1u) != 0u) {
+      v.uv = v.uv.yx;
+      vec3 t = v.tangent;
+      v.tangent = v.bitangent;
+      v.bitangent = t;
+    }
+    if ((uvt & 2u) != 0u) {
+      v.uv.x = -v.uv.x;
+      v.tangent = -v.tangent;
+    }
+    if ((uvt & 4u) != 0u) {
+      v.uv.y = -v.uv.y;
+      v.bitangent = -v.bitangent;
+    }
+  }
+
+  if (fine) {
+    // Its block's own tile, from the cell (0..1 along each axis, turned as the texture is),
+    // kept a hair inside it so it never wraps round to the tile's far edge.
+    v.uv = vec2(dot(inCell, v.tangent), dot(inCell, v.bitangent));
+    v.uv += vec2(v.tangent.x + v.tangent.y + v.tangent.z < 0.0 ? 1.0 : 0.0, v.bitangent.x + v.bitangent.y + v.bitangent.z < 0.0 ? 1.0 : 0.0);
+    v.uv = clamp(v.uv, 1.0 / 1024.0, 1.0 - 1.0 / 1024.0);
+    // Widen a hair along the face at the block's edges, like cube faces, so there are no cracks
+    // between it and the next block's faces.
+    vec3 edge = step(0.999, inCell) - step(inCell, vec3(0.001));
+    p += edge * (vec3(1.0) - abs(v.normal)) * 0.0022;
+  }
+
+  if (n < 6u && !fine) {
     // Expand cube faces by a hair along their plane to close T-junction cracks.
     const float EPS = 0.0022;
     float us = ((w0 >> 27u) & 1u) == 1u ? EPS : -EPS;

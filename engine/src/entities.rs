@@ -5,7 +5,7 @@
 //! client maps them as `Float64Array`s over wasm memory): no per-entity calls across the boundary.
 
 use crate::blocks::*;
-use crate::world::{aabb_collides, aabb_move_axis, World};
+use crate::world::{aabb_collides, aabb_move_axis, step_up, World};
 
 /// Body buffer layout (f64 fields per body).
 pub mod body {
@@ -581,6 +581,10 @@ impl Entities {
             let vi = if axis == 0 { body::VX } else { body::VZ };
             let before = pos;
             if aabb_move_axis(world, &mut pos, axis, b[vi] * dt, hw, hh) {
+                // Walk up onto a slab or a stair.
+                if b[body::ON_GROUND] > 0.5 && mode != 2 && step_up(world, &mut pos, before, axis, b[vi] * dt, hw, hh) {
+                    continue;
+                }
                 b[body::BLOCKED] = 1.0;
                 // Auto-step: hop up a 1-block ledge when walking into it.
                 if b[body::ON_GROUND] > 0.5 && mode != 2 {

@@ -1,8 +1,9 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
+import type { RayHit } from '../api/types';
 import type { Registry } from '../world/registry';
 import type { PlayerSim } from './player';
 import type { Presentation } from './present';
-import type { WorldHost } from './world';
+import { rayHit } from './worldquery';
 
 const REACH = 6.5;
 
@@ -17,13 +18,14 @@ export class CreativeBuild {
   private placeTimer = 0;
 
   constructor(
-    private host: WorldHost,
     private world: VoxelWorld,
     private registry: Registry,
     private present: Presentation,
     private player: PlayerSim,
-    /** Break a block with debris and the plant on top (the simulation's `world.breakBlock`). */
+    /** Break a block with debris and what hangs on it (the simulation's `world.breakBlock`). */
     private breakBlock: (x: number, y: number, z: number) => boolean,
+    /** Place a block against the face aimed at (the simulation's `world.placeBlock`). */
+    private placeBlock: (x: number, y: number, z: number, id: number, against: RayHit) => boolean,
   ) {
     const names = ['grass_block', 'stone', 'oak_planks', 'cobblestone', 'glass', 'oak_log', 'torch', 'glowstone', 'bricks'];
     this.hotbar = names.map((n) => registry.byName.get(n)?.id ?? 1);
@@ -42,6 +44,13 @@ export class CreativeBuild {
     if (this.registry.blocks[id]?.placeable) this.hotbar[this.selected] = id;
   }
 
+  /** The block to pick for one in the world: its family's (a wall torch is a torch). */
+  private pickable(id: number): number | null {
+    const def = this.registry.blocks[id];
+    const d = def && this.registry.byName.get(def.name);
+    return d?.placeable ? d.id : null;
+  }
+
   private swing() {
     this.player.swings++;
     this.present.send(this.player.id, 'view', 'use', [1]);
@@ -52,8 +61,7 @@ export class CreativeBuild {
     this.placeTimer = Math.max(0, this.placeTimer - dt);
     const eye = this.player.eye;
     const d = this.player.look;
-    const r = this.world.raycast(eye.x, eye.y, eye.z, d.x, d.y, d.z, REACH);
-    const t = r[0] ? { x: r[1], y: r[2], z: r[3], nx: r[4], ny: r[5], nz: r[6], id: r[7] } : null;
+    const t = rayHit(this.world, eye, d, REACH);
     this.present.send(this.player.id, 'hud', 'highlight', [t && { x: t.x, y: t.y, z: t.z }]);
     const input = this.player.input;
     if (!input.active) return;
@@ -64,7 +72,7 @@ export class CreativeBuild {
     if (input.buttonPressed(0)) this.swing();
     if (t && (input.buttonPressed(0) || (input.button(0) && this.breakTimer <= 0))) {
       if (!input.buttonPressed(0)) this.swing();
-      const def = this.registry.blocks[t.id];
+      const def = this.registry.blocks[t.block];
       if (def && def.name !== 'bedrock') this.breakBlock(t.x, t.y, t.z);
       this.breakTimer = input.buttonPressed(0) ? 0.3 : 0.22;
     }
@@ -74,37 +82,18 @@ export class CreativeBuild {
       this.placeTimer = input.buttonPressed(2) ? 0.3 : 0.2;
     }
     if (t && input.buttonPressed(1)) {
-      const def = this.registry.blocks[t.id];
-      if (def?.placeable) {
-        const at = this.hotbar.indexOf(t.id);
+      const id = this.pickable(t.block);
+      if (id !== null) {
+        const at = this.hotbar.indexOf(id);
         if (at >= 0) this.select(at);
-        else this.hotbar[this.selected] = t.id;
+        else this.hotbar[this.selected] = id;
       }
     }
   }
 
-  private place(t: { x: number; y: number; z: number; nx: number; ny: number; nz: number; id: number }) {
-    const id = this.selectedBlock;
-    const def = this.registry.blocks[id];
-    if (!def) return;
-    const hitDef = this.registry.blocks[t.id];
-    let x = t.x + t.nx;
-    let y = t.y + t.ny;
-    let z = t.z + t.nz;
-    if (hitDef?.replaceable) {
-      x = t.x;
-      y = t.y;
-      z = t.z;
-    }
-    if (y < 0 || y > 255) return;
-    const cur = this.world.get_block(x, y, z);
-    const curDef = this.registry.blocks[cur];
-    if (cur === 255 || (curDef && !curDef.replaceable)) return;
-    if (def.solid && this.world.player_overlaps(x, y, z)) return;
-    if (def.shape === 'cross') {
-      const below = this.registry.blocks[this.world.get_block(x, y - 1, z)];
-      if (!below || !below.solid) return;
-    }
-    this.host.edit(x, y, z, id);
+  private place(t: RayHit) {
+    // Against the face aimed at, or into a plant's cell.
+    const into = this.registry.blocks[t.block]?.replaceable;
+    this.placeBlock(into ? t.x : t.x + t.normal.x, into ? t.y : t.y + t.normal.y, into ? t.z : t.z + t.normal.z, this.selectedBlock, t);
   }
 }

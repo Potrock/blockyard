@@ -104,7 +104,20 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant or replaceable. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four team beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant or replaceable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
+
+### Block shapes and states
+
+Not every block is a cube. Torches are sticks that stand on the floor or hang on a wall; slabs are half blocks (`oak_slab`, `stone_slab`, `cobblestone_slab`, `spruce_slab`, `birch_slab`, `stone_brick_slab`, `brick_slab`, `sandstone_slab`); stairs (`oak_stairs`, `spruce_stairs`, `birch_stairs`, `cobblestone_stairs`, `stone_brick_stairs`, `brick_stairs`) climb one way; beds (`red_bed`, `blue_bed`, `green_bed`, `yellow_bed`) are two blocks long and 9/16 high; logs lie along any axis. You walk up slabs and stairs without jumping, collide with a bed's real height, and aim past a torch or over a slab to what's behind.
+
+A block with several variants names one Minecraft style, anywhere a block goes (`setBlock`, blueprints, `placeBlock`): `'oak_stairs[facing=east,half=top]'`, `'red_bed[facing=south,part=head]'`, `'torch[facing=west]'` (on a wall, pointing west), `'oak_log[axis=x]'`, `'oak_slab[type=top]'`. States left out are the default's, and the plain name is the default variant (`'oak_stairs'` climbs north). `blockName` is the family's name (a bed's head and foot are both `red_bed`), `blockInfo(id).state` its variant (`{ facing: 'east', part: 'head' }`) and `blockInfo(id).variant` the full name, ready to pass back. A bed in a blueprint is its two halves:
+
+```ts
+bp.set(x, y, z, 'red_bed[facing=east,part=foot]');
+bp.set(x + 1, y, z, 'red_bed[facing=east,part=head]');
+```
+
+`placeBlock` with a plain name turns the block the way a player's hand would: pass `against` (the `raycast` hit being aimed at) and a torch hangs on the side of the block aimed at (or stands on the floor), a slab or stairs take the upper half when aimed at a ceiling or high on a side, a slab aimed at the open side of the same kind of slab fills it in to a full block, and a log lies along the axis aimed along. Stairs climb, and a bed's head points, toward `facing` (or the way `by` is looking). A bed takes its two cells or none. Breaking a block (`breakBlock`, explosions) takes what hangs on it or stands on it with it, and either half of a bed takes the other; each gets its own `blockBreak`. The building kit and Sandbox place this way. `RayHit.point` is where exactly a ray met a block.
 
 ## Player
 
@@ -205,7 +218,7 @@ Without `breakTime`, mining takes a Minecraft-like time by material (`defaultBre
 - **`input.consume(button | key)`** claims an input for the rest of the frame. Your game's `update` runs before the built-in systems, so a click you handle and consume doesn't also swing the sword or eat the apple.
 - **`entities.raycast(origin, dir, reach)`** finds the mob under the crosshair (stopping at blocks); `world.raycast` finds the block.
 - **`hud.highlight(block, { progress })`** outlines a block on a player's screen, with Minecraft's break cracks at `progress` 0..1. **`hud.progress(0..1)`** is a ring round the crosshair.
-- **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone. They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant or replaceable.
+- **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone; `placeBlock` turns torches, slabs, stairs, beds and logs the way the player's aim and look say (see *Block shapes and states*). They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant or replaceable.
 - **`world.explode(center, radius, { filter, by })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match).
 
 ## First-person view model
