@@ -1,6 +1,7 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type {
   AudioApi,
+  ClipOptions,
   DamageOptions,
   Entity,
   EntityApi,
@@ -57,6 +58,27 @@ export interface EntityServices {
   guard(fn: () => void): void;
   /** Props by id (what entities ride). */
   prop(id: number): Prop | null;
+  /** Host time (`SimFrame.t`). */
+  now(): number;
+}
+
+/** A model animation clip a figure plays (`animate`), as its frames carry it to every screen. */
+export interface ClipFrame {
+  /** Counts up with each request: a screen starts the clip when it changes. */
+  seq: number;
+  name: string;
+  loop: boolean;
+  fade: number;
+  layer: 'full' | 'upper' | string[];
+  speed: number;
+  /** When it began (host time, `SimFrame.t`): a screen that sees it late starts it part way through. */
+  at: number;
+}
+
+/** A clip request (`player.animate`, `entity.animate`) as frames carry it, its options filled in. */
+export function clipFrame(seq: number, name: string, opts: ClipOptions | undefined, at: number): ClipFrame {
+  const layer = opts?.layer;
+  return { seq, name, loop: opts?.loop ?? false, fade: Math.max(0, opts?.fade ?? 0.2), layer: Array.isArray(layer) ? [...layer] : (layer ?? 'full'), speed: opts?.speed ?? 1, at };
 }
 
 /** One entity as the client needs to draw it. */
@@ -94,6 +116,8 @@ export interface EntityFrame {
   sprint?: boolean;
   reloading?: boolean;
   ads?: number;
+  /** A model animation clip it's playing (`animate`). */
+  clip?: ClipFrame;
 }
 
 /** One projectile in flight (or stuck in a wall). */
@@ -143,6 +167,9 @@ class EntityImpl implements Entity {
   raised = false;
   casting = false;
   glowColor: string | null = null;
+  /** A clip it's playing (`animate`), and how many it's been asked to play. */
+  clip: ClipFrame | null = null;
+  clipSeq = 0;
   ambientTimer = 2 + Math.random() * 6;
   speedMul = 1;
 
@@ -331,10 +358,15 @@ class EntityImpl implements Entity {
     return isPlayer(target) && this.m.bodies[this.o + B.PLAYER] === this.m.s.slotOf(target);
   }
 
-  animate(name: 'attack' | 'raise' | 'cast' | 'none') {
-    this.raised = name === 'raise';
-    this.casting = name === 'cast';
-    if (name === 'attack') this.attacks++;
+  animate(name: string, opts?: ClipOptions) {
+    if (name === 'attack' || name === 'raise' || name === 'cast' || name === 'none') {
+      this.raised = name === 'raise';
+      this.casting = name === 'cast';
+      if (name === 'attack') this.attacks++;
+      if (name === 'none') this.clip = null;
+      return;
+    }
+    this.clip = clipFrame(++this.clipSeq, name, opts, this.m.s.now());
   }
 
   setSpeed(multiplier: number) {
@@ -693,6 +725,7 @@ export class EntitySim implements EntityApi {
         hurt: e.hurt,
         dying: e.alive ? -1 : e.dyingTime,
         hp: e.health / e.maxHealth,
+        clip: e.clip ?? undefined,
       });
     }
     const p = this.projectiles;

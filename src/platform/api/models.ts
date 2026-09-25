@@ -1,4 +1,4 @@
-import type { GltfSpec, HeldModelSpec, ModelPart, ModelSpec } from './types';
+import type { GltfSpec, HeldModelSpec, HumanoidJoint, ModelPart, ModelSpec } from './types';
 
 /** Origins of the built-in skins in the `builtin` entity atlas. Games bring their own (`items.atlas`). */
 export const Skins = {
@@ -56,7 +56,9 @@ export const Models = {
    * 'idle', walk: 'walk', attack: 'attack' } })`, where `zombie` is the file's address (import it
    * with `?url`). The figure plays `walk` (or `run` when it hurries) as it moves, `idle` when it
    * doesn't and `attack` when it swings, turns its `head` node to look, and holds items at its
-   * `hand` node. It faces +z, as glTF models should (`yaw` turns one that doesn't).
+   * `hand` node. It faces +z, as glTF models should (`yaw` turns one that doesn't). A model on
+   * the humanoid rig (`rig: 'humanoid'`, docs/HUMANOID.md) is animated in code instead, as its
+   * `poses` say, its skeleton named its own way if `joints` says how.
    */
   gltf(url: string, opts: Omit<GltfSpec, 'url'> & { scale?: number } = {}): ModelSpec {
     const { scale, ...rest } = opts;
@@ -78,6 +80,41 @@ export const Models = {
       parts.push({ name: `legL${i}`, size: [16, 2, 2], uv: add(o, [18, 0]), pivot: [3, 9, z], offset: [-1, -1, -1], rotation: [0, yaws[i], 0.6], mirror: true });
     });
     return { rig: 'spider', parts, atlas: opts.atlas ?? 'builtin', scale: opts.scale ?? 1 };
+  },
+};
+
+/**
+ * Joint maps for skeletons named other ways (`GltfSpec.joints`): `Models.gltf(url, { rig:
+ * 'humanoid', joints: HumanoidJoints.mixamo() })`.
+ */
+export const HumanoidJoints = {
+  /**
+   * A Mixamo character (as exported to glTF: `mixamorig:Hips`, `mixamorig:LeftArm` …; some files
+   * say `mixamorig1:` or the like). The chest is `Spine2`; the shoulder bones ride along with it.
+   */
+  mixamo(prefix = 'mixamorig:'): Partial<Record<HumanoidJoint, string>> {
+    const side = (s: 'Left' | 'Right') => ({ upperArm: `${prefix}${s}Arm`, lowerArm: `${prefix}${s}ForeArm`, hand: `${prefix}${s}Hand`, upperLeg: `${prefix}${s}UpLeg`, lowerLeg: `${prefix}${s}Leg`, foot: `${prefix}${s}Foot` });
+    const L = side('Left');
+    const R = side('Right');
+    return {
+      hips: `${prefix}Hips`,
+      spine: `${prefix}Spine`,
+      chest: `${prefix}Spine2`,
+      neck: `${prefix}Neck`,
+      head: `${prefix}Head`,
+      upperArmL: L.upperArm,
+      lowerArmL: L.lowerArm,
+      handL: L.hand,
+      upperArmR: R.upperArm,
+      lowerArmR: R.lowerArm,
+      handR: R.hand,
+      upperLegL: L.upperLeg,
+      lowerLegL: L.lowerLeg,
+      footL: L.foot,
+      upperLegR: R.upperLeg,
+      lowerLegR: R.lowerLeg,
+      footR: R.foot,
+    };
   },
 };
 

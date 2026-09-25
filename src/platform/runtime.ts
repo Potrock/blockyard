@@ -838,6 +838,7 @@ export class Runtime {
         sprint: p.sprinting,
         reloading: gunUp && (p.hand.gun?.reload ?? -1) >= 0,
         ads: gunUp ? (p.hand.gun?.aim ?? 0) : 0,
+        clip: p.clip ?? undefined,
       });
       if (mine) continue;
       if (!p.dead) this.targets.push({ id: p.id, x: p.x, y: p.y + (p.sliding ? 0.55 : p.sneaking ? 0.95 : 1.25), z: p.z });
@@ -1250,11 +1251,11 @@ export class Runtime {
       }
     }
     // A humanoid model: their first-person arms are its forearms and fists (once its file is here), fitted by its `firstPerson`.
-    const body = model?.gltf && (model.gltf.rig === 'humanoid' || !model.gltf.clips) ? model.gltf.url : '';
+    const body = model?.gltf && (model.gltf.rig === 'humanoid' || model.gltf.joints || !model.gltf.clips) ? model.gltf.url : '';
     const fit = body ? model!.gltf!.firstPerson : undefined;
-    const bodyKey = fit ? `${body}|${JSON.stringify(fit)}` : body;
+    const bodyKey = body ? `${body}|${JSON.stringify([fit ?? null, model!.gltf!.joints ?? null, model!.gltf!.poses?.heldScale ?? null])}` : '';
     if (bodyKey !== this.shown.humanoid) {
-      const arms = body ? this.graphics.gltf.humanoidArms(body) : null;
+      const arms = body ? this.graphics.gltf.humanoidArms(model!.gltf!) : null;
       if (!body || arms) {
         this.held.setHumanoidArms(arms, fit);
         this.shown.humanoid = bodyKey;
@@ -1488,7 +1489,7 @@ export class Runtime {
     }
     // A server's game runs on while this client is paused: its figures keep walking.
     if (f.players.length < 2) this.targets = [];
-    this.entityView.sync(f.players.length > 1 || this.view.thirdPerson ? [...f.entities, ...this.avatars(f, me)] : f.entities, f.projectiles, dt, this.server ? started : running);
+    this.entityView.sync(f.players.length > 1 || this.view.thirdPerson ? [...f.entities, ...this.avatars(f, me)] : f.entities, f.projectiles, dt, this.server ? started : running, f.t);
     // A controller rumbles when we're hurt.
     if (me.health < this.lastHealth && this.lastHealth > 0 && this.input.device === 'pad' && this.settings.vibration) rumble(0.55, 0.3, 170);
     this.lastHealth = me.health;

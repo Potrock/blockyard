@@ -1,11 +1,16 @@
 /**
  * Development: a humanoid model (docs/HUMANOID.md) in a row of poses, animated by the platform's
  * own rig code, lit simply. `/tools/rig.html?model=<glb url>&t=<seconds>&view=front|side|34`
- * (`t` freezes time for a screenshot; guns come from Call of Blocky's models).
+ * `&poses=<names>` (`t` freezes time for a screenshot; guns come from Call of Blocky's models).
+ * `joints=mixamo` (or a JSON joint map) for a skeleton named its own way; `style=<JSON>` for
+ * `HumanoidPoses`; the poses ending in a clip's name (`wave`, `cheer`) play the model's clip.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { HELD_SCALE, HumanoidRig, type HeldInfo } from '../src/platform/client/humanoid';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { HumanoidJoints } from '../src/platform/api/models';
+import type { ClipOptions, HumanoidJoint, HumanoidPoses } from '../src/platform/api/types';
+import { HumanoidRig, type HeldInfo } from '../src/platform/client/humanoid';
 import type { AnimState } from '../src/platform/render/entities';
 
 const q = new URLSearchParams(location.search);
@@ -13,6 +18,8 @@ const MODEL = q.get('model') ?? '/src/games/gallery/models/mannequin.glb';
 const FREEZE = q.has('t') ? Number(q.get('t')) : null;
 const VIEW = q.get('view') ?? '34';
 const GUNS = '/src/games/callofblocky/models/';
+const JOINTS: Partial<Record<HumanoidJoint, string>> | undefined = q.get('joints') === 'mixamo' ? HumanoidJoints.mixamo() : q.has('joints') ? JSON.parse(q.get('joints')!) : undefined;
+const STYLE: HumanoidPoses | undefined = q.has('style') ? JSON.parse(q.get('style')!) : undefined;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(1);
@@ -36,7 +43,7 @@ floor.receiveShadow = true;
 scene.add(floor);
 
 const base = (): AnimState => ({ walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 1, stance: 0, speed: 0, moveX: 0, moveZ: 1, ads: 0, shotT: 9 });
-interface Pose { name: string; gun: string | null; state: (t: number) => Partial<AnimState> }
+interface Pose { name: string; gun: string | null; state: (t: number) => Partial<AnimState>; clip?: { name: string } & ClipOptions }
 const POSES: Pose[] = [
   { name: 'idle rifle', gun: 'rifle', state: () => ({}) },
   { name: 'look up', gun: 'rifle', state: () => ({ headPitch: -0.6 }) },
@@ -60,6 +67,11 @@ const POSES: Pose[] = [
   { name: 'katana swing', gun: 'katana', state: (t) => ({ attackT: (t % 0.8) * 0.5 }) },
   { name: 'unarmed walk', gun: null, state: () => ({ walkAmount: 1, speed: 4, aim: 0 }) },
   { name: 'dying', gun: 'rifle', state: (t) => ({ dying: 1, time: t }) },
+  { name: 'wave', gun: null, state: () => ({ aim: 0 }), clip: { name: 'wave', layer: 'upper', loop: true } },
+  { name: 'walk wave', gun: null, state: () => ({ walkAmount: 1, speed: 4, aim: 0 }), clip: { name: 'wave', layer: 'upper', loop: true } },
+  { name: 'rifle wave', gun: 'rifle', state: () => ({}), clip: { name: 'wave', layer: ['upperArmR'], loop: true } },
+  { name: 'cheer', gun: null, state: () => ({ aim: 0 }), clip: { name: 'cheer', loop: true } },
+  { name: 'crouch cheer', gun: null, state: () => ({ stance: 1, aim: 0 }), clip: { name: 'cheer', layer: 'upper', loop: true } },
 ];
 
 const loader = new GLTFLoader();
@@ -76,14 +88,16 @@ async function main() {
   frameCamera(cols);
   shown.forEach((pose, i) => {
     const root = new THREE.Group();
-    const copy = model.scene.clone(true);
+    const copy = cloneSkinned(model.scene);
     copy.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) {
         m.castShadow = true;
+        m.frustumCulled = false;
         const mat = m.material as THREE.MeshStandardMaterial;
         m.material = mat.clone();
-        (m.material as THREE.MeshStandardMaterial).flatShading = true;
+        // Rigid parts faceted; a skin smooth.
+        (m.material as THREE.MeshStandardMaterial).flatShading = !(m as THREE.SkinnedMesh).isSkinnedMesh;
       }
     });
     root.add(copy);
@@ -91,15 +105,14 @@ async function main() {
     // Turned to show the side (its right, the gun side), or three-quarters.
     root.rotation.y = VIEW === 'side' ? -Math.PI / 2 : VIEW === 'back' ? Math.PI : VIEW === '34' ? -0.6 : 0;
     scene.add(root);
-    const nodes = new Map<string, THREE.Object3D>();
-    copy.traverse((o) => o.name && !nodes.has(o.name) && nodes.set(o.name, o));
-    const rig = new HumanoidRig(nodes);
+    const rig = new HumanoidRig(copy, { joints: JOINTS, poses: STYLE, clips: model.animations });
+    if (pose.clip) rig.play({ loop: false, fade: 0.2, layer: 'full', speed: 1, ...pose.clip, elapsed: 0 });
     if (pose.gun) {
       const g = guns.get(pose.gun)!.clone(true);
       g.traverse((o) => ((o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).castShadow = true) : null));
       const point = (n: string) => g.getObjectByName(n)?.position.clone();
       const box = new THREE.Box3().setFromObject(g);
-      const info: HeldInfo = { kind: pose.gun === 'katana' ? 'melee' : 'gun', grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z, scale: HELD_SCALE };
+      const info: HeldInfo = { kind: pose.gun === 'katana' ? 'melee' : 'gun', grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z };
       rig.hold(g, info);
     }
     const label = document.createElement('span');

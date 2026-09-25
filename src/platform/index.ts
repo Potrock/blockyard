@@ -9,7 +9,7 @@
  */
 export * from './api/types';
 export { Blueprint } from './api/blueprint';
-export { Models, Skins, HeldModels } from './api/models';
+export { Models, Skins, HeldModels, HumanoidJoints } from './api/models';
 export { Behaviors } from './api/behaviors';
 export * as vec from './api/vec';
 export * as math from './api/math';

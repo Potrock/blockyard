@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { GltfSpec, HeldModelSpec, ModelSpec } from '../api/types';
 import type { SharedUniforms } from '../render/pipeline';
 import { Shaders } from '../render/shaders';
 import type { AnimState, Figure } from '../render/entities';
-import { HumanoidRig, type HeldInfo } from './humanoid';
+import { ClipLayer, type ClipPlay } from './clips';
+import { HELD_SCALE, HumanoidRig, resolvePoses, rigFrames, type HeldInfo, type RigFrames } from './humanoid';
 
 /** A model without an emissive map glows nowhere. */
 const BLACK = (() => {
@@ -83,6 +85,8 @@ export interface HumanoidArms {
   L: HumanoidArm;
 }
 const POINTS: ItemPoint[] = ['grip', 'grip2', 'muzzle', 'sight', 'mag'];
+const ARM_PARTS = ['upperArmL', 'lowerArmL', 'handL', 'upperArmR', 'lowerArmR', 'handR'] as const;
+type ArmPart = (typeof ARM_PARTS)[number];
 
 const DEG = Math.PI / 180;
 
@@ -96,6 +100,7 @@ export class GltfLibrary {
   private files = new Map<string, File>();
   private loader = new GLTFLoader();
   private shadows = new Map<THREE.Texture, THREE.RawShaderMaterial>();
+  private skinShadows = new Map<THREE.Texture, THREE.RawShaderMaterial>();
   private swatches = new Map<string, THREE.Texture>();
   private items = new Map<string, ItemMesh>();
   private arms = new Map<string, HumanoidArms | null>();
@@ -252,75 +257,162 @@ export class GltfLibrary {
   }
 
   /**
-   * A humanoid model's forearms and fists (docs/HUMANOID.md), for its player's first-person view:
-   * each side's forearm (in its elbow joint's space, without the hand) and fist (in its wrist's
-   * space), a mesh per material, with where the fist holds and how long the forearm is. Null while
-   * the file is coming, or if the model isn't a humanoid.
+   * A humanoid model's arms (docs/HUMANOID.md), for its player's first-person view: each side's
+   * upper arm, forearm and fist, each in its joint's space as the rig has it (standing straight,
+   * the arm hanging, its bone along -y), a mesh per material, with where the elbow and wrist are
+   * and where (and how) the fist holds. A skinned model's arms are cut into rigid pieces (each
+   * triangle goes with the bone that moves it most). Sized for its `heldScale`: first person
+   * draws guns at the platform's size, so arms made for bigger guns are drawn smaller. Null
+   * while the file is coming, or if the model isn't a humanoid.
    */
-  humanoidArms(url: string): HumanoidArms | null {
-    const g = this.get(url);
+  humanoidArms(spec: GltfSpec | string): HumanoidArms | null {
+    const src = typeof spec === 'string' ? { url: spec } : spec;
+    const g = this.get(src.url);
     if (!g) return null;
-    const key = `arms|${url}`;
+    const k = HELD_SCALE / resolvePoses(src.poses).heldScale;
+    const key = `arms|${src.url}|${JSON.stringify(src.joints ?? null)}|${k}`;
     const hit = this.arms.get(key);
     if (hit !== undefined) return hit;
-    const node = (n: string) => g.scene.getObjectByName(n) ?? null;
-    const side = (s: 'L' | 'R'): HumanoidArm | null => {
-      const upper = node(`upperArm${s}`);
-      const lower = node(`lowerArm${s}`);
-      const hand = node(`hand${s}`);
-      if (!upper || !lower || !hand) return null;
-      const grip = node(`grip${s}`);
-      g.scene.updateMatrixWorld(true);
-      return {
-        upper: this.meshesIn(upper, lower),
-        forearm: this.meshesIn(lower, hand),
-        fist: this.meshesIn(hand, null),
-        elbow: lower.position.clone(),
-        wrist: hand.position.clone(),
-        grip: grip ? grip.position.clone() : new THREE.Vector3(0, -0.085, 0.015),
-        gripQ: grip ? grip.quaternion.clone() : new THREE.Quaternion(),
-      };
-    };
-    const R = side('R');
-    const L = side('L');
-    const out = R && L ? { R, L } : null;
+    const f = rigFrames(g.scene, src.joints);
+    let out: HumanoidArms | null = null;
+    if (f) {
+      const pieces = this.armPieces(g.scene, f, k);
+      const side = (s: 'L' | 'R'): HumanoidArm => ({
+        upper: pieces[`upperArm${s}`],
+        forearm: pieces[`lowerArm${s}`],
+        fist: pieces[`hand${s}`],
+        elbow: new THREE.Vector3().subVectors(f.straight[`lowerArm${s}`], f.straight[`upperArm${s}`]).multiplyScalar(k),
+        wrist: new THREE.Vector3().subVectors(f.straight[`hand${s}`], f.straight[`lowerArm${s}`]).multiplyScalar(k),
+        grip: f.grip[s].p.clone().multiplyScalar(k),
+        gripQ: f.grip[s].q.clone(),
+      });
+      out = { R: side('R'), L: side('L') };
+    }
     this.arms.set(key, out);
     return out;
   }
 
-  /** A node's meshes (leaving out one of its children, and all under it) in the node's own space, a geometry per material. */
-  private meshesIn(root: THREE.Object3D, skip: THREE.Object3D | null): ItemMesh[] {
-    const inverse = root.matrixWorld.clone().invert();
-    const byMat = new Map<THREE.Material, THREE.BufferGeometry[]>();
-    const visit = (o: THREE.Object3D) => {
-      if (o === skip) return;
-      const mesh = o as THREE.Mesh;
-      if (mesh.isMesh) {
-        const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.Material;
-        const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
-        const geo = new THREE.BufferGeometry();
-        const n = src.getAttribute('position').count;
-        geo.setAttribute('position', src.getAttribute('position').clone());
-        geo.setAttribute('normal', src.getAttribute('normal')?.clone() ?? new THREE.Float32BufferAttribute(new Float32Array(n * 3), 3));
-        geo.setAttribute('uv', src.getAttribute('uv')?.clone() ?? new THREE.Float32BufferAttribute(new Float32Array(n * 2), 2));
-        geo.applyMatrix4(inverse.clone().multiply(mesh.matrixWorld));
-        if (!src.getAttribute('normal')) geo.computeVertexNormals();
-        const list = byMat.get(mat) ?? [];
-        list.push(geo);
-        byMat.set(mat, list);
-      }
-      for (const c of o.children) visit(c);
-    };
-    visit(root);
-    const out: ItemMesh[] = [];
-    for (const [mat, parts] of byMat) {
-      const m = mat as THREE.MeshStandardMaterial;
-      const geometry = mergeGeometries(parts);
-      for (const p of parts) p.dispose();
-      geometry.computeBoundingSphere();
-      out.push({ geometry, albedo: m.map ?? this.swatch(m.color ?? new THREE.Color(1, 1, 1)), emissive: m.emissiveMap ?? BLACK, surface: surfaceOf(m) });
+  /**
+   * A humanoid's arm parts as meshes, each in its joint's space standing straight (scaled by `k`),
+   * a geometry per material: a rigid part goes with the joint it hangs from, a skin's triangles
+   * each with the bone that weighs most on them (where the skin rests).
+   */
+  private armPieces(root: THREE.Object3D, f: RigFrames, k: number): Record<ArmPart, ItemMesh[]> {
+    root.updateMatrixWorld(true);
+    const toRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
+    // From the world into each part's space standing straight.
+    const toPart = {} as Record<ArmPart, THREE.Matrix4>;
+    for (const p of ARM_PARTS) {
+      const m = new THREE.Matrix4().makeRotationFromQuaternion(f.swing[p]).multiply(new THREE.Matrix4().makeTranslation(-f.at[p].x, -f.at[p].y, -f.at[p].z));
+      if (k !== 1) m.premultiply(new THREE.Matrix4().makeScale(k, k, k));
+      toPart[p] = m.multiply(toRoot);
     }
-    return out;
+    // The part a node is on: the nearest of the rig's joints at or above it, if that's an arm's.
+    const joint = new Map<THREE.Object3D, string>();
+    for (const [name, node] of Object.entries(f.nodes)) joint.set(node, name);
+    const partOf = (o: THREE.Object3D | null): ArmPart | null => {
+      for (let n = o; n; n = n.parent) {
+        const name = joint.get(n);
+        if (name) return (ARM_PARTS as readonly string[]).includes(name) ? (name as ArmPart) : null;
+      }
+      return null;
+    };
+    const byPart = new Map<ArmPart, Map<THREE.Material, THREE.BufferGeometry[]>>();
+    const add = (part: ArmPart, mat: THREE.Material, geo: THREE.BufferGeometry) => {
+      const mats = byPart.get(part) ?? new Map<THREE.Material, THREE.BufferGeometry[]>();
+      byPart.set(part, mats);
+      const list = mats.get(mat) ?? [];
+      list.push(geo);
+      mats.set(mat, list);
+    };
+    const v = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.Material;
+      const src = mesh.geometry;
+      const skin = mesh as THREE.SkinnedMesh;
+      if (!skin.isSkinnedMesh) {
+        const part = partOf(mesh);
+        if (!part) return;
+        const flat = src.index ? src.toNonIndexed() : src;
+        const geo = new THREE.BufferGeometry();
+        const count = flat.getAttribute('position').count;
+        geo.setAttribute('position', flat.getAttribute('position').clone());
+        geo.setAttribute('normal', flat.getAttribute('normal')?.clone() ?? new THREE.Float32BufferAttribute(new Float32Array(count * 3), 3));
+        geo.setAttribute('uv', flat.getAttribute('uv')?.clone() ?? new THREE.Float32BufferAttribute(new Float32Array(count * 2), 2));
+        geo.applyMatrix4(toPart[part].clone().multiply(mesh.matrixWorld));
+        if (!flat.getAttribute('normal')) geo.computeVertexNormals();
+        add(part, mat, geo);
+        return;
+      }
+      // A skin: each triangle to the part of the bone that weighs most on its corners.
+      const pos = src.getAttribute('position');
+      const nor = src.getAttribute('normal');
+      const uv = src.getAttribute('uv');
+      const bones = src.getAttribute('skinIndex');
+      const weights = src.getAttribute('skinWeight');
+      const index = src.index;
+      const boneParts = skin.skeleton.bones.map((b) => partOf(b));
+      const out = new Map<ArmPart, { p: number[]; n: number[]; t: number[] }>();
+      const normalOf = new Map<ArmPart, THREE.Matrix3>();
+      const tris = (index ? index.count : pos.count) / 3;
+      const weigh = new Map<number, number>();
+      for (let t = 0; t < tris; t++) {
+        const corners = [0, 1, 2].map((c) => (index ? index.getX(t * 3 + c) : t * 3 + c));
+        weigh.clear();
+        for (const c of corners) {
+          for (let w = 0; w < 4; w++) {
+            const b = bones.getComponent(c, w);
+            weigh.set(b, (weigh.get(b) ?? 0) + weights.getComponent(c, w));
+          }
+        }
+        let best = -1;
+        let most = 0;
+        for (const [b, w] of weigh) {
+          if (w > most) {
+            best = b;
+            most = w;
+          }
+        }
+        const part = best >= 0 ? boneParts[best] : null;
+        if (!part) continue;
+        let into = out.get(part);
+        if (!into) {
+          out.set(part, (into = { p: [], n: [], t: [] }));
+          normalOf.set(part, new THREE.Matrix3().getNormalMatrix(toPart[part].clone().multiply(skin.matrixWorld)));
+        }
+        for (const c of corners) {
+          skin.getVertexPosition(c, v).applyMatrix4(skin.matrixWorld).applyMatrix4(toPart[part]);
+          into.p.push(v.x, v.y, v.z);
+          if (nor) n.fromBufferAttribute(nor, c).applyNormalMatrix(normalOf.get(part)!);
+          else n.set(0, 1, 0);
+          into.n.push(n.x, n.y, n.z);
+          into.t.push(uv ? uv.getX(c) : 0, uv ? uv.getY(c) : 0);
+        }
+      }
+      for (const [part, a] of out) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(a.p, 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(a.n, 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(a.t, 2));
+        if (!nor) geo.computeVertexNormals();
+        add(part, mat, geo);
+      }
+    });
+    const pieces = {} as Record<ArmPart, ItemMesh[]>;
+    for (const p of ARM_PARTS) {
+      pieces[p] = [];
+      for (const [mat, parts] of byPart.get(p) ?? []) {
+        const m = mat as THREE.MeshStandardMaterial;
+        const geometry = mergeGeometries(parts);
+        for (const g of parts) g.dispose();
+        geometry.computeBoundingSphere();
+        pieces[p].push({ geometry, albedo: m.map ?? this.swatch(m.color ?? new THREE.Color(1, 1, 1)), emissive: m.emissiveMap ?? BLACK, surface: surfaceOf(m) });
+      }
+    }
+    return pieces;
   }
 
   /**
@@ -386,20 +478,25 @@ export class GltfLibrary {
     return this.files.get(url)!.gltf;
   }
 
-  /** The platform's lit material for one of a model's textures (each figure has its own: its tint and fade). */
-  material(map: THREE.Texture, emissive: THREE.Texture | null, side: THREE.Side, own: Record<string, THREE.IUniform>, surface: Surface = MATTE): THREE.RawShaderMaterial {
+  /**
+   * The platform's lit material for one of a model's textures (each figure has its own: its tint
+   * and fade); `skinned` for a skinned mesh (its bones move its vertices).
+   */
+  material(map: THREE.Texture, emissive: THREE.Texture | null, side: THREE.Side, own: Record<string, THREE.IUniform>, surface: Surface = MATTE, skinned = false): THREE.RawShaderMaterial {
     return new THREE.RawShaderMaterial({
       vertexShader: Shaders.entity.vertex,
       fragmentShader: Shaders.entity.fragment,
       glslVersion: THREE.GLSL3,
       uniforms: { ...this.shared, uAtlas: { value: map }, uEmissiveMap: { value: emissive ?? BLACK }, ...surfaceUniforms(surface), ...own },
       side,
+      ...(skinned ? { defines: { SKINNED: 1 } } : {}),
     });
   }
 
-  /** Shadows keep the texture's cut-outs (shared by every figure using the texture). */
-  shadow(map: THREE.Texture): THREE.RawShaderMaterial {
-    let m = this.shadows.get(map);
+  /** Shadows keep the texture's cut-outs (shared by every figure using the texture); a skin's are cast where its bones put it. */
+  shadow(map: THREE.Texture, skinned = false): THREE.RawShaderMaterial {
+    const cache = skinned ? this.skinShadows : this.shadows;
+    let m = cache.get(map);
     if (!m) {
       m = new THREE.RawShaderMaterial({
         vertexShader: Shaders.entityShadow.vertex,
@@ -408,8 +505,9 @@ export class GltfLibrary {
         uniforms: { uAtlas: { value: map } },
         side: THREE.DoubleSide,
         colorWrite: false,
+        ...(skinned ? { defines: { SKINNED: 1 } } : {}),
       });
-      this.shadows.set(map, m);
+      cache.set(map, m);
     }
     return m;
   }
@@ -441,7 +539,7 @@ export class GltfLibrary {
         }
       });
     }
-    for (const m of this.shadows.values()) m.dispose();
+    for (const m of [...this.shadows.values(), ...this.skinShadows.values()]) m.dispose();
     for (const t of this.swatches.values()) t.dispose();
     for (const i of this.items.values()) i.geometry.dispose();
     for (const a of this.arms.values()) for (const side of a ? [a.R, a.L] : []) for (const m of [...side.upper, ...side.forearm, ...side.fist]) m.geometry.dispose();
@@ -450,6 +548,7 @@ export class GltfLibrary {
     this.icons.clear();
     this.files.clear();
     this.shadows.clear();
+    this.skinShadows.clear();
     this.swatches.clear();
   }
 }
@@ -459,8 +558,9 @@ type Clip = 'idle' | 'walk' | 'run' | 'attack' | 'cast';
 /**
  * One copy of a glTF model: its node tree (named nodes are its pivots), the platform's materials,
  * and its animations. As an entity it plays `idle`, `walk` or `run` by how fast it goes (walking
- * in step with the ground it covers), `attack` once per swing, and turns its `head` to look; as a
- * prop it loops whichever animation it's told to.
+ * in step with the ground it covers), `attack` once per swing, and turns its `head` to look; any of
+ * its clips can be played over that (`play`); as a prop it loops whichever animation it's told
+ * to. A humanoid (docs/HUMANOID.md) is animated by the rig instead, its clips over the rig's poses.
  */
 export class GltfFigure implements Figure {
   readonly root = new THREE.Group();
@@ -479,12 +579,17 @@ export class GltfFigure implements Figure {
   private duration = new Map<THREE.AnimationAction, number>();
   /** Built on the humanoid rig: animated in code. */
   private rig: HumanoidRig | null = null;
+  /** Clips played over its animation (`play`), when it isn't a humanoid. */
+  private layer: ClipLayer | null = null;
 
   constructor(gltf: GLTF, spec: GltfSpec, scale: number, lib: GltfLibrary) {
     const inner = new THREE.Group();
     inner.scale.setScalar(scale);
     inner.rotation.y = spec.yaw ?? 0;
-    const scene = gltf.scene.clone(true);
+    // A skinned model's copy has its own skeleton, its meshes bound to its own bones.
+    let skinned = false;
+    gltf.scene.traverse((o) => (skinned ||= (o as THREE.SkinnedMesh).isSkinnedMesh === true));
+    const scene = skinned ? cloneSkinned(gltf.scene) : gltf.scene.clone(true);
     inner.add(scene);
     this.root.add(inner);
     const own: Record<string, THREE.IUniform> = {
@@ -502,22 +607,30 @@ export class GltfFigure implements Figure {
       const src = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial;
       const map = src.map ?? lib.swatch(src.color ?? new THREE.Color(1, 1, 1));
       const surface = surfaceOf(src);
-      const key = `${map.uuid}|${src.emissiveMap?.uuid ?? ''}|${surface.map?.uuid ?? ''}|${surface.metal}|${surface.rough}|${src.side ?? 0}`;
+      const skin = (mesh as THREE.SkinnedMesh).isSkinnedMesh === true;
+      const key = `${map.uuid}|${src.emissiveMap?.uuid ?? ''}|${surface.map?.uuid ?? ''}|${surface.metal}|${surface.rough}|${src.side ?? 0}${skin ? '|skin' : ''}`;
       let m = byMap.get(key);
       if (!m) {
-        m = lib.material(map, src.emissiveMap ?? null, src.side ?? THREE.FrontSide, own, surface);
+        m = lib.material(map, src.emissiveMap ?? null, src.side ?? THREE.FrontSide, own, surface, skin);
         byMap.set(key, m);
         this.materials.push(m);
       }
       if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
       mesh.material = m;
-      mesh.customDepthMaterial = lib.shadow(map);
+      mesh.customDepthMaterial = lib.shadow(map, skin);
+      if (skin) {
+        // Culled by its bounds at rest, with room for the poses its bones put it in.
+        const sm = mesh as THREE.SkinnedMesh;
+        if (!sm.geometry.boundingSphere) sm.geometry.computeBoundingSphere();
+        sm.boundingSphere = sm.geometry.boundingSphere!.clone();
+        sm.boundingSphere.radius *= 2;
+      }
     });
     this.material = this.materials[0] ?? lib.material(lib.swatch(new THREE.Color(1, 1, 1)), null, THREE.FrontSide, own);
     if (!this.materials.length) this.materials.push(this.material);
-    if ((spec.rig === 'humanoid' || !spec.clips) && HumanoidRig.fits(this.pivots)) {
-      this.rig = new HumanoidRig(this.pivots);
-      this.pivots.set('armR', this.pivots.get('handR')!);
+    if ((spec.rig === 'humanoid' || spec.joints || !spec.clips) && HumanoidRig.fits(scene, spec.joints)) {
+      this.rig = new HumanoidRig(scene, { joints: spec.joints, poses: spec.poses, clips: gltf.animations });
+      this.pivots.set('armR', this.rig.joint('handR'));
     }
     if (spec.hand) {
       const hand = this.pivots.get(spec.hand);
@@ -554,6 +667,7 @@ export class GltfFigure implements Figure {
         a.setLoop(THREE.LoopOnce, 1);
         a.clampWhenFinished = false;
       }
+      if (!this.rig) this.layer = new ClipLayer(scene, gltf.animations, (n) => this.pivots.get(n) ?? this.pivots.get(THREE.PropertyBinding.sanitizeNodeName(n)) ?? null);
     }
   }
 
@@ -562,6 +676,7 @@ export class GltfFigure implements Figure {
     if (this.rig) return this.rig.animate(s);
     const dt = this.last < 0 ? 0 : Math.max(0, Math.min(0.25, s.time - this.last));
     this.last = s.time;
+    this.layer?.reset();
     if (this.head) this.head.quaternion.copy(this.headRest);
     if (this.mixer) {
       const moving = s.walkAmount;
@@ -584,7 +699,14 @@ export class GltfFigure implements Figure {
       this.mixer.update(dt);
     }
     if (this.head && (s.headYaw || s.headPitch)) this.head.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(s.headPitch, s.headYaw, 0, 'YXZ')));
+    if (this.layer?.active) this.layer.apply(dt);
     this.root.rotation.z = s.dying * (Math.PI / 2) * 0.95;
+  }
+
+  /** Play one of its clips over its animation (`player.animate`, `entity.animate`), or null: fade out what's playing. */
+  play(clip: ClipPlay | null) {
+    if (this.rig) this.rig.play(clip);
+    else this.layer?.play(clip);
   }
 
   /** A humanoid holds things its own way. */

@@ -3,6 +3,7 @@ import type { HeldModelSpec, IconRef, ItemDefinition, ModelPart, ModelSpec, Spri
 import { Shaders } from './shaders';
 import type { SharedUniforms } from './pipeline';
 import { GltfLibrary, surfaceUniforms, type ItemMesh, type Surface } from '../client/gltf';
+import type { ClipPlay } from '../client/clips';
 import type { HeldInfo } from '../client/humanoid';
 
 /** The built-in starter sprites (16x16, `builtin` atlas, row at y = 64). Games bring the rest. */
@@ -413,6 +414,8 @@ export interface Figure {
   animate(s: AnimState): void;
   /** Hold an item its own way (a humanoid: both hands on a gun); false to hang it from `armR`. */
   hold?(mesh: THREE.Object3D | null, info: HeldInfo | null): boolean;
+  /** Play one of its model's clips over its animation (`animate`), or null: fade it out. */
+  play?(clip: ClipPlay | null): void;
   dispose(): void;
 }
 
