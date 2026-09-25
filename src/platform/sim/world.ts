@@ -27,7 +27,7 @@ export interface WorldHost {
 
 /**
  * `host`, telling `changed` about each block that changes (the `blockChange` event): each edit
- * (set, broken, placed, blown up), each block a carve takes bits out of, and on `revert` each block
+ * (set, broken, placed, blown up), each block a carve or a blast's crater takes bits out of, and on `revert` each block
  * it puts back. Only while `listening()`: with nobody listening it costs nothing (so a listener
  * should start before the world changes, in `setup`).
  */
@@ -83,6 +83,21 @@ export function watchBlocks(host: WorldHost, listening: () => boolean, changed: 
           const y = before[i + 1];
           const z = before[i + 2];
           if (w.get_block(x, y, z) !== before[i + 3] || w.damage_left(x, y, z) !== before[i + 4]) tell(x, y, z);
+        }
+      return out;
+    },
+    blast(center, radius, roughness, seed, cells) {
+      if (!listening()) return host.blast(center, radius, roughness, seed, cells);
+      // Only the blocks it's given can change: what's left of each before.
+      const before: number[] = [];
+      for (let i = 0; i + 2 < cells.length; i += 3) before.push(w.get_block(cells[i], cells[i + 1], cells[i + 2]), w.damage_left(cells[i], cells[i + 1], cells[i + 2]));
+      const out = host.blast(center, radius, roughness, seed, cells);
+      if (out.removed)
+        for (let i = 0, j = 0; i + 2 < cells.length; i += 3, j += 2) {
+          const x = cells[i];
+          const y = cells[i + 1];
+          const z = cells[i + 2];
+          if (w.get_block(x, y, z) !== before[j] || w.damage_left(x, y, z) !== before[j + 1]) tell(x, y, z);
         }
       return out;
     },

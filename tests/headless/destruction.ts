@@ -105,6 +105,8 @@ export default function destruction() {
     hurt.set(e.target, l);
   });
   const took = (p: Player) => (hurt.get(p) ?? []).reduce((n, h) => n + h.amount, 0);
+  const changed = new Set<string>();
+  game.events.on('blockChange', (e) => changed.add(`${e.x},${e.y},${e.z}`));
   const dummy = (name: string, at: Vec3): Bot => {
     const b = game.bots.add(name);
     b.teleport(at, 0, 0);
@@ -173,6 +175,10 @@ export default function destruction() {
       check(w.get_block(x, y, -6) === client.world.get_block(x, y, -6) && left === client.world.damage_left(x, y, -6), `the client's copy has the same crater at ${x},${y}`);
     }
   check(w.damage_count() > damageBefore && bitten >= 3 && taken > 4096, `a crater in the wall: ${taken} little voxels, ${gone} blocks gone, ${bitten} bitten`);
+  // Every block it bit into or blew away was told of (`blockChange`: what a nav grid follows).
+  let heard = 0;
+  for (let y = FLOOR; y <= FLOOR + 3; y++) for (let x = -4; x <= 4; x++) if (w.damage_left(x, y, -6) < 4096 || w.get_block(x, y, -6) === 0) heard += changed.has(`${x},${y},-6`) ? 1 : 0;
+  check(heard === bitten + gone, `blockChange for each block the crater changed: ${heard} of ${bitten + gone}`);
   let floorWhole = true;
   for (let x = Math.floor(ex) - 3; x <= Math.floor(ex) + 3; x++) for (let z = Math.floor(ez) - 3; z <= Math.floor(ez) + 3; z++) floorWhole &&= w.damage_left(x, FLOOR - 1, z) === 4096 && w.get_block(x, FLOOR - 1, z) === blockIdOf(sim.registry, 'stone');
   check(floorWhole, 'the floor under it is whole');

@@ -17,6 +17,7 @@ const yard = defineGame({
     const still = { spread: { hip: 0, aim: 0, move: 0, air: 0, bloom: 0 }, recoil: { up: 0, side: 0 } };
     game.items.define('pistol', { kind: 'gun', name: 'Pistol', icon: 'iron_sword', rpm: 300, damage: 10, magazine: 6, reserve: 30, reload: 0.5, ...still });
     game.items.define('rifle', { kind: 'gun', name: 'Rifle', icon: 'iron_sword', rpm: 600, auto: true, damage: 10, magazine: 20, reload: 1, ...still });
+    game.items.define('frag', { kind: 'throwable', name: 'Frag', icon: 'iron_sword', key: 'KeyG', fuse: 3, cooldown: 0, blast: { radius: 1, damage: 50 } });
     game.events.on('playerJoin', ({ player }) => {
       if (player.name === 'Late') player.freeze(true, { weapons: true });
     });
@@ -69,6 +70,14 @@ export default function freeze() {
   act({ pressed: ['KeyR'] });
   check(shots() === 0 && mag() === 6, `a locked gun fired nothing and spent nothing: ${shots()} shots, ${mag()} rounds`);
   check(a.inventory.selected === 0 && !a.reloading, `no switching or reloading while locked: slot ${a.inventory.selected}, reloading ${a.reloading}`);
+  const inAir = () => sim.ctx.items.thrown.length;
+  // Nor throwing: the key held does nothing, and a throw the screen sent anyway is turned away.
+  a.inventory.give('frag', 2);
+  act({ pressed: ['KeyG'] });
+  const idle: PlayerInput = { active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, shots: [] };
+  host.command(ann.id, { t: 'input', input: { ...idle, throws: [[1, 'frag', 0.5, 42.6, 0.5, 0, 4, 10, 0]] } });
+  step(3);
+  check(a.inventory.count('frag') === 2 && inAir() === 0, `nothing thrown while locked: ${a.inventory.count('frag')} frags, ${inAir()} in the air`);
 
   // Frozen alone: the weapons are free (as a plain freeze always was).
   a.freeze(true);
@@ -77,6 +86,9 @@ export default function freeze() {
 
   // Let go: free, and reloading shows.
   a.freeze(false);
+  host.command(ann.id, { t: 'input', input: { ...idle, throws: [[2, 'frag', 0.5, 42.6, 0.5, 0, 4, 10, 0]] } });
+  step(3);
+  check(a.inventory.count('frag') === 1 && inAir() === 1, `unlocked, a throw is taken: ${a.inventory.count('frag')} frags, ${inAir()} in the air`);
   act({ fire: true });
   check(!a.frozen && shots() === 2 && mag() === 4, `free again: ${shots()} shots, ${mag()} rounds`);
   host.command(ann.id, { t: 'input', input: { active: true, down: ['KeyR'], pressed: ['KeyR'], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, shots: [] } });
@@ -107,5 +119,5 @@ export default function freeze() {
   check(!L.api.frozen && !L.weaponsLocked, 'a restart lets everyone go');
   step(30);
   check(Math.abs(sim.ctx.clock.now - 1) < 1e-6 && Math.abs(sim.ctx.clock.total - total - 1) < 1e-6, `both run on together: ${sim.ctx.clock.now.toFixed(2)}, ${sim.ctx.clock.total.toFixed(2)}`);
-  console.log(`  locked: 0 of 3 shots, no switch or reload; a plain freeze fired; ${shots()} shots in all; frozen at join held through Play; clock.now back to 0 on restart, clock.total ${sim.ctx.clock.total.toFixed(1)} s`);
+  console.log(`  locked: 0 of 3 shots, no switch, reload or throw; a plain freeze fired; ${shots()} shots in all; frozen at join held through Play; clock.now back to 0 on restart, clock.total ${sim.ctx.clock.total.toFixed(1)} s`);
 }

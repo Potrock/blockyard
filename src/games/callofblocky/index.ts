@@ -606,7 +606,7 @@ export default defineGame({
       if (!player.bot) balanceBots(game);
     });
     game.events.on('playerDeath', ({ player, source, weapon, headshot, through }) => onDeath(game, player, source, weapon, !!headshot, through ?? 0));
-    game.events.on('shot', ({ player, from }) => {
+    game.events.on('shot', ({ player }) => {
       const f = fighters.get(player.id);
       if (f) f.firedAt = game.clock.now;
     });
