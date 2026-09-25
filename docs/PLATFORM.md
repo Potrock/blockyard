@@ -32,6 +32,10 @@ src/games/
     shop.ts items.ts    the shopkeeper's menu and everything it sells
     fireballs.ts        thrown fireballs that blast wool and wood
     art/ sounds.ts      team skins, item sprites, sounds
+  obby/                 Sky Obby: a parkour course in the void, each player on their own clock
+    index.ts            rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
+    course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
+    sounds.ts           checkpoint chime, pad boing, crumbling sand, cannons
 ```
 
 ## Hello, game

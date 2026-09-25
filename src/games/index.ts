@@ -5,9 +5,10 @@ import heartHunt from './heart-hunt';
 import starfighter from './starfighter';
 import bedwars from './bedwars';
 import skyship from './skyship';
+import obby from './obby';
 
 /** Games shown in the launcher, in order. The first is the default. */
-export const games: GameDefinition[] = [arena, starfighter, skyship, bedwars, sandbox, heartHunt];
+export const games: GameDefinition[] = [arena, starfighter, skyship, bedwars, obby, sandbox, heartHunt];
 
 /** Dev-only previews (open by id, e.g. `?game=shipyard`; not listed, not in production builds). */
 export async function devGames(): Promise<GameDefinition[]> {

@@ -174,7 +174,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
 
   objective(text: string | null) {
     this.objectiveEl.textContent = text ?? '';
-    this.objectiveEl.style.display = text ? '' : 'none';
+    // Explicitly: the stylesheet hides an empty pill by default.
+    this.objectiveEl.style.display = text ? 'block' : 'none';
   }
 
   stat(id: string, label: string, value: string | number | null) {
