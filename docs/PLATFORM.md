@@ -578,6 +578,14 @@ game.items.define('cutlass', {
 - Others see each player as the model, walking, running, swinging and holding what's in their hand at the model's `hand` node; `player.setModel(model)` gives one player their own (null: back to the game's). With a `hand` node, the player's own first-person arm is that part of the model.
 - A held model should run along +z to its tip with its handle near the origin, like the built-in ones; `rotation` (degrees about X, Y, Z) and `scale` fix one that doesn't, and `grip` is the point in the fist (in pixels, a sixteenth of a block). It's drawn in first person with the item's hold style (`sword`, `axe`, …), in other players' hands, and lying on the ground.
 - `icon: { gltf: url }` draws the item's icon from the model (a small picture from above and to the side, like an inventory's); an item whose icon is a model and has no `hold.model` is held as that model.
+- **Humanoids.** A figure built on the platform's humanoid rig needs no animations. The rig is a joint per part named `hips`, `spine`, `chest`, `neck`, `head`, `upperArmR`, `lowerArmR`, `handR` and so on, with `gripR` and `gripL` marking where the fists hold (`docs/HUMANOID.md` has the joints and the rest pose). The platform animates it in code from what it's doing:
+  - Its feet stay planted and step the way it's going, walking, running, strafing or backpedalling, and its legs bend to reach them.
+  - It crouches, slides, jumps and looks.
+  - It holds a gun in both hands, aimed where it looks, with its fists on the gun's `grip` and `grip2`. It carries the gun low across its chest to sprint, tips it to reload while the support hand fetches a magazine, and kicks with each shot.
+  - It swings a sword two-handed and falls when it dies.
+  - A player on such a model sees its own forearms and fists on the gun in first person.
+  - Give `rig: 'humanoid'` in `Models.gltf`, or leave out `clips` and a model with the joints is taken to be one. `tools/rig.html?model=<url>` (in development) shows a model in a row of poses, and `scripts/mannequin.mjs` builds a plain one to start from.
+- **Materials.** glTF's metallic-roughness is honoured, as factors or a `metallicRoughnessTexture` (G roughness, B metalness). Metal and glossy parts catch the sun and reflect the sky, on figures, held items (only a held model's first material is used) and in the first-person hand. Fully rough non-metal materials, like Blockbench's defaults, look as they always have.
 - `tests/headless/_export-models.ts` writes Blockyard's own box models out as glTF files (a node per part, the skin, and their walk, run and swing as animations). Open one in Blockbench, change it, and load it back.
 - In development, `?game=gallery` shows a room of glTF props, figures, a player model and glTF items (`src/games/gallery/`); `npm run server -- gallery` hosts it for several players.
 
