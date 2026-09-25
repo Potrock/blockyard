@@ -163,7 +163,7 @@ export interface GameContext {
   readonly camera: CameraApi;
   /** The player's keyboard and mouse (single-player shortcut for `player.input`). */
   readonly input: InputApi;
-  /** Movable objects: block builds (ships, vehicles) and glowing bolts. */
+  /** Movable objects: block builds (ships, lifts, vehicles) and glowing bolts. */
   readonly props: PropApi;
   /** Clear entities, timers, pickups and HUD, revive the player at spawn, then call `start` again. */
   restart(): void;
@@ -228,6 +228,15 @@ export interface Prop {
   readonly quaternion: MathQuaternion;
   scale: number;
   visible: boolean;
+  /**
+   * Solid, like the world's blocks (block builds only, `props.model`): players and creatures
+   * bump into it, stand on it and ride along wherever you move and turn it (a ship's deck, a
+   * lift, a moving platform), and are pushed out of its way when it runs into them; shots and
+   * lines of sight stop at it. Its solid blocks count, and it stays solid while hidden. Walking
+   * over it is smoothest turned about the vertical; a gentle tilt (a rolling deck) is walkable.
+   * Default false.
+   */
+  solid: boolean;
   /** Tint it briefly (hits). */
   flash(color?: string, seconds?: number): void;
   /**
@@ -256,7 +265,8 @@ export interface PropApi {
    * spawn as many copies as you like.
    */
   model(blueprint: Blueprint, opts?: { scale?: number; pivot?: Vec3 }): PropModel;
-  spawn(model: PropModel, opts?: { position?: Vec3; scale?: number }): Prop;
+  /** A copy of a model; `solid` makes it something to stand on (see `Prop.solid`). */
+  spawn(model: PropModel, opts?: { position?: Vec3; scale?: number; solid?: boolean }): Prop;
   /**
    * A glTF or GLB model (tables, machines, anything made in Blockbench or Blender), drawn lit and
    * shadowed like the world's blocks; spawn copies with `spawn`. Each player's screen fetches the
@@ -271,6 +281,14 @@ export interface PropApi {
    * each player's camera it grows with the distance, so it stays visible.
    */
   bolt(opts: { color: string; length?: number; width?: number; intensity?: number; flicker?: number; far?: number }): Prop;
+  /** The first solid prop along a ray (a cannonball hitting a ship's hull), within `maxDistance`. */
+  raycast(origin: Vec3, dir: Vec3, maxDistance: number): PropHit | null;
+}
+
+export interface PropHit {
+  prop: Prop;
+  distance: number;
+  point: Vec3;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -386,9 +404,9 @@ export interface WorldApi {
   blockName(id: number): string;
   /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing. Null if unknown. */
   blockInfo(block: BlockRef): BlockInfo | null;
-  /** First targetable block along a ray. */
+  /** First targetable block along a ray (blocks only: `props.raycast` finds solid props). */
   raycast(origin: Vec3, dir: Vec3, maxDistance: number): RayHit | null;
-  /** True if nothing solid blocks the straight line between two points. */
+  /** True if nothing solid (a block, a solid prop) blocks the straight line between two points. */
   lineOfSight(a: Vec3, b: Vec3): boolean;
   /** Highest non-air, non-plant block in a column (-1 if unloaded). */
   surfaceY(x: number, z: number): number;
@@ -524,6 +542,11 @@ export interface PlayerApi {
   leaveVehicle(): void;
   /** The vehicle they're driving, if any. */
   readonly vehicle: Vehicle | null;
+  /**
+   * The solid prop they're riding (`Prop.solid`): the one they stand on, or jumped from and
+   * haven't left. Null on the ground, swimming, flying.
+   */
+  readonly riding: Prop | null;
   /** Armour points, 0..20: each blocks 4% of incoming damage (Minecraft-style). Default 0. */
   armor: number;
   /** The first-person arm and held item. */
@@ -891,6 +914,8 @@ export interface Entity {
   armor: number;
   readonly alive: boolean;
   readonly onGround: boolean;
+  /** The solid prop it stands on and rides (`Prop.solid`), if any. */
+  readonly riding: Prop | null;
   /** Seconds since spawn. */
   readonly age: number;
   /** Free-form per-entity state for behaviours and games. */

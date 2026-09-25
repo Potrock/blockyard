@@ -10,6 +10,7 @@ import { EntitySim, type EntityFrame, type ProjectileFrame } from './entities';
 import { ItemSim, type PickupFrame } from './items';
 import { PlayerSim, type PlayerFrame } from './player';
 import { Presentation, type Sink } from './present';
+import { toLocal, toWorld } from './movers';
 import { PropSim, PropState, type PropFrame } from './props';
 import { rayHit, surfaceY, worldQuery } from './worldquery';
 import type { WorldHost } from './world';
@@ -145,6 +146,7 @@ export class Sim {
       pvp: o.def.player?.pvp ?? false,
       guard: (fn) => this.guard(fn),
       players: () => this.ctx.players,
+      prop: (id) => this.props.byId(id),
     });
     this.items = new ItemSim({
       ctx: () => this.ctx,
@@ -154,16 +156,39 @@ export class Sim {
         const id = world.get_block(x, y, z);
         return id !== 255 && (this.registry.blocks[id]?.solid ?? false);
       },
+      propUnder: (p, depth) => {
+        const [id, t] = world.mover_raycast(p.x, p.y, p.z, 0, -1, 0, depth);
+        return id ? { id, surface: p.y - t } : null;
+      },
+      onProp: (id, at, out) => {
+        const prop = this.props.byId(id);
+        if (!prop?.solid) return null;
+        const w = toWorld(this.props.pose(prop), at);
+        out.x = w.x;
+        out.y = w.y;
+        out.z = w.z;
+        return out;
+      },
+      propLocal: (id, at) => {
+        const prop = this.props.byId(id);
+        return prop ? toLocal(this.props.pose(prop), at) : null;
+      },
       content: o.content,
       present: this.presentation,
     });
-    this.props = new PropSim(this.registry, (b) => this.blockId(b), o.content, {
-      clock: () => this.clockNow,
-      ack: (p) => {
-        const sim = this.players.find((x) => x.api === p);
-        return sim ? { id: sim.id, seq: sim.ack } : null;
+    this.props = new PropSim(
+      this.registry,
+      (b) => this.blockId(b),
+      o.content,
+      {
+        clock: () => this.clockNow,
+        ack: (p) => {
+          const sim = this.players.find((x) => x.api === p);
+          return sim ? { id: sim.id, seq: sim.ack } : null;
+        },
       },
-    });
+      world,
+    );
     this.local = this.newPlayer(o.player?.id ?? 'local', o.player?.name ?? 'Player');
     this.players.push(this.local);
     this.roster.push(this.local.api);
@@ -211,7 +236,8 @@ export class Sim {
 
   /**
    * One tick: time of day, players move with their controls, then (while running) timers and the
-   * game's `update`, health, entities, items and props, and finally the built-in hands.
+   * game's `update` and health; props move on, solid ones carrying what rides them; then entities
+   * and items, and finally the built-in hands.
    */
   tick(dt: number, running: boolean, inputs: Record<string, PlayerInput>, premoved?: ReadonlySet<string>) {
     if (!this.env.frozen) this.env.time = (this.env.time + dt / this.env.dayLength) % 1;
@@ -225,9 +251,11 @@ export class Sim {
       this.guard(() => this.def.update?.(this.ctx, dt));
       for (const p of this.players) p.updateHealth(dt);
     }
+    this.props.update(dt);
+    // Where the game moved its solid props, what stands on them goes too (before creatures step).
+    if (this.props.carry(dt)) for (const p of this.players) p.syncState();
     this.entities.update(dt, running);
     this.items.update(dt, running);
-    this.props.update(dt);
     for (const p of this.players) {
       p.updateHands(dt, running);
       p.creative?.update(dt);
@@ -340,6 +368,7 @@ export class Sim {
       present: this.presentation,
       entities: this.entities,
       items: this.items,
+      props: this.props,
       ctx: () => this.ctx,
       emit: (k, e) => this.emit(k, e),
     });

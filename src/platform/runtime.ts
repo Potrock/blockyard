@@ -6,6 +6,8 @@ import { PageLink, SocketLink, WorkerLink, type SimLink } from './host/link';
 import { MemoryStore } from './host/store';
 import { FrameBuffer } from './client/interp';
 import { Predictor } from './client/predict';
+import { ClientMovers, propPose } from './client/movers';
+import { heading, toWorld } from './sim/movers';
 import { VehicleView } from './client/vehicle';
 import { worldQuery } from './sim/worldquery';
 import { Models, Skins } from './api/models';
@@ -141,6 +143,10 @@ export class Runtime {
   private playback: FrameBuffer | null = null;
   /** This client's own movement, predicted ahead of the server (a server, walking games). */
   private predictor: Predictor | null = null;
+  /** The solid props prediction bumps into and stands on (a server, walking games). */
+  private movers: ClientMovers | null = null;
+  /** The prop this player rides and which way it was drawn facing: their view turns with it. */
+  private rideHeading: { prop: number; heading: number } | null = null;
   /** This client's own vehicle (`player.drive`): predicted on a server, its camera and model's pose. */
   private vehicles!: VehicleView;
   /** Inputs sent to a server, numbered (prediction replays what the server hasn't applied). */
@@ -407,7 +413,10 @@ export class Runtime {
       // Two steps behind the newest frame: smooth, and about 70 ms behind the server at 30 steps a second.
       this.playback = new FrameBuffer(2 / this.server.welcome.tickRate);
       this.server.onClose = () => this.disconnected();
-      if (this.walker) this.predictor = new Predictor(this.chunks.world);
+      if (this.walker) {
+        this.predictor = new Predictor(this.chunks.world);
+        this.movers = new ClientMovers(this.chunks.world, this.content, this.registry, (b) => this.blockId(b));
+      }
     } else {
       if (inPage || !this.makeWorker) {
         this.link = new PageLink(def, { ...opts, engine: module, budget: 2, store: new MemoryStore(kept, keep) });
@@ -584,6 +593,8 @@ export class Runtime {
       this.ticking = false;
       this.playback?.push(b.frame, (b as TimedBatch).time);
       const me = this.playerId !== null ? b.frame.players.find((p) => p.id === this.playerId) : undefined;
+      // Prediction starts again from this frame: its solid props too.
+      this.movers?.sync(b.frame.props, b.frame.clock);
       if (me) {
         this.predictor?.reconcile(me);
         this.vehicles.reconcile(me);
@@ -657,6 +668,7 @@ export class Runtime {
       skin: null,
       model: null,
       color: null,
+      ride: null,
     };
   }
 
@@ -1158,7 +1170,8 @@ export class Runtime {
     const played = this.mine(f);
     // Our own player where prediction has them (a server), else as the frame says.
     const predicted = this.predictor?.shown();
-    const me = played && predicted ? { ...played, ...predicted } : played;
+    let me = played && predicted ? { ...played, ...predicted } : played;
+    if (f && me) me = this.onRide(f, me);
     if (!f || !me) {
       // The host is still starting: nothing to draw yet but the sky.
       this.present(dt, playing, t0);
@@ -1245,6 +1258,28 @@ export class Runtime {
     this.camera.updateMatrixWorld();
     this.sfx.setListener(this.camera.position, this.walker ? this.view.yaw : Math.atan2(-this.dir.x, -this.dir.z));
     this.present(dt, playing, t0);
+  }
+
+  /**
+   * On a solid prop, this player is shown where it's drawn this frame (prediction runs ahead of
+   * the frames the prop is drawn from), and their view turns as it turns.
+   */
+  private onRide(f: SimFrame, me: PlayerFrame): PlayerFrame {
+    const ride = me.ride;
+    const pose = ride && !me.vehicle ? propPose(f.props, ride.prop, f.clock) : null;
+    if (!ride || !pose) {
+      this.rideHeading = null;
+      return me;
+    }
+    const h = heading(pose.q);
+    if (this.walker && this.mode !== 'title' && this.rideHeading?.prop === ride.prop) {
+      let d = h - this.rideHeading.heading;
+      d -= Math.round(d / (Math.PI * 2)) * Math.PI * 2;
+      this.view.yaw += d;
+    }
+    this.rideHeading = { prop: ride.prop, heading: h };
+    const at = toWorld(pose, { x: ride.p[0], y: ride.p[1], z: ride.p[2] });
+    return { ...me, x: at.x, y: at.y, z: at.z };
   }
 
   private updateHand(dt: number, me: PlayerFrame) {

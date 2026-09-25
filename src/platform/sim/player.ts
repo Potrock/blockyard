@@ -76,6 +76,8 @@ export interface PlayerFrame {
   model: ModelSpec | null;
   /** Their name's colour above their figure. */
   color: string | null;
+  /** The solid prop they ride (`player.riding`), and where their feet are on it (its own space). */
+  ride: { prop: number; p: [number, number, number] } | null;
 }
 
 export interface PlayerSimParts {
@@ -89,6 +91,8 @@ export interface PlayerSimParts {
   present: Presentation;
   entities: EntitySim;
   items: ItemSim;
+  /** Props by id (what they ride). */
+  props: { byId(id: number): Prop | null };
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
 }
@@ -109,7 +113,7 @@ export class PlayerSim {
   allowFlight: boolean;
   sneaking = false;
   sprinting = false;
-  readonly state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: false, inWater: false, eyesInWater: false, inLava: false, flying: false, bob: 0, frozen: false };
+  readonly state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: false, inWater: false, eyesInWater: false, inLava: false, flying: false, bob: 0, frozen: false, ride: 0, rideX: 0, rideY: 0, rideZ: 0 };
   readonly input = new SimInput();
   readonly inventory: Inventory;
   readonly health: PlayerHealth;
@@ -275,6 +279,10 @@ export class PlayerSim {
     S.flying = st[10] > 0.5;
     S.bob = st[11];
     S.frozen = st[12] > 0.5;
+    S.ride = st[13];
+    S.rideX = st[14];
+    S.rideY = st[15];
+    S.rideZ = st[16];
   }
 
   /** Walk, sprint, sneak, jump, swim and fly from this tick's controls (or drive). */
@@ -384,6 +392,7 @@ export class PlayerSim {
       skin: this.skin,
       model: this.model,
       color: this.color,
+      ride: s.ride ? { prop: s.ride, p: [s.rideX, s.rideY, s.rideZ] } : null,
     };
   }
 
@@ -527,6 +536,9 @@ export class PlayerSim {
       },
       get vehicle() {
         return me.vehicle;
+      },
+      get riding() {
+        return me.state.ride ? me.p.props.byId(me.state.ride) : null;
       },
     };
   }

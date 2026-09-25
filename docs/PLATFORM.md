@@ -13,6 +13,9 @@ src/games/
     structure.ts        the colosseum, as a Blueprint
     art/                the mob skins and weapon sprites, painted in code into the 'arena' atlas
     sounds.ts           creature voices (audio.define)
+  skyship/              an airship crewed together: a solid prop the players walk on as it sails
+    index.ts            the helm, sailing, beacons, overboard, the HUD
+    ship.ts world.ts    the airship and the sky islands, as Blueprints
   starfighter/          a Star Fox-style dogfighter: no walking, the game flies the camera
     index.ts            waves, HUD, win/lose
     ships.ts            the fighters, as Blueprints (meshed into movable props)
@@ -352,7 +355,7 @@ export default defineGame({
 - **Math:** `import { math } from '@platform'` gives `Vector3`, `Quaternion`, `Euler`, `Matrix4` and `MathUtils`.
 - **Props** are movable objects:
   - `props.model(blueprint, { scale, pivot })` meshes a Blueprint once. The mesh uses the world's block textures, with ambient occlusion, sun shadows and glowing blocks. At `scale: 0.25`, each block is a quarter metre, which is how the Starfighter builds detailed X-wings.
-  - `props.spawn(model)` places a copy; move it through its `position` and `quaternion`. `flash(color)` tints it briefly for hits.
+  - `props.spawn(model, { solid })` places a copy; move it through its `position` and `quaternion`. `flash(color)` tints it briefly for hits. `solid: true` makes it something to stand on and ride (see *Ships, lifts and moving platforms* below).
   - `props.bolt({ color, length, width, flicker, far })` is a glowing streak along its -z, for lasers, tracers and engine flames. `flicker` makes it waver on its own; past `far` blocks from each player's camera it grows with the distance, so it stays visible.
   - `prop.attach(parent)`: it rides on another prop (engine flames on a ship, a turret on a tank), its `position` and `quaternion` now on the parent. It goes wherever the parent goes without being moved each tick, and goes when the parent is removed.
   - `prop.launch(from, velocity, { by })`: it flies in a straight line on its own on every screen, and nothing is sent while it does (moving it yourself stops that). `by` the player who fired it: on their screen it leaves their (predicted) guns when they fired.
@@ -369,6 +372,31 @@ export default defineGame({
 - `audio.loop('engine')` returns a handle whose `set({ volume, pitch })` follows the throttle (in steps: a steady engine sends nothing).
 
 `src/games/starfighter/` is the reference: the X-wing is a vehicle (`flight.ts`), the TIEs fly themselves with the same physics, and every pilot has their own HUD.
+
+## Ships, lifts and moving platforms
+
+A block build spawned `solid` is ground you can stand on that moves. Players and creatures bump into it, stand on it, and ride along wherever the game moves and turns it. When it runs into someone, it pushes them out of the way. Shots and lines of sight stop at it, and pickups dropped on it stay on it. Move it the way you move any prop, through its `position` and `quaternion`; the platform does the rest.
+
+```ts
+const deck = game.props.spawn(game.props.model(shipPlan, { pivot: { x: 6, y: 1, z: 8 } }), { solid: true });
+
+update(game, dt) {
+  s.yaw += s.turn * dt;
+  s.x -= Math.sin(s.yaw) * s.speed * dt;
+  s.z -= Math.cos(s.yaw) * s.speed * dt;
+  deck.position.set(s.x, 80 + Math.sin(game.clock.now) * 0.2, s.z); // bobbing on the swell
+  deck.quaternion.setFromEuler(new math.Euler(0, s.yaw, s.turn * 0.15)); // banking into the turn
+}
+```
+
+- **Riding.** Whoever stands on it rides it: walking, jumping, standing still or `freeze`d (a helmsman at the wheel, a cutscene). After a jump you land back on the same spot, even as it sails on. Jump or fall off and you keep its speed. `player.riding` and `entity.riding` say which prop someone is on.
+- **Online** it's predicted like walking: your own steps on deck answer at once, and you're drawn on the ship where your screen draws it, so the deck never slides under your feet. Your view turns as the ship turns.
+- **Shape.** Every solid block of the model collides; plants and liquids don't. Low lips and gentle slopes (a deck rolling a few degrees) are walked up without jumping. It stays solid while hidden (`visible = false`), which gives you an invisible wall. `prop.solid = false` turns it off. Only block models can be solid; glTF models can't.
+- **Parts.** Props attached to it (`attach`) ride with it too. A solid part attached to a solid ship is solid as well: a turret you can stand on, or a drawbridge that swings.
+- **Queries.** `props.raycast(origin, dir, reach)` finds the first solid prop along a ray (a cannonball hitting a hull). `world.lineOfSight` stops at solid props. `world.raycast` still sees only blocks.
+- **Moving it well.** Move it every tick (in `update`) rather than in jumps. A teleport carries riders with it only as far as the world between lets them go, so to jump the ship somewhere far, teleport the riders aboard too. The platform doesn't stop it hitting the world: test a few points of the hull with `world.getBlock` before you move it, the way Skyship does (`aground` in `src/games/skyship/index.ts`).
+
+`src/games/skyship/` is the reference: an airship crewed together. Whoever takes the helm (E at the wheel on the cabin roof) steers it while frozen at the wheel. The rest walk the deck, go into the cabin, and jump off onto islands to light beacons, while the ship banks, climbs and bobs under them.
 
 ## Entities
 

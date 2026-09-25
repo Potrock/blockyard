@@ -7,6 +7,14 @@ export interface ItemServices {
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   players(): readonly Player[];
   isSolid(x: number, y: number, z: number): boolean;
+  /**
+   * A solid prop just under a point (within `depth`): which, and the height of its surface there;
+   * and where a point on one is now (null once it's gone or no longer solid).
+   */
+  propUnder(p: Vec3, depth: number): { id: number; surface: number } | null;
+  onProp(id: number, at: Vec3, out: Vec3): Vec3 | null;
+  /** A world point in a prop's own space (to ride on it). */
+  propLocal(id: number, at: Vec3): Vec3 | null;
   /** Item definitions and atlases, for the client's icons and meshes. */
   content: Content;
   /** Sounds and toasts for the player who picks something up. */
@@ -122,6 +130,8 @@ class PickupImpl implements Pickup {
   readonly vel: Vec3;
   age = 0;
   settled = false;
+  /** Resting on a solid prop: which, and where on it. */
+  ride: { id: number; local: Vec3 } | null = null;
   removed = false;
   collectT = -1;
   constructor(
@@ -212,15 +222,28 @@ export class ItemSim implements ItemApi {
         p.remove();
         continue;
       }
-      // Fall and settle 0.3 above the ground.
+      // Resting on a solid prop: where it's gone (or falling, once it's gone).
+      if (p.settled && p.ride && !this.s.onProp(p.ride.id, p.ride.local, p.pos)) {
+        p.ride = null;
+        p.settled = false;
+      }
+      // Fall and settle 0.3 above the ground (or a solid prop's deck, riding it).
       if (!p.settled) {
+        const was = p.pos.y;
         p.vel.y -= 22 * dt;
         p.pos.x += p.vel.x * dt;
         p.pos.y += p.vel.y * dt;
         p.pos.z += p.vel.z * dt;
         p.vel.x *= Math.exp(-2 * dt);
         p.vel.z *= Math.exp(-2 * dt);
-        if (this.s.isSolid(Math.floor(p.pos.x), Math.floor(p.pos.y - 0.3), Math.floor(p.pos.z))) {
+        const deck = this.s.propUnder({ x: p.pos.x, y: Math.max(was, p.pos.y), z: p.pos.z }, Math.max(was, p.pos.y) - p.pos.y + 0.3);
+        if (deck) {
+          p.pos.y = deck.surface + 0.3;
+          const local = this.s.propLocal(deck.id, p.pos);
+          p.ride = local && { id: deck.id, local };
+          p.vel.x = p.vel.y = p.vel.z = 0;
+          p.settled = true;
+        } else if (this.s.isSolid(Math.floor(p.pos.x), Math.floor(p.pos.y - 0.3), Math.floor(p.pos.z))) {
           p.pos.y = Math.floor(p.pos.y - 0.3) + 1.3;
           p.vel.x = p.vel.y = p.vel.z = 0;
           p.settled = true;
@@ -256,6 +279,7 @@ export class ItemSim implements ItemApi {
       p.pos.y += (dy / d) * step;
       p.pos.z += (dz / d) * step;
       p.settled = false;
+      p.ride = null;
       p.vel.x = p.vel.y = p.vel.z = 0;
       if (d < 1.1) this.collect(p, ctx, who);
     }
