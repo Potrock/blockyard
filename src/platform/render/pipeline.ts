@@ -307,24 +307,30 @@ export class Renderer {
     if (!this.sceneRT || prev.msaa !== s.msaa || prev.renderScale !== s.renderScale) {
       this.createTargets(this.width, this.height);
     }
-    if (s.shadowRes !== (this.shadowRT?.width ?? 0)) {
+    // Shadows off keeps a 1x1 map, never drawn into: the shaders' shadow sampler must always have
+    // a depth texture that compares (with none, three.js binds one that doesn't, and every draw
+    // that samples it fails: the terrain vanished).
+    const res = Math.max(1, s.shadowRes);
+    if (res !== (this.shadowRT?.width ?? 0)) {
       this.shadowRT?.dispose();
-      this.shadowRT = null;
-      if (s.shadowRes > 0) {
-        const depth = new THREE.DepthTexture(s.shadowRes, s.shadowRes, THREE.UnsignedIntType);
-        depth.compareFunction = THREE.LessEqualCompare;
-        depth.minFilter = THREE.LinearFilter;
-        depth.magFilter = THREE.LinearFilter;
-        this.shadowRT = new THREE.WebGLRenderTarget(s.shadowRes, s.shadowRes, {
-          format: THREE.RedFormat,
-          type: THREE.UnsignedByteType,
-          depthBuffer: true,
-          depthTexture: depth,
-          generateMipmaps: false,
-        });
-      }
+      const depth = new THREE.DepthTexture(res, res, THREE.UnsignedIntType);
+      depth.compareFunction = THREE.LessEqualCompare;
+      depth.minFilter = THREE.LinearFilter;
+      depth.magFilter = THREE.LinearFilter;
+      this.shadowRT = new THREE.WebGLRenderTarget(res, res, {
+        format: THREE.RedFormat,
+        type: THREE.UnsignedByteType,
+        depthBuffer: true,
+        depthTexture: depth,
+        generateMipmaps: false,
+      });
+      // Made on the GPU now (cleared to the far plane), not at its first shadow pass.
+      const was = this.gl.getRenderTarget();
+      this.gl.setRenderTarget(this.shadowRT);
+      this.gl.clear(false, true, false);
+      this.gl.setRenderTarget(was);
     }
-    this.uniforms.uShadowMap.value = this.shadowRT?.depthTexture ?? null;
+    this.uniforms.uShadowMap.value = this.shadowRT!.depthTexture;
     const radius = s.shadowDistance;
     this.uniforms.uShadowParams.value.set(1 / Math.max(1, s.shadowRes), radius, ((2 * radius) / Math.max(1, s.shadowRes)) * 1.8, s.shadowRes > 0 ? 1 : 0);
     (this.materials.water.uniforms.uSSR as Uniform<number>).value = s.ssr ? 1 : 0;
@@ -457,7 +463,7 @@ export class Renderer {
 
     // 2. Shadow map.
     const s = this.settings;
-    if (this.shadowRT && env.lightDir.y > 0.02) {
+    if (this.shadowRT && s.shadowRes > 0 && env.lightDir.y > 0.02) {
       const m = engine.shadow_camera(
         new Float64Array([env.lightDir.x, env.lightDir.y, env.lightDir.z]),
         new Float64Array([camera.position.x, camera.position.y, camera.position.z]),
