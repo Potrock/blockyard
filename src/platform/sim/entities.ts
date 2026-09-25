@@ -234,7 +234,7 @@ class EntityImpl implements Entity {
     this.m.s.fx.damageNumber({ x: top.x, y: top.y + 0.4, z: top.z }, amount, { crit: opts.crit });
     this.m.s.fx.burst({ x: pos.x, y: pos.y + this.height * 0.6, z: pos.z }, { color: this.def.bloodColor ?? '#b3261e', count: opts.crit ? 22 : 12, speed: 3.5, size: 0.08 });
     this.m.s.audio.play(this.def.sounds?.hurt ?? 'mob_hurt', { at: pos, pitch: 0.9 + Math.random() * 0.2 });
-    const how = { weapon: opts.weapon, headshot: opts.headshot };
+    const how = { weapon: opts.weapon, headshot: opts.headshot, ...(opts.through && { through: opts.through }) };
     this.m.s.emit('entityDamage', { entity: this, amount, source: opts.source, ...how });
     if (this.health <= 0) this.die(opts.source, how);
     return true;

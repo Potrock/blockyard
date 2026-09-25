@@ -4,7 +4,7 @@ import type { Bot, BotControls, CameraApi, GameContext, GameEvents, ItemStack, M
 import { IDLE_INPUT, type PlayerInput } from '../net/protocol';
 import { Combat, type ShotWire } from './combat';
 import { moveMods, type GunRules, type Stance } from './guns';
-import type { BulletHit } from './hitscan';
+import type { BulletHit, Penetration } from './hitscan';
 import { clipFrame, type ClipFrame, type EntitySim } from './entities';
 import { PlayerHealth } from './health';
 import { SimInput } from './input';
@@ -14,6 +14,7 @@ import type { CreativeBuild } from './creative';
 import { abilityStates, copyMemory, freshMemory, resolveMovement, stepMovement, type MoveMemory, type MoveTune } from './movement';
 import type { PropState } from './props';
 import { VehicleSim } from './vehicle';
+import type { ThrowSim } from './throwing';
 
 const EYE = 1.62;
 const SNEAK_EYE = 1.27;
@@ -91,6 +92,8 @@ export interface PlayerFrame {
   clip?: ClipFrame | null;
   /** The solid prop they ride (`player.riding`), and where their feet are on it (its own space). */
   ride: { prop: number; p: [number, number, number] } | null;
+  /** Throwables: the last throw their screen made that the host has taken (or turned down). */
+  throws: number;
   /**
    * Third person (`camera.orbit`): what the camera circles (a prop or a player, by id), the point
    * on it, and the wheel's range. `seq` counts up each time the game sets it (their screen then
@@ -114,10 +117,12 @@ export interface PlayerSimParts {
   items: ItemSim;
   /** Props by id (what they ride). */
   props: { byId(id: number): Prop | null };
-  /** Guns: a bullet's path from this player (see `castBullet`). */
-  bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player): BulletHit;
+  /** Guns: a bullet's path from this player (see `castBullet`), through walls with `pen`. */
+  bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player, pen: Penetration | null): BulletHit;
   /** Guns: carve where a bullet hit a block (`Sim.carve`); null when the world's blocks don't carve. */
   carve: ((point: Vec3, dir: Vec3, opts: { radius: number; depth: number }, by: Player) => void) | null;
+  /** Throwables in the air (the host flies them and sets them off). */
+  throws: ThrowSim;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   /** Host time (`SimFrame.t`). */
@@ -249,12 +254,21 @@ export class PlayerSim {
         get stance(): Stance {
           return me.sliding ? 2 : me.sneaking ? 1 : 0;
         },
-        bullet: (from, dir, range, seen) => p.bullet(from, dir, range, seen, me.api),
+        bullet: (from, dir, range, seen, pen) => p.bullet(from, dir, range, seen, me.api, pen),
         carve: p.carve && ((point, dir, opts) => p.carve!(point, dir, opts, me.api)),
         shotSeen: (shot: ShotWire, sound: string, at: Vec3) => {
           present.send(null, 'client', 'shot', [shot], this.id);
           present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z } }], this.id);
         },
+        launch: (item, t, from, v, fuse, key, mine) => {
+          p.throws.launch(item, t, from, v, fuse, key, this.api, mine);
+          // Their figure swings its arm; everyone else hears it go (their own screen played it).
+          this.swings++;
+          const sound = t.def.sounds?.use ?? 'whoosh';
+          present.send(null, 'audio', 'play', [sound, { at: { x: from.x, y: from.y, z: from.z }, volume: 0.7 }], mine ? this.id : undefined);
+        },
+        refuse: (key) => p.throws.refuse(key, this.id),
+        now: () => p.now(),
         emit: (k, e) => p.emit(k, e),
         view: (method, power) => {
           if (method === 'swing' || method === 'use') this.swings++;
@@ -330,6 +344,8 @@ export class PlayerSim {
     this.ack = -1;
     this.lead = 0;
     this.swings = 0;
+    // Their screen counts its throws from the start.
+    this.combat.thrown = 0;
     this.speedMul = 1;
     this.sliding = false;
     this.memory = freshMemory();
@@ -489,6 +505,7 @@ export class PlayerSim {
       clip: this.clip,
       ride: s.ride ? { prop: s.ride, p: [s.rideX, s.rideY, s.rideZ] } : null,
       orbit: this.orbit,
+      throws: c.thrown,
     };
   }
 
@@ -677,6 +694,7 @@ export class PlayerSim {
         return abilityStates(me.memory, me.tune);
       },
       protect: (seconds) => this.health.protect(seconds),
+      throw: (item, opts) => this.combat.throwFromCode(item, opts),
     };
   }
 }

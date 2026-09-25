@@ -299,6 +299,23 @@ const VOICES: Record<BuiltinSound, Voice> = {
   alarm(this: Sfx, ctx, out, t, p) {
     for (let i = 0; i < 3; i++) tone(ctx, out, 'square', (i % 2 ? 520 : 760) * p, (i % 2 ? 520 : 760) * p, t + i * 0.16, 0.14, 0.12, 2200);
   },
+  // Something small and hard knocking on the ground (a grenade bouncing).
+  bounce(this: Sfx, ctx, out, t, p) {
+    tone(ctx, out, 'triangle', 520 * p, 300 * p, t, 0.05, 0.35, 3000);
+    tone(ctx, out, 'sine', 180 * p, 90 * p, t, 0.07, 0.4);
+    noiseBurst(this, ctx, out, t, 0.03, 'bandpass', 2600 * p, 1800 * p, 0.2, 3);
+  },
+  // A bottle breaking: a crack and a spray of glass.
+  glass(this: Sfx, ctx, out, t, p) {
+    noiseBurst(this, ctx, out, t, 0.05, 'highpass', 5000 * p, 3000 * p, 0.5);
+    noiseBurst(this, ctx, out, t + 0.02, 0.35, 'bandpass', 6500 * p, 4200 * p, 0.3, 4);
+    [2900, 3700, 4600].forEach((f, i) => tone(ctx, out, 'sine', f * p, f * p * 0.97, t + 0.03 + i * 0.04, 0.12, 0.08));
+  },
+  // Fire: a soft roar with crackles in it.
+  fire(this: Sfx, ctx, out, t, p) {
+    noiseBurst(this, ctx, out, t, 0.7, 'lowpass', 900 * p, 500 * p, 0.35);
+    for (let i = 0; i < 5; i++) noiseBurst(this, ctx, out, t + Math.random() * 0.6, 0.015, 'highpass', 3500, 2500, 0.3);
+  },
   // Fly-by.
   whoosh(this: Sfx, ctx, out, t, p) {
     noiseBurst(this, ctx, out, t, 0.6, 'bandpass', 500 * p, 1800 * p, 0.4, 1.5);

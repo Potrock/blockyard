@@ -215,27 +215,31 @@ export class GameHost {
         this.events.push({ t: 'revert' });
         return w.revert_edits().length / 2;
       },
-      carve: (o, d, radius, depth) => {
-        const out = w.carve(o[0], o[1], o[2], d[0], d[1], d[2], radius, depth);
-        const v = new DataView(out.buffer, out.byteOffset, out.byteLength);
-        const n = v.getUint32(4, true);
-        const emptied: [number, number, number, number][] = [];
-        for (let i = 0, at = 8; i < n; i++, at += 16) emptied.push([v.getInt32(at, true), v.getInt32(at + 4, true), v.getInt32(at + 8, true), v.getInt32(at + 12, true)]);
-        // What's left of the blocks it chipped, as changes every client takes from its own copy
-        // (a tick's carves go together); the blocks it carved away, as edits.
-        const changes = out.subarray(8 + n * 16);
-        if (changes.length) {
-          const last = this.events[this.events.length - 1];
-          if (last?.t === 'damage') {
-            const both = new Uint8Array(last.data.length + changes.length);
-            both.set(last.data);
-            both.set(changes, last.data.length);
-            last.data = both;
-          } else this.events.push({ t: 'damage', data: changes.slice() });
-        }
-        if (emptied.length) edited(emptied.map(([x, y, z]) => [x, y, z, 0]));
-        return { removed: v.getUint32(0, true), emptied };
-      },
+      carve: (o, d, radius, depth) => carved(w.carve(o[0], o[1], o[2], d[0], d[1], d[2], radius, depth)),
+      blast: (c, radius, roughness, seed, cells) => carved(w.blast(c[0], c[1], c[2], radius, roughness, seed, cells)),
+    };
+    /**
+     * What a carve or a blast changed (see `VoxelWorld.carve`): what's left of the blocks it
+     * chipped, as changes every client takes from its own copy (a tick's carves go together);
+     * the blocks it carved away, as edits.
+     */
+    const carved = (out: Uint8Array): { removed: number; emptied: [number, number, number, number][] } => {
+      const v = new DataView(out.buffer, out.byteOffset, out.byteLength);
+      const n = v.getUint32(4, true);
+      const emptied: [number, number, number, number][] = [];
+      for (let i = 0, at = 8; i < n; i++, at += 16) emptied.push([v.getInt32(at, true), v.getInt32(at + 4, true), v.getInt32(at + 8, true), v.getInt32(at + 12, true)]);
+      const changes = out.subarray(8 + n * 16);
+      if (changes.length) {
+        const last = this.events[this.events.length - 1];
+        if (last?.t === 'damage') {
+          const both = new Uint8Array(last.data.length + changes.length);
+          both.set(last.data);
+          both.set(changes, last.data.length);
+          last.data = both;
+        } else this.events.push({ t: 'damage', data: changes.slice() });
+      }
+      if (emptied.length) edited(emptied.map(([x, y, z]) => [x, y, z, 0]));
+      return { removed: v.getUint32(0, true), emptied };
     };
     const content = new Content();
     content.forward = (def) => {
@@ -483,6 +487,7 @@ export class GameHost {
       i.mouseX = 0;
       i.mouseY = 0;
       if (i.shots) i.shots = [];
+      if (i.throws) i.throws = [];
     }
     const events = this.flush();
     const frame = sim.frame();
@@ -531,6 +536,8 @@ export class GameHost {
         i.clicked |= n.clicked;
         // Shots add up until a step; a client that sends them (even none) fires its own from then on.
         if (n.shots) (i.shots ??= []).push(...n.shots);
+        // So do throws.
+        if (n.throws) (i.throws ??= []).push(...n.throws);
         if (n.seen !== undefined) i.seen = n.seen;
         i.wheel += n.wheel;
         i.mouseX += n.mouseX;

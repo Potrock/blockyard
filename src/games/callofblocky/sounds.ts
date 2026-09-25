@@ -98,6 +98,26 @@ export function defineSounds(game: GameContext) {
     }
   });
   // The match is on: a surf-guitar run.
+  // The lethals: a pin pulled and the spoon flying, a lighter struck on the rag, a throw, a knock on the ground.
+  a.define('pin', (s) => {
+    s.tone({ wave: 'triangle', from: 2800 * s.pitch, to: 2500 * s.pitch, duration: 0.08, volume: 0.18 });
+    s.noise({ duration: 0.04, filter: 'highpass', from: 4200, to: 3000, volume: 0.25 });
+    click(s, 0.12, 1600, 0.35);
+    s.tone({ wave: 'sine', from: 3400 * s.pitch, to: 3100 * s.pitch, duration: 0.18, volume: 0.08, delay: 0.14 });
+  });
+  a.define('lighter', (s) => {
+    click(s, 0, 1900, 0.4);
+    s.noise({ duration: 0.08, delay: 0.05, filter: 'highpass', from: 6000, to: 4000, volume: 0.2 });
+    s.noise({ duration: 0.5, delay: 0.1, filter: 'lowpass', from: 1400 * s.pitch, to: 500, volume: 0.28 });
+  });
+  a.define('toss', (s) => {
+    s.noise({ duration: 0.22, filter: 'bandpass', from: 600 * s.pitch, to: 1500 * s.pitch, q: 1.4, volume: 0.35 });
+  });
+  a.define('clink', (s) => {
+    s.tone({ wave: 'triangle', from: 1250 * s.pitch, to: 900 * s.pitch, duration: 0.07, volume: 0.28, lowpass: 4000 });
+    s.tone({ wave: 'sine', from: 210 * s.pitch, to: 110 * s.pitch, duration: 0.08, volume: 0.35 });
+    s.noise({ duration: 0.03, filter: 'bandpass', from: 3000, to: 2200, q: 3, volume: 0.18 });
+  });
   a.define('match_start', (s) => surf(s, [0, 1, 4, 5, 7, 8, 7, 5, 4, 1, 0], 0.11, 3));
   a.define('match_end', (s) => surf(s, [12, 11, 8, 7, 5, 4, 1, 0], 0.16, 4));
   // A spawn: a quick rising whoosh.

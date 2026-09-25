@@ -34,7 +34,7 @@ src/games/
     art/ sounds.ts      team skins, item sprites, sounds
   callofblocky/         Call of Blocky: a pulp free-for-all shooter against bots and people
     index.ts            rules: the match, spawns, kills, streaks, loadouts, the HUD
-    weapons.ts          the guns (kind 'gun') and the katana
+    weapons.ts          the guns (kind 'gun'), the katana, and the lethals (kind 'throwable')
     bots.ts nav.ts      bot fighters (game.bots) and the walking grid they path-find on
     map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
     models/             the guns and fighters as GLB files (tools/ writes them)
@@ -124,7 +124,7 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion (in a world with destructible blocks, a crater: below). With `damage` it hurts too: `explode(at, 1.5, { damage: [160, 20], reach: 5.5, knockback: 1.2, by, weapon })` takes 160 off anyone at its middle, falling to 20 at 5.5 blocks and nothing past that or behind a wall, pushes them away, and names `by` and `weapon` (the hits' `cause` is `'explosion'`). In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
 
 ### Block shapes and states
 
@@ -156,6 +156,10 @@ defineGame({
 ```
 
 Only solid, opaque, full blocks carve: not glass, leaves, slabs, stairs, torches, plants or liquids. Guns carve where their bullets land (each gun's `carve`, see Guns). `game.world.carve(point, dir, { radius, depth, by })` does it on purpose: a rounded channel from `point` along `dir`, `radius` round and `depth` long (blocks, defaults 0.1 and 0.2), through every block it reaches: a blast with a big radius, a drill with a long depth. It returns how many little voxels went (4096 make a block), 0 when there was nothing it could take, so carving the same place twice changes nothing the second time.
+
+**Explosions** blow craters. In a world with destructible blocks, `world.explode` (and a grenade's blast, see Throwables) takes a ragged sphere of little voxels out of the destructible blocks it reaches: a wall is bitten into, a thin one holed, the crater's edge wandering in and out by about a third of its radius (seeded by where it went off, so the host and every screen carve the same crater). Blocks the game made destructible that can't be carved (glass, leaves, slabs, torches) break whole within the radius, and what isn't destructible (under `above`, the `except`ed) stands: the floor stays. A world without destructible blocks blows out whole blocks, as always. `filter` still decides what goes, carved or whole.
+
+**Rubble.** What's carved out falls: every screen throws chips from each block a bullet or a blast bit into (a few little cubes coloured from the block's own texture, more the more went, flung away from an explosion) and chunks from each block broken whole, with a puff of dust. They tumble, bounce and settle on what's there (to the little voxel), lie a while and sink away. It's worked out on each screen from the same damage (nothing's sent for it) and drawn in one go, so it costs nothing once it's settled.
 
 `restart` makes every block whole again with the rest of the world. Damage isn't saved (a block carved away altogether is an edit, and a `persist` world keeps that). A damaged block keeps light out as it did (it's lit inside by what reaches it), so a hole through a roof lets you see the sky but not its light. Creatures' pathfinding treats a damaged block as whole until it's gone. Call of Blocky makes everything above its street destructible.
 
@@ -236,7 +240,7 @@ player: {
 
 `player.speed` multiplies one player's speeds (a power-up; guns have their own `mobility`), `player.crouching`, `sliding` and `aiming` say what they're doing, and `player.protect(seconds)` makes them ignore damage for a while (spawn protection). `hurtCooldown` (default 0.45, Minecraft's) is how long a player ignores further damage after a hit; shooters set it to 0.
 
-**Changing damage.** Every hit is heard before it lands, from anything: a gun, a blade, an arrow or fireball, a fall, a mob's swing, your own `damage` call. A `damage` listener can change it (`amount`, before armour, and `knockback`) or `cancel()` it, for players and creatures alike; a cancelled hit doesn't land at all (no hurt, no knockback, no `playerDamage` or `entityDamage`, no hit marker for a gun). It says who's hit (`target`), who did it (`source`), what with (`weapon`, the item id), how (`cause`: `'gun'`, `'melee'`, `'projectile'` or `'world'`), and for bullets the `part` hit (`'head'` or `'body'`) and `headshot`:
+**Changing damage.** Every hit is heard before it lands, from anything: a gun, a blade, an arrow or fireball, a fall, a mob's swing, your own `damage` call. A `damage` listener can change it (`amount`, before armour, and `knockback`) or `cancel()` it, for players and creatures alike; a cancelled hit doesn't land at all (no hurt, no knockback, no `playerDamage` or `entityDamage`, no hit marker for a gun). It says who's hit (`target`), who did it (`source`), what with (`weapon`, the item id), how (`cause`: `'gun'`, `'melee'`, `'projectile'`, `'explosion'`, `'fire'` or `'world'`), and for bullets the `part` hit (`'head'` or `'body'`), `headshot` and `through` (blocks of wall it went through first: wall-banging, below; `playerDeath` carries it too):
 
 ```ts
 game.events.on('damage', (hit) => {
@@ -374,6 +378,7 @@ The platform does the rest:
 - **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself (unless `guns.autoReload` is off). Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up. On a controller the triggers fire and aim, X reloads, and there's aim assist (`aim.assist`, see Controllers).
 - **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people). The `damage` event (see Player) can change or cancel a hit before it lands.
 - **Sights.** `iron` sights are the model's own. A `dot` or `holo` sight lights its reticle (a red dot, or a holo's ring and dot; `aim.color`) at the aim point as the optic's window comes up to the eye: model the optic with its window open and its `sight` point in the window's middle. A `scope` fills the view with the scope.
+- **Wall-banging.** `penetration: { depth, damageLoss }` sends bullets through walls with up to `depth` blocks of material in them all told (a block-thick wall head on is 1, at a slant more; what's been shot out of it doesn't count, so a wall shot into gets easier), losing `damageLoss` of their damage for each block (0.4 by default). Bedrock and unbreakable blocks stop them. In a destructible world they hole the wall where they go in and where they come out. Everyone sees the holes on both faces, the chips spraying out of the far one and the tracer carrying on from there; the shooter's screen works the path out as the host does. The hit's `through` says how much wall there was. Off by default; Call of Blocky's rifle has `{ depth: 1.15, damageLoss: 0.32 }` (through a block-thick wall head on, at about two thirds of its damage), the pistol `{ 0.7, 0.45 }` (only walls already shot into, slabs), the sniper `{ 2.2, 0.18 }` (two blocks, and still a kill up close). Lag compensation is the same through a wall.
 - **Walls.** In a world with destructible blocks (`world.destructible`), each bullet (each pellet) carves a pit where it lands: `carve: { radius, depth }` in blocks, default `{ radius: 0.1, depth: 0.05 }`; `carve: false` for a gun that doesn't. The next shot on the same spot lands at the bottom of the last one's pit, so each goes about `radius + depth` further in: seven or eight on one spot hole a block. Call of Blocky's: rifle and pistol `{ 0.09, 0.04 }` (eight shots down the sights through a block-thick wall), SMG `{ 0.1, 0.025 }` (ten), sniper `{ 0.12, 0.42 }` (two), shotgun pellets `{ 0.07, 0.01 }` (a spray of small pits). The pit is the bullet's mark: no bullet-hole decal on a block that carves.
 - **The HUD.** An ammo counter replaces the hotbar's job, and the crosshair opens with the spread (and goes when aiming).
 - **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
@@ -419,6 +424,38 @@ defineGame({
 ```
 
 `assist` is aim assist's shape for every gun (see Controllers); a gun's own `aim.assist` goes over it, as a strength or the same shape.
+
+## Throwables
+
+A `kind: 'throwable'` item is thrown: a grenade that bounces, rolls and goes off when its fuse is out, a molotov that breaks where it lands and burns. Hold its `key` (or, with it in hand, the fire button) to pull the pin and cook it, let go to throw it where you look, lobbed a little.
+
+```ts
+game.items.define('frag', {
+  kind: 'throwable', name: 'The Pineapple', icon: { gltf: fragUrl },
+  hold: { style: 'throw', model: HeldModels.gltf(fragUrl, { rotation: [90, 180, 0] }) },
+  key: 'KeyG',                                  // thrown from whatever's in hand; the wheel skips it
+  fuse: 3.2, cook: true,                        // held too long, it goes off in the hand
+  speed: 21, lift: 8,                           // blocks a second, lobbed 8 degrees over the view
+  physics: { gravity: 24, bounce: 0.3, friction: 0.35, radius: 0.1 },
+  blast: { radius: 5.5, damage: [165, 18], knockback: 1.2, carve: 1.45 },   // the crater's 1.45 blocks round
+  cooldown: 0.9, stack: 2,
+  sounds: { draw: 'pin', use: 'toss', hit: 'clink' },                       // pin, throw, bounce
+});
+game.items.define('molotov', {
+  kind: 'throwable', name: 'The Mia', icon: { gltf: miaUrl }, hold: { style: 'throw', model: HeldModels.gltf(miaUrl) },
+  key: 'KeyG', impact: true, fuse: 4, speed: 18,     // breaks on the first thing it hits
+  fire: { radius: 3, duration: 7, damage: 34, color: '#ff8a2a' },           // a second, to anyone standing in it
+  trail: '#ffb347',                                                          // the lit rag
+});
+player.inventory.give('frag', 2);
+```
+
+- **At once, and fair.** The thrower's screen throws it the moment they let go (the hand tosses it, it leaves the hand and flies) and sends the throw with the controls: from where, how fast, how long it was cooked. The host takes it if they have one and aren't throwing faster than its `cooldown`, and flies it the same way; everyone else's screen hears of it and flies it too. A flight is worked out in fixed steps (1/120 s) from the throw with plain arithmetic and the world's own raycasts, so the same throw on the same blocks lands in the same place on every machine, whatever their frame rates, and it goes off where the thrower's screen had it. The host decides when and where: the blast, the fire, the damage.
+- **How it flies.** Gravity and a little drag; off a block it bounces (the part of its speed into the block turned round and cut to `bounce`, the part along it cut by `friction`), landing gently it rolls and comes to rest. It goes through plants and torches like bullets do, and it bounces off what's left of a damaged block. (Not yet: solid props and players; an `impact` one breaks on whoever it meets, on the host.)
+- **The blast** (`blast`) is `world.explode`'s: `damage` falling off from its middle to `radius` (none behind a wall; the thrower too), a push, and a crater `carve` blocks round (whole blocks in a world without destructible ones). The hits are `'explosion'`s with the item as their `weapon`. **The fire** (`fire`) burns on the ground round where it broke for `duration` seconds: flames and smoke on every screen, and `damage` a second (every half second) to anyone standing in it who isn't behind a wall (`'fire'`).
+- **On screen.** A count of each throwable with a key over the rounds (bottom right; a cooked one shakes), the fuse burning down round the crosshair while it's cooked, and a warning marker (at the screen's edge when it's off it) on any live one that could reach you. In first person the `throw` hold style holds it up by the shoulder, and it's thrown with the `toss` animation; others see the thrower's arm swing.
+- **From code.** `player.throw(item, { at, yaw, pitch, cook })` throws one of theirs from their eyes: along their view (or the one given), or lobbed to come down at `at` (up at about 40 degrees, as hard as that needs, so it doesn't roll far). It's how bots throw; a bot can also hold the key through its controls (`bot.controls.hold('KeyG')`, then let go) and cook it for as long as it holds. `game.items.thrown` lists what's in the air (where, whose, how far it reaches, seconds to go) and `game.items.fires` the fires burning: what a bot keeps away from.
+- **Controllers:** give the key a button with the game's `gamepad` (Call of Blocky: `RB: ['KeyG', 'lethal']`); hold to cook, let go to throw.
 
 ## Controllers
 
@@ -500,7 +537,7 @@ Without `breakTime`, mining takes a Minecraft-like time by material (`defaultBre
 - **`entities.raycast(origin, dir, reach)`** finds the mob under the crosshair (stopping at blocks); `world.raycast` finds the block.
 - **`hud.highlight(block, { progress })`** outlines a block on a player's screen, with Minecraft's break cracks at `progress` 0..1. **`hud.progress(0..1)`** is a ring round the crosshair.
 - **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone; `placeBlock` turns torches, slabs, stairs, beds and logs the way the player's aim and look say (see *Block shapes and states*). They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant or replaceable.
-- **`world.explode(center, radius, { filter, by })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match).
+- **`world.explode(center, radius, { filter, by, damage, reach, knockback, weapon })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match); `damage` hurts whoever's in `reach` too (see World).
 
 ## First-person view model
 
@@ -523,6 +560,7 @@ Walk bob, breathing, look sway, the landing dip, recoil when you're hit, and the
 | `item` | everything else | Upright in the fist | `drink` |
 | `block` | Sandbox blocks | A small cube on the fist | `swing` |
 | `polearm` | | Two hands on the shaft, low at the right, tip just under the crosshair | `jab` |
+| `throw` | throwables | Up by the shoulder, ready to throw | `toss` |
 
 The empty hand uses `punch`. Change a pose per item with `hold`, in the same numbers as a Minecraft model's `firstperson_righthand`. Every field is optional:
 
@@ -541,7 +579,7 @@ game.items.define('spear', {
 });
 ```
 
-Built-in animations are `swing` (Minecraft's), `slash` (a diagonal cut for 3D blades), `hew` (an overhead blow for axes), `sip` (drinking from a held bottle), `punch`, `jab` (a two-handed thrust along the shaft), `drink` (Minecraft's eat pose), `release`, `chop` and `stab`. Custom animations are keyframes offset from the rest pose:
+Built-in animations are `swing` (Minecraft's), `slash` (a diagonal cut for 3D blades), `hew` (an overhead blow for axes), `sip` (drinking from a held bottle), `punch`, `jab` (a two-handed thrust along the shaft), `drink` (Minecraft's eat pose), `release`, `chop`, `stab` and `toss` (a throw from the `throw` pose, the arm whipping forward and down out of sight). Custom animations are keyframes offset from the rest pose:
 - `move` shifts the hand, in blocks.
 - `hand` turns the hand, item and forearm together about the fist.
 - `wrist` turns only the item.
@@ -796,7 +834,7 @@ game.audio.define('laser', (s) => {
 - `s.noise` is filtered noise with a sweeping filter.
 - `s.pitch` is the play's pitch: multiply frequencies by it.
 - Your game runs away from the player's speakers (in a worker, or on a server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
-- The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers).
+- The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers, a grenade's `bounce`, a bottle's `glass`, `fire`).
 
 ## Keeping data
 

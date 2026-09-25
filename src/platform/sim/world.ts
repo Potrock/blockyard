@@ -18,4 +18,9 @@ export interface WorldHost {
    * (air now, as edits): where, and what they were.
    */
   carve(o: [number, number, number], d: [number, number, number], radius: number, depth: number): { removed: number; emptied: [number, number, number, number][] };
+  /**
+   * A blast's crater (`VoxelWorld.blast`): a ragged sphere of little voxels out of the carvable
+   * blocks among `cells` (x, y, z triples). Returns what `carve` returns.
+   */
+  blast(center: [number, number, number], radius: number, roughness: number, seed: number, cells: Int32Array): { removed: number; emptied: [number, number, number, number][] };
 }

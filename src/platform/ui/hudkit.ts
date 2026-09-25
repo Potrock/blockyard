@@ -120,6 +120,9 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
   private barText: HTMLElement;
   private ammoEl: HTMLElement;
   private ammoKey = '';
+  /** Throwables carried (bottom right, over the rounds and the radar): each one's picture, how many, its key. */
+  private throwsEl: HTMLElement;
+  private throwsKey = '';
   /** An open menu's key listener, removed when it closes, however it closes. */
   private unhooks = new Map<HTMLElement, () => void>();
   /** Each open menu's close (B on a controller backs out of the top one). */
@@ -161,6 +164,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     this.barEl.style.display = 'none';
     this.ammoEl = h('div.ammo');
     this.ammoEl.style.display = 'none';
+    this.throwsEl = h('div.throwables');
+    this.throwsEl.style.display = 'none';
     this.widgetSheet = h('style') as HTMLStyleElement;
     this.widgetLayer = h('div.gw-layer', {}, this.widgetSheet);
     this.root = h(
@@ -182,6 +187,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
       this.popEl,
       this.barEl,
       this.ammoEl,
+      this.throwsEl,
       this.widgetLayer,
       this.boardEl,
     );
@@ -282,6 +288,27 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
       void this.ammoEl.offsetWidth;
       this.ammoEl.classList.add('fired');
     }
+  }
+
+  /**
+   * The throwables with keys of their own they carry (bottom right, over the rounds): a picture
+   * of each, how many, and its key; one being cooked shows it. Null (or none) hides them.
+   */
+  throwables(list: { icon: IconRef; count: number; key: string; cooking: boolean }[] | null) {
+    const key = list ? JSON.stringify(list) : '';
+    if (key === this.throwsKey) return;
+    const was = this.throwsKey ? (JSON.parse(this.throwsKey) as { count: number }[]) : [];
+    this.throwsKey = key;
+    this.throwsEl.style.display = list?.length ? '' : 'none';
+    if (!list?.length) return;
+    this.throwsEl.replaceChildren(
+      ...list.map((t, i) => {
+        const el = h(`div.throwable${t.count === 0 ? '.out' : ''}${t.cooking ? '.cooking' : ''}`, {}, this.icon('img.throwable-icon', t.icon), h('span.throwable-count', {}, `×${t.count}`), h('span.throwable-key', {}, t.key));
+        // One gone: a bump.
+        if (was[i] && was[i].count > t.count) el.classList.add('spent');
+        return el;
+      }),
+    );
   }
 
   /**
@@ -843,6 +870,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     this.numbers = [];
     this.scoreboard(null);
     this.ammo(null);
+    this.throwables(null);
     for (const a of this.hurts) a.el.remove();
     this.hurts = [];
     this.popEl.classList.remove('show');

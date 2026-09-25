@@ -1,4 +1,4 @@
-import type { AtlasPixels, GameContext, GameEvents, ItemApi, ItemDefinition, ItemStack, InventoryApi, Pickup, Player, Vec3 } from '../api/types';
+import type { AtlasPixels, GameContext, GameEvents, ItemApi, ItemDefinition, ItemStack, InventoryApi, Pickup, Player, ThrownInfo, Vec3 } from '../api/types';
 import type { Content } from '../content';
 import type { Presentation } from './present';
 import { freshGun, isGun, type GunState } from './guns';
@@ -20,6 +20,9 @@ export interface ItemServices {
   content: Content;
   /** Sounds and toasts for the player who picks something up. */
   present: Presentation;
+  /** Throwables in the air and the fires they started (`items.thrown`, `items.fires`). */
+  thrown(): ThrownInfo[];
+  fires(): { position: Vec3; radius: number; left: number; by: Player }[];
 }
 
 /** One pickup as the client draws it. */
@@ -150,13 +153,20 @@ export class Inventory implements InventoryApi {
     this.onChange?.();
   }
 
-  /** The next slot with something in it (`by` of them on, or back for a negative), round the end. */
+  /**
+   * The next slot with something in it (`by` of them on, or back for a negative), round the end.
+   * Throwables with a key of their own are thrown with it, and skipped.
+   */
   cycle(by: number) {
     let at = this.selected;
+    const skip = (s: ItemStack | null) => {
+      const d = s ? this.defs.get(s.item) : undefined;
+      return d?.kind === 'throwable' && !!d.key;
+    };
     for (let n = Math.abs(by); n > 0; n--) {
       for (let i = 1; i <= 9; i++) {
         const s = (((at + Math.sign(by) * i) % 9) + 9) % 9;
-        if (this.slots[s] || i === 9) {
+        if ((this.slots[s] && !skip(this.slots[s])) || i === 9) {
           at = s;
           break;
         }
@@ -227,6 +237,14 @@ export class ItemSim implements ItemApi {
 
   get(id: string): ItemDefinition | undefined {
     return this.defs.get(id);
+  }
+
+  get thrown(): ThrownInfo[] {
+    return this.s.thrown();
+  }
+
+  get fires(): { position: Vec3; radius: number; left: number; by: Player }[] {
+    return this.s.fires();
   }
 
   /** Ids of the defined items. */

@@ -278,19 +278,37 @@ impl VoxelWorld {
     /// the changes to the rest for other copies of the world (`apply_damage`)], little-endian.
     #[allow(clippy::too_many_arguments)]
     pub fn carve(&mut self, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, radius: f64, depth: f64) -> Vec<u8> {
-        let c = self.inner.carve([x, y, z], [dx, dy, dz], radius, depth);
-        let mut out = Vec::with_capacity(8 + c.emptied.len() * 16 + c.cells.len() * 64);
-        out.extend_from_slice(&c.removed.to_le_bytes());
-        out.extend_from_slice(&(c.emptied.len() as u32).to_le_bytes());
-        for (p, id) in &c.emptied {
-            for v in [p[0], p[1], p[2], *id as i32] {
-                out.extend_from_slice(&v.to_le_bytes());
-            }
+        carved_bytes(&self.inner.carve([x, y, z], [dx, dy, dz], radius, depth))
+    }
+
+    /// A blast's crater (`World::blast`): a ragged sphere of little voxels `radius` round (x, y, z),
+    /// its edge wandering by `roughness` of that (the same for the same `seed`), out of the
+    /// carvable blocks among `cells` (x, y, z triples). Returns what `carve` returns.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blast(&mut self, x: f64, y: f64, z: f64, radius: f64, roughness: f64, seed: u32, cells: &[i32]) -> Vec<u8> {
+        carved_bytes(&self.inner.blast([x, y, z], radius, roughness, seed, cells))
+    }
+
+    /// Whether `carve` and `blast` can take bits out of the block at (x, y, z).
+    pub fn carvable(&self, x: i32, y: i32, z: i32) -> bool {
+        self.inner.carvable_at(x, y, z)
+    }
+
+    /// Whether a point is inside solid material: a solid block's collision boxes, less what's been
+    /// shot out of it. Unloaded columns count as air.
+    pub fn point_solid(&self, x: f64, y: f64, z: f64) -> bool {
+        world::point_solid(&self.inner, [x, y, z])
+    }
+
+    /// A ray that went into material at (ox, oy, oz): [found, distance, nx, ny, nz], how far along
+    /// it comes out into the open and the face it comes out of (see `World::ray_exit`); found 0
+    /// when it's still in material after `max`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ray_exit(&self, ox: f64, oy: f64, oz: f64, dx: f64, dy: f64, dz: f64, max: f64) -> Vec<f64> {
+        match self.inner.ray_exit([ox, oy, oz], [dx, dy, dz], max) {
+            Some((t, n)) => vec![1.0, t, n[0] as f64, n[1] as f64, n[2] as f64],
+            None => vec![0.0; 5],
         }
-        for (cell, gone) in &c.cells {
-            damage::encode(&mut out, *cell, gone);
-        }
-        out
     }
 
     /// Damage from the simulation's copy of the world (`carve`'s changes, `export_damage`), here
@@ -700,4 +718,22 @@ impl Default for Culler {
 #[wasm_bindgen]
 pub fn shadow_camera(to_sun: &[f64], center: &[f64], radius: f64, depth: f64, resolution: f64) -> Vec<f64> {
     cull::shadow_camera([to_sun[0], to_sun[1], to_sun[2]], [center[0], center[1], center[2]], radius, depth, resolution).to_vec()
+}
+
+/// What a carve or a blast changed, for the host: [removed u32, n u32, then n blocks left with
+/// nothing (air now, an edit) as x, y, z, the block it was (i32 each), then the changes to the rest
+/// for other copies of the world (`apply_damage`)], little-endian.
+fn carved_bytes(c: &world::Carved) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + c.emptied.len() * 16 + c.cells.len() * 64);
+    out.extend_from_slice(&c.removed.to_le_bytes());
+    out.extend_from_slice(&(c.emptied.len() as u32).to_le_bytes());
+    for (p, id) in &c.emptied {
+        for v in [p[0], p[1], p[2], *id as i32] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    for (cell, gone) in &c.cells {
+        damage::encode(&mut out, *cell, gone);
+    }
+    out
 }
