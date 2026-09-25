@@ -463,15 +463,30 @@ function lint(gun, visible) {
 }
 
 /**
- * An optic's window must be open: no box inside it from its rear face on (along +z), and from an
- * eye 16 px behind the sight (about where the platform holds it when aiming), nothing beyond the
- * optic's front shows through its front opening. Returns what's in the way.
+ * How far behind the `sight` point the eye is when aiming, in model pixels: the platform holds the
+ * sight 0.3 blocks in front of the eye with the gun at scale 0.42 (0.3 / 0.42 * 16).
+ */
+const EYE_BACK = 11.4;
+
+/**
+ * An optic's window must be open: no box inside it from its rear face on (along +z), and from the
+ * aiming eye nothing shows through it: not beyond its front opening, nor between the eye and its
+ * rear. Returns what's in the way.
  */
 function clearView(gun) {
   const win = gun.window;
   if (!win) return [];
   const bad = [];
-  const eye = [0, (win.y0 + win.y1) / 2, win.z0 - 16];
+  const eye = [0, (win.y0 + win.y1) / 2, win.z0 - EYE_BACK];
+  // Does the part of a box within z0..z1 (seen from the eye) cover the window's opening at plane z?
+  const covers = (corners, za, zb, plane) => {
+    const pts = corners.map((c) => [c[0], c[1], Math.min(Math.max(c[2], za), zb)]).map((c) => {
+      const t = (plane - eye[2]) / (c[2] - eye[2]);
+      return [eye[0] + (c[0] - eye[0]) * t, eye[1] + (c[1] - eye[1]) * t];
+    });
+    const px = pts.map((p) => p[0]), py = pts.map((p) => p[1]);
+    return Math.min(...px) < win.x1 - EPS && Math.max(...px) > win.x0 + EPS && Math.min(...py) < win.y1 - EPS && Math.max(...py) > win.y0 + EPS;
+  };
   gun.boxes.forEach((box, k) => {
     const corners = [];
     for (const x of [box.from[0], box.to[0]]) for (const y of [box.from[1], box.to[1]]) for (const z of [box.from[2], box.to[2]]) corners.push(place(box, [x, y, z]));
@@ -479,15 +494,8 @@ function clearView(gun) {
     const hi = [0, 1, 2].map((m) => Math.max(...corners.map((c) => c[m])));
     const inside = lo[0] < win.x1 - EPS && hi[0] > win.x0 + EPS && lo[1] < win.y1 - EPS && hi[1] > win.y0 + EPS && hi[2] > win.z0 + EPS;
     if (inside) return bad.push(`box ${k} is in the window`);
-    if (hi[2] <= win.z1) return;
-    // Beyond the front: seen from the eye, does it cover any of the front opening?
-    const zs = Math.max(lo[2], win.z1);
-    const pts = corners.map((c) => [c[0], c[1], Math.max(c[2], zs)]).map((c) => {
-      const t = (win.z1 - eye[2]) / (c[2] - eye[2]);
-      return [eye[0] + (c[0] - eye[0]) * t, eye[1] + (c[1] - eye[1]) * t];
-    });
-    const px = pts.map((p) => p[0]), py = pts.map((p) => p[1]);
-    if (Math.min(...px) < win.x1 - EPS && Math.max(...px) > win.x0 + EPS && Math.min(...py) < win.y1 - EPS && Math.max(...py) > win.y0 + EPS) bad.push(`box ${k} shows through the window`);
+    if (hi[2] > win.z1 + EPS && covers(corners, win.z1, Infinity, win.z1)) bad.push(`box ${k} shows through the window`);
+    if (lo[2] < win.z0 - EPS && hi[2] > eye[2] + 0.5 && covers(corners, eye[2] + 0.5, win.z0, win.z0)) bad.push(`box ${k} blocks the window from behind`);
   });
   return bad;
 }
@@ -840,57 +848,67 @@ const port = (face, [y0, y1], [z0, z1], inside = (ctx) => add(hex('#2a2d33'), (r
 const NORMAL = { '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0], '+z': [0, 0, 1], '-z': [0, 0, -1] };
 
 /**
- * Paint for an optic's frame round its open window (x0..x1, y0..y1, from its rear face z0 to z1):
- * faces turned into the window matte black, and a lighter rim round the window on the rear face
- * (the border the eye sees). The window itself holds no geometry: the platform draws the reticle.
+ * Paint for an optic round its open window (x0..x1, y0..y1, from its rear face z0 to z1): the faces
+ * turned into the window a mid dark grey, with a lighter lip along their front and rear edges, and
+ * the thin walls' own rear and front edges light too, so the window reads as an opening. The window
+ * holds no geometry: the platform draws the reticle. `led`: a power pixel [colour, y, z] on the left.
  */
 const frame = (win, led) => (ctx, c) => {
   const n = NORMAL[ctx.face];
   const q = ctx.w.map((v, k) => v + n[k] * 0.3);
+  const lip = hex('#a3a9b3');
   // A texel straddling the window's edge counts as inside (half a texel of slack in the face's plane).
   const ex = n[0] ? 0 : 0.5, ey = n[1] ? 0 : 0.5;
-  if (q[0] > win.x0 - ex && q[0] < win.x1 + ex && q[1] > win.y0 - ey && q[1] < win.y1 + ey && q[2] > win.z0 && q[2] < win.z1) return add(hex('#141416'), (rnd(ctx) - 0.5) * 6);
-  if (ctx.face === '-z' && Math.abs(ctx.w[2] - win.z0) < 0.01) {
+  if (q[0] > win.x0 - ex && q[0] < win.x1 + ex && q[1] > win.y0 - ey && q[1] < win.y1 + ey && q[2] > win.z0 && q[2] < win.z1) {
+    const edge = ctx.w[2] - win.z0 < 0.6 || win.z1 - ctx.w[2] < 0.6;
+    return add(edge ? lip : hex('#474b53'), (rnd(ctx) - 0.5) * 6);
+  }
+  const end = (ctx.face === '-z' && Math.abs(ctx.w[2] - win.z0) < 0.01) || (ctx.face === '+z' && Math.abs(ctx.w[2] - win.z1) < 0.01);
+  if (end) {
     const dx = Math.max(0, win.x0 - ctx.w[0], ctx.w[0] - win.x1);
     const dy = Math.max(0, win.y0 - ctx.w[1], ctx.w[1] - win.y1);
-    if (Math.hypot(dx, dy) < 0.8) return mix(c, hex('#ffffff'), 0.45);
+    if (Math.hypot(dx, dy) < 0.4) return add(lip, (rnd(ctx) - 0.5) * 6);
   }
   if (led && ctx.face === '+x' && Math.abs(ctx.w[1] - led[1]) < 0.5 && Math.abs(ctx.w[2] - led[2]) < 0.5) return glow(led[0], 0.9)(ctx);
   return c;
 };
 
 /**
- * A holographic sight (EOTech style): a boxy hood round an open window `w` x `h` px, the window's
- * inside spanning x -w/2..w/2 and y `y`..`y + h`, from the rear face at `z` to `z + len`. The frame
- * is `t` px thick (base 1 px) with a rear hood `e` px bigger all round; a green power pixel on the
- * left side. Returns the `sight` point: the window's centre on the rear face.
+ * A holographic sight (EOTech style), open at the back: a big window `w` x `h` px (its inside
+ * spanning x -w/2..w/2 and y `y`..`y + h`, from the rear edge at `z` to `z + len`) between thin
+ * side walls and a thin top hood (`wall` px), over a solid body (the battery housing, `body` px
+ * tall, the optic's full width and length) with two buttons on its back and a green power pixel on
+ * its left side. The accent colour is on the body and the hood's outside. Returns the `sight`
+ * point: the window's centre on its rear edge.
  */
-function holo(g, { y, z, w = 3, h = 3, len = 5, t = 1, e = 0.5, hood, base = hood }) {
-  const hw = w / 2, z1 = z + len, r = t + e;
+function holo(g, { y, z, w, h, len, body = 2, wall = 0.5, mat }) {
+  const hw = w / 2, o = hw + wall, z1 = z + len;
   g.window = { x0: -hw, x1: hw, y0: y, y1: y + h, z0: z, z1 };
-  const paint = frame(g.window, ['#5dff6a', y - 0.5, z + 1.5]);
-  // The rear hood: a ring 1 px deep round the window.
-  g.box([-hw - r, y - 1, z], [hw + r, y, z + 1], base, { paint });
-  g.pair([hw, y, z], [hw + r, y + h, z + 1], hood, { paint });
-  g.box([-hw - r, y + h, z], [hw + r, y + h + r, z + 1], hood, { paint });
-  // The hood on to the front: sides, top, and the base under the window.
-  g.pair([hw, y, z + 1], [hw + t, y + h, z1], hood, { paint });
-  g.box([-hw - t, y + h, z + 1], [hw + t, y + h + t, z1], hood, { paint });
-  g.box([-hw - t, y - 1, z + 1], [hw + t, y, z1], base, { paint });
+  const paint = frame(g.window, ['#5dff6a', y - body + 0.5, z + 0.75]); // the power pixel: the body's bottom row, at the back
+  // The body: buttons on its back, a dark seam along the top of its sides and front (under the hood).
+  const detail = (ctx, c) => {
+    if (ctx.face === '-z' && Math.abs(Math.abs(ctx.w[0]) - 1.5) < 0.5 && ctx.w[1] < y - body / 2) return hex('#1c1c1f');
+    if ((onSide(ctx) || ctx.face === '+z') && ctx.w[1] > y - 0.6) return paint(ctx, mul(c, 0.55));
+    return paint(ctx, c);
+  };
+  g.box([-o, y - body, z], [o, y, z1], mat, { paint: detail });
+  g.pair([hw, y, z], [o, y + h, z1], mat, { paint });
+  g.box([-o, y + h, z], [o, y + h + wall, z1], mat, { paint });
   return [0, y + h / 2, z];
 }
 
 /**
- * A mini red dot (RMR style) for a slide: a small housing round an open window `w` x `h` px (its
- * bottom at `y`, from the rear face at `z`), walls half a pixel thick. Returns the `sight` point.
+ * A mini red dot (RMR style) for a slide, open at the back: a window `w` x `h` px (its bottom at
+ * `y`, from the rear edge at `z`) between half-pixel walls, over a body `body` px tall; the hood
+ * spans only the window, so its top corners step in like an RMR's rounded hood. Returns `sight`.
  */
-function rmr(g, { y, z, w = 2, h = 1.5, len = 2.5, mat }) {
-  const hw = w / 2, z1 = z + len;
+function rmr(g, { y, z, w, h, len, body = 1, mat }) {
+  const hw = w / 2, o = hw + 0.5, z1 = z + len;
   g.window = { x0: -hw, x1: hw, y0: y, y1: y + h, z0: z, z1 };
   const paint = frame(g.window);
-  g.box([-hw - 0.5, y - 0.5, z], [hw + 0.5, y, z1], mat, { paint });
-  g.pair([hw, y, z], [hw + 0.5, y + h, z1], mat, { paint });
-  g.box([-hw - 0.5, y + h, z], [hw + 0.5, y + h + 0.5, z1], mat, { paint });
+  g.box([-o, y - body, z], [o, y, z1], mat, { paint });
+  g.pair([hw, y, z], [o, y + h, z1], mat, { paint });
+  g.box([-hw, y + h, z], [hw, y + h + 0.5, z1], mat, { paint });
   return [0, y + h / 2, z];
 }
 
@@ -933,7 +951,7 @@ function pistol() {
   // Barrel bushing and bore.
   g.box([-0.5, 3.5, 8.5], [0.5, 4.5, 9], 'steel', { faces: { '+z': 'bore' } });
   // A gold mini red dot on the rear of the slide (the iron sights gone, so nothing shows through it).
-  const sight = rmr(g, { y: 5.5, z: -1.5, w: 2, h: 1.5, len: 2.5, mat: 'gold' });
+  const sight = rmr(g, { y: 6, z: -1.5, w: 3, h: 2.5, len: 2.5, body: 1, mat: 'gold' });
   // Hammer, cocked back over the beavertail.
   g.box([-0.5, 3.5, -3], [0.5, 5.5, -2], 'darksteel');
   // Trigger guard (hollow) and the gold trigger.
@@ -963,7 +981,7 @@ function smg() {
   g.decal(rivets([[2.5, -3], [2.5, 3.5], [2.5, 5.5]]));
   // Cocking knob; a compact hot-pink holo sight on the back of the top (the iron sights gone).
   g.box([-0.5, 6, 1], [0.5, 6.5, 2], 'steel');
-  const sight = holo(g, { y: 7, z: -3.5, w: 3, h: 2.5, len: 3.5, t: 0.5, e: 0.5, hood: 'pink' });
+  const sight = holo(g, { y: 7.5, z: -3.5, w: 4, h: 3.5, len: 3.5, body: 1.5, mat: 'pink' });
   // Threaded barrel with a thread protector.
   const threads = (ctx, c) => (ctx.face !== '+z' && ctx.face !== '-z' && Math.floor(ctx.w[2] * 2) % 2 === 0 ? mul(c, 0.7) : c);
   g.box([-0.5, 4, 6], [0.5, 5, 10], 'darksteel', { faces: { '+z': 'bore' }, paint: threads });
@@ -1009,9 +1027,9 @@ function rifle() {
   g.decal(rivets([[2.5, -2.5], [2.5, 0.5], [2.5, 4.5], [2.5, 7.5], [4.5, 7.5]]));
   g.box([-1, 5, -3], [1, 6, 6], 'steel', { paint: (ctx, c) => (ctx.face !== '-z' && ctx.w[2] < -0.5 && Math.floor(ctx.w[2] + 10) % 2 === 0 ? mul(c, 0.68) : c) });
   g.box([-1, 5, 6], [1, 6, 8], 'blued');
-  // A holographic sight on a rail mount on the top cover: yellow hood, black body.
-  g.box([-1.5, 6, 0.5], [1.5, 7, 4.5], 'parker', { paint: railTeeth });
-  const sight = holo(g, { y: 8, z: 0, w: 3, h: 3, len: 5, hood: 'yellow', base: 'parker' });
+  // A holographic sight on a rail clamp on the top cover, in yellow.
+  g.box([-1.5, 6, 0.5], [1.5, 6.5, 3.5], 'parker', { paint: railTeeth });
+  const sight = holo(g, { y: 8.5, z: 0, w: 5, h: 4, len: 4, body: 2, mat: 'yellow' });
   // Charging handle and the big selector lever on the right.
   g.box([-2.5, 4, 5], [-1.5, 5, 6], 'steel');
   g.box([-2, 3.5, -1.5], [-1.5, 4, 3], 'steel');
@@ -1085,8 +1103,8 @@ function shotgun() {
   // The pump: cherry red with deep grooves.
   g.box([-1.5, 0.5, 10], [1.5, 3.5, 15], 'cherry', { paint: (ctx, c) => (ctx.face !== '+z' && ctx.face !== '-z' && ctx.w[2] > 10.5 && ctx.w[2] < 14.5 && Math.floor(ctx.w[2] + 20) % 2 === 1 ? mul(c, 0.6) : c) });
   // A holographic sight on a mount on the receiver: cherry red, like the pump.
-  g.box([-1.5, 5, 2.5], [1.5, 6, 6.5], 'parker', { paint: railTeeth });
-  const sight = holo(g, { y: 7, z: 2, w: 3, h: 3, len: 5, hood: 'cherry' });
+  g.box([-1.5, 5, 2.5], [1.5, 5.5, 5.5], 'parker', { paint: railTeeth });
+  const sight = holo(g, { y: 7.5, z: 2, w: 5, h: 4, len: 4, body: 2, mat: 'cherry' });
   // Trigger guard and trigger.
   g.box([-0.5, -1, 1.5], [0.5, 0, 4.5], 'darksteel');
   g.box([-0.5, 0, 3.5], [0.5, 1, 4.5], 'darksteel');
@@ -1277,6 +1295,6 @@ for (const gun of GUNS) {
   if (blocked.length) throw new Error(`${gun.id}: the optic's window isn't clear: ${blocked.join('; ')}`);
   if (gun.window) {
     const { x0, x1, y0, y1, z0, z1 } = gun.window;
-    console.log(`  optic window ${x1 - x0} x ${y1 - y0} px inside (x ${x0}..${x1}, y ${y0}..${y1}, z ${z0}..${z1}), clear`);
+    console.log(`  optic window ${x1 - x0} x ${y1 - y0} px inside (x ${x0}..${x1}, y ${y0}..${y1}, z ${z0}..${z1}), clear from ${EYE_BACK} px behind`);
   }
 }
