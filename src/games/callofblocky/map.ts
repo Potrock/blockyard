@@ -1217,8 +1217,9 @@ export const MAP: MapSpec = {
   terraform: [
     { x: -22, z: 0, radius: 40, blend: 22, height: G + 0.5 },
     { x: 22, z: 0, radius: 40, blend: 22, height: G + 0.5 },
-    ...HILL_LETTERS.map(([, x0, z, y0]) => ({ x: x0 + 3, z: z - 6, radius: 7, blend: 34, height: y0 - 3.5 })),
-    { x: 60, z: -44, radius: 6, blend: 24, height: 83.5 },
+    // Gentle enough that each step up is grass on top, not a dirt cliff.
+    ...HILL_LETTERS.map(([, x0, z, y0]) => ({ x: x0 + 3, z: z - 10, radius: 10, blend: 58, height: y0 - 3.5 })),
+    { x: 60, z: -44, radius: 7, blend: 46, height: 83.5 },
     { x: 118, z: 30, radius: 16, blend: 40, height: 84.5 },
     { x: -120, z: 20, radius: 18, blend: 44, height: 88.5 },
     { x: -70, z: 105, radius: 20, blend: 40, height: 82.5 },
