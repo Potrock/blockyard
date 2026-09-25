@@ -356,4 +356,121 @@ mod tests {
     }
 
     const NORTH_F: u8 = 0;
+
+    /// FNV-1a, a word at a time.
+    fn fnv(h: &mut u64, w: u64) {
+        for b in w.to_le_bytes() {
+            *h = (*h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+
+    /// Generated hills (seed 99) with a crafted layer of every kind of built-in block beside every
+    /// other (as the mesher's zoo), for fingerprinting what bodies and rays do among them.
+    fn zoo() -> crate::world::World {
+        let mut g = crate::gen::Generator::new(99);
+        let mut w = crate::world::World::new();
+        for cz in -1..=4 {
+            for cx in -1..=4 {
+                let d = g.generate(cx, cz);
+                w.insert_column(cx, cz, &d);
+            }
+        }
+        let kinds = [STONE, GLASS_B, OAK_LEAVES_B, WATER_B, slab_id(0, false), slab_id(0, true), stairs_id(0, 1, false), stairs_id(0, 2, true), bed_id(0, 1, true), TORCH_B, WALL_TORCH_B + 2, log_id(0, 0), log_id(0, 2), GLOWSTONE_B, GRASS, AIR];
+        for y in 150..154 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let k = ((x * 7 + z * 3 + y * 5) as usize) % kinds.len();
+                    w.set(x, y, z, kinds[k]);
+                }
+            }
+        }
+        w
+    }
+
+    /// The built-in blocks' tables and models (what the mesher, light and physics read), as they
+    /// were before game blocks could have shapes of their own.
+    #[test]
+    fn built_in_tables_are_unchanged() {
+        let reg = crate::blocks::registry();
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for id in 0..256 {
+            for t in [&reg.opaque, &reg.opacity, &reg.emit, &reg.solid, &reg.layer, &reg.shape, &reg.lit_inside] {
+                fnv(&mut h, t[id] as u64);
+            }
+            for c in reg.shapes.cover[id] {
+                fnv(&mut h, c as u64);
+            }
+            let b = &reg.blocks[id];
+            for f in 0..6 {
+                fnv(&mut h, b.tex[f] as u64 | (b.uvt[f] as u64) << 16);
+            }
+            if let Some(m) = &reg.shapes.models[id] {
+                for p in &m.parts {
+                    for k in 0..3 {
+                        fnv(&mut h, p.from[k] as u64 | (p.to[k] as u64) << 8);
+                    }
+                    for f in p.faces {
+                        fnv(&mut h, f.tex as u64 | (f.uvt as u64) << 16);
+                    }
+                }
+                for bx in &m.bounds {
+                    for v in bx {
+                        fnv(&mut h, *v as u64);
+                    }
+                }
+                fnv(&mut h, m.flat_light as u64);
+            }
+        }
+        assert_eq!(h, 0x181ea19e98622433, "built-in block tables changed");
+    }
+
+    /// Bodies walking, jumping and falling over the built-in blocks, and rays through them, as
+    /// they were before game blocks could have shapes of their own: the same to the last bit.
+    #[test]
+    fn built_in_physics_and_rays_are_unchanged() {
+        use crate::world::{walk_axis, MoveInput, Player};
+        let w = zoo();
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for k in 0..24 {
+            let (x, z) = (0.5 + (k * 5 % 16) as f64 + 0.13 * k as f64 % 1.0, 0.5 + (k * 3 % 16) as f64);
+            let mut p = Player::new(x, 156.0, z);
+            for step in 0..400 {
+                let a = (k as f64 * 0.7 + step as f64 * 0.01).sin();
+                let input = MoveInput { wish_x: a, wish_z: (1.0 - a * a).sqrt() * if k % 2 == 0 { 1.0 } else { -1.0 }, jump: step % 50 < 5, sneak: k % 5 == 0, sprint: k % 3 == 0, slide: false, speed: 1.0 };
+                p.step(&w, &input, 1.0 / 60.0);
+                for v in p.pos.iter().chain(&p.vel) {
+                    fnv(&mut h, v.to_bits());
+                }
+                fnv(&mut h, (p.on_ground as u64) | (p.in_water as u64) << 1);
+            }
+        }
+        // Creatures' boxes (smaller and larger) stepping along.
+        for k in 0..16 {
+            let mut pos = [1.0 + k as f64 * 0.9, 154.0, 8.0];
+            for _ in 0..200 {
+                walk_axis(&w, &mut pos, if k % 2 == 0 { 0 } else { 2 }, 0.05, 0.2 + k as f64 * 0.05, 0.6 + k as f64 * 0.1, true);
+                crate::world::move_axis(&w, &mut pos, 1, -0.05, 0.3, 1.0, 0);
+                for v in pos {
+                    fnv(&mut h, v.to_bits());
+                }
+            }
+        }
+        for k in 0..4000 {
+            let t = k as f64 * 0.37;
+            let o = [8.0 + 9.0 * t.sin(), 152.0 + 4.0 * (t * 0.3).cos(), 8.0 + 9.0 * (t * 1.3).cos()];
+            let d = [(t * 2.1).cos(), (t * 0.9).sin() - 0.3, (t * 1.7).sin()];
+            match w.raycast(o, d, 12.0) {
+                Some((p, n, b, t)) => {
+                    for v in p.iter().chain(&n) {
+                        fnv(&mut h, *v as u64);
+                    }
+                    fnv(&mut h, b as u64);
+                    fnv(&mut h, t.to_bits());
+                }
+                None => fnv(&mut h, 1),
+            }
+            fnv(&mut h, w.raycast_solid(o, d, 12.0).map_or(7, f64::to_bits));
+        }
+        assert_eq!(h, 0x4e8d53d99c21d40e, "built-in physics or rays changed");
+    }
 }
