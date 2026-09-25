@@ -115,7 +115,8 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     kind: 'melee',
     name: 'Hattori Katana',
     icon: { gltf: url('katana') },
-    hold: { style: 'sword', model: HeldModels.gltf(url('katana')) },
+    // Rolled onto its side: in the hand the flat of the blade (and its hamon) shows, not the edge.
+    hold: { style: 'sword', model: HeldModels.gltf(url('katana'), { rotation: [0, 0, 90] }) },
     damage: 101,
     cooldown: 0.65,
     reach: 3.6,
