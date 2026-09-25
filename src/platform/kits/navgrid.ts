@@ -498,20 +498,17 @@ const OPEN: Probe = { alongX: true, alongZ: true, ox: 0, oz: 0, sill: 0 };
 
 /**
  * A kind of block, for walking. Slabs and stairs are told by their state (a slab's `type`,
- * stairs' `half`), or by name for blocks that have neither; a block's `shape` and collision
- * `height` are used where `blockInfo` gives them.
+ * stairs' `half`), then by `shape` and collision `height` (a game's own shapes).
  */
 function kindOf(b: BlockInfo | null): Kind {
   if (!b) return { solid: true, step: false, liquid: false, tall: false };
   const st = b.state ?? {};
-  const more = b as BlockInfo & { shape?: string; height?: number };
   let step: boolean;
   if ('type' in st) step = st.type === 'bottom';
   else if ('half' in st) step = st.half === 'bottom';
-  else if (more.shape === 'stairs' || more.shape === 'slab') step = true;
-  else if (typeof more.height === 'number') step = more.height > 0 && more.height <= 0.6;
-  else step = b.name.endsWith('_stairs') || b.name.endsWith('_slab');
-  return { solid: b.solid, step: b.solid && step, liquid: b.liquid, tall: b.solid && typeof more.height === 'number' && more.height > 1 };
+  else if (b.shape === 'stairs' || b.shape === 'slab') step = true;
+  else step = b.height > 0 && b.height <= 0.6;
+  return { solid: b.solid, step: b.solid && step, liquid: b.liquid, tall: b.solid && b.height > 1 };
 }
 
 /** A binary min-heap of cells by priority. */
