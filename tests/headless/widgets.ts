@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import type { GameDefinition, Player } from '../../src/platform/api/types';
+import { Presenter } from '../../src/platform/client/present';
 import { GameHost } from '../../src/platform/host/game';
 import { decode, encode } from '../../src/platform/net/codec';
 import type { HostBatch, PresentCall } from '../../src/platform/net/protocol';
 import { sanitizeCommand } from '../../src/platform/net/validate';
-import { cleanStyle, diffData, mergeData, parseMarkup, safeUrl, scopeCss, type MarkupNode } from '../../src/platform/ui/markup';
+import { cleanStyle, diffData, mergeData, parseMarkup, safeUrl, scopeCss, type MarkupNode, type PlainData } from '../../src/platform/ui/markup';
 import { compileWidget, WidgetView } from '../../src/platform/ui/widgets';
 import { check } from './_harness';
 
@@ -18,9 +19,12 @@ const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
 export default function widgets() {
   hosting();
   menus();
+  joining();
+  copies();
   markup();
   css();
   building();
+  bound();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -169,6 +173,167 @@ function hosting() {
   check(sanitizeCommand({ t: 'message', msg: { t: 'widgetAction', widget: 'shop<script>', action: 'buy', value: '' } }) === null, 'a malformed widget name is dropped');
   check(sanitizeCommand({ t: 'message', msg: { t: 'widgetAction', widget: 'shop', action: 'buy', value: { evil: 1 } } }) === null, 'a value that isn’t text is dropped');
   console.log(`  hosting: definitions once, patches only (${JSON.stringify(patch[0].args[1])}), late joiners caught up, buttons as their presser`);
+}
+
+// -------------------------------------------------------------------------------------------------
+// A player's screen: what reaches it, in order
+// -------------------------------------------------------------------------------------------------
+
+/**
+ * A server's client as far as presentation goes: the real `Presenter` over a stand-in HUD that
+ * notes each call it makes, fed a batch's events in order the way the runtime is (`joined` tells it
+ * who it is; a call for anyone else is dropped).
+ */
+function screenOf() {
+  const shown: string[] = [];
+  const hud = new Proxy({} as Record<string | symbol, unknown>, {
+    get: (t, k) => (k in t ? t[k] : (...args: unknown[]) => void shown.push(`${String(k)}:${typeof args[0] === 'string' ? args[0] : ''}`)),
+    set: (t, k, v) => ((t[k] = v), true),
+  });
+  const presenter = new Presenter(null, { hud: hud as never, fx: {} as never, sfx: {} as never, view: {} as never, send: () => {}, client: () => {} });
+  return {
+    shown,
+    take(b: HostBatch) {
+      for (const e of decode<HostBatch>(encode(b)).events) {
+        if (e.t === 'joined') presenter.player = e.player;
+        else if (e.t === 'call') presenter.apply(e.call);
+      }
+    },
+    count: (what: string) => shown.filter((s) => s === what).length,
+  };
+}
+
+/**
+ * A modal widget, another widget and a toast put up as a player joins (`playerJoin`) on a server,
+ * where their browser watched first and joins when they press Play: all of it reaches their screen
+ * (the bug: it came before the screen knew who it was, so it was dropped, and the host thought it
+ * was up, so the same again sent nothing). The modal goes again as they enter play; the game hears
+ * `playerReady` after `playerJoin` (and after `start`, for the first); the same widget again sends
+ * nothing, and after they close it, it goes whole.
+ */
+function joining() {
+  const heard: string[] = [];
+  const def: GameDefinition = {
+    id: 'joining-test',
+    title: 'Joining',
+    world: { terrain: 'flat', flatHeight: 8, seed: 5 },
+    setup(game) {
+      game.hud.define('picker', { modal: true, html: `<div>{{title}} <button data-action="pick" data-value="a">A</button></div>`, actions: { pick: () => {} } });
+      game.hud.define('badge', { html: `<b>{{name}}</b>` });
+      game.events.on('playerJoin', ({ player }) => {
+        heard.push(`join ${player.name}`);
+        player.hud.widget('picker', { title: 'Choose' });
+        player.hud.widget('badge', { name: player.name });
+        player.hud.toast(`Welcome, ${player.name}`);
+      });
+      game.events.on('playerReady', ({ player }) => heard.push(`ready ${player.name}`));
+    },
+    start: () => void heard.push('start'),
+  };
+  const host = new GameHost(def, { engine: wasm, seed: 5, remote: true, radius: 2, budget: Infinity, player: { id: 'p1', name: 'Ann' } });
+  const screens = new Map<string, ReturnType<typeof screenOf>>();
+  const ids = new Map<string, string>();
+  for (const name of ['Ann', 'Bob']) {
+    // Watching first (the title screen), then Play: `start` with their name.
+    const c = host.connect();
+    const screen = screenOf();
+    screens.set(name, screen);
+    ids.set(name, c.id);
+    screen.take(c.batch);
+    host.command(c.id, { t: 'start', name });
+    screen.take(host.step(1 / 30).get(c.id)!);
+    check(screen.count('widget:picker') >= 1, `${name}'s modal, put up as they joined, reached their screen: ${screen.shown.join(' ')}`);
+    check(screen.count('widget:badge') === 1 && screen.count('toast:Welcome, ' + name) === 1, `${name}'s badge and toast reached their screen too: ${screen.shown.join(' ')}`);
+    check(!screen.shown.some((s) => s.includes('Welcome, ' + (name === 'Ann' ? 'Bob' : 'Ann'))), "nobody else's toast");
+  }
+  check(heard.join(', ') === 'join Ann, start, ready Ann, join Bob, ready Bob', `playerReady after playerJoin (and start): ${heard.join(', ')}`);
+  const bob = host.sim.players.find((p) => p.name === 'Bob')!;
+  const bobScreen = screens.get('Bob')!;
+  const bobId = ids.get('Bob')!;
+  const before = bobScreen.shown.length;
+  bob.api.hud.widget('picker', { title: 'Choose' });
+  bobScreen.take(host.step(1 / 30).get(bobId)!);
+  check(bobScreen.shown.length === before, `the same widget again sends nothing: ${bobScreen.shown.slice(before).join(' ')}`);
+  host.command(bobId, { t: 'message', msg: { t: 'widgetClosed', player: '', widget: 'picker' } });
+  bob.api.hud.widget('picker', { title: 'Choose' });
+  bobScreen.take(host.step(1 / 30).get(bobId)!);
+  check(bobScreen.shown.slice(before).join(' ') === 'widgetRemove:picker widget:picker', `closed, then put up again: whole: ${bobScreen.shown.slice(before).join(' ')}`);
+
+  // Single-player: the one player is there from the start; Play is `start`, and they're ready then.
+  const solo: string[] = [];
+  const one = new GameHost({ ...def, setup: (game) => game.events.on('playerReady', ({ player }) => solo.push(player.name)), start: () => void solo.push('start') }, { engine: wasm, seed: 5, radius: 2, budget: Infinity });
+  one.handle({ t: 'start' });
+  check(solo.join() === 'start,Player', `single-player: ready once play starts: ${solo}`);
+  console.log(`  joining: a modal, a widget and a toast from playerJoin reach the joining screen; heard ${heard.join(', ')}`);
+}
+
+/**
+ * Everyone's widget and a player's own: everyone's changes reach a player's own copy, and a player
+ * who took everyone's down gets it back (whole) the next time the game puts it up for everyone
+ * (the bug: once they had a copy of their own, `game.hud.widget` never reached them again).
+ */
+function copies() {
+  const def: GameDefinition = {
+    id: 'copies-test',
+    title: 'Copies',
+    world: { terrain: 'flat', flatHeight: 8, seed: 5 },
+    setup: (game) => game.hud.define('card', { html: `<b>{{title}}</b> <i>{{mine}}</i>` }),
+  };
+  const host = new GameHost(def, { engine: wasm, seed: 5, remote: true, radius: 2, budget: Infinity, player: { id: 'p1', name: 'Ann' } });
+  const conns = ['Ann', 'Bob'].map((name) => {
+    const c = host.connect();
+    const screen = screenOf();
+    screen.take(c.batch);
+    host.command(c.id, { t: 'start', name });
+    return { id: c.id, screen };
+  });
+  const step = () => {
+    const out = host.step(1 / 30);
+    for (const c of conns) c.screen.take(out.get(c.id)!);
+    return out;
+  };
+  step();
+  const g = host.sim.ctx;
+  const bob = host.sim.players.find((p) => p.name === 'Bob')!.api;
+  const [annScreen, bobScreen] = conns.map((c) => c.screen);
+  const since = (s: ReturnType<typeof screenOf>, n: number) => s.shown.slice(n).join(' ');
+  const mark = () => [annScreen.shown.length, bobScreen.shown.length];
+
+  g.hud.widget('card', { title: 'Round 1' });
+  step();
+  bob.hud.widget('card', { mine: 'Bob' });
+  step();
+  let [a, b] = mark();
+  g.hud.widget('card', { title: 'Round 2' });
+  step();
+  const bobs = bob.hud.widget('card');
+  check(since(bobScreen, b) === 'widgetSet:card' && (bobs.data as { title: string; mine: string }).title === 'Round 2' && (bobs.data as { mine: string }).mine === 'Bob', `everyone's change reached Bob's own copy (his own field kept): ${since(bobScreen, b)} ${JSON.stringify(bobs.data)}`);
+
+  // Bob takes it down on his screen; everyone's next call puts it back there, as everyone has it.
+  bobs.remove();
+  step();
+  [a, b] = mark();
+  g.hud.widget('card', { title: 'Round 3' });
+  const out = step();
+  const back = out.get(conns[1].id)!.events.find((e) => e.t === 'call' && e.call.method === 'widget');
+  // (Everyone's patch goes to his screen too, which has nothing up to patch; then his whole one.)
+  check(since(bobScreen, b).endsWith('widget:card') && back?.t === 'call' && (back.call.args[1] as { title: string }).title === 'Round 3', `everyone's widget came back up on Bob's screen, whole: ${since(bobScreen, b)}`);
+  check(since(annScreen, a) === 'widgetSet:card', `Ann (who never took it down) just got the change: ${since(annScreen, a)}`);
+  check(bobs.shown && (bobs.data as { title: string }).title === 'Round 3', "Bob's handle says it's up again");
+
+  // His own call after taking it down starts from everyone's.
+  bobs.remove();
+  bob.hud.widget('card', { mine: 'again' });
+  const again = step().get(conns[1].id)!.events.filter((e) => e.t === 'call' && e.call.method === 'widget');
+  const data = again[0]?.t === 'call' ? (again[0].call.args[1] as { title: string; mine: string }) : null;
+  check(data?.title === 'Round 3' && data.mine === 'again', `his own copy starts from everyone's: ${JSON.stringify(data)}`);
+
+  // Everyone's taken down: off every screen, his own copy too.
+  [a, b] = mark();
+  g.hud.widget('card').remove();
+  step();
+  check(since(annScreen, a) === 'widgetRemove:card' && since(bobScreen, b) === 'widgetRemove:card' && !bobs.shown, `everyone's remove takes it off every screen: ${since(annScreen, a)} / ${since(bobScreen, b)}`);
+  console.log("  copies: everyone's changes reach own copies, and everyone's widget comes back where a player took it down");
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -365,6 +530,56 @@ function building() {
     check(acts.join() === 'pick:rifle,pick:smg', `a button's action, with its value as it is now: ${acts}`);
     check(button.getAttribute('disabled') === 'true' && root.all('img')[0].getAttribute('src') === '', 'on again; a bound address that turns bad is emptied');
     console.log(`  building: a ${rows.length}-row list, conditions, bindings and a button on a stand-in page`);
+  } finally {
+    g.document = had;
+  }
+}
+
+/**
+ * Widgets bound to the screen's own state (`$gun`, `$ability`, `$health`): the screen fills them
+ * in itself, so a shot or a reload shows the frame it happens. They're read like data (text only,
+ * styles checked as they're filled), in lists and conditions too, beside the game's own data; a
+ * widget that binds none isn't refreshed for them.
+ */
+function bound() {
+  const g = globalThis as unknown as { document?: unknown };
+  const had = g.document;
+  g.document = {
+    createElement: (tag: string) => new FakeElement(tag),
+    createTextNode: (t: string) => new FakeNode('#text', t),
+    createComment: (t: string) => new FakeNode('#comment', t),
+    createDocumentFragment: () => new FakeNode('#fragment'),
+  };
+  try {
+    const def = compileWidget('ammo', {
+      html: `<div data-if="$gun"><b>{{$gun.mag}}/{{$gun.size}}</b><span data-if="$gun.reloading">loading</span>
+             <s data-each="rounds"><u data-if="$i < $gun.mag">|</u></s><em style="--n: {{$gun.name}}">{{$gun.name}}</em></div>
+             <p>{{label}} {{$ability.dash.cool}} {{$health}}</p><i data-each="$gun.marks">{{.}}</i>`,
+    })!;
+    check(def.local, 'a widget binding $gun is refreshed with the screen');
+    check(!compileWidget('plain', { html: `<b data-each="rows">{{$n}} {{name}}</b>` })!.local, 'one binding only its data (and $i / $n) is not');
+    const local: PlainData = {};
+    const view = new WidgetView(def, mergeData({}, { rounds: [1, 1, 1], label: 'dash' }), () => {}, local);
+    const root = view.root as unknown as FakeElement;
+    const div = root.all('div')[0];
+    check(div.hidden && root.all('p')[0].textContent.trim() === 'dash', `no gun held: hidden; the game's data still shows: "${root.all('p')[0].textContent}"`);
+    const set = (state: PlainData) => {
+      for (const k of Object.keys(local)) delete local[k];
+      Object.assign(local, state);
+      view.update();
+    };
+    set({ $gun: { mag: 2, size: 3, reloading: false, name: '<img src=x onerror=alert(1)>', marks: ['a', 'b'] }, $ability: { dash: { cool: 0.5 } }, $health: 17 });
+    const loaded = () => root.all('u').filter((u) => !u.hidden).length;
+    check(!div.hidden && root.all('b')[0].textContent === '2/3' && root.all('span')[0].hidden && loaded() === 2, `a gun with 2 of 3: "${root.all('b')[0].textContent}", ${loaded()} rounds shown`);
+    check(root.all('p')[0].textContent.trim() === 'dash 0.5 17' && root.all('i').map((i) => i.textContent).join() === 'a,b', `abilities, health and a list from the screen's state: "${root.all('p')[0].textContent}"`);
+    const em = root.all('em')[0];
+    check(em.textContent === '<img src=x onerror=alert(1)>' && em.childNodes.every((c) => c.nodeName === '#text'), "the screen's state is only ever text");
+    set({ $gun: { mag: 0, size: 3, reloading: true, name: 'url(https://evil.example/x)' }, $health: 17 });
+    check(!root.all('span')[0].hidden && loaded() === 0 && root.all('b')[0].textContent === '0/3', 'fired dry and reloading: shown at once');
+    check(em.getAttribute('style') === '', `a style bound to it is checked as it's filled: "${em.getAttribute('style')}"`);
+    set({});
+    check(div.hidden, 'the gun put away: hidden again');
+    console.log(`  bound: $gun, $ability and $health filled in by the screen, in text, lists, conditions and styles`);
   } finally {
     g.document = had;
   }

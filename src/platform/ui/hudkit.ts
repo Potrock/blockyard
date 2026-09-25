@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { h } from './dom';
-import { mergeData, plainRecord, scopeCss, type WidgetWire } from './markup';
+import { mergeData, plainRecord, scopeCss, type PlainData, type WidgetWire } from './markup';
 import { compileWidget, WidgetView, type CompiledWidget } from './widgets';
 import type { FeedPart, HudApi, HudTheme, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3, WidgetAnchor } from '../api/types';
 import type { AnchorRef, RadarWire } from '../net/protocol';
@@ -120,6 +120,9 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
   private barText: HTMLElement;
   private ammoEl: HTMLElement;
   private ammoKey = '';
+  /** Throwables carried (bottom right, over the rounds and the radar): each one's picture, how many, its key. */
+  private throwsEl: HTMLElement;
+  private throwsKey = '';
   /** An open menu's key listener, removed when it closes, however it closes. */
   private unhooks = new Map<HTMLElement, () => void>();
   /** Each open menu's close (B on a controller backs out of the top one). */
@@ -130,6 +133,12 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
   private widgetSlots = new Map<WidgetAnchor, HTMLElement>();
   private widgetDefs = new Map<string, CompiledWidget>();
   private widgetsUp = new Map<string, ShownWidget>();
+  /**
+   * This screen's own state, for widgets' `$` names (`{{$gun.mag}}`, `{{$ability.dash.cool}}`):
+   * one record every widget reads, changed in place (`setLocal`).
+   */
+  private local: PlainData = {};
+  private localKey = '';
   /** A button in a widget was pressed; a modal widget was closed by the player (the presenter tells the host). */
   onWidgetAction: ((widget: string, action: string, value: string) => void) | null = null;
   onWidgetClosed: ((widget: string) => void) | null = null;
@@ -161,6 +170,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     this.barEl.style.display = 'none';
     this.ammoEl = h('div.ammo');
     this.ammoEl.style.display = 'none';
+    this.throwsEl = h('div.throwables');
+    this.throwsEl.style.display = 'none';
     this.widgetSheet = h('style') as HTMLStyleElement;
     this.widgetLayer = h('div.gw-layer', {}, this.widgetSheet);
     this.root = h(
@@ -182,6 +193,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
       this.popEl,
       this.barEl,
       this.ammoEl,
+      this.throwsEl,
       this.widgetLayer,
       this.boardEl,
     );
@@ -282,6 +294,27 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
       void this.ammoEl.offsetWidth;
       this.ammoEl.classList.add('fired');
     }
+  }
+
+  /**
+   * The throwables with keys of their own they carry (bottom right, over the rounds): a picture
+   * of each, how many, and its key; one being cooked shows it. Null (or none) hides them.
+   */
+  throwables(list: { icon: IconRef; count: number; key: string; cooking: boolean }[] | null) {
+    const key = list ? JSON.stringify(list) : '';
+    if (key === this.throwsKey) return;
+    const was = this.throwsKey ? (JSON.parse(this.throwsKey) as { count: number }[]) : [];
+    this.throwsKey = key;
+    this.throwsEl.style.display = list?.length ? '' : 'none';
+    if (!list?.length) return;
+    this.throwsEl.replaceChildren(
+      ...list.map((t, i) => {
+        const el = h(`div.throwable${t.count === 0 ? '.out' : ''}${t.cooking ? '.cooking' : ''}`, {}, this.icon('img.throwable-icon', t.icon), h('span.throwable-count', {}, `×${t.count}`), h('span.throwable-key', {}, t.key));
+        // One gone: a bump.
+        if (was[i] && was[i].count > t.count) el.classList.add('spent');
+        return el;
+      }),
+    );
   }
 
   /**
@@ -843,6 +876,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     this.numbers = [];
     this.scoreboard(null);
     this.ammo(null);
+    this.throwables(null);
     for (const a of this.hurts) a.el.remove();
     this.hurts = [];
     this.popEl.classList.remove('show');
@@ -864,15 +898,43 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     if (up) this.widget(name, up.view.data);
   }
 
-  /** Up on this screen (again, from scratch), filled in from `data`. */
+  /**
+   * Up on this screen (again, from scratch), filled in from `data`. A modal one that's up already
+   * is filled in again inside its own screen, so the screen (and the mouse it freed) stays.
+   */
   widget(name: string, data: unknown) {
     const def = this.widgetDefs.get(name);
     if (!def) return;
+    const view = new WidgetView(def, mergeData({}, plainRecord(data)), (action, value) => this.onWidgetAction?.(name, action, value), this.local);
+    const was = this.widgetsUp.get(name);
+    if (def.modal && was?.screen) {
+      was.view.root.replaceWith(view.root);
+      was.view = view;
+      return;
+    }
     this.widgetRemove(name);
-    const view = new WidgetView(def, mergeData({}, plainRecord(data)), (action, value) => this.onWidgetAction?.(name, action, value));
     const screen = def.modal ? this.widgetScreen(name, view) : null;
     if (!screen) this.widgetSlot(def.at).append(view.root);
     this.widgetsUp.set(name, { view, screen });
+  }
+
+  /** Whether a widget that's up reads this screen's own state (then it's worth working out each frame). */
+  get wantsLocal(): boolean {
+    for (const up of this.widgetsUp.values()) if (up.view.def.local) return true;
+    return false;
+  }
+
+  /**
+   * This screen's own state changed (its gun, abilities, health, as it predicts them): widgets
+   * that bind it (`{{$gun.mag}}`) show it at once, with no round trip to the host.
+   */
+  setLocal(state: PlainData) {
+    const key = JSON.stringify(state);
+    if (key === this.localKey) return;
+    this.localKey = key;
+    for (const k of Object.keys(this.local)) delete this.local[k];
+    Object.assign(this.local, state);
+    for (const up of this.widgetsUp.values()) if (up.view.def.local) up.view.update();
   }
 
   /** What it shows changes: merged in, and only what reads differently is touched. */

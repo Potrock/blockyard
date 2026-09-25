@@ -188,6 +188,24 @@ pub enum ModelKind {
     /// Half of a bed whose head points toward the facing; true = the head half.
     /// `tex`: [top, side, end, underside, legs, -].
     Bed(u8, bool),
+    /// A game's fence: a post, with rails to the fences and solid blocks beside it (see
+    /// `shapes::JOIN_FENCE`). Faces use `tex` by direction.
+    Fence,
+    /// A game's pane: a thin wall joining the panes and solid blocks beside it.
+    Pane,
+    /// A game's post: a thin pillar, turned by `Orient` (lying along x or z).
+    Post(Orient),
+    /// A game's own boxes (1/16 grid, written as it faces north), turned by `Orient`.
+    Boxes(&'static [[u8; 6]], Orient),
+}
+
+/// How a game's block is turned from the way it's written (facing north, or upright): first
+/// tipped about the east-west axis (`tilt` 1 brings its north face to the top, -1 to the
+/// bottom), then `turn` quarter turns clockwise seen from above (north to east).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Orient {
+    pub tilt: i8,
+    pub turn: u8,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -242,6 +260,8 @@ pub struct Block {
     pub breakable: bool,
     /// A slab: the block two halves make together.
     pub double: u8,
+    /// Bodies climb it (a game's ladders and vines).
+    pub climbable: bool,
 }
 
 const fn base(name: &'static str, label: &'static str, t: [u16; 6]) -> Block {
@@ -266,6 +286,7 @@ const fn base(name: &'static str, label: &'static str, t: [u16; 6]) -> Block {
         placeable: true,
         breakable: true,
         double: 0,
+        climbable: false,
     }
 }
 
@@ -758,6 +779,8 @@ pub struct Registry {
     pub shape: [u8; 256],
     /// 1 for a model that keeps light out but is lit itself (slabs, stairs).
     pub lit_inside: [u8; 256],
+    /// 1 when bodies climb it (ladders, vines).
+    pub climbable: [u8; 256],
     /// The models of blocks that aren't full cubes, and the sides each block fills.
     pub shapes: Shapes,
 }
@@ -779,8 +802,9 @@ impl Registry {
         let shape = table(&|b| shape_id(b.shape));
         // Blocks light yet is lit itself: light reaches in but doesn't carry on through.
         let lit_inside = table(&|b| (!b.opaque && b.opacity >= 15 && b.shape == Shape::Model) as u8);
+        let climbable = table(&|b| b.climbable as u8);
         let shapes = crate::shapes::build(&blocks, count);
-        Registry { blocks, count, opaque, opacity, emit, solid, layer, shape, lit_inside, shapes }
+        Registry { blocks, count, opaque, opacity, emit, solid, layer, shape, lit_inside, climbable, shapes }
     }
 
     #[inline(always)]
@@ -793,6 +817,7 @@ impl Registry {
             Prop::Layer => &self.layer,
             Prop::Shape => &self.shape,
             Prop::LitInside => &self.lit_inside,
+            Prop::Climbable => &self.climbable,
         }
     }
 }
@@ -808,6 +833,7 @@ pub enum Prop {
     Layer,
     Shape,
     LitInside,
+    Climbable,
 }
 
 impl std::ops::Index<usize> for Prop {
@@ -832,6 +858,8 @@ pub const LAYER: Prop = Prop::Layer;
 pub const SHAPE: Prop = Prop::Shape;
 /// 1 for a model that keeps light out but is lit itself (slabs, stairs).
 pub const LIT_INSIDE: Prop = Prop::LitInside;
+/// 1 when bodies climb it (ladders, vines).
+pub const CLIMBABLE: Prop = Prop::Climbable;
 
 thread_local! {
     /// The blocks in use on this thread (None until first asked: the built-in ones).
@@ -901,15 +929,18 @@ fn leak(s: &str) -> &'static str {
 ///
 /// ```text
 /// { "name": "marble_slab", "label": "Marble Slab", "state": "type=top",
-///   "shape": "cube" | "cross" | "slab" | "stairs", "facing": 0..3 (stairs), "top": bool,
+///   "shape": "cube" | "cross" | "slab" | "stairs" | "fence" | "pane" | "post" | "boxes",
+///   "facing": 0..3 (stairs), "top": bool, "boxes": [[x0, y0, z0, x1, y1, z1], ...] (1/16),
+///   "tilt": -1..1, "turn": 0..3 (a cube, post or boxes turned: see `Orient`),
 ///   "layer": 0 opaque | 1 cutout, "tex": [+X -X +Y -Y +Z -Z texture layers], "uvt": [6],
 ///   "solid": bool, "opacity": 0..15, "emit": 0..15, "tint": bool (the grass colour),
 ///   "cull_self": bool, "replaceable": bool, "placeable": bool, "breakable": bool,
-///   "double": id (a slab's full block), "anim": 0 | 1 | 2 }
+///   "double": id (a slab's full block), "anim": 0 | 1 | 2, "climbable": bool }
 /// ```
 ///
 /// Left out: a cube is solid and opaque on the opaque layer; a cross is a plant (cutout, not solid,
-/// replaceable, swaying).
+/// replaceable, swaying); fences, panes, posts and boxes are solid and let light through. A turned
+/// cube's textures are given as it faces north (or stands upright) and turn with it.
 fn game_block(v: &Json) -> Result<Block, String> {
     let num = |k: &str, def: f64| v.get(k).and_then(Json::as_f64).unwrap_or(def);
     let flag = |k: &str, def: bool| v.get(k).and_then(Json::as_bool).unwrap_or(def);
@@ -939,18 +970,27 @@ fn game_block(v: &Json) -> Result<Block, String> {
     };
     let facing = (num("facing", 0.0) as u8).min(3);
     let top = flag("top", false);
+    let orient = Orient { tilt: num("tilt", 0.0).clamp(-1.0, 1.0) as i8, turn: (num("turn", 0.0) as u8).min(3) };
     let (shape, model, layer) = match text("shape").unwrap_or("cube") {
         "cube" => (Shape::Cube, ModelKind::None, layer),
         // Plants are drawn with the cutout layer's alpha test.
         "cross" => (Shape::Cross, ModelKind::None, Layer::Cutout),
         "slab" => (Shape::Model, ModelKind::Slab(top), layer),
         "stairs" => (Shape::Model, ModelKind::Stairs(facing, top), layer),
+        "fence" => (Shape::Model, ModelKind::Fence, layer),
+        "pane" => (Shape::Model, ModelKind::Pane, layer),
+        "post" => (Shape::Model, ModelKind::Post(orient), layer),
+        "boxes" => (Shape::Model, ModelKind::Boxes(game_boxes(v)?, orient), layer),
         s => return Err(format!("unknown shape {s:?}")),
     };
+    // A cube turned: its faces' textures go round with it.
+    let (tex, uvt) = if shape == Shape::Cube && orient != Orient::default() { crate::shapes::turn_cube(tex, uvt, orient) } else { (tex, uvt) };
     let cross = shape == Shape::Cross;
     let opaque = shape == Shape::Cube && layer == Layer::Opaque;
-    // Slabs and stairs keep light out (they make roofs) and are lit inside, like the built-in ones.
-    let opacity = num("opacity", if opaque || shape == Shape::Model { 15.0 } else { 0.0 }).clamp(0.0, 15.0) as u8;
+    // Slabs and stairs keep light out (they make roofs) and are lit inside, like the built-in
+    // ones; thin things (fences, panes, posts, a game's boxes) let it through.
+    let blocks_light = opaque || matches!(model, ModelKind::Slab(_) | ModelKind::Stairs(..));
+    let opacity = num("opacity", if blocks_light { 15.0 } else { 0.0 }).clamp(0.0, 15.0) as u8;
     Ok(Block {
         name: leak(name),
         label: leak(text("label").unwrap_or(name)),
@@ -972,7 +1012,34 @@ fn game_block(v: &Json) -> Result<Block, String> {
         placeable: flag("placeable", true),
         breakable: flag("breakable", true),
         double: num("double", 0.0).clamp(0.0, 254.0) as u8,
+        climbable: flag("climbable", false),
     })
+}
+
+/// The most boxes a game's block can be made of.
+pub const MAX_BOXES: usize = 16;
+
+/// A game block's own boxes (`"boxes"`): each [x0, y0, z0, x1, y1, z1] on the 1/16 grid, inside
+/// its cell and not empty. Kept for the life of the thread, like the rest of its description.
+fn game_boxes(v: &Json) -> Result<&'static [[u8; 6]], String> {
+    let list = v.get("boxes").and_then(Json::as_arr).ok_or("a boxes shape needs boxes")?;
+    if list.is_empty() || list.len() > MAX_BOXES {
+        return Err(format!("boxes: 1 to {MAX_BOXES} of them"));
+    }
+    let mut out = Vec::with_capacity(list.len());
+    for b in list {
+        let a = b.as_arr().filter(|a| a.len() == 6).ok_or("boxes: each is [x0, y0, z0, x1, y1, z1]")?;
+        let mut c = [0u8; 6];
+        for (o, x) in c.iter_mut().zip(a) {
+            let x = x.as_f64().filter(|x| (0.0..=16.0).contains(x) && x.fract() == 0.0).ok_or("boxes: corners are whole sixteenths, 0 to 16")?;
+            *o = x as u8;
+        }
+        if (0..3).any(|k| c[k] >= c[k + 3]) {
+            return Err("boxes: each box's far corner must be past its near one".into());
+        }
+        out.push(c);
+    }
+    Ok(Box::leak(out.into_boxed_slice()))
 }
 
 /// A string as JSON writes it (game blocks' names and labels can hold anything).
@@ -1016,6 +1083,10 @@ pub fn registry_json() -> String {
             ModelKind::Slab(_) => "slab",
             ModelKind::Stairs(..) => "stairs",
             ModelKind::Bed(..) => "bed",
+            ModelKind::Fence => "fence",
+            ModelKind::Pane => "pane",
+            ModelKind::Post(_) => "post",
+            ModelKind::Boxes(..) => "boxes",
         };
         // Small attachments (plants, torches) break at a touch and show as flat items.
         let small = matches!(b.shape, Shape::Cross) || matches!(b.model, ModelKind::Torch | ModelKind::WallTorch(_));
@@ -1031,16 +1102,32 @@ pub fn registry_json() -> String {
             i, quoted(b.name), quoted(b.label), quoted(b.state), shape, kind, b.layer as u8, b.tex[0], b.tex[1], b.tex[2], b.tex[3], b.tex[4], b.tex[5],
             b.uvt[0], b.uvt[1], b.uvt[2], b.uvt[3], b.uvt[4], b.uvt[5], b.tint, b.emit, b.solid, b.replaceable, b.placeable, b.breakable, small, b.double, sturdy, b.opacity, b.cull_self, b.anim
         ));
+        if b.climbable {
+            s.push_str(",\"climbable\":true");
+        }
         if let Some(m) = &shapes.models[i] {
-            s.push_str(",\"boxes\":[");
-            for (k, bx) in m.bounds.iter().enumerate() {
-                if k > 0 {
-                    s.push(',');
+            let list = |s: &mut String, key: &str, boxes: &[[u8; 6]]| {
+                s.push_str(&format!(",\"{key}\":["));
+                for (k, bx) in boxes.iter().enumerate() {
+                    if k > 0 {
+                        s.push(',');
+                    }
+                    s.push_str(&format!("[{},{},{},{},{},{}]", bx[0], bx[1], bx[2], bx[3], bx[4], bx[5]));
                 }
-                s.push_str(&format!("[{},{},{},{},{},{}]", bx[0], bx[1], bx[2], bx[3], bx[4], bx[5]));
+                s.push(']');
+            };
+            list(&mut s, "boxes", &m.bounds);
+            // What bodies collide with, where that's more (a fence is 1.5 high).
+            if m.collide != m.bounds {
+                list(&mut s, "collide", &m.collide);
             }
-            s.push_str("],\"parts\":[");
-            for (k, p) in m.parts.iter().enumerate() {
+            // A fence or pane is drawn (an icon, in a hand) joined east and west, as it usually stands.
+            let look = shapes.joined(i as u8).map_or(m, |j| &j[crate::shapes::JOIN_EAST_WEST]);
+            if shapes.joins[i] != 0 {
+                s.push_str(",\"joins\":true");
+            }
+            s.push_str(",\"parts\":[");
+            for (k, p) in look.parts.iter().enumerate() {
                 if k > 0 {
                     s.push(',');
                 }

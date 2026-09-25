@@ -34,7 +34,7 @@ src/games/
     art/ sounds.ts      team skins, item sprites, sounds
   callofblocky/         Call of Blocky: a pulp free-for-all shooter against bots and people
     index.ts            rules: the match, spawns, kills, streaks, loadouts, the HUD
-    weapons.ts          the guns (kind 'gun') and the katana
+    weapons.ts          the guns (kind 'gun'), the katana, and the lethals (kind 'throwable')
     bots.ts nav.ts      bot fighters (game.bots) and the walking grid they path-find on
     map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
     models/             the guns and fighters as GLB files (tools/ writes them)
@@ -104,9 +104,13 @@ Register it in `src/games/index.ts` and open `?game=heart-hunt`. The launcher li
 | `start(game)` | when the player first clicks play, and after `game.restart()` | reset state, give the starting kit, schedule the first beat |
 | `update(game, dt)` | every frame while running (not paused) | rules, spawning, HUD |
 
-`game.restart()` clears entities, props, pickups, timers, the inventory and HUD, puts back any blocks broken, placed or shot into this session (unless the game sets `world.persist`), revives the player at the spawn point and calls `start` again. Keep your game state in plain module variables and reset it in `start`.
+`game.restart()` clears entities, props, pickups, timers, the inventory and HUD, puts back any blocks broken, placed or shot into this session (unless the game sets `world.persist`), revives the player at the spawn point, lets go of any `freeze`, and calls `start` again. Keep your game state in plain module variables and reset it in `start`.
 
-Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it over `setTimeout`.
+Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it over `setTimeout`. There are two clocks:
+- `clock.now` is the match's: seconds of play since `start`, and a restart puts it back to 0 (clearing the timers with it). Times you keep from it (`roundStartedAt = game.clock.now`) belong to this match: reset them in `start`, or a round that began at 90 s looks 90 s in the future after a restart.
+- `clock.total` is all the game's time since it first started, and a restart doesn't touch it: for what outlives a match (a cooldown across restarts, when someone joined).
+
+A person's screen coming into play is its own moment: `playerReady` (after `start` for the first player, and right after `playerJoin` for anyone joining a server) is the place for what needs their screen, like a modal widget (see Presentation).
 
 ## World
 
@@ -124,7 +128,7 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion (in a world with destructible blocks, a crater: below). With `damage` it hurts too: `explode(at, 1.5, { damage: [160, 20], reach: 5.5, knockback: 1.2, by, weapon })` takes 160 off anyone at its middle, falling to 20 at 5.5 blocks and nothing past that or behind a wall, pushes them away, and names `by` and `weapon` (the hits' `cause` is `'explosion'`). In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. Every change to a block, however it's made (set, broken, placed, blown up, carved into, put back by `restart`), fires `blockChange` (`{ x, y, z, block }`, after the change), for keeping something built from the blocks up to date; listen from `setup`. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
 
 ### Block shapes and states
 
@@ -157,11 +161,17 @@ defineGame({
 
 Only solid, opaque, full blocks carve: not glass, leaves, slabs, stairs, torches, plants or liquids. Guns carve where their bullets land (each gun's `carve`, see Guns). `game.world.carve(point, dir, { radius, depth, by })` does it on purpose: a rounded channel from `point` along `dir`, `radius` round and `depth` long (blocks, defaults 0.1 and 0.2), through every block it reaches: a blast with a big radius, a drill with a long depth. It returns how many little voxels went (4096 make a block), 0 when there was nothing it could take, so carving the same place twice changes nothing the second time.
 
+**Explosions** blow craters. In a world with destructible blocks, `world.explode` (and a grenade's blast, see Throwables) takes a ragged sphere of little voxels out of the destructible blocks it reaches: a wall is bitten into, a thin one holed, the crater's edge wandering in and out by about a third of its radius (seeded by where it went off, so the host and every screen carve the same crater). Blocks the game made destructible that can't be carved (glass, leaves, slabs, torches) break whole within the radius, and what isn't destructible (under `above`, the `except`ed) stands: the floor stays. A world without destructible blocks blows out whole blocks, as always. `filter` still decides what goes, carved or whole.
+
+**Rubble.** What's carved out falls: every screen throws chips from each block a bullet or a blast bit into (a few little cubes coloured from the block's own texture, more the more went, flung away from an explosion) and chunks from each block broken whole, with a puff of dust. They tumble, bounce and settle on what's there (to the little voxel), lie a while and sink away. It's worked out on each screen from the same damage (nothing's sent for it) and drawn in one go, so it costs nothing once it's settled.
+
 `restart` makes every block whole again with the rest of the world. Damage isn't saved (a block carved away altogether is an edit, and a `persist` world keeps that). A damaged block keeps light out as it did (it's lit inside by what reaches it), so a hole through a roof lets you see the sky but not its light. Creatures' pathfinding treats a damaged block as whole until it's gone. Call of Blocky makes everything above its street destructible.
+
+`world.carved(x, y, z)` says how much of a block has been carved away (0 whole, up to 1), and `world.fits(p)` whether a player's body (0.6 x 1.8 x 0.6) fits with its feet at `p`, going by what's left of each block (a hole through a wall, for one). Each block carved into fires `blockChange`, like any other change to a block. The `navGrid` kit (see Kits) uses all three: a hole a body fits through is a way through the wall for bots.
 
 ### Blocks of your own
 
-A game adds blocks in its definition and uses them by name, like the built-in ones: in blueprints and `world.structures`, `setBlock`, `placeBlock`, `breakBlock`, `blockInfo`, and the creative block picker. They're defined here rather than in `setup` (like `vehicles`) because every player's screen generates its terrain, structures included, and draws it; so each screen has them from the start, on a server too, and saves keep them by name. Sandbox has four:
+A game adds blocks in its definition and uses them by name, like the built-in ones: in blueprints and `world.structures`, `setBlock`, `placeBlock`, `breakBlock`, `blockInfo`, and the creative block picker. They're defined here rather than in `setup` (like `vehicles`) because every player's screen generates its terrain, structures included, and draws it; so each screen has them from the start, on a server too, and saves keep them by name. Sandbox has four plain ones (and shapes, below):
 
 ```ts
 import crate from './blocks/crate.png?url';
@@ -188,13 +198,16 @@ A texture is one of:
 - pixel art: `{ pixels: ['#.#.', '#.#.', '####', '#.#.'], palette: { '#': '#3b3f44' } }`, rows of characters each looked up in the palette (`.` or a character it hasn't got is clear), scaled to 16 x 16;
 - painted by code: `{ paint: (x, y) => (x === y ? '#fff' : null) }`, a colour per pixel (null: clear), row 0 at the top.
 
-Give one texture for every face, or face by face: `{ top, bottom, side }`, or one side (`north`, `south`, `east`, `west`), with `all` for any face not named. Every texture gets a normal map from its brightness (or its noise), so custom blocks catch the light like the built-in ones.
+Give one texture for every face, or face by face: `{ top, bottom, side }`, or one side (`north`, `south`, `east`, `west`), with `all` for any face not named; a block that faces a way also has a `front` and a `back` (below). Every texture gets a normal map from its brightness (or its noise), so custom blocks catch the light like the built-in ones.
 
 | Option | Default | |
 | --- | --- | --- |
 | `label` | the name in words | its name in the picker and `blockInfo` (`neon_sign` is "Neon Sign") |
 | `like` | | start from a built-in full block or plant, `{ like: 'stone', breakable: false }`: its textures, light and the rest, which anything given changes. `{ like: 'neon_red' }` is that block exactly, textures and all |
-| `shape` | `'cube'` | `'cross'` (two crossed planes, like flowers: walked through, broken at a touch, needs ground under it), `'slab'` (`name[type=top]` is the upper half), `'stairs'` (`name[facing=east,half=top]`); slabs and stairs are placed the way the built-in ones are |
+| `shape` | `'cube'` | `'cross'` (two crossed planes, like flowers: walked through, broken at a touch, needs ground under it), `'slab'` (`name[type=top]` is the upper half), `'stairs'` (`name[facing=east,half=top]`); slabs and stairs are placed the way the built-in ones are. Thin shapes: `'fence'`, `'pane'`, `'post'` (see *Shapes of your own*) |
+| `boxes` | | a shape of its own, boxes on the block's 16 x 16 x 16 grid (see *Shapes of your own*) |
+| `facing` | | it faces a way: `true` (four sides), `'all'` (up and down too) or `'axis'` (x, y or z, like a log); a cube, a `post` or `boxes` |
+| `climbable` | `false` | bodies climb it: a ladder, a vine |
 | `full` | none | a slab's full block, made by placing one slab on another |
 | `transparency` | `'opaque'` | `'cutout'`: light and sight go through the clear pixels (grates, leaves); `'transparent'`: like glass (faces between two of it aren't drawn). A pixel is there or not: half-clear colours show solid |
 | `solid` | `true` (a `cross`, false) | bodies collide with it |
@@ -207,7 +220,36 @@ Give one texture for every face, or face by face: `{ top, bottom, side }`, or on
 | `replaceable` | `false` (a `cross`, true) | placing a block into its cell replaces it |
 | `sounds` | the platform's | `{ break, place }`: sounds (built-in or `audio.define`d) when it's broken and placed |
 
-A game has room for 68 block variants of its own (a slab is two, stairs are eight), with ids after the built-in ones (187 to 254), in the order they're defined: `world.blockId('crate')` tells you one. Names are lower case, digits and `_`, and not a built-in block's. Ids needn't stay put: a save records the names of the ids it used, so a save outlives definitions that are reordered, added to or taken from (a block no longer defined becomes air), and a server's welcome tells each joining player its ids, so a player whose copy of the game is older still agrees with it (a block their copy hasn't got shows as a magenta "missing" block). Hotbars kept on a server keep them by name too.
+#### Shapes of your own
+
+A game's block can be thin, face a way, and be climbed, like the fences, windows, signs and ladders of Minecraft. The gallery (`?game=gallery`) has a yard of them east of its casino floor, and Sandbox has a fence, a glass pane, a beam, a ladder and a table in its picker:
+
+```ts
+blocks: {
+  picket_fence: { texture: 'oak_planks', shape: 'fence' },
+  glass_pane: { texture: 'glass', shape: 'pane', transparency: 'cutout' },
+  beam: { texture: { top: 'oak_log_top', bottom: 'oak_log_top', side: 'oak_log' }, shape: 'post', facing: 'axis' },
+  ladder: { texture: LADDER, boxes: [[0, 0, 14, 16, 16, 16]], facing: true, climbable: true, transparency: 'cutout' },
+  poster: { texture: { front: POSTER, all: 'oak_planks' }, boxes: [[1, 2, 15, 15, 14, 16]], facing: true, solid: false },
+  stove: { texture: { front: STOVE, top: 'stone', all: 'cobblestone' }, facing: true },
+  table: { texture: 'oak_planks', boxes: [[0, 13, 0, 16, 16, 16], [1, 0, 1, 3, 13, 3], [13, 0, 1, 15, 13, 3], [1, 0, 13, 3, 13, 15], [13, 0, 13, 15, 13, 15]] },
+}
+```
+
+- **`fence`**: a post 4/16 across, with two rails to each fence and solid block beside it (full blocks, not leaves; the full side of stairs). To bodies it's 1.5 blocks high, like Minecraft's, so nobody jumps it (creatures path round it); you aim at (and rays, sight and bullets stop at) the post and rails you see, and pass between the rails.
+- **`pane`**: a wall 2/16 thick from a post in the middle to each pane and solid block beside it (glass panes, iron bars). Alone it's a thin post.
+- **`post`**: a pillar 4/16 across. With `facing: 'axis'` it lies along x or z too: a beam.
+- **`boxes`**: your own, up to 16 boxes `[x0, y0, z0, x1, y1, z1]` on the 1/16 grid (0 to 16), written as it faces north if it faces. Bodies collide with them (if it's `solid`), you aim at them, and each face shows the part of its texture it covers, so a thin poster's front shows the whole picture and its edges a strip.
+
+Fences and panes join where they stand, from what's beside them, so placing or breaking a block next to one changes it without changing its id (one variant each). The thin shapes let light through; none of them carves (`world.destructible` carves full blocks only).
+
+**Facing.** `facing: true` makes four variants (`'sign[facing=east]'`), `'all'` six (`facing=up` and `down` too), `'axis'` three (`'beam[axis=x]'`, like logs). The block is written, textures and boxes, as it faces north (upright for `'axis'`): `front` is its north face and `back` its south, and turning it takes them round (a stove's front, a poster's picture, a chair's back). Named with a state, it goes as it is: in structures, `setBlock` and `placeBlock`. Placed by its plain name (`placeBlock`, the building kit, Sandbox), it faces `facing` if given; else out from the side of the block aimed at (a ladder or sign against a wall faces away from it); else, aimed at a floor or ceiling, up or down if it has those, or back toward whoever placed it. An `'axis'` block lies along the axis aimed along.
+
+**Climbing.** A `climbable` block (a ladder, a vine) where a body's feet are: pushing into something (the wall behind it, or the ladder's own boxes) or holding jump climbs at 2.6 blocks a second, sneaking holds on, and otherwise they slide down no faster than 2.4 (so a fall down a ladder never hurts); off the ground, sideways speed is held to 3 so they don't fly off it. It's part of the engine's player step, which a client predicting its own player runs too, so climbing online holds as well as walking. A climbable `cross` (a vine) hangs without ground under it. Creatures don't climb.
+
+**What bots can read.** `blockInfo(block).shape` is `'air'`, `'cube'`, `'cross'`, `'liquid'`, `'slab'`, `'stairs'`, `'torch'`, `'bed'`, `'fence'`, `'pane'`, `'post'` or `'boxes'`; `height` is how high bodies collide with it (0 if it isn't solid, 0.5 a bottom slab, 1 a top slab, stairs or a full block, 9/16 a bed, 1.5 a fence); `boxes` those boxes, in blocks (a fence or pane's post alone: its arms depend on what's beside it); and `climbable`. `world.collisionHeight(x, y, z)` says it at a position: a fence as it's joined, a carved block as what's left of it (an unloaded chunk counts as 1). A walker steps up 0.6 without jumping and jumps about 1.25.
+
+A game has room for 68 block variants of its own (a slab is two, stairs are eight, a facing block four or six), with ids after the built-in ones (187 to 254), in the order they're defined: `world.blockId('crate')` tells you one. Names are lower case, digits and `_`, and not a built-in block's. Ids needn't stay put: a save records the names of the ids it used, so a save outlives definitions that are reordered, added to or taken from (a block no longer defined becomes air), and a server's welcome tells each joining player its ids, so a player whose copy of the game is older still agrees with it (a block their copy hasn't got shows as a magenta "missing" block). Hotbars kept on a server keep them by name too.
 
 Under the hood `world/blocks.ts` turns the definitions into the engine's block variants (`engine.set_game_blocks`, in every engine instance: the host's, the page's, each terrain worker's) and into texture layers after the built-in ones, which `render/blocktextures.ts` paints on each screen (fetching the images). The built-in blocks keep their ids, so no existing world or save changes.
 
@@ -218,6 +260,8 @@ Under the hood `world/blocks.ts` turns the definitions into the engine's block v
 - `'none'` removes the walking body, hand and hotbar. The game drives the camera and reads the controls itself, which is what vehicles, flight and top-down games need (next section). `player.position` then stays wherever you last `teleport` it: that's the point mobs chase and pickups fly to, so move it with your vehicle if you use those, and ignore it if you don't.
 
 `game.player` (one of `game.players`, see "Players and multiplayer") gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
+
+**Freezing.** `player.freeze(true)` stops their body (a countdown, a cutscene) and `freeze(false)` lets it go; their weapons still work. `freeze(true, { weapons: true })` locks their weapons as well, for as long as the freeze lasts: they can't switch slots, aim, reload, fire or use items, their own screen doesn't fire, and any shot it sends anyway is refused, so no rounds are spent (a duel's standoff, a between-rounds pause). The lock ends with the freeze: `freeze(false)`, a `revive`, or a restart. A freeze put on as they join (`playerJoin`, before they've pressed Play) holds once they do. `player.frozen` says whether their body is frozen (by a freeze, or dead, driving, not yet in play), and `player.reloading` whether the gun they hold is reloading.
 
 **Movement.** `player: { movement }` tunes how everyone moves (speeds in blocks a second; the defaults are Minecraft's). It's data, and the moves you add are pure functions (*Movement abilities*, below), because each player's own screen runs the same movement to predict them:
 
@@ -236,7 +280,7 @@ player: {
 
 `player.speed` multiplies one player's speeds (a power-up; guns have their own `mobility`), `player.crouching`, `sliding` and `aiming` say what they're doing, and `player.protect(seconds)` makes them ignore damage for a while (spawn protection). `hurtCooldown` (default 0.45, Minecraft's) is how long a player ignores further damage after a hit; shooters set it to 0.
 
-**Changing damage.** Every hit is heard before it lands, from anything: a gun, a blade, an arrow or fireball, a fall, a mob's swing, your own `damage` call. A `damage` listener can change it (`amount`, before armour, and `knockback`) or `cancel()` it, for players and creatures alike; a cancelled hit doesn't land at all (no hurt, no knockback, no `playerDamage` or `entityDamage`, no hit marker for a gun). It says who's hit (`target`), who did it (`source`), what with (`weapon`, the item id), how (`cause`: `'gun'`, `'melee'`, `'projectile'` or `'world'`), and for bullets the `part` hit (`'head'` or `'body'`) and `headshot`:
+**Changing damage.** Every hit is heard before it lands, from anything: a gun, a blade, an arrow or fireball, a fall, a mob's swing, your own `damage` call. A `damage` listener can change it (`amount`, before armour, and `knockback`) or `cancel()` it, for players and creatures alike; a cancelled hit doesn't land at all (no hurt, no knockback, no `playerDamage` or `entityDamage`, no hit marker for a gun). It says who's hit (`target`), who did it (`source`), what with (`weapon`, the item id), how (`cause`: `'gun'`, `'melee'`, `'projectile'`, `'explosion'`, `'fire'` or `'world'`), and for bullets the `part` hit (`'head'` or `'body'`), `headshot` and `through` (blocks of wall it went through first: wall-banging, below; `playerDeath` carries it too):
 
 ```ts
 game.events.on('damage', (hit) => {
@@ -279,9 +323,23 @@ movement: {
 
 - **What a step can read:** `controls` (`isDown`, `pressed`, `button`, `buttonPressed`, mouse deltas, and `consume` to hide a key from the abilities after it: a wall-jump's Space isn't also a double jump), `body` (`position`, `velocity`, `onGround`, `inWater`, `flying`, `crouching`, `sprinting`, `sliding`, `yaw`, `pitch`, `look`, and `time`, a movement clock both sides share), and `world` (the questions vehicles ask: `getBlock`, `raycast`, `surfaceY`…). `body.fits(p)` says whether their body would fit with its feet at `p` (a wall beside them is `!body.fits({ x: p.x + 0.15, y: p.y, z: p.z })`).
 - **What it can change, for this step:** `body.wish` (where the keys or stick push them, a direction on the ground; set it to steer, zero to coast), `body.jump` (`false` swallows the jump), `body.gravity` and `body.control` (times the game's gravity and how quickly speed follows the wish: 0 floats, 0 keeps the velocity as the ability left it), `body.speed`, and at once: `setVelocity` / `addVelocity` (upward speed lifts them off the ground) and `setPosition` (a blink).
+- **How low they are:** `body.stance` is `'stand'`, `'crouch'` or `'low'` (a slide's height). It starts as the platform's movement has it, and an ability can change it for the step: a dodge roll goes `'low'`. It's their hitbox for bullets, the height of their eyes (their camera, and where their shots start), and how their figure looks to everyone else (crouched, or low as in a slide), so `player.crouching` / `sliding` follow it. It isn't how they move: speeds are the ability's to set.
+- **Their camera:** `body.camera` tips their own view for the step: `roll` tilts it (radians, positive leans right, as a head tilts), `pitch` nods it (radians, up is positive; where they aim stays put), `dip` lowers it (blocks). They start at 0 each step, so set them on every step they should show; their screen eases in and out of them. On their screen only, and predicted like the rest, so it moves the moment they do.
+- **A clip:** `body.trigger('roll', { clip: 'tumble' })` also plays their model's `tumble` clip on their figure, with `player.animate`'s options (`layer`, `fade`, `speed`): at once on their own screen (in third person), and for everyone else from the host.
+
+High Noon's dodge roll (`src/games/highnoon/abilities.ts`) does the first two:
+
+```ts
+if (s.left > 0) {
+  body.stance = 'low';                                             // under a standing head's bullets
+  const arc = Math.sin((1 - s.left / ROLL.time) * Math.PI);          // over and back
+  body.camera.roll = right * arc * 0.42;                             // leaning the way they roll
+  body.camera.pitch = -Math.max(0, ahead) * arc * 0.3;               // nose down rolling forward
+}
+```
 - **Timers and cooldowns live in the state**, counted down by `dt`. Abilities rest while the body is frozen (dead, a countdown).
 - **It must be pure**, like a vehicle's `step`: the same state, controls and blocks give the same result on the host and on the player's screen, which starts again from the host's state whenever a frame arrives and replays the inputs since. So no `Math.random`, no clock but `body.time`, nothing kept outside the state. Their movement memory (the abilities' states and timers) is rounded as frames carry it at the start of each step, on both sides, so a timer never runs out a step later on one than the other.
-- **Consequences are the game's:** `body.trigger(name)` fires the `ability` event on the host (`{ player, ability, name }`, heard once, after the step) for sounds and effects; `player.abilities.dash` is that player's live state to read for the HUD (a cooldown meter) or change (reset a cooldown, unlock a move: their screen follows). The HUD, sounds and effects arrive a round trip late online, but the move itself doesn't.
+- **Consequences are the game's:** `body.trigger(name)` fires the `ability` event on the host (`{ player, ability, name }`, heard once, after the step) for sounds and effects; `player.abilities.dash` is that player's live state to read for the HUD (a cooldown meter) or change (reset a cooldown, unlock a move: their screen follows). Sounds and effects arrive a round trip late online, but the move itself doesn't, and neither does a widget bound to the state on their screen: `{{$ability.dash.cool}}` (see Presentation).
 
 `src/games/moves/abilities.ts` has a dash, a double jump and a wall-run with wall-jumps; in development, `?game=moves` is a short course that needs all three (online: `npm run server -- moves`, then `?server=ws://localhost:8787/moves`). `tests/headless/abilities.ts` runs that course with 100 ms of latency and checks the prediction holds.
 
@@ -304,7 +362,7 @@ Games are written so the same code works with one player or many:
 - **Who did it.** Damage sources, killers and block events are an `Actor`: an `Entity`, a `Player`, or `'world'`. Tell them apart with `kind` (`'entity'` or `'player'`): `if (killer !== 'world' && killer?.kind === 'player') kills++`.
 - **Callbacks name the player**: `use(game, player)`, `onPickup(game, count, player)`, command `run(args, game, player)`, the `pickup`, `playerDamage` and `playerDeath` events, and the kits' handlers. Use that player rather than `game.player`, and a potion heals whoever drank it.
 - **Mobs pick their target**: `self.nearestPlayer()`, then `moveTo`, `lookAt`, `canSee`, `distanceTo`, `shoot` and `damage` it. The built-in `Behaviors` all hunt the nearest player.
-- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`, and the array stays up to date as players come and go.
+- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`, and the array stays up to date as players come and go. `playerReady` follows when a person's screen is in play: on a server, straight after their `playerJoin` (their browser joins when they press Play); in single-player, when they first press Play, after `start`. Bots have no screen and don't get one. Anything you put on their screen at `playerJoin` reaches it, but `playerReady` reads better for a welcome or a modal (an outfit picker, a team choice).
 - **Player against player.** With `player: { pvp: true }`, players' swords and arrows hit other players too (never the shooter); without it, players can't hurt each other. Monsters' shots always hit any player. Who hit whom arrives as usual: `playerDamage` and `playerDeath` name the attacker as `source`.
 
 **Playing together.** Any game can be hosted by the game server, and players join from their browsers:
@@ -314,6 +372,8 @@ npm run server -- sandbox --port 8787          # add --cheats for /tp, /give…,
 # then each player opens:
 http://localhost:5173/?server=ws://localhost:8787&game=sandbox
 ```
+
+With no games named, a server hosts every game in the launcher. Development games (the ones behind `?game=` alone, like High Noon, `moves` or the previews) are hosted only when named: `npm run server -- highnoon`, then `?server=ws://localhost:8787&game=highnoon`.
 
 The server runs the game at 30 steps a second whether or not anyone's watching a given frame. The first to join is `game.player`; everyone else arrives at the spawn and the game hears `playerJoin`. When the first player leaves, the next to join takes their place, so `game.player` always works. Everyone sees everyone else as a figure with their name above it, wearing the game's player skin (or their own, `player.setSkin`). Your own movement is predicted: it happens the moment you press a key, and the server's word only corrects it when something you couldn't know about happened (a knockback, a teleport). A restart (from any player's pause menu or a "Play again" button) restarts the game for everyone. `game.exit()` sends back to the launcher only the player whose button or command called it.
 
@@ -374,6 +434,7 @@ The platform does the rest:
 - **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself (unless `guns.autoReload` is off). Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up. On a controller the triggers fire and aim, X reloads, and there's aim assist (`aim.assist`, see Controllers).
 - **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people). The `damage` event (see Player) can change or cancel a hit before it lands.
 - **Sights.** `iron` sights are the model's own. A `dot` or `holo` sight lights its reticle (a red dot, or a holo's ring and dot; `aim.color`) at the aim point as the optic's window comes up to the eye: model the optic with its window open and its `sight` point in the window's middle. A `scope` fills the view with the scope.
+- **Wall-banging.** `penetration: { depth, damageLoss }` sends bullets through walls with up to `depth` blocks of material in them all told (a block-thick wall head on is 1, at a slant more; what's been shot out of it doesn't count, so a wall shot into gets easier), losing `damageLoss` of their damage for each block (0.4 by default). Bedrock and unbreakable blocks stop them. In a destructible world they hole the wall where they go in and where they come out. Everyone sees the holes on both faces, the chips spraying out of the far one and the tracer carrying on from there; the shooter's screen works the path out as the host does. The hit's `through` says how much wall there was. Off by default; Call of Blocky's rifle has `{ depth: 1.15, damageLoss: 0.32 }` (through a block-thick wall head on, at about two thirds of its damage), the pistol `{ 0.7, 0.45 }` (only walls already shot into, slabs), the sniper `{ 2.2, 0.18 }` (two blocks, and still a kill up close). Lag compensation is the same through a wall.
 - **Walls.** In a world with destructible blocks (`world.destructible`), each bullet (each pellet) carves a pit where it lands: `carve: { radius, depth }` in blocks, default `{ radius: 0.1, depth: 0.05 }`; `carve: false` for a gun that doesn't. The next shot on the same spot lands at the bottom of the last one's pit, so each goes about `radius + depth` further in: seven or eight on one spot hole a block. Call of Blocky's: rifle and pistol `{ 0.09, 0.04 }` (eight shots down the sights through a block-thick wall), SMG `{ 0.1, 0.025 }` (ten), sniper `{ 0.12, 0.42 }` (two), shotgun pellets `{ 0.07, 0.01 }` (a spray of small pits). The pit is the bullet's mark: no bullet-hole decal on a block that carves.
 - **The HUD.** An ammo counter replaces the hotbar's job, and the crosshair opens with the spread (and goes when aiming).
 - **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
@@ -437,6 +498,38 @@ defineGame({
 
 `assist` is aim assist's shape for every gun (see Controllers); a gun's own `aim.assist` goes over it, as a strength or the same shape.
 
+## Throwables
+
+A `kind: 'throwable'` item is thrown: a grenade that bounces, rolls and goes off when its fuse is out, a molotov that breaks where it lands and burns. Hold its `key` (or, with it in hand, the fire button) to pull the pin and cook it, let go to throw it where you look, lobbed a little.
+
+```ts
+game.items.define('frag', {
+  kind: 'throwable', name: 'The Pineapple', icon: { gltf: fragUrl },
+  hold: { style: 'throw', model: HeldModels.gltf(fragUrl, { rotation: [90, 180, 0] }) },
+  key: 'KeyG',                                  // thrown from whatever's in hand; the wheel skips it
+  fuse: 3.2, cook: true,                        // held too long, it goes off in the hand
+  speed: 21, lift: 8,                           // blocks a second, lobbed 8 degrees over the view
+  physics: { gravity: 24, bounce: 0.3, friction: 0.35, radius: 0.1 },
+  blast: { radius: 5.5, damage: [165, 18], knockback: 1.2, carve: 1.45 },   // the crater's 1.45 blocks round
+  cooldown: 0.9, stack: 2,
+  sounds: { draw: 'pin', use: 'toss', hit: 'clink' },                       // pin, throw, bounce
+});
+game.items.define('molotov', {
+  kind: 'throwable', name: 'The Mia', icon: { gltf: miaUrl }, hold: { style: 'throw', model: HeldModels.gltf(miaUrl) },
+  key: 'KeyG', impact: true, fuse: 4, speed: 18,     // breaks on the first thing it hits
+  fire: { radius: 3, duration: 7, damage: 34, color: '#ff8a2a' },           // a second, to anyone standing in it
+  trail: '#ffb347',                                                          // the lit rag
+});
+player.inventory.give('frag', 2);
+```
+
+- **At once, and fair.** The thrower's screen throws it the moment they let go (the hand tosses it, it leaves the hand and flies) and sends the throw with the controls: from where, how fast, how long it was cooked. The host takes it if they have one and aren't throwing faster than its `cooldown`, and flies it the same way; everyone else's screen hears of it and flies it too. A flight is worked out in fixed steps (1/120 s) from the throw with plain arithmetic and the world's own raycasts, so the same throw on the same blocks lands in the same place on every machine, whatever their frame rates, and it goes off where the thrower's screen had it. The host decides when and where: the blast, the fire, the damage.
+- **How it flies.** Gravity and a little drag; off a block it bounces (the part of its speed into the block turned round and cut to `bounce`, the part along it cut by `friction`), landing gently it rolls and comes to rest. It goes through plants and torches like bullets do, and it bounces off what's left of a damaged block. (Not yet: solid props and players; an `impact` one breaks on whoever it meets, on the host.)
+- **The blast** (`blast`) is `world.explode`'s: `damage` falling off from its middle to `radius` (none behind a wall; the thrower too), a push, and a crater `carve` blocks round (whole blocks in a world without destructible ones). The hits are `'explosion'`s with the item as their `weapon`. **The fire** (`fire`) burns on the ground round where it broke for `duration` seconds: flames and smoke on every screen, and `damage` a second (every half second) to anyone standing in it who isn't behind a wall (`'fire'`).
+- **On screen.** A count of each throwable with a key over the rounds (bottom right; a cooked one shakes), the fuse burning down round the crosshair while it's cooked, and a warning marker (at the screen's edge when it's off it) on any live one that could reach you. In first person the `throw` hold style holds it up by the shoulder, and it's thrown with the `toss` animation; others see the thrower's arm swing.
+- **From code.** `player.throw(item, { at, yaw, pitch, cook })` throws one of theirs from their eyes: along their view (or the one given), or lobbed to come down at `at` (up at about 40 degrees, as hard as that needs, so it doesn't roll far). It's how bots throw; a bot can also hold the key through its controls (`bot.controls.hold('KeyG')`, then let go) and cook it for as long as it holds. `game.items.thrown` lists what's in the air (where, whose, how far it reaches, seconds to go) and `game.items.fires` the fires burning: what a bot keeps away from.
+- **Controllers:** give the key a button with the game's `gamepad` (Call of Blocky: `RB: ['KeyG', 'lethal']`); hold to cook, let go to throw.
+
 ## Controllers
 
 Every game plays with a controller as well as the keyboard and mouse, with nothing to write: a controller presses the same keys and mouse buttons, so `input.isDown('KeyR')` and `button(0)` read it too. The left stick walks, the way it points and as fast as it's pushed (it also holds WASD, for games that read those), and the right stick looks, turning faster the longer it's held all the way over and slower aiming down the sights. Play and Resume pressed with the controller give it the game (no mouse capture needed); Menu pauses. In the menus (the home page, pause, `hud.menu`, `hud.screen`, the block picker) the D-pad or stick moves a highlight, A presses, B backs out, and sliders slide with left and right. With a gun there's aim assist: over a player in sight the stick turns slower, and while the sticks move the view turns a little with them as they move. The strength is the gun's `aim.assist` (0 to 1, default 0.6). It can give the shape too, as can the game's `guns.assist` for every gun: `cone` (who's near enough the crosshair: `radius` blocks round them, 1.1, plus `angle` degrees, about 1.43), `slow` (how much the stick slows over them at full strength, from the hip and aiming: 0.45 and 0.6) and `follow` (how much of their movement the view turns with: 0.4 and 0.6). Only controllers get it, never a mouse, and each player can turn it off, along with stick sensitivity, invert look and vibration, in the pause menu. The controller rumbles as guns fire and when you're hurt.
@@ -477,7 +570,7 @@ bot.controls.press('KeyR');                 // this tick only
 game.bots.remove(bot);
 ```
 
-Set their controls in `update`; they apply from the next tick. `player.bot` tells them from people. Call of Blocky's bots (`src/games/callofblocky/bots.ts`) look for enemies, react, swing their aim on imperfectly, fire, strafe, reload and roam the map along a walking grid built from the world's blocks (`nav.ts`).
+Set their controls in `update`; they apply from the next tick. `player.bot` tells them from people. For a shooter, the `shooterBots` and `navGrid` kits (see Kits) do all of it: bots that look for enemies, react, swing their aim on imperfectly, fire, strafe, reload and roam the map along a walking grid built from the world's blocks. Call of Blocky and High Noon use them (`src/games/*/bots.ts`: each game's weapons, tuning and rules).
 
 ## Kits: ready-made systems, no special access
 
@@ -487,6 +580,8 @@ Some gameplay systems are common enough that the platform ships them, but they a
 | --- | --- |
 | `building(game, rules)` | Survival building: hold left-click to mine a block (cracks grow over it, the arm swings), right-click with a block to place it against the face you aim at. Your rules decide what may be broken or placed, by whom, and how long mining takes. |
 | `interactions(game, { type: (entity, player) => … })` | Right-click a mob to talk to it: shopkeepers, quest givers, levers. |
+| `navGrid(game, { bounds })` | Where bots can walk inside a box: steps, slabs and stairs, jumps and drops; A* paths, the cell someone's in, places to wander to. It keeps up with the world: a block placed or broken, a hole shot or blown through a wall that a body fits through. |
+| `shooterBots(game, { nav, weapons, … })` | Bot fighters for a shooter: they see (over cover, through holes) and hear gunshots, react and aim by skill, fire in bursts or at a gun's pace, strafe, hold their gun's range, reload, switch guns, and roam the grid. Hooks add your game's rules. |
 
 ```ts
 import { building, interactions, type Building, type Interactions } from '@platform/kits';
@@ -511,13 +606,55 @@ update(game, dt) {
 
 Without `breakTime`, mining takes a Minecraft-like time by material (`defaultBreakTime`: plants instantly, wool and glass fast, wood medium, stone slow, obsidian very slow). Bots build under the same rules through `build.placeBlock(x, y, z, block, bot)` and `build.breakBlock(x, y, z, bot)`; that's how the Bed Wars bots bridge and dig.
 
+### Bots for a shooter: `navGrid` and `shooterBots`
+
+```ts
+import { navGrid, shooterBots, type ShooterBots } from '@platform/kits';
+
+let bots: ShooterBots;
+
+setup(game) {
+  const nav = navGrid(game, { bounds: MAP.bounds });       // builds itself once the map's blocks have loaded
+  bots = shooterBots(game, {
+    nav,
+    hotspots: MAP.hotspots,                                 // where fights happen: somewhere to wander to
+    weapons: {
+      rifle: { range: 16 },                                 // the distance it likes to fight at
+      shotgun: { range: 4, ads: false, rush: true },        // never down the sights; sprints in
+      sniper: { range: 32, ads: true, steady: true },       // always scoped, and only fires scoped
+    },
+    goal: (bot, mind) => briefcase,                         // somewhere to go when nobody's in sight
+  });
+  game.events.on('playerJoin', ({ player }) => player.bot && bots.add(player as Bot, game.rng.range(0.3, 0.8)));
+},
+update(game, dt) {
+  bots.update(dt, phase !== 'playing');                     // frozen: hands off the controls
+},
+// after each respawn or new round: bots.reset(player)
+```
+
+**The walking grid** (`navGrid`): every cell of the box a body can stand in (something under its feet, two blocks of room), linked to its neighbours by a step (stairs, a bottom slab, told by their state), a jump (a block up, with room overhead) or a drop (up to `drop` blocks, default 3). `path(from, to)` is A* over it: the cells to walk through, each with `at`, the point to walk to. `cellAt(p)` is the cell someone's in, `random()` somewhere to wander to, `needsJump(a, b)` whether a step needs a jump. It builds itself on the first question once every chunk in the bounds has loaded (`ready`), and from then on it follows `blockChange`, so create it in `setup`: a block placed takes cells away, a block broken opens a way, and a hole carved through a wall (`world.destructible`) is a way through if a body fits in it (`world.fits`), crossed straight and lined up (a `hole` cell). `opened` goes up whenever a change opens a new way, and `has(cell)` tells whether a cell is still there. Ladders aren't walked yet.
+
+**The fighters** (`shooterBots`) drive each bot through its controls, like a person. A bot sees anyone in front of it (or right beside it) in line of sight, by the chest or, failing that, the head (over cover, through a hole); it reacts after a beat, swings its aim on off by a body or two, settles in as it tracks, and fires when near enough on target: bursts from an automatic (`GunItem.auto`), a shot at the gun's pace from anything else, a swing in reach with a blade. It strafes, closes in or backs off to its weapon's `range`, hops and crouches now and then, reloads, swaps to another loaded gun when the one in hand runs dry up close, and between fights goes back to its first hotbar slot and tops up. Seen through a gap a sidestep would lose (a hole shot in a wall), it holds still and shoots through it. Out of a fight it hears gunshots (and knows where a hit came from; `bots.hear(at)` tells it of any other noise, an explosion say) and heads there, or to where it last saw someone, or wanders the grid toward your `hotspots`, planning again when the grid opens a new way.
+
+How good each bot is comes from its skill (0..1, given to `add`). `aim` tunes it: each of `reaction`, `miss`, `head`, `settle`, `drag`, `shake`, `turn`, `tolerance` and `pace` is `[a skill-0 bot's, a skill-1 bot's]`. `senses` (`sight`, `view`, `near`, `hearing`, and how long it chases what it heard or saw) and `moves` (`range`, `keep`, `strafe`, `hop`, `crouch`, `slide`, `hotspot`, `wander`, `replan`, `glance`, `swapWithin`, `homeSlot`, `topUp`) tune the rest. The defaults are Call of Blocky's, tuned so a bot takes about 1.3 to 1.5 s to kill someone standing in the open 8 blocks away (a person does it in about 0.8 s); `tests/headless/_duel.ts` measures it.
+
+Hooks add your game's rules, each given the bot and what it has in mind (`BotMind`: its target, where it last saw them, what it heard, when it was hit, its strafe, goal and path):
+- `hostile(bot, other)`: teams (default: everyone else).
+- `goal(bot, mind)`: somewhere to go when nobody's in sight, before its own ideas (an objective, a pickup when it's low, the nearest enemy).
+- `weapon(bot, mind, distance)`: the gun for the range (it switches if that one's loaded).
+- `fight(bot, mind, distance)`: each tick of a fight, after it has decided (a dodge roll when hit).
+- `throw(bot, at, mind)`: throw something (a grenade) your game's way when someone it was fighting ducks out of sight not far off; return whether it did (`throwEvery` seconds apart at most).
+
+Call of Blocky's `bots.ts` is the defaults plus its weapons and the briefcase; High Noon's retunes everything for slow guns, picks the rifle or the revolver by range, dodge-rolls when hit and hunts everyone down once the sun gives them away.
+
 **The primitives underneath**, available to any game:
 - **Items that look like blocks.** An item with `icon: { block: 'oak_planks' }` shows the block in the hotbar and menus, is held as a little cube and drops as a spinning cube of the block.
 - **`input.consume(button | key)`** claims an input for the rest of the frame. Your game's `update` runs before the built-in systems, so a click you handle and consume doesn't also swing the sword or eat the apple.
 - **`entities.raycast(origin, dir, reach)`** finds the mob under the crosshair (stopping at blocks); `world.raycast` finds the block.
 - **`hud.highlight(block, { progress })`** outlines a block on a player's screen, with Minecraft's break cracks at `progress` 0..1. **`hud.progress(0..1)`** is a ring round the crosshair.
-- **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone; `placeBlock` turns torches, slabs, stairs, beds and logs the way the player's aim and look say (see *Block shapes and states*). They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant or replaceable.
-- **`world.explode(center, radius, { filter, by })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match).
+- **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone; `placeBlock` turns torches, slabs, stairs, beds, logs and a game's facing blocks the way the player's aim and look say (see *Block shapes and states* and *Shapes of your own*). They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant, replaceable or climbable, its `shape` and how high bodies collide with it (`height`, `boxes`); **`world.collisionHeight(x, y, z)`** says that at a position.
+- **`world.explode(center, radius, { filter, by, damage, reach, knockback, weapon })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match); `damage` hurts whoever's in `reach` too (see World).
 
 ## First-person view model
 
@@ -540,6 +677,7 @@ Walk bob, breathing, look sway, the landing dip, recoil when you're hit, and the
 | `item` | everything else | Upright in the fist | `drink` |
 | `block` | Sandbox blocks | A small cube on the fist | `swing` |
 | `polearm` | | Two hands on the shaft, low at the right, tip just under the crosshair | `jab` |
+| `throw` | throwables | Up by the shoulder, ready to throw | `toss` |
 
 The empty hand uses `punch`. Change a pose per item with `hold`, in the same numbers as a Minecraft model's `firstperson_righthand`. Every field is optional:
 
@@ -558,7 +696,7 @@ game.items.define('spear', {
 });
 ```
 
-Built-in animations are `swing` (Minecraft's), `slash` (a diagonal cut for 3D blades), `hew` (an overhead blow for axes), `sip` (drinking from a held bottle), `punch`, `jab` (a two-handed thrust along the shaft), `drink` (Minecraft's eat pose), `release`, `chop` and `stab`. Custom animations are keyframes offset from the rest pose:
+Built-in animations are `swing` (Minecraft's), `slash` (a diagonal cut for 3D blades), `hew` (an overhead blow for axes), `sip` (drinking from a held bottle), `punch`, `jab` (a two-handed thrust along the shaft), `drink` (Minecraft's eat pose), `release`, `chop`, `stab` and `toss` (a throw from the `throw` pose, the arm whipping forward and down out of sight). Custom animations are keyframes offset from the rest pose:
 - `move` shifts the hand, in blocks.
 - `hand` turns the hand, item and forearm together about the fist.
 - `wrist` turns only the item.
@@ -770,7 +908,7 @@ game.items.define('cutlass', {
   - It holds a gun in both hands, aimed where it looks, with its fists on the gun's `grip` and `grip2`. It carries the gun low across its chest to sprint, tips it to reload while the support hand fetches a magazine, kicks with each shot, and works a `lever` or a `hammer`. A gun held in one hand (`hold.gun.hands: 1`) leaves the other free, in its stance's `offHand` pose, until a reload brings it to the gun.
   - It swings a sword two-handed and falls when it dies.
   - A player on such a model sees its own forearms and fists on the gun in first person. `firstPerson` fits them to the model: `Models.gltf(url, { rig: 'humanoid', firstPerson: { scale: 1.2, reach: [0.55, 0.72], bend: 0, support: [0.01, -0.012, 0] } })` (those are the defaults): `scale` times life size (a little bigger reads better round a gun), how far the firing and support arms `reach` from the wrist to leave the screen (blocks), the elbows' `bend` (0, straight; see Guns), and where the `support` fist sits from the handguard's near side (the model's blocks, along the gun: out to the side we see, up, toward the muzzle). It goes with the model, so each player's (`player.setModel`) brings its own, and a gun's `hold.gun.arm` goes over it for that gun.
-  - Give `rig: 'humanoid'` in `Models.gltf`, or leave out `clips` and a model with the joints is taken to be one. `tools/rig.html?model=<url>` (in development) shows a model in a row of poses (`&joints=mixamo`, `&style=<poses as JSON>`, and poses like `wave` and `cheer` that play a clip), and `scripts/mannequin.mjs` builds plain ones to start from: rigid, skinned, and skinned on a Mixamo-style skeleton, the last two with `wave` and `cheer` clips.
+  - Give `rig: 'humanoid'` in `Models.gltf`, or leave out `clips` and a model with the joints is taken to be one. `tools/rig.html?model=<url>` (in development) shows a model in a row of poses (`&joints=mixamo`, `&style=<poses as JSON>`, and poses like `wave` and `cheer` that play a clip), with any item in its hand (`&item=<glb url>`, `&kind=melee` for a blade, `&hold=<JSON>` for how it holds a gun: `hands`, `stance`, `action`, `poses`) and any of its clips (`&clips=victory,tip_hat`, or `&clips=all`; `&layer=upper` over the legs' own motion), and `scripts/mannequin.mjs` builds plain ones to start from: rigid, skinned, and skinned on a Mixamo-style skeleton, the last two with `wave` and `cheer` clips.
   - **Its style is the game's.** `poses` (`HumanoidPoses`) sets how it holds and moves: the rifle and pistol stances (from the hip and down the sights, and a one-handed gun's free hand), which guns are pistols (shorter than `pistolUnder`, or say so per item with `hold: { stance: 'pistol' }`), the kick, the sprint carry, the reload, a lever and a hammer worked, the sword and its swing, the fall on death (`death.backward`), the gait, and a held item's size (`heldScale`). What's left out is the platform's own (Call of Blocky's); give every model the same object for a game-wide style. An item's `hold.poses` goes over the figure's while it's held (the same keys, the parts about holding: `{ reload: { turn: [...], cycle: 0.42 } }` for a gun reloaded its own way). `docs/HUMANOID.md` lists every value.
   - **Other skeletons.** `joints` maps the rig's joints onto a skeleton named its own way: `Models.gltf(url, { rig: 'humanoid', joints: HumanoidJoints.mixamo() })`. It may rest in any pose (a T-pose, each bone turned its own way, under a scaled armature, as Mixamo and Blender export them): the rig works out its poses on a skeleton of its own standing straight, and the model's bones follow it, each keeping its own turn.
   - **Skinned characters.** A skinned mesh (one mesh on a skeleton of bones) works like rigid parts: the rig turns the bones, and the platform's shading skins the mesh and its shadow on the GPU. A skinned player's first-person arms are cut from the skin into rigid pieces (each triangle goes with the bone that weighs most on it).
@@ -813,7 +951,7 @@ game.audio.define('laser', (s) => {
 - `s.noise` is filtered noise with a sweeping filter.
 - `s.pitch` is the play's pitch: multiply frequencies by it.
 - Your game runs away from the player's speakers (in a worker, or on a server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
-- The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers).
+- The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers, a grenade's `bounce`, a bottle's `glass`, `fire`).
 
 ## Keeping data
 
@@ -883,7 +1021,7 @@ game.commands.run('/give pike'); // run one from code
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
-| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'blockChange' \| 'playerJoin' \| 'playerReady' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
 | `rng` | Seeded random numbers |
 
 **The HUD's look.** `hud` on the game definition sets how the HUD looks on every screen:
@@ -932,7 +1070,26 @@ update(game) {
 
 Its CSS is kept to it: `.row` means its own `.row`, `:scope` the widget itself (nudge it from its place with `:scope { margin-top: 20px }`), and its `@keyframes` are its own. It can't restyle anything outside (that's what `theme.css` is for), but the platform's classes and the game's theme do reach in, so pick class names of your own (`.stat` would come out as a stat chip). The theme's colours and fonts are there: `var(--hud-accent)`, `var(--pixel)` and the rest.
 
-`hud.widget(name, data)` returns a handle: `set(data)` (merged in, records field by field; `null` clears a field), `remove()`, `shown` and `data`. A player's own call on everyone's widget (`player.hud.widget('score', …)`) gives them a copy of their own from then on. A restart takes widgets down; they stay defined.
+`hud.widget(name, data)` returns a handle: `set(data)` (merged in, records field by field; `null` clears a field), `remove()`, `shown` and `data`. Calling `widget` again (or `set`) on a widget that's up sends only what changed; on one that's down (never put up, taken down, closed by the player, or after a restart) it goes up whole. A restart takes widgets down; they stay defined.
+
+**Everyone's widget and a player's own.** A widget can be up for everyone (`game.hud.widget`) and differ on some players' screens (`player.hud.widget`):
+- A player's own call on everyone's widget (`player.hud.widget('duel', { count: 2 })`) gives them a copy of their own, starting from everyone's, with their change on top. Only their screen sees their changes.
+- Everyone's calls still reach every screen, copies included: each changes the fields it names, everywhere (a player's own fields that everyone's call doesn't name stay theirs).
+- `player.hud.widget(name).remove()` takes it off their screen alone, and a modal they close is off theirs alone. The next `game.hud.widget(name, …)` puts it back there (whole, as everyone has it), so a modal you keep calling `game.hud.widget` for every tick can't be closed: call it once, or give each player their own.
+- `game.hud.widget(name).remove()` takes it off every screen, copies too.
+
+**Bound to the player's own screen.** A shot, a reload, a dash's cooldown: things the player's own screen knows the moment they happen, while the host's word takes a round trip (a widget's ammo counter would lag the platform's by a fifth of a second). A widget can bind them directly with names starting `$`, filled in by each player's screen from its own (predicted) state, never sent:
+
+| Name | What |
+| --- | --- |
+| `$gun` | The gun in their hand, as their screen fires and reloads it (null with no gun, dead or driving): `$gun.mag` (rounds in it), `$gun.size` (a full magazine), `$gun.reserve`, `$gun.reloading`, `$gun.reload` (how far through the reload, 0..1), `$gun.aim` (down the sights, 0..1), `$gun.item` (its id) and `$gun.name` |
+| `$ability.<name>.<field>` | Their movement abilities' states as their screen predicts them (`$ability.dash.cool`) |
+| `$health`, `$maxHealth`, `$dead` | Their health, as the newest frame has it |
+| `$crouching`, `$sliding`, `$sprinting` | What their body is doing, predicted |
+
+They work wherever a name does, beside the widget's own data: `{{$gun.mag}}`, `data-if="$gun.reloading"`, `data-if="$i < $gun.mag"` in a list, `style="--mag: {{$gun.mag}}"`. The game still sends what only it knows (a list to lay the rounds out by), and can put the widget up once and leave it: High Noon's cylinder (`src/games/highnoon/hud.ts`) turns a chamber the frame a shot goes off. A widget that binds none of them costs nothing extra.
+
+**Modal widgets online.** A modal widget works like any other on a server, put up whenever you like (`playerJoin` included). As a person's screen comes into play (they pressed Play) the modals up on it are sent again whole, in case it wasn't there to take them; `playerReady` is the natural moment to put one up.
 
 **Buttons, and modal widgets.** With `modal: true` a widget works like a menu: it frees the mouse while it's up, a controller's D-pad moves between its buttons (and anything with `data-action`) and A presses, and Esc, B or a click outside closes it (`onClose(player)` hears). A press reaches the game as the player who pressed it, only while the widget is on their screen and only for actions its markup names; the value comes from their screen, so check it like any input. A widget that isn't modal has working buttons only while the mouse is free (a menu is open).
 
@@ -959,6 +1116,7 @@ export default function myGame() {
 }
 ```
 
+- `launch(id)` finds the launcher's games and the development ones (`launch('highnoon')`), or takes a game's definition itself (`launch(myGame)`).
 - `h.run(seconds, { pilot, until, dt })` steps the simulation at 60 ticks per second. `h.step(dt, input)` steps once.
 - `pilot` returns the local player's controls as a `PlayerInput`: `down` for keys held, `pressed` for keys pressed this tick, `clicked` for the buttons clicked this tick as a bitmask (1 = left), and `yaw` / `pitch` to aim. Return `{}` to stand still.
 - `h.calls` records every presentation call (banners, feeds, screens, sounds), and `h.find('hud', 'banner')` filters them. `lastScreen(h)` is the title of the last `hud.screen`.

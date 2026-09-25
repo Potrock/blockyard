@@ -41,6 +41,14 @@
  *     the edge unless its hold rolls it 90 degrees about z).
  * - The briefcase (a pickup, not a weapon) has no markers: its origin is the centre of its bottom
  *   face, +y up, its front (latches, the lid) toward +z; about 10 x 7 x 3 px, the handle on top.
+ * - The lethals (thrown, not fired) have one marker, `grip`, where the fist holds them, and their
+ *   origin is the middle of the body (about its centre of mass: a thrown one spins about it), +y
+ *   up. The frag (The Pineapple, a Mk 2) is about 4 x 6.1 x 3.9 px: the body 3.6 across, the fuse
+ *   on top, the spoon down its right side (-x), the pull ring hanging in front (+z) and a little
+ *   left; its `grip` is the origin. The molotov (The Mia, a soda bottle with a burning napkin in
+ *   it) is about 3.8 x 12.2 x 3.8 px, the bottle 9.2 tall from its base at y -3.72, the label
+ *   toward +z, the napkin flopped over toward +x with its flame on top; its `grip` is 1.5 px below
+ *   the origin, low on the body.
  * - One material per file: the engine merges a held model's meshes and uses only the first
  *   material's textures. So every part maps into one atlas, and the material has three textures
  *   of that one UV layout, sampled LINEAR with mipmaps:
@@ -912,7 +920,7 @@ const FONT = {
   V: '11111111110a04', W: '1111111515150a', X: '11110a040a1111', Y: '1111110a040404', Z: '1f01020408101f',
   0: '0e11131519110e', 1: '040c040404040e', 2: '0e11010204081f', 3: '1f02040201110e', 4: '02060a121f0202', 5: '1f101e0101110e', 6: '0608101e11110e',
   7: '1f010204080808', 8: '0e11110e11110e', 9: '0e11110f01020c', '.': '00000000000c0c', '-': '0000000e000000', "'": '04040800000000', ' ': '00000000000000',
-  '*': '00150e1f0e1500',
+  '*': '00150e1f0e1500', $: '040f140e051e04',
 };
 /**
  * The glyph as strokes: segments joining each lit pixel of the 5x7 font to its lit neighbours
@@ -2813,11 +2821,247 @@ function briefcase() {
   return g;
 }
 
+/**
+ * The Pineapple: a Mk 2 frag. An egg of cast iron in eight columns and five rows of raised
+ * segments (the grooves cut into its shape and inked in the paint) under glossy olive lacquer,
+ * worn to the iron on the segments' rims, a yellow band round its shoulder and a filler plug
+ * underneath. On top, the fuse: a threaded collar, the parkerized fuse head with its striker
+ * housing, the zinc striker lever (the spoon) over the top and down the right side, and the
+ * safety pin through the lever's ears, its pull ring hanging in front. A lethal: one marker,
+ * `grip`, at the middle of the body (the origin).
+ */
+function frag() {
+  const g = new Gun('frag', 'The Pineapple', { atlas: 512 });
+  // The body's shape: a slightly tall egg (radius R0 across, HB below the middle and HT above it),
+  // by its latitude th (0 at the widest).
+  const R0 = 1.78, HB = 2.3, HT = 2.45, YC = -0.12;
+  const thOf = (y) => Math.asin(clamp((y - YC) / (y < YC ? HB : HT), -1, 1));
+  const rOf = (th) => R0 * Math.pow(Math.max(0, Math.cos(th)), 0.8);
+  const yOf = (th) => YC + (th < 0 ? HB : HT) * Math.sin(th);
+  // The segments: five rows between these latitudes, eight columns (a column's middle faces -x,
+  // under the spoon); the grooves between them 0.34 px across and 0.15 deep.
+  const TH0 = -58 * DEG, TH1 = 56 * DEG, ROWS = 5, COLS = 8;
+  const lat = (th) => {
+    const e = 1e-3;
+    const dr = rOf(th + e) - rOf(th - e), dy = yOf(th + e) - yOf(th - e);
+    const L = Math.hypot(dr, dy);
+    return { nr: dy / L, ny: -dr / L, rate: L / (2 * e) };
+  };
+  /** How far (px, along the surface) a point of the body is from the middle of the nearest groove. */
+  const grooveDist = (x, y, z) => {
+    const th = thOf(y);
+    const { rate } = lat(th);
+    if (th < TH0 - 0.2 || th > TH1 + 0.2) return Math.min(Math.abs(th - TH0), Math.abs(th - TH1)) * rate;
+    const row = ((th - TH0) / (TH1 - TH0)) * ROWS;
+    const dv = th < TH0 || th > TH1 ? Math.min(Math.abs(th - TH0), Math.abs(th - TH1)) * rate : Math.abs(row - Math.round(row)) * ((TH1 - TH0) / ROWS) * rate;
+    if (th < TH0 || th > TH1) return dv;
+    const u = (Math.atan2(z, x) / (2 * Math.PI)) * COLS + 0.5;
+    const du = Math.abs(u - Math.round(u)) * ((2 * Math.PI * Math.hypot(x, z)) / COLS);
+    return Math.min(du, dv);
+  };
+  const cut = (d) => 1 - smoothstep(0.05, 0.24, d);
+  // Its profile, sampled so the grooves' middles fall on rings (and, with 48 sides, on columns
+  // of corners): four samples a row, three over each smooth end.
+  const TB = -71.2 * DEG, TT = 67.5 * DEG;
+  const ths = [0, 1, 2].map((i) => lerp(TB, TH0, i / 3));
+  for (let i = 0; i <= ROWS * 4; i++) ths.push(lerp(TH0, TH1, i / (ROWS * 4)));
+  for (let i = 1; i <= 3; i++) ths.push(lerp(TH1, TT, i / 3));
+  const body = ths.map((th) => [rOf(th), yOf(th)]);
+  const y0 = body[0][1], y1 = body[body.length - 1][1];
+  const prof = [[0, y0 - 0.24], [0.46, y0 - 0.24], [0.54, y0 - 0.18], [0.56, y0 - 0.02], [body[0][0] - 0.02, y0], ...body, [0, y1]];
+  const lacquer = paint({ base: '#56692a', alt: '#48591f', rough: 0.2, rv: 0.08, grime: 0.6 });
+  const iron = hex('#3f3e39');
+  const bodyMat = (ctx) => {
+    const [x, y, z] = [ctx.lp[0], ctx.lp[2], -ctx.lp[1]];
+    const th = thOf(y);
+    // The plug underneath: bare dark steel with a slot.
+    if (y < y0 + 0.01 && Math.hypot(x, z) < 0.6) {
+      const out = M.darksteel(ctx);
+      if (Math.abs(x) < 0.08 && y < y0 - 0.2) out.c = mulc(out.c, 0.35);
+      return out;
+    }
+    // The shoulder above the segments: a yellow band.
+    if (th > TH1 + 0.07) return M.yellow(ctx);
+    const out = lacquer(ctx);
+    const d = grooveDist(x, y, z);
+    // Inked grooves; the rims of the segments chipped to the iron.
+    const k = 1 - smoothstep(0.07, 0.13, d);
+    out.c = mixc(out.c, hex('#171a0d'), k * 0.9);
+    out.r = lerp(out.r, 0.7, k);
+    const rim = smoothstep(0.1, 0.16, d) * (1 - smoothstep(0.18, 0.3, d));
+    const n = fbm(x * 3.1, y * 3.1, z * 3.1, 3, 88);
+    const w = clamp((rim * 1.4 - (1 - n) * 0.8) * 2.2);
+    if (w > 0) {
+      out.c = mixc(out.c, iron, w);
+      out.m = lerp(out.m, 0.85, w);
+      out.r = lerp(out.r, 0.45, w);
+    }
+    // A glossy highlight on each segment's crown.
+    out.c = mixc(out.c, hex('#8ea24a'), smoothstep(0.45, 0.7, d) * 0.18);
+    return out;
+  };
+  g.add(
+    'body',
+    alongY(lathe(prof, { sides: 48, mat: bodyMat, tex: 1.3 }), [0, 0, 0]).map(([x, y, z]) => {
+      const th = thOf(y);
+      const r = Math.hypot(x, z);
+      if (r < 0.7 || th < TB + 0.02 || th > TT - 0.02) return [x, y, z];
+      const k = 0.13 * cut(grooveDist(x, y, z));
+      if (k <= 0) return [x, y, z];
+      const { nr, ny } = lat(th);
+      const rr = (r - k * nr) / r;
+      return [x * rr, y - k * ny, z * rr];
+    }),
+  );
+  // The fuse: a threaded collar, the fuse head, the striker housing.
+  const threads = (ctx, out) => {
+    const k = stripesAt(ctx.lp[2], 0.09, ctx.fw, 0.4);
+    out.c = mixc(out.c, mulc(out.c, 0.45), k * 0.8);
+  };
+  const Y1 = y1 - 0.08;
+  g.add('collar', alongY(lathe([[0.86, 0], [0.86, 0.08], [0.82, 0.12], [0.82, 0.4], [0.74, 0.47], [0, 0.47]], { sides: 32, mat: M.darksteel, decals: [threads] }), [0, Y1, 0]));
+  const HY = Y1 + 0.47;
+  g.add('fuse head', alongY(lathe([[0.64, 0], [0.64, 0.62], [0.58, 0.74], [0.4, 0.84], [0, 0.88]], { sides: 28, mat: M.parker }), [0, HY, 0]));
+  g.add('striker housing', box([0.25, HY + 0.08, -0.34], [0.8, HY + 0.62, 0.34], { mat: M.parker, bevel: 0.1, round: 2 }));
+  // The spoon: over the top of the fuse head and down the right side, a hair off the segments.
+  const zinc = metal({ base: '#aeb2a8', alt: '#969a90', rough: 0.34, rv: 0.12, grime: 0.6, mottle: 0.7, wear: '#d6d9d2', wearRough: 0.2 });
+  const top = HY + 0.9;
+  const down = [];
+  for (let y = HY - 0.3; y >= 0.15; y -= 0.22) down.push([-(rOf(thOf(y)) + 0.2), y, 0]);
+  const spoonPath = [[0.62, top - 0.06, 0], [0.1, top + 0.04, 0], [-0.45, top, 0], [-0.78, top - 0.2, 0], [-0.92, HY + 0.2, 0], [-0.98, HY - 0.1, 0], ...down, [-(rOf(thOf(0.05)) + 0.42), -0.18, 0]];
+  g.add('spoon', sweep(spoonPath, [[-0.48, -0.065, 0.04], [0.48, -0.065, 0.04], [0.48, 0.065, 0.04], [0.12, 0.09], [-0.12, 0.09], [-0.48, 0.065, 0.04]], { side: [0, 0, 1], mat: zinc, tex: 1.2 }));
+  // The lever's ears either side of the fuse head, and the safety pin through them.
+  const ear = [[-0.95, HY + 0.3, 0.1], [-0.3, HY + 0.3, 0.1], [-0.25, top - 0.05], [-0.95, top - 0.05]];
+  for (const s of [1, -1]) g.add('lever ear', along(ear, s > 0 ? 0.64 : -0.74, s > 0 ? 0.74 : -0.64, { mat: zinc }));
+  const PIN = [-0.62, HY + 0.55];
+  g.add('pin', cyl(0.07, -0.98, 1.0, { sides: 10, mat: M.steel }).move(PIN[0], PIN[1], 0));
+  g.add('pin crimp', sweep([[PIN[0], PIN[1], -0.96], [PIN[0], PIN[1] - 0.12, -1.1], [PIN[0], PIN[1] - 0.3, -1.14]], circle(0.065, 8), { side: [1, 0, 0], mat: M.steel }));
+  // The pull ring, hanging off the pin's front end.
+  const RR = 0.62, RC = [PIN[0] - 0.02, PIN[1] - 0.42, 1.0 + 0.46];
+  const ring = Array.from({ length: 24 }, (_, i) => {
+    const a = (i / 24) * Math.PI * 2;
+    return [RC[0] + Math.sin(a) * 0.08, RC[1] + Math.cos(a) * RR, RC[2] + Math.sin(a) * RR];
+  });
+  g.add('pull ring', sweep(ring, circle(0.075, 8), { closed: true, side: [1, 0, 0], mat: M.nickel, tex: 1.5 }));
+  g.mark('grip', [0, 0, 0]);
+  return g;
+}
+
+/**
+ * The Mia: a five-dollar shake gone bad. A contoured soda bottle of cherry-red glass (fluted,
+ * glinting, the fuel dark in it up to its shoulder) with a diner's paper label round its waist
+ * (MIA, $5 SHAKE), a gingham napkin stuffed in its neck and tied off with twine, flopped over and
+ * burning at its tip: charred, glowing, and a little flame. A lethal: one marker, `grip`, low on
+ * the body where the fist holds it; the origin is the middle of the bottle.
+ */
+function molotov() {
+  const g = new Gun('molotov', 'The Mia', { atlas: 512 });
+  const FUEL = 2.0;
+  // The glass, bottom to lip, then down into the mouth (the napkin fills it).
+  const outline = fillet(
+    [[0, -3.72], [1.3, -3.72, 0.25], [1.74, -3.42, 0.35], [1.9, -2.5, 0.8], [1.68, -1.05, 0.8], [1.68, -0.3, 0.6], [1.94, 0.95, 0.8], [1.82, 1.8, 0.5], [1.1, 2.95, 0.6], [0.72, 3.7, 0.4], [0.69, 4.95, 0.04], [0.84, 5.05, 0.05], [0.86, 5.42, 0.05], [0.78, 5.52], [0.6, 5.52], [0.58, 5.2], [0, 5.2]],
+    false,
+    4,
+  );
+  const rAt = (y) => {
+    for (let i = 1; i < outline.length; i++) {
+      const [r0, a] = outline[i - 1], [r1, b] = outline[i];
+      if (b >= y && a <= y && b > a) return lerp(r0, r1, (y - a) / (b - a));
+    }
+    return 0;
+  };
+  const glass = (ctx) => {
+    const [x, y, z] = ctx.p;
+    const a = Math.atan2(x, z);
+    const n = fbm(x * 0.9, y * 0.9, z * 0.9, 2, 131);
+    let c = y < FUEL ? mixc(hex('#5c0716'), hex('#7c0c1f'), n) : mixc(hex('#b01a3a'), hex('#c8284a'), n);
+    // The fuel's surface, a brighter line where it meets the glass.
+    c = mixc(c, hex('#ff7d8e'), Math.exp(-(((y - FUEL) / 0.05) ** 2)) * 0.7);
+    // Flutes down the bulges.
+    const bulge = smoothstep(-3.2, -2.6, y) * (1 - smoothstep(2.0, 2.6, y));
+    c = mulc(c, 1 - bulge * 0.12 * (0.5 + 0.5 * Math.cos(a * 16)));
+    // Glints: two streaks down the front left and a soft sheen at the back right.
+    const streak = (a0, w) => Math.exp(-(((a - a0) / w) ** 2));
+    const up = Math.abs(ctx.n[1]) < 0.75 ? 1 : 0.3;
+    c = mixc(c, hex('#ffe3ea'), up * Math.max(streak(-0.62, 0.07), streak(-0.4, 0.025) * 0.8));
+    c = mixc(c, hex('#ff9fb4'), streak(2.3, 0.3) * 0.25);
+    // The rim of the lip and the heel catch the light.
+    if (y > 5.38 || y < -3.62) c = mixc(c, hex('#ff8fa5'), 0.35);
+    return { c: addc(c, (ctx.rnd - 0.5) * 3), m: 0, r: 0.05 + n * 0.04, e: 0 };
+  };
+  g.add('bottle', alongY(lathe(outline, { sides: 44, mat: glass, tex: 1.1 }), [0, 0, 0]));
+  // The label: diner paper round the waist, a red rule top and bottom, the name in ink.
+  const L0 = -1.45, L1 = -0.12;
+  const band = [[rAt(L0), L0]];
+  for (let y = L0; y <= L1 + 1e-6; y += (L1 - L0) / 10) band.push([rAt(y) + 0.035, y]);
+  band.push([rAt(L1), L1]);
+  const label = (ctx) => {
+    const [x, y, z] = ctx.p;
+    const r = Math.hypot(x, z);
+    const u = Math.atan2(x, z) * r;
+    const n = fbm(x * 2, y * 2, z * 2, 2, 141);
+    let c = mixc(hex('#f6e8c6'), hex('#ead7ad'), n);
+    let rough = 0.82;
+    const edge = Math.min(y - L0, L1 - y);
+    if (edge < 0.14 && edge > 0.05) c = hex('#d7263d');
+    const ink = Math.max(textMask('*MIA*', u + 0.99, y - (L0 + 0.62), 0.5, ctx.fw), textMask('$5 SHAKE', u + 0.82, y - (L0 + 0.25), 0.24, ctx.fw));
+    c = mixc(c, hex('#1b1414'), ink);
+    rough = lerp(rough, 0.5, ink);
+    // Grease on the paper where fingers held it.
+    c = mulc(c, 1 - smoothstep(0.62, 0.8, fbm(x * 0.8, y * 0.8, z * 0.8, 3, 143)) * 0.18);
+    return { c, m: 0, r: rough, e: 0 };
+  };
+  g.add('label', alongY(lathe(band, { sides: 44, mat: label, tex: 1.6 }), [0, 0, 0]));
+  // The napkin: stuffed in the mouth, up out of it and flopped over, burning at its end.
+  const TIP = [0.98, 7.18, 0.1];
+  const gingham = (ctx) => {
+    const [x, y, z] = ctx.p;
+    const k1 = stripesAt(y + x * 0.35, 0.34, ctx.fw, 0.5);
+    const k2 = stripesAt(x * 0.8 - z * 0.6 + y * 0.2, 0.34, ctx.fw, 0.5);
+    let c = mixc(mixc(hex('#f3ece0'), hex('#e0536a'), Math.max(k1, k2) * 0.75), hex('#c8102e'), k1 * k2);
+    c = mulc(c, 0.9 + fbm(x * 5, y * 5, z * 5, 2, 151) * 0.2);
+    c = mulc(c, 1 - grimeAt(ctx, 0.2) * 0.3);
+    // Charred toward the burning end, glowing at it.
+    const d = len3(sub3(ctx.p, TIP));
+    const char = 1 - smoothstep(0.3, 0.95, d + (fbm(x * 3, y * 3, z * 3, 2, 153) - 0.5) * 0.4);
+    c = mixc(c, hex('#241510'), char);
+    const hot = 1 - smoothstep(0.12, 0.42, d);
+    c = mixc(c, hex('#ff9a2a'), hot);
+    return { c, m: 0, r: 0.85, e: hot * 0.9 };
+  };
+  const napkinPath = [[0, 4.95, 0], [0, 5.55, 0], [0.06, 6.15, 0.03], [0.26, 6.7, 0.06], [0.58, 7.06, 0.08], TIP];
+  const crumple = [[-0.6, -0.22], [-0.2, -0.34], [0.3, -0.28], [0.62, -0.08], [0.5, 0.22], [0.05, 0.34], [-0.42, 0.26], [-0.66, 0.04]];
+  g.add('napkin', sweep(napkinPath, crumple, { side: [0, 0, 1], scale: (t) => lerp(1.02, 0.5, t), mat: gingham, tex: 1.4 }));
+  const flapSide = norm3([-0.5, 0, 0.87]);
+  g.add('napkin flap', sweep([[0.42, 5.4, 0.26], [0.78, 5.08, 0.46], [0.66, 4.62, 0.4], [0.64, 4.12, 0.38]], rect(0.56, 0.08, 0.03), { side: flapSide, scale: (t) => [lerp(1, 0.75, t), 1], mat: gingham, tex: 1.4 }));
+  // Twine round the neck.
+  const twine = (ctx) => {
+    const [x, y, z] = ctx.p;
+    const tw = Math.abs(Math.sin((Math.atan2(x, z) * 9 + y * 22) * 1.0));
+    return { c: mulc(hex('#b8955f'), 0.75 + tw * 0.3), m: 0, r: 0.8, e: 0 };
+  };
+  const TY = 4.45;
+  g.add('twine', sweep(Array.from({ length: 20 }, (_, i) => [Math.cos((i / 20) * Math.PI * 2) * 0.745, TY, Math.sin((i / 20) * Math.PI * 2) * 0.745]), circle(0.055, 6), { closed: true, side: [0, 1, 0], mat: twine }));
+  // The flame on the napkin's end: a hot core and a lick beside it.
+  const flameMat = (ctx) => {
+    const [x, y, h] = ctx.lp;
+    const t = clamp(h / 1.05);
+    const core = clamp(1 - Math.hypot(x, y) / (0.3 * (1 - t) + 0.05));
+    const c = mixc(mixc(hex('#ff5a12'), hex('#ffb42a'), 1 - t), hex('#fff4b0'), core * (1 - t));
+    return { c, m: 0, r: 0.5, e: 1 };
+  };
+  const tear = [[0, 0], [0.2, 0.1], [0.3, 0.32], [0.26, 0.58], [0.14, 0.84], [0, 1.05]];
+  g.add('flame', alongY(lathe(tear, { sides: 12, mat: flameMat }).scale(1.35), [TIP[0] - 0.02, TIP[1] - 0.14, TIP[2]]).turn('z', -10, TIP));
+  g.add('flame', alongY(lathe(tear, { sides: 10, mat: flameMat }).scale(0.8), [TIP[0] + 0.26, TIP[1] - 0.18, TIP[2] - 0.05]).turn('z', -28, TIP));
+  g.mark('grip', [0, -1.5, 0]);
+  return g;
+}
+
 // ---------------------------------------------------------------------------------------------
 
 /** Each model's size today (px, from the box models these replaced), to keep the first-person hold tuned. */
-const SIZES = { pistol: [4, 12.77, 12], smg: [5, 20.5, 17], rifle: [6, 19.5, 28], shotgun: [6, 14.9, 29.5], sniper: [5.5, 12.84, 33], katana: [4, 5, 29.91], briefcase: [10.5, 10, 5.09] };
-const MODELS = { pistol, smg, rifle, shotgun, sniper, katana, briefcase };
+const SIZES = { pistol: [4, 12.77, 12], smg: [5, 20.5, 17], rifle: [6, 19.5, 28], shotgun: [6, 14.9, 29.5], sniper: [5.5, 12.84, 33], katana: [4, 5, 29.91], briefcase: [10.5, 10, 5.09], frag: [4.06, 6.1, 3.93], molotov: [3.84, 12.16, 3.84] };
+const MODELS = { pistol, smg, rifle, shotgun, sniper, katana, briefcase, frag, molotov };
 const args = process.argv.slice(2);
 const fast = args.includes('--fast');
 const only = args.filter((a) => !a.startsWith('--'));

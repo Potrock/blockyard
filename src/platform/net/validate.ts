@@ -91,6 +91,21 @@ function sanitizeInput(raw: unknown): PlayerInput | null {
     }
     out.shots = shots;
   }
+  if (raw.throws !== undefined) {
+    // A throw or two an input at most.
+    if (!Array.isArray(raw.throws) || raw.throws.length > 4) return null;
+    const throws: NonNullable<PlayerInput['throws']> = [];
+    for (const s of raw.throws) {
+      if (!Array.isArray(s) || s.length !== 9 || typeof s[1] !== 'string' || s[1].length > 40) return null;
+      const serial = int(s[0], 0, Number.MAX_SAFE_INTEGER);
+      const n = [2, 3, 4, 5, 6, 7].map((i) => num(s[i], -1e6, 1e6));
+      const cook = num(s[8], 0, 60);
+      if (serial === null || cook === null || n.some((v) => v === null)) return null;
+      const [x, y, z, vx, vy, vz] = n as number[];
+      throws.push([serial, s[1], x, y, z, vx, vy, vz, cook]);
+    }
+    out.throws = throws;
+  }
   return out;
 }
 

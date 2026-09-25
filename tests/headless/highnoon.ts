@@ -1,24 +1,19 @@
-import { readFileSync } from 'node:fs';
-import highnoon, { matchState } from '../../src/games/highnoon';
-import { Headless } from '../../src/platform/host/headless';
-import { check } from './_harness';
+import { matchState } from '../../src/games/highnoon';
+import { check, launch } from './_harness';
 
 /**
- * High Noon (a dev game, so `launch` can't find it: built here the way `launch` does) with the
- * local player standing idle at their mark: five bots fill Dry Gulch, wait out the standoff, draw,
- * and shoot it out round after round with the Peacemaker and the Yellowboy until one of them takes
- * three rounds and the town. Nothing may land during a standoff (the game's `damage` listener
- * cancels it), the round and match structure has to run, and the widgets have to go up.
+ * High Noon (a dev game: `launch` finds those too) with the local player standing idle at their
+ * mark: five bots fill Dry Gulch, wait out the standoff, draw, and shoot it out round after round
+ * with the Peacemaker and the Yellowboy until one of them takes three rounds and the town. Nothing
+ * may land during a standoff (the game's `damage` listener cancels it), the round and match
+ * structure has to run, and the widgets have to go up.
  */
 export default function highNoon() {
   const t0 = performance.now();
-  const seed = 5;
-  Math.random = mulberry32(seed ^ 0x5bd1e995);
-  const h = new Headless(highnoon, { wasm: readFileSync('engine/pkg/voxel_engine_bg.wasm'), seed, radius: 5, wire: true });
   const warnings: string[] = [];
   const warn = console.warn;
   console.warn = (...a: unknown[]) => (warnings.push(a.join(' ')), warn(...a));
-  h.start();
+  const h = launch('highnoon', { seed: 5, radius: 5 });
   const g = h.ctx;
   check(g.players.length === 6, `expected 6 gunslingers (1 person + 5 bots), got ${g.players.length}`);
   let shots = 0;
@@ -41,6 +36,12 @@ export default function highNoon() {
   });
   // The standoff: a shot now doesn't land (the house rules cancel it).
   check(matchState().phase === 'standoff', `a round should open with a standoff, not ${matchState().phase}`);
+  // Rooted to the mark, hands off the guns (a weapons-locked freeze): 1 doesn't draw the Peacemaker.
+  const me = g.player;
+  h.step(1 / 60, { down: ['Digit1'], pressed: ['Digit1'] });
+  check(me.frozen && me.inventory.selected === 2 && me.inventory.ammo('revolver')?.magazine === 6, `no drawing in the standoff: frozen ${me.frozen}, slot ${me.inventory.selected}`);
+  // Their outfit picker went up as they came into play (`playerReady`).
+  check(h.find('hud', 'widget').some((c) => c.args[0] === 'outfits' && c.to === me.id), 'the outfit picker should be up on their screen');
   const [, a, b] = g.players;
   check(!a.damage(30, { source: b, cause: 'gun', part: 'body', weapon: 'revolver' }), 'a hit landed in the standoff');
   check(a.health === a.maxHealth, 'the standoff hit hurt');
@@ -71,15 +72,4 @@ export default function highNoon() {
   check(won, 'the match should end with someone taking the town');
   check(early === 0, `${early} hits landed during a standoff`);
   for (const w of ['cylinder', 'wanted', 'duel', 'roundbar', 'outfits']) check(widgets.has(w), `the ${w} widget never went up`);
-}
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }

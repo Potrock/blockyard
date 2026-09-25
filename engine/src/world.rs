@@ -236,7 +236,29 @@ impl World {
                 return &d.boxes;
             }
         }
-        target_boxes(b)
+        match self.model_at(x, y, z, b) {
+            Some(m) => &m.collide,
+            None => &FULL_BOX,
+        }
+    }
+
+    /// The model block `b` has at (x, y, z): a fence or pane joined to what's beside it there.
+    #[inline]
+    fn model_at(&self, x: i32, y: i32, z: i32, b: u8) -> Option<&'static crate::shapes::Model> {
+        if SHAPE[b as usize] != SHAPE_MODEL {
+            return None;
+        }
+        shapes().model_at(b, || [self.get(x, y, z - 1), self.get(x + 1, y, z), self.get(x, y, z + 1), self.get(x - 1, y, z)])
+    }
+
+    /// The boxes you aim at in the block `b` at (x, y, z) (see `target_boxes`), a fence as it's
+    /// joined there.
+    #[inline]
+    pub fn target_at(&self, x: i32, y: i32, z: i32, b: u8) -> &'static [[u8; 6]] {
+        match self.model_at(x, y, z, b) {
+            Some(m) => &m.bounds,
+            None => &FULL_BOX,
+        }
     }
 
     /// `damage_at` for a block that can be damaged (a cube: anything else there is stale).
@@ -249,13 +271,16 @@ impl World {
     }
 
     /// Copy the SOLID flag of every block in a box into `out` (x fastest, then z, then y).
-    /// Unloaded columns count as solid. One hash lookup per column keeps this fast.
+    /// Unloaded columns count as solid, and so does the cell over a fence (it's 1.5 high: nobody
+    /// jumps it). One hash lookup per column keeps this fast.
     pub fn solid_box(&self, x0: i32, y0: i32, z0: i32, sx: usize, sy: usize, sz: usize, out: &mut [u8]) {
+        let shapes = shapes();
         for dz in 0..sz {
             for dx in 0..sx {
                 let x = x0 + dx as i32;
                 let z = z0 + dz as i32;
                 let col = self.cols.get(&key(x >> 4, z >> 4));
+                let mut over_fence = 0;
                 for dy in 0..sy {
                     let y = y0 + dy as i32;
                     let b = if y < 0 {
@@ -271,7 +296,8 @@ impl World {
                             },
                         }
                     };
-                    out[(dy * sz + dz) * sx + dx] = SOLID[b as usize];
+                    out[(dy * sz + dz) * sx + dx] = SOLID[b as usize] | over_fence;
+                    over_fence = shapes.rises[b as usize];
                 }
             }
         }
@@ -488,33 +514,135 @@ impl World {
                         continue;
                     }
                     let taken = damage::capsule([x, y, z], o, b, r);
-                    if taken.iter().all(|&t| t == 0) {
-                        continue;
-                    }
-                    let (k, local) = (key(x >> 4, z >> 4), (((y & 255) << 8) | ((z & 15) << 4) | (x & 15)) as u32);
-                    let m = self.damage.entry(k).or_default();
-                    let d = m.entry(local).or_insert_with(|| Box::new(Damage::whole()));
-                    let gone = d.take(&taken);
-                    let (n, left) = (damage::count(&gone), d.left);
-                    if n == 0 {
-                        continue;
-                    }
-                    out.removed += n;
-                    if left == 0 {
-                        // Nothing left: air, as an edit (the damage goes with it).
-                        self.set(x, y, z, AIR);
-                        out.emptied.push(([x, y, z], id));
-                    } else {
-                        let mask = damaged_sections(m);
-                        if let Some(c) = self.cols.get_mut(&k) {
-                            c.damaged = mask;
-                        }
-                        out.cells.push(([x, y, z], gone));
-                    }
+                    self.take_bits([x, y, z], id, &taken, &mut out);
                 }
             }
         }
         out
+    }
+
+    /// Take `taken` from the block `id` at `cell` (a carvable one), noting what changed in `out`:
+    /// the bits that went, or the block itself once nothing's left of it (air, as an edit).
+    fn take_bits(&mut self, cell: [i32; 3], id: u8, taken: &[u16; 256], out: &mut Carved) {
+        if taken.iter().all(|&t| t == 0) {
+            return;
+        }
+        let [x, y, z] = cell;
+        let (k, local) = (key(x >> 4, z >> 4), (((y & 255) << 8) | ((z & 15) << 4) | (x & 15)) as u32);
+        let m = self.damage.entry(k).or_default();
+        let d = m.entry(local).or_insert_with(|| Box::new(Damage::whole()));
+        let gone = d.take(taken);
+        let (n, left) = (damage::count(&gone), d.left);
+        if n == 0 {
+            return;
+        }
+        out.removed += n;
+        if left == 0 {
+            // Nothing left: air, as an edit (the damage goes with it).
+            self.set(x, y, z, AIR);
+            out.emptied.push((cell, id));
+        } else {
+            let mask = damaged_sections(m);
+            if let Some(c) = self.cols.get_mut(&k) {
+                c.damaged = mask;
+            }
+            out.cells.push((cell, gone));
+        }
+    }
+
+    /// Whether `carve` and `blast` can take bits out of the block at (x, y, z): the game made it
+    /// destructible, it's above the line, and it's a solid, opaque cube.
+    pub fn carvable_at(&self, x: i32, y: i32, z: i32) -> bool {
+        let Some(rule) = self.destructible.as_deref() else { return false };
+        let id = self.get_or(x, y, z, 255);
+        id != 255 && Self::carvable(rule, y, id)
+    }
+
+    /// A blast's crater: a ragged sphere of little voxels (`damage::blast`) out of the carvable
+    /// blocks among `cells` (flat x, y, z triples; the game's explosion picks them), `radius`
+    /// round `center`, its edge wandering in and out by `roughness` of that. A block left with
+    /// nothing is air, as `carve` leaves it.
+    pub fn blast(&mut self, center: [f64; 3], radius: f64, roughness: f64, seed: u32, cells: &[i32]) -> Carved {
+        let mut out = Carved::default();
+        let Some(rule) = self.destructible.as_deref().cloned() else { return out };
+        if !center.iter().all(|v| v.is_finite()) || !radius.is_finite() || radius <= 0.0 {
+            return out;
+        }
+        let radius = radius.min(12.0);
+        for c in cells.chunks_exact(3) {
+            let (x, y, z) = (c[0], c[1], c[2]);
+            if !(0..256).contains(&y) {
+                continue;
+            }
+            let id = self.get_or(x, y, z, 255);
+            if id == 255 || !Self::carvable(&rule, y, id) {
+                continue;
+            }
+            let taken = damage::blast([x, y, z], center, radius, roughness, seed);
+            self.take_bits([x, y, z], id, &taken, &mut out);
+        }
+        out
+    }
+
+    /// A ray starting in solid material (at `o`, where it went in): how far along unit-ish `d` it
+    /// comes out into the open (a hole, air, a slab's empty half), and the face it comes out of
+    /// (pointing out, along the ray), or None if it's still in material after `max`. Measured on
+    /// the grid of little voxels (1/16 of a block), so what's been shot out of a block counts.
+    /// Unloaded columns count as open.
+    pub fn ray_exit(&self, o: [f64; 3], d: [f64; 3], max: f64) -> Option<(f64, [i32; 3])> {
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if len < 1e-12 || !o.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let d = [d[0] / len, d[1] / len, d[2] / len];
+        // A hair in, so a ray starting on a face starts inside the block it faces.
+        const IN: f64 = 1e-6;
+        let s = [(o[0] + d[0] * IN) * 16.0, (o[1] + d[1] * IN) * 16.0, (o[2] + d[2] * IN) * 16.0];
+        let mut m = [s[0].floor() as i64, s[1].floor() as i64, s[2].floor() as i64];
+        let step = [d[0].signum() as i64, d[1].signum() as i64, d[2].signum() as i64];
+        let mut t_max = [0f64; 3];
+        let mut t_delta = [0f64; 3];
+        for a in 0..3 {
+            if d[a].abs() < 1e-12 {
+                t_max[a] = f64::INFINITY;
+                t_delta[a] = f64::INFINITY;
+            } else {
+                // In blocks along the ray (the micro grid is 16 to a block).
+                let next = if d[a] > 0.0 { m[a] as f64 + 1.0 - s[a] } else { s[a] - m[a] as f64 };
+                t_max[a] = IN + next / 16.0 / d[a].abs();
+                t_delta[a] = 1.0 / 16.0 / d[a].abs();
+            }
+        }
+        let mut t = 0.0;
+        let mut normal = [0i32; 3];
+        for _ in 0..4096 {
+            let cell = [m[0].div_euclid(16) as i32, m[1].div_euclid(16) as i32, m[2].div_euclid(16) as i32];
+            let (mx, my, mz) = (m[0].rem_euclid(16) as u8, m[1].rem_euclid(16) as u8, m[2].rem_euclid(16) as u8);
+            let solid = self.collision_at(cell[0], cell[1], cell[2], AIR).iter().any(|b| mx >= b[0] && mx < b[3] && my >= b[1] && my < b[4] && mz >= b[2] && mz < b[5]);
+            if !solid {
+                return Some((t, normal));
+            }
+            let a = if t_max[0] < t_max[1] {
+                if t_max[0] < t_max[2] {
+                    0
+                } else {
+                    2
+                }
+            } else if t_max[1] < t_max[2] {
+                1
+            } else {
+                2
+            };
+            t = t_max[a];
+            if t > max {
+                return None;
+            }
+            t_max[a] += t_delta[a];
+            m[a] += step[a];
+            normal = [0; 3];
+            normal[a] = step[a] as i32;
+        }
+        None
     }
 
     /// Damage made in another copy of the world (the simulation's): the changes `damage::encode`
@@ -736,8 +864,9 @@ impl World {
                 if SHAPE[b as usize] != SHAPE_MODEL && damaged.is_none() {
                     return Some(t);
                 }
-                // A slab, a bed, a block with holes in it: only its boxes stop the ray.
-                if let Some((tb, _)) = ray_boxes(o, d, p, damaged.map_or(collision_boxes(b), |d| &d.boxes)) {
+                // A slab, a bed, a block with holes in it: only its boxes stop the ray (a fence:
+                // the post and rails you see, not its taller collision).
+                if let Some((tb, _)) = ray_boxes(o, d, p, damaged.map_or_else(|| self.target_at(p[0], p[1], p[2], b), |d| &d.boxes)) {
                     if tb <= max_dist {
                         return Some(tb);
                     }
@@ -795,7 +924,7 @@ impl World {
                 if SHAPE[b as usize] != SHAPE_MODEL && damaged.is_none() {
                     return Some((p, normal, b, t));
                 }
-                if let Some((tb, n)) = ray_boxes(o, d, p, damaged.map_or(target_boxes(b), |d| &d.boxes)) {
+                if let Some((tb, n)) = ray_boxes(o, d, p, damaged.map_or_else(|| self.target_at(p[0], p[1], p[2], b), |d| &d.boxes)) {
                     if tb <= max_dist {
                         return Some((p, n, b, tb));
                     }
@@ -830,13 +959,19 @@ fn damaged_sections(m: &FxMap<u32, Box<Damage>>) -> u16 {
 }
 
 /// The boxes a block collides with, in 1/16 of a block within its cell (none if it isn't
-/// solid): the whole cell, or a model's own (a slab's half, a bed 9/16 high).
+/// solid): the whole cell, or a model's own (a slab's half, a bed 9/16 high; a fence standing
+/// alone, 24/16).
 #[inline]
 pub fn collision_boxes(b: u8) -> &'static [[u8; 6]] {
     if SOLID[b as usize] == 0 {
         return &[];
     }
-    target_boxes(b)
+    if SHAPE[b as usize] == SHAPE_MODEL {
+        if let Some(m) = &shapes().models[b as usize] {
+            return &m.collide;
+        }
+    }
+    &FULL_BOX
 }
 
 /// The boxes you aim at in a block: the whole cell, or a model's own (a torch's stick).
@@ -854,10 +989,21 @@ pub fn target_boxes(b: u8) -> &'static [[u8; 6]] {
 /// a hole shot in a block). Unloaded columns count as air here.
 pub fn point_solid(world: &World, p: [f64; 3]) -> bool {
     let cell = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
-    world.collision_at(cell[0], cell[1], cell[2], AIR).iter().any(|b| {
-        let (lo, hi) = world_box(cell, b);
-        (0..3).all(|a| p[a] >= lo[a] && p[a] < hi[a])
-    })
+    let inside = |cell: [i32; 3]| {
+        world.collision_at(cell[0], cell[1], cell[2], AIR).iter().any(|b| {
+            let (lo, hi) = world_box(cell, b);
+            (0..3).all(|a| p[a] >= lo[a] && p[a] < hi[a])
+        })
+    };
+    // A fence below reaches up into this cell.
+    inside(cell) || (shapes().tall && inside([cell[0], cell[1] - 1, cell[2]]))
+}
+
+/// How far down to look for blocks a box might touch: a cell further when some block's collision
+/// rises above its own cell (a fence).
+#[inline]
+fn reach_below() -> i32 {
+    shapes().tall as i32
 }
 
 /// How many of a mover's blocks would be in the world's solid blocks with it at `pose` (a block
@@ -913,7 +1059,7 @@ pub fn ray_boxes(o: [f64; 3], d: [f64; 3], cell: [i32; 3], boxes: &[[u8; 6]]) ->
 pub fn voxel_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
     let lo = [p[0] - hw + EPS, p[1] + EPS, p[2] - hw + EPS];
     let hi = [p[0] + hw - EPS, p[1] + h - EPS, p[2] + hw - EPS];
-    for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
+    for y in lo[1].floor() as i32 - reach_below()..=hi[1].floor() as i32 {
         for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
             for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
                 for b in world.collision_at(x, y, z, STONE) {
@@ -962,7 +1108,7 @@ fn voxel_move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, h
         lo[axis] += delta;
     }
     let mut d = delta;
-    for y in (lo[1] - TOUCH).floor() as i32..=(hi[1] + TOUCH).floor() as i32 {
+    for y in (lo[1] - TOUCH).floor() as i32 - reach_below()..=(hi[1] + TOUCH).floor() as i32 {
         for z in (lo[2] - TOUCH).floor() as i32..=(hi[2] + TOUCH).floor() as i32 {
             for x in (lo[0] - TOUCH).floor() as i32..=(hi[0] + TOUCH).floor() as i32 {
                 for b in world.collision_at(x, y, z, STONE) {
@@ -1186,6 +1332,13 @@ const EPS: f64 = 1e-4;
 pub const JUMP: f64 = 8.0;
 /// How high a walker steps up without jumping: onto a slab or a stair, a mover's deck.
 pub const STEP_UP: f64 = 0.6;
+/// Climbing a ladder or vine (blocks a second): up, the fastest down, and the fastest sideways
+/// off the ground (Minecraft's are about 2.4, 3 and 3).
+pub const CLIMB_UP: f64 = 2.6;
+pub const CLIMB_DOWN: f64 = 2.4;
+pub const CLIMB_SIDE: f64 = 3.0;
+/// How far ahead a climber feels for something to push against.
+const CLIMB_PROBE: f64 = 0.05;
 
 pub struct MoveInput {
     /// Desired horizontal direction in world space (length <= 1).
@@ -1367,6 +1520,8 @@ impl Player {
             }
         }
 
+        self.climb(world, input, wish);
+
         // Sneaking on the ground: don't walk off edges.
         let guard = input.sneak && self.on_ground && !self.flying && t.edge_guard && !input.slide;
 
@@ -1424,6 +1579,41 @@ impl Player {
         let speed = (self.vel[0] * self.vel[0] + self.vel[2] * self.vel[2]).sqrt();
         if self.on_ground && !self.flying {
             self.bob += speed * dt;
+        }
+    }
+
+    /// On a ladder or a vine (a climbable block where their feet are), Minecraft's way: pushing
+    /// into something (the wall behind it, a ladder's rungs) or holding jump climbs, sneaking holds
+    /// on, and otherwise they slide down slowly; off the ground, sideways speed is held down so
+    /// they don't fly off it. It reads only the blocks and this step's input, so a client
+    /// predicting its own player climbs exactly as the host does.
+    fn climb(&mut self, world: &World, input: &MoveInput, wish: [f64; 2]) {
+        if self.flying || self.in_water || self.in_lava {
+            return;
+        }
+        let feet = world.get(self.pos[0].floor() as i32, self.pos[1].floor() as i32, self.pos[2].floor() as i32);
+        if CLIMBABLE[feet as usize] == 0 {
+            return;
+        }
+        let w = (wish[0] * wish[0] + wish[1] * wish[1]).sqrt();
+        let pushing = w > 0.1 && {
+            let mut p = self.pos;
+            p[0] += wish[0] / w * CLIMB_PROBE;
+            p[2] += wish[1] / w * CLIMB_PROBE;
+            Self::collides(world, p)
+        };
+        if pushing || input.jump {
+            self.vel[1] = CLIMB_UP;
+            self.on_ground = false;
+        } else if input.sneak {
+            self.vel[1] = 0.0;
+        } else {
+            self.vel[1] = self.vel[1].max(-CLIMB_DOWN);
+        }
+        if !self.on_ground {
+            for a in [0, 2] {
+                self.vel[a] = self.vel[a].clamp(-CLIMB_SIDE, CLIMB_SIDE);
+            }
         }
     }
 
@@ -1821,6 +2011,91 @@ mod tests {
         assert_eq!(w.get(8, top - 1, 8), ground);
         assert!(w.damage_at(8, top - 1, 8).is_none() && w.damage_count() == 0);
         assert!(aabb_collides(&w, [8.5, top as f64 - 0.9, 8.5], HALF_W, HEIGHT));
+    }
+
+    /// Every cell round a point, as an explosion lists what it reaches.
+    fn around(c: [f64; 3], r: i32) -> Vec<i32> {
+        let mut cells = Vec::new();
+        let (x0, y0, z0) = (c[0].floor() as i32, c[1].floor() as i32, c[2].floor() as i32);
+        for y in y0 - r..=y0 + r {
+            for z in z0 - r..=z0 + r {
+                for x in x0 - r..=x0 + r {
+                    cells.extend([x, y, z]);
+                }
+            }
+        }
+        cells
+    }
+
+    #[test]
+    fn blasts_leave_a_ragged_crater_and_the_ground_whole() {
+        let (mut w, top) = wall();
+        let ground = w.get(8, top - 1, 12);
+        // A grenade at rest against the wall's face, a block and a half up.
+        let at = [8.5, top as f64 + 1.5, 11.9];
+        let c = w.blast(at, 2.0, 0.3, 7, &around(at, 4));
+        // The block it touched is gone altogether; the wall round it is bitten into, raggedly.
+        assert_eq!(w.get(8, top + 1, 12), AIR);
+        assert!(c.emptied.iter().any(|(p, b)| *p == [8, top + 1, 12] && *b == STONE));
+        let bitten: Vec<u32> = (6..11).flat_map(|x| (top..top + 3).map(move |y| (x, y))).filter_map(|(x, y)| w.damage_at(x, y, 12).map(|d| d.left)).collect();
+        assert!(bitten.len() >= 4 && bitten.iter().all(|&l| l > 0 && l < damage::CELLS), "{bitten:?}");
+        assert!(bitten.iter().any(|&l| l < 2048) && bitten.iter().any(|&l| l > 2048), "some deep, some shallow: {bitten:?}");
+        // The ground (not above the line) is whole, though the blast reached it.
+        assert_eq!(w.get(8, top - 1, 12), ground);
+        assert!(w.damage_at(8, top - 1, 12).is_none() && w.damage_at(8, top - 1, 11).is_none());
+        // Its edge is ragged: along the wall's face, the crater's edge isn't where a smooth
+        // sphere's would be.
+        let (mut smooth, _) = wall();
+        smooth.blast(at, 2.0, 0.0, 7, &around(at, 4));
+        let differ = (6..11).flat_map(|x| (top..top + 3).map(move |y| (x, y))).any(|(x, y)| w.damage_at(x, y, 12).map(|d| d.bits) != smooth.damage_at(x, y, 12).map(|d| d.bits));
+        assert!(differ, "roughness shows");
+        // The same blast on another copy: the same crater (the host's and every client's agree).
+        let (mut again, _) = wall();
+        let c2 = again.blast(at, 2.0, 0.3, 7, &around(at, 4));
+        assert_eq!((c2.removed, c2.emptied.len(), c2.cells.len()), (c.removed, c.emptied.len(), c.cells.len()));
+        assert!((6..11).all(|x| (top..top + 3).all(|y| w.damage_at(x, y, 12).map(|d| d.bits) == again.damage_at(x, y, 12).map(|d| d.bits))));
+        // And a copy that takes the changes over the wire gets it too.
+        let (mut copy, _) = wall();
+        copy.destructible = None;
+        let mut changes = Vec::new();
+        for (cell, gone) in &c.cells {
+            damage::encode(&mut changes, *cell, gone);
+        }
+        for (p, _) in &c.emptied {
+            copy.mirror(p[0], p[1], p[2], AIR);
+        }
+        copy.apply_damage(&changes);
+        assert!((6..11).all(|x| (top..top + 3).all(|y| w.damage_at(x, y, 12).map(|d| d.bits) == copy.damage_at(x, y, 12).map(|d| d.bits) && w.get(x, y, 12) == copy.get(x, y, 12))));
+        // Only the cells it's given, and nothing without a rule.
+        let (mut w2, _) = wall();
+        assert_eq!(w2.blast(at, 0.5, 0.3, 7, &[6, top, 12]).cells.len(), 0, "out of reach");
+        w2.destructible = None;
+        assert_eq!(w2.blast(at, 2.0, 0.3, 7, &around(at, 4)).removed, 0);
+        assert!(!w2.carvable_at(8, top + 1, 12));
+        assert!(w.carvable_at(9, top + 1, 12) && !w.carvable_at(8, top - 1, 12));
+    }
+
+    #[test]
+    fn rays_come_out_of_walls_where_the_material_ends() {
+        let (mut w, top) = wall();
+        let y = top as f64 + 1.5;
+        // Straight through a block-thick wall: out of its far face, a block on.
+        let (t, n) = w.ray_exit([8.5, y, 12.0], [0.0, 0.0, 1.0], 3.0).unwrap();
+        assert!((t - 1.0).abs() < 1e-6 && n == [0, 0, 1], "{t} {n:?}");
+        // At a slant, further.
+        let d = [0.5f64, 0.0, 1.0];
+        let (t, n) = w.ray_exit([8.2, y, 12.0], d, 3.0).unwrap();
+        assert!((t - (1.25f64).sqrt()).abs() < 1e-6 && n == [0, 0, 1], "{t} {n:?}");
+        // Along the wall, five blocks of it: still in material three blocks on.
+        assert!(w.ray_exit([6.0, y, 12.5], [1.0, 0.0, 0.0], 3.0).is_none());
+        let (t, n) = w.ray_exit([6.0, y, 12.5], [1.0, 0.0, 0.0], 6.0).unwrap();
+        assert!((t - 5.0).abs() < 1e-6 && n == [1, 0, 0]);
+        // Shot into from behind (a pit in its back face): less of it to go through.
+        w.carve([8.5, y, 13.01], [0.0, 0.0, -1.0], 0.2, 0.5);
+        let (t, _) = w.ray_exit([8.5, y, 12.0], [0.0, 0.0, 1.0], 3.0).unwrap();
+        assert!(t > 0.25 && t < 0.4, "out into the pit: {t}");
+        // Down into the ground: the whole ground is material (the world's own blocks).
+        assert!(w.ray_exit([8.5, top as f64, 8.5], [0.0, -1.0, 0.0], 3.0).is_none());
     }
 
     #[test]

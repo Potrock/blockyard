@@ -1,10 +1,10 @@
 import { defineGame, Models, type Bot, type GameContext, type MenuHandle, type Pickup, type Player } from '@platform';
+import { navGrid } from '@platform/kits';
 import { ATLAS, defineArt, OUTFITS, skinOrigin } from './art';
-import { Bots } from './bots';
+import { makeBots, type Bots } from './bots';
 import { MAP, type SpawnPoint } from './map';
-import { NavGrid } from './nav';
 import { defineSounds } from './sounds';
-import { BLURBS, defineWeapons, feedIcon, PRIMARIES, WEAPONS, type Primary } from './weapons';
+import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
 import { GUNS } from './models';
 import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
 import hudCss from './hud.css?raw';
@@ -18,8 +18,9 @@ const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfit % FIG
  * pulp-pop. First to 25 kills (or the most when the clock runs out) takes it. Bots fill the
  * street up to six fighters; people joining take a bot's place.
  *
- * Everyone carries a primary of their choosing (L), the Lucky 45 and a katana. Three kills in
- * a row light up the radar for you (UAV); five get an Adrenaline Shot: faster, and patched up.
+ * Everyone carries a primary of their choosing (L), the Lucky 45, a katana and a lethal (G: two
+ * Pineapple frags or a Mia firebomb). Three kills in a row light up the radar for you (UAV); five
+ * get an Adrenaline Shot: faster, and patched up.
  */
 
 const SCORE_LIMIT = 25;
@@ -42,6 +43,8 @@ interface Fighter {
   best: number;
   headshots: number;
   primary: Primary;
+  /** Their lethal (thrown with G), a few a life. */
+  lethal: Lethal;
   outfit: number;
   /** When they died (-1: alive), and who did it. */
   diedAt: number;
@@ -68,7 +71,6 @@ let running = false;
 let startedAt = 0;
 let overAt = 0;
 let firstBlood = false;
-let nav: NavGrid | null = null;
 let bots: Bots;
 let boardDirty = true;
 /** The briefcase: on the street (a pickup), and when the next one turns up. */
@@ -106,6 +108,7 @@ function addFighter(game: GameContext, p: Player): Fighter {
     best: 0,
     headshots: 0,
     primary: p.bot ? botPrimary(game.rng.next()) : 'rifle',
+    lethal: p.bot && game.rng.next() < 0.35 ? 'molotov' : 'frag',
     outfit,
     diedAt: -1,
     spawnedAt: 0,
@@ -151,12 +154,14 @@ function pickSpawn(game: GameContext, me: Player): SpawnPoint {
   return best;
 }
 
-function arm(p: Player, primary: Primary) {
+function arm(p: Player, primary: Primary, lethal: Lethal) {
   const inv = p.inventory;
   inv.clear();
   inv.give(primary);
   inv.give('pistol');
   inv.give('katana');
+  // The lethal rides in the fourth slot: thrown with G, never switched to.
+  inv.give(lethal, LETHAL_COUNT[lethal] ?? 1);
   inv.select(0);
 }
 
@@ -168,19 +173,26 @@ function spawn(game: GameContext, f: Fighter) {
   p.revive();
   p.health = p.maxHealth;
   p.teleport({ x: sp.x, y: sp.y + 0.05, z: sp.z }, sp.yaw, 0);
-  arm(p, f.primary);
+  arm(p, f.primary, f.lethal);
   p.protect(1.5);
   p.speed = 1;
   f.diedAt = -1;
   f.spawnedAt = game.clock.now;
   f.rushUntil = 0;
-  if (p.bot) bots.respawned(p);
+  if (p.bot) bots.reset(p);
   else p.audio.play('respawn');
 }
 
 function loadoutMenu(game: GameContext, f: Fighter) {
   if (f.menu?.open) return;
   const p = f.player;
+  // Just spawned: swap now; otherwise it's for the next life.
+  const pick = (name: string) => {
+    if (p.alive && game.clock.now - f.spawnedAt < 5) {
+      arm(p, f.primary, f.lethal);
+      p.hud.toast(`${name} it is`);
+    } else p.hud.toast(`${name} next life`);
+  };
   const entries = () =>
     PRIMARIES.map((id) => ({
       icon: feedIcon(id) ?? undefined,
@@ -191,17 +203,28 @@ function loadoutMenu(game: GameContext, f: Fighter) {
         f.primary = id;
         f.chose = true;
         f.menu?.close();
-        // Just spawned: swap now; otherwise it's for the next life.
-        if (p.alive && game.clock.now - f.spawnedAt < 5) {
-          arm(p, id);
-          p.hud.toast(`${WEAPONS[id].name} it is`);
-        } else p.hud.toast(`${WEAPONS[id].name} next life`);
+        pick(WEAPONS[id].name);
+      },
+    }));
+  const lethals = () =>
+    (Object.keys(LETHALS) as Lethal[]).map((id) => ({
+      icon: feedIcon(id) ?? undefined,
+      label: LETHALS[id].name,
+      note: LETHAL_BLURBS[id],
+      active: f.lethal === id,
+      onSelect: () => {
+        f.lethal = id;
+        f.menu?.update({ sections: [{ title: 'Primary', entries: entries() }, { title: 'Lethal (G)', entries: lethals() }] });
+        pick(LETHALS[id].name);
       },
     }));
   f.menu = p.hud.menu({
     title: 'Pick your piece',
-    subtitle: 'Your primary. The Lucky 45 and the katana come along regardless.',
-    sections: [{ entries: entries() }],
+    subtitle: 'Your primary and your lethal. The Lucky 45 and the katana come along regardless.',
+    sections: [
+      { title: 'Primary', entries: entries() },
+      { title: 'Lethal (G)', entries: lethals() },
+    ],
     onClose: () => {
       f.menu = null;
     },
@@ -231,7 +254,7 @@ function balanceBots(game: GameContext) {
 // Kills
 // -------------------------------------------------------------------------------------------------
 
-function onDeath(game: GameContext, victim: Player, source: unknown, weapon: string | undefined, headshot: boolean) {
+function onDeath(game: GameContext, victim: Player, source: unknown, weapon: string | undefined, headshot: boolean, through = 0) {
   const v = fighters.get(victim.id);
   if (!v || phase !== 'playing') return;
   const now = game.clock.now;
@@ -255,6 +278,12 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
       calls.push('HEADSHOT');
     }
     if (weapon === 'katana') calls.push('SLICED');
+    if (weapon === 'frag') calls.push('BLOWN UP');
+    if (weapon === 'molotov') calls.push('TOASTED');
+    if (through > 0) {
+      points += 50;
+      calls.push('WALLBANG');
+    }
     if (!firstBlood) {
       firstBlood = true;
       points += 50;
@@ -285,13 +314,13 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
       killer.hud.banner('ADRENALINE SHOT', 'Faster and patched up, for fifteen seconds', { color: COLORS.pink, duration: 2 });
       killer.audio.play('heal');
     }
-    game.hud.feed([{ text: killer.name, color: killer.bot ? '#ffe7a3' : COLORS.gold }, ...(icon ? [{ icon }] : weapon ? [` ${WEAPONS[weapon]?.name ?? weapon} `] : [' ✕ ']), ...(headshot ? ['⌖'] : []), { text: victim.name, color: victim.bot ? '#ffd0d0' : COLORS.red }]);
-    victim.hud.banner('KILLED BY', `${killer.name}${weapon ? ` · ${WEAPONS[weapon]?.name ?? weapon}` : ''}${headshot ? ' · headshot' : ''}`, { color: COLORS.red, duration: RESPAWN - 0.3 });
+    game.hud.feed([{ text: killer.name, color: killer.bot ? '#ffe7a3' : COLORS.gold }, ...(icon ? [{ icon }] : weapon ? [` ${weaponName(weapon)} `] : [' ✕ ']), ...(headshot ? ['⌖'] : []), ...(through > 0 ? ['▦'] : []), { text: victim.name, color: victim.bot ? '#ffd0d0' : COLORS.red }]);
+    victim.hud.banner('KILLED BY', `${killer.name}${weapon ? ` · ${weaponName(weapon)}` : ''}${headshot ? ' · headshot' : ''}${through > 0 ? ' · through the wall' : ''}`, { color: COLORS.red, duration: RESPAWN - 0.3 });
     // The kill cam: watch whoever did it.
     if (!victim.bot && killer.alive) victim.camera.orbit(killer, { distance: 4.5, min: 4.5, max: 4.5 });
     if (k.kills >= SCORE_LIMIT) endMatch(game, killer);
   } else {
-    game.hud.feed([{ text: victim.name, color: COLORS.red }, ' took the easy way out']);
+    game.hud.feed([{ text: victim.name, color: COLORS.red }, weapon && LETHALS[weapon] ? ` cooked their own ${LETHALS[weapon].name}` : ' took the easy way out']);
     victim.hud.banner('WIPED OUT', undefined, { color: COLORS.red, duration: RESPAWN - 0.3 });
   }
 }
@@ -473,13 +502,16 @@ export default defineGame({
     ['Shift', 'sprint'],
     ['C', 'crouch · slide'],
     ['1 2 3', 'weapons'],
+    ['G', 'lethal (hold to cook)'],
     ['L', 'loadout'],
     ['Tab', 'scores'],
   ],
   // Controllers: the platform's shooter layout (RT fire, LT aim, X reload, B crouch and slide,
-  // L3 sprint, LB / RB / Y switch weapons), with the loadout on the D-pad and the katana on R3.
+  // L3 sprint, LB / Y switch weapons), with the lethal on RB (hold to cook), the loadout on the
+  // D-pad and the katana on R3.
   gamepad: {
     R3: ['Digit3', 'katana'],
+    RB: ['KeyG', 'lethal'],
     Up: 'KeyL',
     Down: null,
   },
@@ -548,14 +580,14 @@ export default defineGame({
     fighters = new Map();
     running = false;
     phase = 'playing';
-    nav = null;
     briefcase = null;
     defineArt(game);
     defineWeapons(game);
     defineBriefcase(game);
     defineSounds(game);
     game.hud.define('dossier', DOSSIER);
-    bots = new Bots(game, () => nav, MAP.hotspots);
+    // The walking grid (built once the map's blocks are here, kept up with holes and breaks) and the bots on it.
+    bots = makeBots(game, navGrid(game, { bounds: MAP.bounds }), MAP.hotspots);
     game.events.on('playerJoin', ({ player }) => {
       const f = fighters.get(player.id) ?? addFighter(game, player);
       if (player.bot) bots.add(player as Bot, 0.3 + game.rng.next() * 0.5);
@@ -573,11 +605,10 @@ export default defineGame({
       boardDirty = true;
       if (!player.bot) balanceBots(game);
     });
-    game.events.on('playerDeath', ({ player, source, weapon, headshot }) => onDeath(game, player, source, weapon, !!headshot));
-    game.events.on('shot', ({ player, from }) => {
+    game.events.on('playerDeath', ({ player, source, weapon, headshot, through }) => onDeath(game, player, source, weapon, !!headshot, through ?? 0));
+    game.events.on('shot', ({ player }) => {
       const f = fighters.get(player.id);
       if (f) f.firedAt = game.clock.now;
-      bots.heard(player, from);
     });
     game.commands.register('bots', {
       usage: '<n>',
@@ -621,14 +652,6 @@ export default defineGame({
 
   update(game, dt) {
     const now = game.clock.now;
-    // The walking grid, once the map's blocks are here.
-    if (!nav) {
-      const { min, max } = MAP.bounds;
-      if ([min.x, max.x].every((x) => [min.z, max.z].every((z) => game.world.getBlock(x, MAP.floorY - 1, z) >= 0))) {
-        nav = new NavGrid(game, MAP.bounds);
-        nav.build();
-      }
-    }
     bots.update(dt, phase !== 'playing');
 
     if (phase === 'over') {

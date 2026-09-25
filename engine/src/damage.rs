@@ -141,6 +141,71 @@ pub fn capsule(cell: [i32; 3], a: [f64; 3], b: [f64; 3], r: f64) -> [u16; 256] {
     out
 }
 
+/// Smooth value noise in -1..1 at `p` (world coordinates, blocks), its lattice `scale` to a block.
+fn value_noise(p: [f64; 3], scale: f64, seed: u32) -> f64 {
+    let q = [p[0] * scale, p[1] * scale, p[2] * scale];
+    let i = [q[0].floor(), q[1].floor(), q[2].floor()];
+    let s = [0, 1, 2].map(|a| {
+        let f = q[a] - i[a];
+        f * f * (3.0 - 2.0 * f)
+    });
+    let (x, y, z) = (i[0] as i32, i[1] as i32, i[2] as i32);
+    let h = |dx: i32, dy: i32, dz: i32| crate::noise::unit(crate::noise::hash3(seed, x + dx, y + dy, z + dz)) as f64;
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let x00 = lerp(h(0, 0, 0), h(1, 0, 0), s[0]);
+    let x10 = lerp(h(0, 1, 0), h(1, 1, 0), s[0]);
+    let x01 = lerp(h(0, 0, 1), h(1, 0, 1), s[0]);
+    let x11 = lerp(h(0, 1, 1), h(1, 1, 1), s[0]);
+    lerp(lerp(x00, x10, s[1]), lerp(x01, x11, s[1]), s[2]) * 2.0 - 1.0
+}
+
+/// How far a blast's crater reaches toward `p`, as a change to its radius (-1..1 of its
+/// roughness): lumps about a block across, and a grain a few pixels across on them.
+pub fn ragged(p: [f64; 3], seed: u32) -> f64 {
+    0.7 * value_noise(p, 1.3, seed) + 0.3 * value_noise(p, 4.5, seed ^ 0x5bd1_e995)
+}
+
+/// The little voxels of the block at `cell` a blast at `center` takes: those within `radius`,
+/// give or take `roughness` of it (a ragged sphere, `ragged`, the same for the same `seed`).
+pub fn blast(cell: [i32; 3], center: [f64; 3], radius: f64, roughness: f64, seed: u32) -> [u16; 256] {
+    let mut out = [0u16; 256];
+    let rough = roughness.clamp(0.0, 0.9);
+    let (inner, outer) = (radius * (1.0 - rough), radius * (1.0 + rough));
+    // The nearest and furthest points of the cell from the centre: all of it, or none of it, in
+    // most cells (only those the crater's edge crosses are worked out voxel by voxel).
+    let (mut near, mut far) = (0.0, 0.0);
+    for a in 0..3 {
+        let (lo, hi) = (cell[a] as f64, cell[a] as f64 + 1.0);
+        let n = if center[a] < lo { lo - center[a] } else if center[a] > hi { center[a] - hi } else { 0.0 };
+        let f = (center[a] - lo).abs().max((hi - center[a]).abs());
+        near += n * n;
+        far += f * f;
+    }
+    if near.sqrt() > outer {
+        return out;
+    }
+    if far.sqrt() < inner {
+        return [0xffff; 256];
+    }
+    for y in 0..16 {
+        for z in 0..16 {
+            let mut row = 0u16;
+            for x in 0..16 {
+                let p = [cell[0] as f64 + (x as f64 + 0.5) / 16.0, cell[1] as f64 + (y as f64 + 0.5) / 16.0, cell[2] as f64 + (z as f64 + 0.5) / 16.0];
+                let d = ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2)).sqrt();
+                if d > outer {
+                    continue;
+                }
+                if d <= inner || d <= radius * (1.0 + rough * ragged(p, seed)) {
+                    row |= 1 << x;
+                }
+            }
+            out[y * 16 + z] = row;
+        }
+    }
+    out
+}
+
 fn varint(out: &mut Vec<u8>, mut v: u32) {
     while v >= 0x80 {
         out.push((v as u8) | 0x80);
@@ -269,6 +334,40 @@ mod tests {
         assert_eq!(c[8 * 16 + 4] & (1 << 2), 0, "not wider than it is");
         // Nothing of a block it doesn't reach.
         assert_eq!(count(&capsule([3, 0, 0], [0.5, 0.5, -0.1], [0.5, 0.5, 0.6], 0.2)), 0);
+    }
+
+    #[test]
+    fn blasts_take_a_ragged_sphere() {
+        let c = [0.5, 0.5, 0.5];
+        // All of a block well inside, none of one well outside; the one the edge crosses, part.
+        assert_eq!(count(&blast([0, 0, 0], c, 2.0, 0.3, 1)), CELLS);
+        assert_eq!(count(&blast([4, 0, 0], c, 2.0, 0.3, 1)), 0);
+        let edge = count(&blast([1, 0, 0], [-1.0, 0.5, 0.5], 2.5, 0.3, 1));
+        assert!(edge > 200 && edge < CELLS - 200, "{edge}");
+        // The same blast, the same crater; another seed, another edge.
+        assert_eq!(blast([1, 0, 0], [-1.0, 0.5, 0.5], 2.5, 0.3, 1), blast([1, 0, 0], [-1.0, 0.5, 0.5], 2.5, 0.3, 1));
+        assert_ne!(blast([1, 0, 0], [-1.0, 0.5, 0.5], 2.5, 0.3, 1), blast([1, 0, 0], [-1.0, 0.5, 0.5], 2.5, 0.3, 2));
+        // Smooth (roughness 0): exactly the sphere.
+        let s = blast([1, 0, 0], [0.0, 0.5, 0.5], 1.5, 0.0, 1);
+        for (i, row) in s.iter().enumerate() {
+            for x in 0..16 {
+                let p = [1.0 + (x as f64 + 0.5) / 16.0, ((i / 16) as f64 + 0.5) / 16.0, ((i % 16) as f64 + 0.5) / 16.0];
+                let d = (p[0].powi(2) + (p[1] - 0.5).powi(2) + (p[2] - 0.5).powi(2)).sqrt();
+                assert_eq!((row >> x) & 1 == 1, d <= 1.5, "{p:?} at {d}");
+            }
+        }
+        // Ragged: the edge wanders in and out of the smooth sphere by up to its roughness.
+        let mut out = 0;
+        let mut short = 0;
+        for i in 0..200 {
+            let a = i as f64 * 0.7;
+            let dir = [a.cos() * (i as f64 * 0.3).sin(), (i as f64 * 0.3).cos(), a.sin() * (i as f64 * 0.3).sin()];
+            let k = 1.0 + 0.3 * ragged([dir[0] * 2.0, dir[1] * 2.0, dir[2] * 2.0], 9);
+            assert!((0.7..=1.3).contains(&k));
+            out += (k > 1.05) as u32;
+            short += (k < 0.95) as u32;
+        }
+        assert!(out > 20 && short > 20, "lumps both ways: {out} out, {short} in");
     }
 
     #[test]

@@ -107,9 +107,15 @@ interface Variant {
   name: string;
   label: string;
   state: string;
-  shape: 'cube' | 'cross' | 'slab' | 'stairs';
+  shape: 'cube' | 'cross' | 'slab' | 'stairs' | 'fence' | 'pane' | 'post' | 'boxes';
   facing: number;
   top: boolean;
+  /** A `boxes` shape's boxes (1/16, written facing north). */
+  boxes?: number[][];
+  /** Turned from the way it's written: tipped (1 brings its north face to the top, -1 to the bottom), then quarter turns clockwise from above. */
+  tilt?: number;
+  turn?: number;
+  climbable?: boolean;
   layer: number;
   tex: number[];
   uvt: number[];
@@ -227,8 +233,13 @@ function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTe
   const like = d.like === undefined ? undefined : b.byName.get(d.like);
   if (d.like !== undefined && (!like || (like.shape !== 'cube' && like.shape !== 'cross'))) throw new Error(`${where}: like "${d.like}" isn't a built-in full block or plant`);
   if (d.texture === undefined && !like) throw new Error(`${where}: give it a texture (or a built-in block it's like)`);
-  const shape = d.shape ?? (like?.shape === 'cross' ? 'cross' : 'cube');
-  if (!['cube', 'cross', 'slab', 'stairs'].includes(shape)) throw new Error(`${where}: unknown shape "${shape}"`);
+  if (d.boxes !== undefined && d.shape !== undefined) throw new Error(`${where}: give a shape or boxes, not both`);
+  const shape = d.boxes !== undefined ? 'boxes' : (d.shape ?? (like?.shape === 'cross' ? 'cross' : 'cube'));
+  if (!['cube', 'cross', 'slab', 'stairs', 'fence', 'pane', 'post', 'boxes'].includes(shape)) throw new Error(`${where}: unknown shape "${shape}"`);
+  const boxes = d.boxes === undefined ? undefined : checkBoxes(d.boxes, where);
+  const facing = d.facing === true ? 'horizontal' : d.facing || null;
+  if (facing && !['horizontal', 'all', 'axis'].includes(facing)) throw new Error(`${where}: facing is 'horizontal', 'all' or 'axis'`);
+  if (facing && !['cube', 'post', 'boxes'].includes(shape)) throw new Error(`${where}: a ${shape} can't be given a facing (only a cube, a post or boxes)`);
   const cross = shape === 'cross';
 
   // How light and sight go through it.
@@ -247,7 +258,11 @@ function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTe
     const tx = d.texture;
     if (tx !== undefined) {
       if (isTexture(tx)) t = tx;
-      else t = tx[face] ?? (SIDES.has(face) ? tx.side : undefined) ?? tx.all;
+      else {
+        // Written facing north: its front is the north face, its back the south.
+        const named = face === 'north' ? (tx.front ?? tx.north) : face === 'south' ? (tx.back ?? tx.south) : tx[face];
+        t = named ?? (SIDES.has(face) ? tx.side : undefined) ?? tx.all;
+      }
     }
     if (t === undefined && like) {
       return layer({ layer: like.tex[f] }, { tint, glow: glowOwn, clear, grass: grass && !like.tint }, `${name}_${face}`);
@@ -282,12 +297,16 @@ function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTe
     breakable: d.breakable ?? true,
     double: 0,
   };
+  if (boxes) base.boxes = boxes;
+  if (d.climbable) base.climbable = true;
   // A cube or plant it's like keeps that one's light and sway.
-  if (like && d.shape === undefined) {
+  if (like && d.shape === undefined && d.boxes === undefined) {
     if (d.transparency === undefined) base.opacity = like.opacity;
     base.anim = like.anim;
   }
   if (d.full !== undefined && shape !== 'slab') throw new Error(`${where}: only a slab has a full block`);
+  // Facing: a variant per way, turned from the way it's written (the first is the picker's).
+  if (facing) return TURNS[facing].map(([state, tilt, turn], i) => ({ ...base, state, tilt, turn, placeable: base.placeable && i === 0 }));
   switch (shape) {
     case 'slab':
       return [false, true].map((top) => ({ ...base, state: `type=${top ? 'top' : 'bottom'}`, top, placeable: base.placeable && !top, full: d.full }));
@@ -296,6 +315,27 @@ function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTe
     default:
       return [base];
   }
+}
+
+/**
+ * A facing block's variants: its state, and how it's turned from the way it's written (facing
+ * north, or upright for an axis): tipped (1 brings the north face to the top and the top to the
+ * south), then quarter turns clockwise seen from above.
+ */
+const TURNS: Record<'horizontal' | 'all' | 'axis', [string, number, number][]> = {
+  horizontal: FACINGS.map((f, i) => [`facing=${f}`, 0, i]),
+  all: [...FACINGS.map((f, i): [string, number, number] => [`facing=${f}`, 0, i]), ['facing=up', 1, 0], ['facing=down', -1, 0]],
+  axis: [['axis=y', 0, 0], ['axis=x', 1, 1], ['axis=z', 1, 0]],
+};
+
+/** `boxes` checked: whole sixteenths inside the block, each with some size, at most 16 of them. */
+function checkBoxes(boxes: number[][], where: string): number[][] {
+  if (!Array.isArray(boxes) || boxes.length < 1 || boxes.length > 16) throw new Error(`${where}: boxes are 1 to 16 boxes`);
+  return boxes.map((b) => {
+    if (!Array.isArray(b) || b.length !== 6 || b.some((v) => !Number.isInteger(v) || v < 0 || v > 16)) throw new Error(`${where}: a box is [x0, y0, z0, x1, y1, z1] in whole sixteenths, 0 to 16 (${JSON.stringify(b)})`);
+    if (b[0] >= b[3] || b[1] >= b[4] || b[2] >= b[5]) throw new Error(`${where}: a box's far corner must be past its near one (${JSON.stringify(b)})`);
+    return [...b];
+  });
 }
 
 /** A CSS colour as sRGB 0..1: `#rgb`, `#rrggbb`, `rgb(r, g, b)`. */
