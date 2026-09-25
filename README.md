@@ -134,6 +134,8 @@ The site is at **https://blockyard.potrock.xyz** (also https://blockyard-games.v
 | F1 / F3 | Hide HUD / debug overlay |
 | `[` / `]` | Shift time by one hour (Sandbox) |
 
+Moving, jumping, sneaking and sprinting can be rebound under **Keyboard** in the pause menu: click a key, then press the new one. Taking a key another control uses swaps the two (Sprint on Shift puts Sneak on Ctrl), and the bindings are kept in the browser with the other settings. Every game sees a rebound key as the one it replaced, so nothing in a game changes.
+
 ## Architecture
 
 ```

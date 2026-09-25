@@ -1,6 +1,7 @@
 import type { PadAction, PadButton } from '../api/types';
 import type { PlayerInput } from '../net/protocol';
 import { DEFAULT_PAD, PAD_BUTTONS, readPad } from './gamepad';
+import { translation, type KeyBindings } from './keys';
 
 /** Directions a controller moves through menus with (the D-pad or the left stick). */
 const NAV: PadButton[] = ['Up', 'Down', 'Left', 'Right'];
@@ -8,10 +9,17 @@ const NAV: PadButton[] = ['Up', 'Down', 'Left', 'Right'];
 /**
  * Keyboard / mouse state with pointer lock and per-frame edge detection, and a controller's
  * buttons and sticks alongside: while it drives the game its buttons press the keys and mouse
- * buttons they're bound to (and its sticks walk and look); otherwise they work the menus.
+ * buttons they're bound to (and its sticks walk and look); otherwise they work the menus. Keys
+ * are read through the player's key bindings (`setBindings`): a rebound key reads as its action's
+ * default code, which is also what a controller presses.
  */
 export class Input {
+  /** The codes held on the keyboard, as the game reads them (after the key bindings). */
   private down = new Set<string>();
+  /** Physical keys held, and the code each one reads as. */
+  private held = new Map<string, string>();
+  /** Physical key -> the code it reads as (null: nothing). Keys not in it read as themselves. */
+  private bindings = new Map<string, string | null>();
   private pressedThisFrame = new Set<string>();
   private buttonsDown = 0;
   private buttonsPressed = 0;
@@ -34,7 +42,10 @@ export class Input {
   /** A controller has the game (no pointer lock needed: it doesn't use the mouse). */
   private padHeld = false;
   onLockChange: ((locked: boolean) => void) | null = null;
-  /** A key went down (a controller's button pressing one comes without an event). */
+  /**
+   * A key went down: the code it reads as, and the event itself unless a controller's button
+   * pressed it or the key was rebound.
+   */
   onKey: ((code: string, e?: KeyboardEvent) => void) | null = null;
   /** What was used last: `lock` captures with it, and the page shows hints for it. */
   device: 'mouse' | 'pad' = 'mouse';
@@ -76,20 +87,27 @@ export class Input {
   ) {
     const opts = { signal };
     window.addEventListener('keydown', (e) => {
-      if (e.repeat) {
-        if (this.locked && isGameKey(e.code)) e.preventDefault();
-        return;
-      }
+      const code = this.read(e.code);
+      if (this.locked && (isGameKey(e.code) || (code !== null && isGameKey(code)))) e.preventDefault();
+      if (e.repeat) return;
       this.use('mouse');
-      this.down.add(e.code);
-      this.pressedThisFrame.add(e.code);
-      this.frameKeys.add(e.code);
-      if (this.locked && isGameKey(e.code)) e.preventDefault();
-      this.onKey?.(e.code, e);
+      if (code === null) return;
+      this.held.set(e.code, code);
+      this.down.add(code);
+      this.pressedThisFrame.add(code);
+      this.frameKeys.add(code);
+      // A rebound key's event describes the physical key, not the one it stands for.
+      this.onKey?.(code, code === e.code ? e : undefined);
     }, opts);
-    window.addEventListener('keyup', (e) => this.down.delete(e.code), opts);
+    window.addEventListener('keyup', (e) => {
+      const code = this.held.get(e.code);
+      if (code === undefined) return;
+      this.held.delete(e.code);
+      // Both Shifts can be down at once: let go of one and the other still holds.
+      if (![...this.held.values()].includes(code)) this.down.delete(code);
+    }, opts);
     window.addEventListener('blur', () => {
-      this.down.clear();
+      this.releaseKeys();
       this.buttonsDown = 0;
     }, opts);
     target.addEventListener('mousedown', (e) => {
@@ -124,11 +142,27 @@ export class Input {
       // The mouse took over from a controller (it lets go of the game when the pointer does).
       if (this.pointer) this.padHeld = false;
       if (!this.pointer) {
-        this.down.clear();
+        this.releaseKeys();
         this.buttonsDown = 0;
       }
       if (this.locked !== was) this.onLockChange?.(this.locked);
     }, opts);
+  }
+
+  /** Read keys through these bindings from now on (keys held now are let go). */
+  setBindings(b: KeyBindings) {
+    this.bindings = translation(b);
+    this.releaseKeys();
+  }
+
+  private read(code: string): string | null {
+    const to = this.bindings.get(code);
+    return to === undefined ? code : to;
+  }
+
+  private releaseKeys() {
+    this.down.clear();
+    this.held.clear();
   }
 
   /** The game has the controls: the mouse is captured, or a controller has them. */

@@ -239,7 +239,7 @@ export class Runtime {
     this.room = room;
     const online = server ? { server: new URL(server.url).origin, game: def.id, room, onRoom: def.instances ? (own: boolean) => this.switchGame(def.id, own ? newRoomCode() : null) : undefined } : null;
     this.title = carried?.title ?? new TitleScreen(ui, games);
-    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, padKeys), walks: this.walker, online });
+    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, padKeys), walks: this.walker, keys: this.settings.keys, online });
   }
 
   /**
@@ -1317,6 +1317,7 @@ export class Runtime {
     this.view.sensitivity = s.sensitivity;
     this.view.baseFov = s.fov;
     this.view.viewBobbing = s.viewBobbing;
+    this.input.setBindings(s.keys);
     this.link.send({ t: 'env', dayLength: s.dayMinutes * 60 });
     this.link.send({ t: 'radius', columns: this.hostRadius(s) });
     this.camera.far = Math.max(256, (rd + 1.5) * 16 * 1.08);

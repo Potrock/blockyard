@@ -685,6 +685,76 @@ input[type='range']::-moz-range-thumb {
   transform: translateX(14px);
 }
 
+/* Controls: a keycap per action; click it, then press the new key. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.link-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font: 600 11px var(--sans);
+  cursor: pointer;
+}
+.link-btn:hover {
+  color: var(--text);
+}
+.link-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.keybinds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+}
+.keybind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+.keycap {
+  appearance: none;
+  min-width: 62px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom-width: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font: 600 12px var(--sans);
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.keycap:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+.keycap.changed {
+  border-color: rgba(255, 255, 255, 0.32);
+}
+.keycap.listening {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: keycap-pulse 1s ease-in-out infinite;
+}
+@keyframes keycap-pulse {
+  50% {
+    background: rgba(255, 255, 255, 0.16);
+  }
+}
+.keybind-hint {
+  min-height: 1.5em;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
 .panel-foot {
   display: flex;
   align-items: center;

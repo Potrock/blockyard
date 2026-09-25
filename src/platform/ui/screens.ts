@@ -1,4 +1,5 @@
 import { h } from './dom';
+import { ACTIONS, actionLabel, canBind, keyFor, keyLabel, moveLabel, normalize, rebind, relabel, type Action, type KeyBindings } from '../player/keys';
 import type { Settings, ShadowQuality } from '../settings';
 import type { Registry } from '../world/registry';
 
@@ -35,6 +36,8 @@ export interface HomeGame {
   /** The same on a controller (shown instead while one is in use). */
   pad?: [string, string][];
   walks?: boolean;
+  /** The player's key bindings, so the hints name the keys they actually press. */
+  keys?: KeyBindings;
   online?: OnlineOptions | null;
 }
 
@@ -110,6 +113,7 @@ export class TitleScreen {
       name = h('label.home-name', {}, h('span', {}, 'Your name'), this.nameInput);
     }
     const walks = g.walks ?? true;
+    const keys = g.keys ?? {};
     const controls = g.controls ?? [['LMB', 'break'], ['RMB', 'place'], ['E', 'blocks']];
     const rooms = g.online?.onRoom ? this.rooms(g.online, g.online.onRoom) : null;
     const tag = g.online?.room ? h('span.home-room-tag', {}, 'Your own game') : null;
@@ -118,8 +122,8 @@ export class TitleScreen {
       h(
         'div.home-controls.keys-only',
         {},
-        ...(walks ? [h('span', {}, h('kbd', {}, 'WASD'), ' move'), h('span', {}, h('kbd', {}, 'Space'), ' jump')] : []),
-        ...controls.map(([k, v]) => h('span', {}, h('kbd', {}, k), ` ${v}`)),
+        ...(walks ? [h('span', {}, h('kbd', {}, moveLabel(keys)), ' move'), h('span', {}, h('kbd', {}, actionLabel(keys, 'jump')), ' jump')] : []),
+        ...controls.map(([k, v]) => h('span', {}, h('kbd', {}, relabel(keys, k)), ` ${v}`)),
         h('span', {}, h('kbd', {}, '/'), ' commands'),
       ),
       h('div.home-controls.pad-only', {}, ...(g.pad ?? []).map(([k, v]) => h('span', {}, h('kbd', {}, k), ` ${v}`))),
@@ -287,6 +291,11 @@ export class PauseMenu {
   private settings: Settings;
   private timeSlider!: HTMLInputElement;
   private padKeys: HTMLElement;
+  /** The footer's list of keys (on a keyboard), which follows the bindings. */
+  private keysLine = h('div.keys.keys-only', {});
+  /** The control waiting for its new key, if any. */
+  private rebinding: Action | null = null;
+  private stopRebinding: () => void = () => {};
   onTime: ((t: number) => void) | null = null;
   onNewWorld: ((seed: number | null) => void) | null = null;
   onRestart: (() => void) | null = null;
@@ -325,6 +334,71 @@ export class PauseMenu {
       } }, q);
       seg.append(b);
     }
+
+    // Keyboard: click a key, then press the new one (Escape cancels). Taking a key another control
+    // has swaps the two, so Sprint on Shift puts Sneak on Ctrl.
+    const keyButtons = new Map<Action, HTMLButtonElement>();
+    const hint = h('div.keybind-hint', {});
+    const reset = h('button.link-btn', {
+      onclick: () => {
+        set('keys', {});
+        hint.textContent = '';
+        refreshKeys();
+      },
+    }, 'Reset') as HTMLButtonElement;
+    const refreshKeys = () => {
+      for (const a of ACTIONS) {
+        const b = keyButtons.get(a.id)!;
+        b.textContent = actionLabel(s.keys, a.id);
+        b.classList.toggle('changed', keyFor(s.keys, a.id) !== a.key);
+        b.classList.remove('listening');
+      }
+      reset.disabled = Object.keys(s.keys).length === 0;
+      this.keysLine.textContent = keysText(s.keys);
+    };
+    const capture = (e: KeyboardEvent) => {
+      // Ours alone: the game mustn't see the key being bound.
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const action = this.rebinding;
+      if (!action || e.repeat) return;
+      if (e.code === 'Escape') return this.stopRebinding();
+      if (!canBind(e.code)) {
+        hint.textContent = `${e.code ? keyLabel(e.code) : 'That key'} can’t be bound. Press another key, or Escape to cancel.`;
+        return;
+      }
+      const taken = ACTIONS.find((a) => a.id !== action && keyFor(s.keys, a.id) === normalize(e.code));
+      set('keys', rebind(s.keys, action, e.code));
+      hint.textContent = taken ? `${taken.label} moved to ${actionLabel(s.keys, taken.id)}.` : '';
+      this.stopRebinding();
+    };
+    this.stopRebinding = () => {
+      if (!this.rebinding) return;
+      this.rebinding = null;
+      window.removeEventListener('keydown', capture, true);
+      // Let go of the button, so the key's release doesn't press it again.
+      if (document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('keycap')) document.activeElement.blur();
+      refreshKeys();
+    };
+    const keybinds = h(
+      'div.keybinds',
+      {},
+      ...ACTIONS.map((a) => {
+        const b = h('button.keycap', {
+          onclick: () => {
+            this.stopRebinding();
+            this.rebinding = a.id;
+            hint.textContent = `Press a key for ${a.label.toLowerCase()}. Escape cancels.`;
+            b.textContent = '…';
+            b.classList.add('listening');
+            window.addEventListener('keydown', capture, true);
+          },
+          onblur: () => this.rebinding === a.id && this.stopRebinding(),
+        }) as HTMLButtonElement;
+        keyButtons.set(a.id, b);
+        return h('div.keybind', {}, h('span.name', {}, a.label), b);
+      }),
+    );
 
     this.timeSlider = h('input', { type: 'range', min: 0, max: 1, step: 0.001, value: '0.3' }) as HTMLInputElement;
     this.timeSlider.addEventListener('input', () => this.onTime?.(Number(this.timeSlider.value)));
@@ -383,16 +457,14 @@ export class PauseMenu {
               toggle('Clouds', 'clouds'),
               toggle('Cave culling', 'occlusion'),
             ),
+            // Keyboard keys: hidden (and out of a controller's reach) while a controller is in use.
+            h('div.keys-only', {}, h('div.section-head', {}, h('h3', {}, 'Keyboard'), reset), keybinds, hint),
           ),
         ),
         h(
           'div.panel-foot',
           {},
-          h(
-            'div.keys.keys-only',
-            {},
-            'WASD move · Space jump / fly up · Shift sneak / fly down · Ctrl or double-tap W sprint · F fly · 1-9 / wheel select · MMB pick · E blocks · F1 hide HUD · F3 debug · [ ] time',
-          ),
+          this.keysLine,
           this.padKeys,
           h('div.new-world', {}, seedInput, h('button.btn', { onclick: () => {
             const v = seedInput.value.trim();
@@ -403,6 +475,7 @@ export class PauseMenu {
       ),
     );
     parent.append(this.root);
+    refreshKeys();
   }
 
   /** What the controller's buttons do in this game (shown while one is in use). */
@@ -416,12 +489,19 @@ export class PauseMenu {
   }
 
   hide() {
+    this.stopRebinding();
     this.root.classList.add('hidden');
   }
 
   get visible(): boolean {
     return !this.root.classList.contains('hidden');
   }
+}
+
+/** The pause menu's footer: every control, with the keys as bound. */
+function keysText(b: KeyBindings): string {
+  const k = (a: Action) => actionLabel(b, a);
+  return `${moveLabel(b)} move · ${k('jump')} jump / fly up · ${k('sneak')} sneak / fly down · ${k('sprint')} or double-tap ${k('forward')} sprint · F fly · 1-9 / wheel select · MMB pick · E blocks · F1 hide HUD · F3 debug · [ ] time`;
 }
 
 function hashString(s: string): number {
