@@ -117,3 +117,7 @@
   background: var(--hud-accent, #ffd36b);
   color: var(--hud-ink, #111);
 }
+/* Your own name on it too: the leader's is gold, like the row (its colour is set on the cell itself). */
+.sb-table tr.me td.sb-name {
+  color: var(--hud-ink, #111) !important;
+}
