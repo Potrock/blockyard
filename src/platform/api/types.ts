@@ -999,9 +999,11 @@ export interface GunItem extends ItemBase {
   /**
    * Aiming down the sights (right mouse): `zoom` (the view's field of view divided by it; default
    * 1.3), seconds to raise (0.2), speed while aiming (0.6), and what's seen: the gun's own
-   * `iron` sights (default), a `dot` sight, or a `scope` (the view fills with the scope).
+   * `iron` sights (default); a red `dot` or a `holo` sight's ring and dot, glowing on the target
+   * through the optic's window (`color`, default red; model the optic with its window open and
+   * its `sight` point in the window's middle); or a `scope` (the view fills with the scope).
    */
-  aim?: { zoom?: number; time?: number; move?: number; sight?: 'iron' | 'dot' | 'scope' };
+  aim?: { zoom?: number; time?: number; move?: number; sight?: 'iron' | 'dot' | 'holo' | 'scope'; color?: string };
   /** Blocks. Default 150. */
   range?: number;
   /** Movement speed while it's held (a heavy gun is slower). Default 1. */

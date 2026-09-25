@@ -161,7 +161,9 @@ const GUN = {
   roll: -0.22,
   sprint: { yaw: 0.8, pitch: -0.5, roll: -0.45, move: [-0.08, -0.06, 0.08] as V3 },
   slide: { roll: 0.35, move: [-0.04, -0.03, 0.02] as V3 },
+  /** How far ahead of the eye the sight sits when aiming: iron sights, an optic's window (nearer, so it frames more), a scope. */
   ads: 0.42,
+  opticAds: 0.3,
   scopeAds: 0.46,
   forearm: [0.32, -0.74, 0.6] as V3,
   forearm2: [-0.52, -0.72, 0.48] as V3,
@@ -182,7 +184,7 @@ export interface GunView {
   reload: number;
   shells: number;
   /** What aiming looks through: a scope hides the gun once it's up. */
-  sight: 'iron' | 'dot' | 'scope';
+  sight: 'iron' | 'dot' | 'holo' | 'scope';
   /** Worked after each shot. */
   action?: 'pump' | 'bolt';
 }
@@ -427,7 +429,7 @@ function gunRest(pts: GunPoints, hold: HoldSpec, side: number, drop: number, gv:
   if (sl > 0) out.itemRot.premultiply(new THREE.Quaternion().setFromAxisAngle(Z, side * GUN.slide.roll * sl));
   out.itemRot.slerp(qA, a);
   const sightCam = new THREE.Vector3().subVectors(pts.sight, pts.grip).multiplyScalar(S).applyQuaternion(qA);
-  const dist = gv.sight === 'scope' ? GUN.scopeAds : GUN.ads;
+  const dist = gv.sight === 'scope' ? GUN.scopeAds : gv.sight === 'dot' || gv.sight === 'holo' ? GUN.opticAds : GUN.ads;
   const fistA = new THREE.Vector3(0, 0, -dist).sub(sightCam);
   out.grip
     .copy(fistH)

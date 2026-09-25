@@ -1607,6 +1607,7 @@ export class Runtime {
       this.gameHud.ammo(null);
       this.hud.setGunCrosshair(null);
       this.hud.setScope(false);
+      this.hud.setReticle(null);
       return;
     }
     this.gameHud.ammo({ mag: st.mag, reserve: st.reserve, size: def.magazine, name: def.name, reloading: st.reload >= 0 });
@@ -1614,7 +1615,11 @@ export class Runtime {
     const spread = this.guns.spread({ moving: Math.hypot(p.vx, p.vz) / Math.max(1, this.tune.params[0]), air: !p.onGround, crouch: p.sneaking, sprinting: false, dead: false });
     const focal = window.innerHeight / 2 / Math.tan((this.camera.fov * DEG) / 2);
     this.hud.setGunCrosshair(Math.tan(spread * DEG) * focal + 5, st.aim > 0.55);
-    this.hud.setScope(gunOf(def).aim.sight === 'scope' && st.aim > 0.9);
+    const sight = gunOf(def).aim;
+    this.hud.setScope(sight.sight === 'scope' && st.aim > 0.9);
+    // An optic's reticle lights up as the window comes to the eye.
+    const optic = sight.sight === 'dot' || sight.sight === 'holo' ? sight.sight : null;
+    this.hud.setReticle(optic, Math.max(0, Math.min(1, (st.aim - 0.75) / 0.2)), sight.color);
   }
 
   /** Render, HUD, autosave, debug overlay, end of input frame. */

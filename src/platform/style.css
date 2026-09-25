@@ -2045,3 +2045,53 @@ input[type='range']::-moz-range-thumb {
   background: var(--hud-accent, #ffd36b);
   color: var(--hud-ink, #111);
 }
+
+/* A red dot / holo sight's reticle (a gun's aim.sight 'dot' or 'holo'), at the aim point */
+.gun-reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  --rc: #ff2a2a;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+.gun-reticle-dot {
+  position: absolute;
+  left: -2.5px;
+  top: -2.5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0 18%, var(--rc) 45%);
+  box-shadow: 0 0 4px 1px var(--rc), 0 0 10px 2px color-mix(in srgb, var(--rc) 55%, transparent);
+}
+.gun-reticle.holo .gun-reticle-dot {
+  left: -2px;
+  top: -2px;
+  width: 4px;
+  height: 4px;
+}
+.gun-reticle-ring {
+  display: none;
+  position: absolute;
+  left: -30px;
+  top: -30px;
+  width: 60px;
+  height: 60px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid var(--rc);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--rc) 80%, transparent), inset 0 0 6px color-mix(in srgb, var(--rc) 70%, transparent);
+  opacity: 0.9;
+  /* The EOTech's ticks at the four points of the ring. */
+  background:
+    linear-gradient(var(--rc), var(--rc)) top center / 2px 7px no-repeat,
+    linear-gradient(var(--rc), var(--rc)) bottom center / 2px 7px no-repeat,
+    linear-gradient(var(--rc), var(--rc)) left center / 7px 2px no-repeat,
+    linear-gradient(var(--rc), var(--rc)) right center / 7px 2px no-repeat;
+}
+.gun-reticle.holo .gun-reticle-ring {
+  display: block;
+}

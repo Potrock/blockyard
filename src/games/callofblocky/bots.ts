@@ -33,6 +33,9 @@ interface Brain {
   strafeT: number;
   crouchT: number;
   nextShot: number;
+  /** Automatic fire comes in bursts: seconds left of this one, and of the pause after it. */
+  burst: number;
+  pause: number;
   stuckT: number;
   stuckAt: Vec3;
   wander: number;
@@ -75,6 +78,8 @@ export class Bots {
       strafeT: 0,
       crouchT: 0,
       nextShot: 0,
+      burst: 0,
+      pause: 0,
       stuckT: 0,
       stuckAt: bot.position,
       wander: 0,
@@ -159,10 +164,13 @@ export class Bots {
       b.target = best;
       if (best) {
         // A beat to react, and a first swing that's off by a body or two.
-        b.react = 0.18 + (1 - b.skill) * 0.35 + Math.random() * 0.15;
-        const miss = 0.6 + (1 - b.skill) * 1.6;
+        // A person takes a third of a second or more to notice and react; bots do too.
+        b.react = 0.38 + (1 - b.skill) * 0.45 + Math.random() * 0.25;
+        const miss = 1.1 + (1 - b.skill) * 2;
         b.err = { x: (Math.random() - 0.5) * miss * 2, y: (Math.random() - 0.3) * miss, z: (Math.random() - 0.5) * miss * 2 };
-        b.head = Math.random() < b.skill * 0.35;
+        b.head = Math.random() < b.skill * 0.18;
+        b.burst = 0;
+        b.pause = 0;
       }
     }
 
@@ -182,15 +190,19 @@ export class Bots {
       const v = t.velocity;
       const dist = Math.hypot(aim.x - eye.x, aim.y - eye.y, aim.z - eye.z);
       const lead = Math.min(0.12, dist / 300);
-      const settle = Math.exp(-dt * (0.9 + b.skill * 2.2));
-      b.err = { x: b.err.x * settle, y: b.err.y * settle, z: b.err.z * settle };
-      const jitter = (1 - b.skill) * 0.25 + (bot.aiming ? 0 : 0.15);
+      // Still taking it in: the aim doesn't move yet. After that the error settles as it tracks,
+      // but a target on the move drags the aim behind it.
+      const reacting = b.react > 0;
+      const settle = reacting ? 1 : Math.exp(-dt * (0.6 + b.skill * 1.4));
+      const drag = reacting ? 0 : dt * (0.08 + (1 - b.skill) * 0.22);
+      b.err = { x: b.err.x * settle - v.x * drag, y: b.err.y * settle, z: b.err.z * settle - v.z * drag };
+      const jitter = (1 - b.skill) * 0.4 + (bot.aiming ? 0.05 : 0.25) + Math.hypot(v.x, v.z) * 0.04;
       const px = aim.x + v.x * lead + b.err.x + (Math.random() - 0.5) * jitter;
       const py = aim.y + v.y * lead * 0.5 + b.err.y + (Math.random() - 0.5) * jitter;
       const pz = aim.z + v.z * lead + b.err.z + (Math.random() - 0.5) * jitter;
       const wantYaw = Math.atan2(-(px - eye.x), -(pz - eye.z));
       const wantPitch = Math.atan2(py - eye.y, Math.hypot(px - eye.x, pz - eye.z));
-      const rate = (3.5 + b.skill * 9) * dt;
+      const rate = reacting ? 0 : (2.4 + b.skill * 6) * dt;
       b.yaw += clampAngle(angleDiff(wantYaw, b.yaw), rate);
       b.pitch += Math.max(-rate, Math.min(rate, wantPitch - b.pitch));
       c.look(b.yaw, b.pitch);
@@ -203,7 +215,17 @@ export class Bots {
       const wantAds = def?.kind === 'gun' && (sniper || (dist > 9 && held !== 'shotgun'));
       c.button(2, wantAds);
       const ready = b.react <= 0 && onTarget && (!sniper || bot.aiming) && (ammo?.magazine ?? 1) > 0;
-      if (def?.kind === 'gun' && def.auto) c.button(0, ready);
+      if (def?.kind === 'gun' && def.auto) {
+        // Bursts: short ones at range, longer up close, then a moment to re-aim.
+        if (b.pause > 0) b.pause -= dt;
+        else if (ready && b.burst <= 0) b.burst = dist > 10 ? 0.25 + Math.random() * 0.3 : 0.6 + Math.random() * 0.6;
+        const firing = ready && b.pause <= 0 && b.burst > 0;
+        if (firing) {
+          b.burst -= dt;
+          if (b.burst <= 0) b.pause = 0.2 + Math.random() * 0.25 + (1 - b.skill) * 0.2;
+        }
+        c.button(0, firing);
+      }
       else {
         c.button(0, false);
         if (ready && now >= b.nextShot) {

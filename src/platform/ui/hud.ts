@@ -13,6 +13,9 @@ export class Hud {
   /** A gun's crosshair: four ticks that open up with the spread. */
   private gunCross: HTMLElement;
   private scopeEl: HTMLElement;
+  /** A red dot or holo sight's reticle, glowing at the aim point while aiming through it. */
+  private reticleEl: HTMLElement;
+  private reticleKey = '';
   /** The game wants a crosshair (`hud.crosshair`). */
   private wanted = true;
   private gunGap: number | null = null;
@@ -31,8 +34,10 @@ export class Hud {
     this.gunCross.style.display = 'none';
     this.scopeEl = h('div.scope', {}, h('div.scope-lens'));
     this.scopeEl.style.display = 'none';
+    this.reticleEl = h('div.gun-reticle', {}, h('span.gun-reticle-ring'), h('span.gun-reticle-dot'));
+    this.reticleEl.style.display = 'none';
     this.hotbarEl = bar;
-    this.root = h('div.hud', {}, this.waterTint, this.scopeEl, this.crosshairEl, this.gunCross, this.toast, bar);
+    this.root = h('div.hud', {}, this.waterTint, this.scopeEl, this.reticleEl, this.crosshairEl, this.gunCross, this.toast, bar);
     parent.append(this.root);
   }
 
@@ -89,6 +94,19 @@ export class Hud {
     const gun = this.gunGap !== null;
     this.crosshairEl.style.display = this.wanted && !gun ? '' : 'none';
     this.gunCross.style.display = this.wanted && gun ? '' : 'none';
+  }
+
+  /** A red dot (`dot`) or a holo's ring and dot (`holo`) at the aim point, `opacity` 0..1; null hides it. */
+  setReticle(kind: 'dot' | 'holo' | null, opacity = 1, color = '#ff2a2a') {
+    const show = kind !== null && opacity > 0.01;
+    const key = show ? `${kind}|${opacity.toFixed(2)}|${color}` : '';
+    if (key === this.reticleKey) return;
+    this.reticleKey = key;
+    this.reticleEl.style.display = show ? '' : 'none';
+    if (!show) return;
+    this.reticleEl.className = `gun-reticle ${kind}`;
+    this.reticleEl.style.opacity = opacity.toFixed(2);
+    this.reticleEl.style.setProperty('--rc', color);
   }
 
   /** Looking through a scope. */
