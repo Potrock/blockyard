@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import type { HeldModelSpec, IconRef, ItemDefinition, ModelPart, ModelSpec, SpriteRef } from '../api/types';
 import { Shaders } from './shaders';
 import type { SharedUniforms } from './pipeline';
-import { GltfLibrary, type ItemMesh } from '../client/gltf';
+import { GltfLibrary, surfaceUniforms, type ItemMesh, type Surface } from '../client/gltf';
+import type { HeldInfo } from '../client/humanoid';
 
 /** The built-in starter sprites (16x16, `builtin` atlas, row at y = 64). Games bring the rest. */
 export const BUILTIN_SPRITES: Record<string, [number, number]> = {
@@ -145,7 +146,7 @@ export class EntityGraphics {
   }
 
   /** The same, for any texture (a glTF item's). */
-  materialFor(albedo: THREE.Texture, emissive: THREE.Texture): THREE.RawShaderMaterial {
+  materialFor(albedo: THREE.Texture, emissive: THREE.Texture, surface?: Surface): THREE.RawShaderMaterial {
     return new THREE.RawShaderMaterial({
       vertexShader: Shaders.entity.vertex,
       fragmentShader: Shaders.entity.fragment,
@@ -154,6 +155,7 @@ export class EntityGraphics {
         ...this.shared,
         uAtlas: { value: albedo },
         uEmissiveMap: { value: emissive },
+        ...surfaceUniforms(surface),
         uProbe: { value: new THREE.Vector2(1, 0) },
         uTint: { value: new THREE.Vector4(1, 0, 0, 0) },
         uOpacity: { value: 1 },
@@ -389,6 +391,16 @@ export interface AnimState {
   aim: number;
   /** Standing 0, crouching 1, sliding 2 (blended). */
   stance: number;
+  /** Ground speed (blocks a second), and which way it's going in its own space (+z ahead, +x its left). */
+  speed?: number;
+  moveX?: number;
+  moveZ?: number;
+  /** Off the ground; sprinting; reloading; aiming down the sights 0..1; seconds since its gun last fired. */
+  air?: boolean;
+  sprint?: boolean;
+  reloading?: boolean;
+  ads?: number;
+  shotT?: number;
 }
 
 /** A drawn figure: box model (`ModelInstance`) or glTF (`GltfFigure`). */
@@ -399,6 +411,8 @@ export interface Figure {
   /** Its light, tint and fade uniforms (`uProbe`, `uTint`, `uOpacity`). */
   readonly material: THREE.RawShaderMaterial;
   animate(s: AnimState): void;
+  /** Hold an item its own way (a humanoid: both hands on a gun); false to hang it from `armR`. */
+  hold?(mesh: THREE.Object3D | null, info: HeldInfo | null): boolean;
   dispose(): void;
 }
 

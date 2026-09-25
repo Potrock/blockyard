@@ -3,6 +3,7 @@ import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Content } from '../content';
 import type { AnimState, EntityGraphics, Figure } from '../render/entities';
 import { Shaders } from '../render/shaders';
+import { HELD_SCALE } from './humanoid';
 import type { EntityFrame, ProjectileFrame } from '../sim/entities';
 
 let boltGeo: THREE.BufferGeometry[] | null = null;
@@ -82,7 +83,7 @@ export class EntityView {
         this.scene.add(model.root);
         v = {
           model,
-          anim: { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0 },
+          anim: { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0, speed: 0, moveX: 0, moveZ: 1, ads: 0, shotT: 9 },
           yaw: f.yaw,
           attacks: f.attacks,
           probeTimer: Math.random() * 0.2,
@@ -104,6 +105,12 @@ export class EntityView {
       this.shown.delete(id);
     }
     this.syncShots(projectiles);
+  }
+
+  /** Its gun just fired (a figure kicks with it). */
+  kick(id: number) {
+    const v = this.shown.get(id);
+    if (v) v.anim.shotT = 0;
   }
 
   /** The muzzle of the gun in a figure's hand, where it's drawn now; false if it holds none. */
@@ -151,8 +158,21 @@ export class EntityView {
     if (running) {
       a.time += dt;
       a.attackT += dt;
+      a.shotT = (a.shotT ?? 9) + dt;
       a.walkPhase += hs * dt * (4.2 / Math.max(0.6, v.scale));
     }
+    // Its speed and which way it's going, in its own space (it faces +z): a humanoid steps that way.
+    a.speed = hs;
+    if (hs > 0.3) {
+      const c = Math.cos(v.yaw);
+      const sn = Math.sin(v.yaw);
+      a.moveX = f.vx * c - f.vz * sn;
+      a.moveZ = f.vx * sn + f.vz * c;
+    }
+    a.air = f.air ?? false;
+    a.sprint = f.sprint ?? false;
+    a.reloading = f.reloading ?? false;
+    a.ads = (a.ads ?? 0) + ((f.ads ?? 0) - (a.ads ?? 0)) * k;
     a.walkAmount += (Math.min(1, hs / Math.max(1.2, v.speed * 0.7)) - a.walkAmount) * Math.min(1, dt * 8);
     a.pace = hs / Math.max(0.1, v.speed);
     if (f.look) {
@@ -207,6 +227,7 @@ export class EntityView {
       v.heldMesh.removeFromParent();
       (v.heldMesh.material as THREE.Material).dispose();
       v.heldMesh = null;
+      v.model.hold?.(null, null);
     }
     const def = item ? this.content.items.get(item) : undefined;
     const arm = v.model.pivots.get('armR');
@@ -218,7 +239,20 @@ export class EntityView {
       return;
     }
     const { geometry, model } = look;
-    const mesh = new THREE.Mesh(geometry, this.graphics.materialFor(look.albedo, look.emissive));
+    const mesh = new THREE.Mesh(geometry, this.graphics.materialFor(look.albedo, look.emissive, look.surface));
+    if (look.points?.muzzle) mesh.userData.muzzle = look.points.muzzle.clone();
+    else if (model?.muzzle) mesh.userData.muzzle = new THREE.Vector3(...model.muzzle).divideScalar(16);
+    // A humanoid holds it its own way: a gun or a sword in both hands, anything else in the fist.
+    if (model && v.model.hold) {
+      geometry.computeBoundingBox();
+      const box = geometry.boundingBox!;
+      const kind = def.kind === 'gun' ? 'gun' : look.points?.grip2 ? 'melee' : 'other';
+      const info = { kind, grip: look.points?.grip?.clone() ?? new THREE.Vector3(), grip2: look.points?.grip2?.clone(), mag: look.points?.mag?.clone(), length: box.max.z - box.min.z, scale: kind === 'other' ? 0.5 : HELD_SCALE } as const;
+      if (v.model.hold(mesh, info)) {
+        v.heldMesh = mesh;
+        return;
+      }
+    }
     // In the fist at the end of the hanging arm (the figure faces +z). A held model runs along
     // +z already: tilt it up a little, its grip in the fist. A sprite stands on edge, turned so
     // its handle-to-tip diagonal points forward and up, the handle (lower left) in the fist. A

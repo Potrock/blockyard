@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Content } from '../content';
 import type { EntityGraphics } from '../render/entities';
+import type { Surface } from './gltf';
 import { Shaders } from '../render/shaders';
 import type { PickupFrame } from '../sim/items';
 
@@ -42,10 +43,10 @@ export class PickupView {
 
   constructor(private p: PickupViewParts) {}
 
-  private materialFor(albedo: THREE.Texture, emissive: THREE.Texture): THREE.RawShaderMaterial {
+  private materialFor(albedo: THREE.Texture, emissive: THREE.Texture, surface?: Surface): THREE.RawShaderMaterial {
     let m = this.materials.get(albedo);
     if (!m) {
-      m = this.p.graphics.materialFor(albedo, emissive);
+      m = this.p.graphics.materialFor(albedo, emissive, surface);
       this.materials.set(albedo, m);
     }
     return m;
@@ -66,7 +67,7 @@ export class PickupView {
       // Its model or its sprite, as in the hand (a model whose file is still coming: later).
       const look = this.p.graphics.itemLook(def);
       if (!look) return null;
-      const mesh = new THREE.Mesh(look.geometry, this.materialFor(look.albedo, look.emissive));
+      const mesh = new THREE.Mesh(look.geometry, this.materialFor(look.albedo, look.emissive, look.surface));
       mesh.customDepthMaterial = this.p.graphics.gltf.shadow(look.albedo);
       if (look.model) {
         // A held model lies along +z: stood up, centred, about a sprite's size.

@@ -179,7 +179,7 @@ export class Runtime {
   private probeFrame = 0;
   private titleSpin = 0;
   /** What's on screen, to redraw only on change. */
-  private shown = { health: '', hotbar: '', creative: '', held: '', arm: '' };
+  private shown = { health: '', hotbar: '', creative: '', held: '', arm: '', humanoid: '' };
   /** Development: treat input as active without pointer lock (headless tests). */
   debugActive = false;
   /** On a server, in a room of a player's own: its code. */
@@ -809,6 +809,10 @@ export class Runtime {
         held,
         aim: gunUp ? 1 : 0,
         stance: p.sliding ? 2 : p.sneaking ? 1 : 0,
+        air: !p.onGround && !p.flying && !p.inWater,
+        sprint: p.sprinting,
+        reloading: gunUp && (p.hand.gun?.reload ?? -1) >= 0,
+        ads: gunUp ? (p.hand.gun?.aim ?? 0) : 0,
       });
       if (mine) continue;
       if (!p.dead) this.targets.push({ id: p.id, x: p.x, y: p.y + (p.sliding ? 0.55 : p.sneaking ? 0.95 : 1.25), z: p.z });
@@ -1216,6 +1220,15 @@ export class Runtime {
         }
       }
     }
+    // A humanoid model: their first-person arms are its forearms and fists (once its file is here).
+    const body = model?.gltf && (model.gltf.rig === 'humanoid' || !model.gltf.clips) ? model.gltf.url : '';
+    if (body !== this.shown.humanoid) {
+      const arms = body ? this.graphics.gltf.humanoidArms(body) : null;
+      if (!body || arms) {
+        this.held.setHumanoidArms(arms);
+        this.shown.humanoid = body;
+      }
+    }
     const creative = me.creative;
     const health = `${me.health}|${me.mortal ? me.maxHealth : 0}`;
     if (health !== this.shown.health) {
@@ -1282,7 +1295,7 @@ export class Runtime {
     const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : def.kind === 'gun' ? 'gun' : 'item';
     // Held as a model (boxes or glTF), posed by its grip; else as its sprite.
     const hold = look.model ? { ...def.hold, model: look.model } : def.hold ?? {};
-    this.held.setItem(look.geometry, look.albedo, look.emissive, hold, style, look.points);
+    this.held.setItem(look.geometry, look.albedo, look.emissive, hold, style, look.points, look.surface);
   }
 
   /** Columns the host keeps around the player: what this client shows, within reason. */
@@ -1701,6 +1714,7 @@ export class Runtime {
       from.set(shooter.x, shooter.y + 1.45, shooter.z);
     }
     this.fx.muzzleFlash(from, 0.55);
+    if (avatar !== undefined) this.entityView.kick(avatar);
     const color = def?.kind === 'gun' && def.tracer !== false ? (def.tracer ?? '#ffd27a') : null;
     const cam = this.camera.position;
     w.ends.forEach(([x, y, z, kind], i) => {

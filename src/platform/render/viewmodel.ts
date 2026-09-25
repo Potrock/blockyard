@@ -4,7 +4,8 @@ import { DEFAULT_TINT } from '../world/registry';
 import type { HeldModelSpec, HoldSpec, HoldStyle, ViewAnimation, ViewKey, ViewModelApi } from '../api/types';
 import { boxGeometry, type EntityGraphics } from './entities';
 import { itemFaces } from './blockmodel';
-import type { ItemPoint } from '../client/gltf';
+import { HELD_SCALE } from '../client/humanoid';
+import { setSurface, surfaceUniforms, type HumanoidArm, type HumanoidArms, type ItemMesh, type ItemPoint, type Surface } from '../client/gltf';
 
 /**
  * First-person view model, built from Minecraft's own transforms: the arm is posed exactly like
@@ -86,6 +87,8 @@ uniform mat4 projectionMatrix;
 uniform mat3 normalMatrix;
 out vec2 vUv;
 out float vShade;
+out vec3 vView;
+out vec3 vN;
 void main() {
   vUv = uv;
   vec3 n = normalize(normalMatrix * normal);
@@ -93,7 +96,10 @@ void main() {
   float key = clamp(dot(n, normalize(vec3(0.45, 0.85, 0.35))), 0.0, 1.0);
   float fill = clamp(n.z, 0.0, 1.0);
   vShade = 0.42 + 0.45 * key + 0.18 * fill;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec4 viewPos = modelViewMatrix * vec4(position, 1.0);
+  vView = viewPos.xyz;
+  vN = n;
+  gl_Position = projectionMatrix * viewPos;
   ${DEPTH}
 }`;
 
@@ -101,14 +107,46 @@ const spriteFrag = /* glsl */ `
 precision highp float;
 uniform sampler2D uAtlas;
 uniform sampler2D uEmissive;
+uniform sampler2D uMaterialMap; // glTF metallic-roughness: G roughness, B metalness
+uniform vec2 uMaterial;         // metalness and roughness factors
 uniform vec3 uLight;
 in vec2 vUv;
 in float vShade;
+in vec3 vView;
+in vec3 vN;
 layout(location = 0) out vec4 fragColor;
+const float PI = 3.14159265;
 void main() {
   vec4 a = texture(uAtlas, vUv);
   if (a.a < 0.5) discard;
-  fragColor = vec4(a.rgb * uLight * vShade + a.rgb * texture(uEmissive, vUv).r * 3.0, 1.0);
+  vec4 mr = texture(uMaterialMap, vUv);
+  float metal = clamp(uMaterial.x * mr.b, 0.0, 1.0);
+  float rough = clamp(uMaterial.y * mr.g, 0.06, 1.0);
+  vec3 c = a.rgb * (1.0 - metal) * uLight * vShade;
+  if (metal > 0.001 || rough < 0.97) {
+    // The same key light shining off it, and a studio's bright top and dark floor in it.
+    vec3 N = normalize(gl_FrontFacing ? vN : -vN);
+    vec3 V = normalize(-vView);
+    vec3 L = normalize(vec3(0.45, 0.85, 0.35));
+    vec3 H = normalize(L + V);
+    float NoV = max(dot(N, V), 1e-3);
+    float NoL = max(dot(N, L), 0.0);
+    float NoH = max(dot(N, H), 0.0);
+    float al = rough * rough;
+    float a2 = al * al;
+    float d = (NoH * a2 - NoH) * NoH + 1.0;
+    float D = a2 / (PI * d * d + 1e-7);
+    float Vis = 0.5 / (NoL * sqrt(NoV * NoV * (1.0 - a2) + a2) + NoV * sqrt(NoL * NoL * (1.0 - a2) + a2) + 1e-5);
+    vec3 F0 = mix(vec3(0.04), a.rgb, metal);
+    vec3 F = F0 + (1.0 - F0) * pow(1.0 - max(dot(V, H), 0.0), 5.0);
+    c += uLight * 1.4 * D * Vis * F * NoL;
+    vec3 R = reflect(-V, N);
+    float up = smoothstep(-0.35, 0.65, R.y);
+    vec3 env = uLight * mix(mix(0.12, 1.25, up), 0.55, rough);
+    vec3 Fv = F0 + (max(vec3(1.0 - rough), F0) - F0) * pow(1.0 - NoV, 5.0);
+    c += env * Fv * mix(1.0, 0.4, rough);
+  }
+  fragColor = vec4(c + a.rgb * texture(uEmissive, vUv).r * 3.0, 1.0);
 }`;
 
 const srgb = (c: number) => Math.pow(c, 2.2);
@@ -798,6 +836,7 @@ interface HeldSprite {
   geometry: THREE.BufferGeometry;
   albedo: THREE.Texture;
   emissive: THREE.Texture;
+  surface?: Surface;
   hold: HoldSpec;
   style: HoldStyle;
   /** Points the model marks (guns: grip2, muzzle, sight, mag), in its own space. */
@@ -877,6 +916,8 @@ export class ViewModel implements ViewModelApi {
   /** The held gun's points (its own space, blocks). */
   private gunPts: GunPoints | null = null;
   /** The hands on a gun (palms and fingers, in the gun's own space, so they move with it). */
+  /** A humanoid player's own forearms and fists (their model's), in place of the skin's arms. */
+  private humanoid: Record<'R' | 'L', { arm: HumanoidArm; forearm: THREE.Group; fist: THREE.Group }> | null = null;
   private gunHands = new THREE.Group();
   private gunHand2 = new THREE.Group();
   /** Springs: the kick back and the muzzle rise after a shot. */
@@ -943,7 +984,7 @@ export class ViewModel implements ViewModelApi {
       fragmentShader: spriteFrag,
       glslVersion: THREE.GLSL3,
       side,
-      uniforms: { uAtlas: { value: null }, uEmissive: { value: null }, uLight: { value: this.light } },
+      uniforms: { uAtlas: { value: null }, uEmissive: { value: null }, ...surfaceUniforms(), uLight: { value: this.light } },
     });
   }
 
@@ -967,6 +1008,57 @@ export class ViewModel implements ViewModelApi {
   setArm(look: { geometry: THREE.BufferGeometry; albedo: THREE.Texture; emissive: THREE.Texture } | null) {
     this.armLook = look;
     this.buildArm();
+  }
+
+  /** A humanoid player's arms (their model's forearms and fists), or null for the skin's. */
+  setHumanoidArms(arms: HumanoidArms | null) {
+    if (this.humanoid) {
+      for (const side of Object.values(this.humanoid)) {
+        for (const g of [side.forearm, side.fist]) {
+          g.removeFromParent();
+          for (const c of g.children) ((c as THREE.Mesh).material as THREE.Material).dispose();
+        }
+      }
+      this.humanoid = null;
+    }
+    if (arms) {
+      const group = (parts: ItemMesh[]) => {
+        const g = new THREE.Group();
+        for (const part of parts) {
+          const mat = this.makeSpriteMaterial(THREE.FrontSide);
+          mat.uniforms.uAtlas.value = part.albedo;
+          mat.uniforms.uEmissive.value = part.emissive;
+          setSurface(mat.uniforms, part.surface);
+          const m = new THREE.Mesh(part.geometry, mat);
+          m.frustumCulled = false;
+          g.add(m);
+        }
+        this.hand.add(g);
+        return g;
+      };
+      const side = (arm: HumanoidArm) => ({ arm, forearm: group(arm.forearm), fist: group(arm.fist) });
+      this.humanoid = { R: side(arms.R), L: side(arms.L) };
+    }
+    this.buildArm();
+  }
+
+  /**
+   * One of a humanoid's arms: the fist holding at `grip` (hand space) turned as `gripQ`, the
+   * forearm running back from the wrist toward the elbow (`elbowDir`), at `scale` to the model.
+   */
+  private placeHumanoidArm(side: 'R' | 'L', grip: THREE.Vector3, gripQ: THREE.Quaternion, elbowDir: THREE.Vector3, scale: number) {
+    const h = this.humanoid![side];
+    const fistQ = h.fist.quaternion.copy(gripQ).multiply(_qb.copy(h.arm.gripQ).invert());
+    h.fist.position.copy(grip).sub(_fa.copy(h.arm.grip).multiplyScalar(scale).applyQuaternion(fistQ));
+    h.fist.scale.setScalar(scale);
+    const y = _fb.copy(elbowDir).normalize();
+    const z = _fc.set(0, 0, 1).applyQuaternion(fistQ);
+    z.addScaledVector(y, -z.dot(y)).normalize();
+    const x = _v.crossVectors(y, z);
+    _m.makeBasis(x, y, z);
+    h.forearm.quaternion.setFromRotationMatrix(_m);
+    h.forearm.position.copy(h.fist.position).addScaledVector(y, h.arm.wrist.length() * scale);
+    h.forearm.scale.setScalar(scale);
   }
 
   define(name: string, anim: ViewAnimation) {
@@ -1006,10 +1098,10 @@ export class ViewModel implements ViewModelApi {
   }
 
   /** Hold an extruded sprite item, or a model (with the points it marks: a gun's muzzle and sight). */
-  setItem(geometry: THREE.BufferGeometry, albedo: THREE.Texture, emissive: THREE.Texture, hold: HoldSpec, fallback: HoldStyle, points?: Partial<Record<ItemPoint, THREE.Vector3>>) {
+  setItem(geometry: THREE.BufferGeometry, albedo: THREE.Texture, emissive: THREE.Texture, hold: HoldSpec, fallback: HoldStyle, points?: Partial<Record<ItemPoint, THREE.Vector3>>, surface?: Surface) {
     const target = this.pending ?? this.held;
     if (target.kind === 'sprite' && target.geometry === geometry) return;
-    this.pending = { kind: 'sprite', geometry, albedo, emissive, hold, style: hold.style ?? fallback, points };
+    this.pending = { kind: 'sprite', geometry, albedo, emissive, surface, hold, style: hold.style ?? fallback, points };
   }
 
   /** A gun went off: the kick, the rise, the flash (and then its pump or bolt, if it has one). */
@@ -1112,6 +1204,11 @@ export class ViewModel implements ViewModelApi {
 
   /** Main arm (right, or mirrored for the left hand; classic skin layout) and the other one. */
   private buildArm() {
+    if (this.humanoid) {
+      this.arm.visible = this.arm2.visible = false;
+      this.gunHands.visible = false;
+      return;
+    }
     const look = this.armLook;
     if (look) {
       // The model's own arm (shared: never ours to free).
@@ -1211,6 +1308,7 @@ export class ViewModel implements ViewModelApi {
       this.spriteMesh.geometry = h.geometry;
       this.spriteMaterial.uniforms.uAtlas.value = h.albedo;
       this.spriteMaterial.uniforms.uEmissive.value = h.emissive;
+      setSurface(this.spriteMaterial.uniforms, h.surface);
       this.spriteMesh.visible = true;
     } else if (h.kind === 'block') {
       const def = h.def;
@@ -1465,7 +1563,16 @@ export class ViewModel implements ViewModelApi {
     this.arm.quaternion.copy(r.armRot);
     this.arm.position.copy(r.armOffset);
     this.arm.scale.set(r.armScale, r.armScale * r.armStretch, r.armScale);
-    this.arm2.visible = r.twoHanded && !!this.skin;
+    this.arm2.visible = r.twoHanded && !!this.skin && !this.humanoid;
+    if (this.humanoid) {
+      // Their own fists on the grips (the item's turn), forearms back toward the elbows.
+      const itemQ = this.held.kind !== 'empty' ? this.tmpQ.copy(m.wrist).multiply(r.itemRot) : this.tmpQ.copy(r.armRot);
+      const k = (this.held.kind === 'sprite' ? r.itemScale : STYLES.gun.scale) / HELD_SCALE;
+      this.placeHumanoidArm('R', _fa.set(0, 0, 0).clone(), itemQ, r.armOffset, k);
+      const two = r.twoHanded;
+      this.humanoid.L.fist.visible = this.humanoid.L.forearm.visible = two;
+      if (two) this.placeHumanoidArm('L', r.grip2.clone(), itemQ, _fb.subVectors(r.arm2Offset, r.grip2).clone(), k);
+    }
     if (r.twoHanded) {
       this.arm2.quaternion.copy(r.arm2Rot);
       this.arm2.position.copy(r.arm2Offset);

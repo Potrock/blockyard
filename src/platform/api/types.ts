@@ -1137,6 +1137,13 @@ export interface GltfSpec {
   hand?: string;
   /** Nodes not to draw (by name). A node named `hitbox` (a collision box) is never drawn. */
   hide?: string[];
+  /**
+   * `humanoid`: the model is built on the platform's humanoid rig (docs/HUMANOID.md: joints named
+   * `hips`, `spine`, `chest`, `head`, `upperArmR` …) and the platform animates it in code: walking,
+   * running and strafing, crouching, sliding, jumping, looking, a gun in both hands, a sword, a fall
+   * on death. A model with those joints and no `clips` is taken to be one.
+   */
+  rig?: 'humanoid';
 }
 
 export interface ModelPart {

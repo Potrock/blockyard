@@ -88,6 +88,11 @@ export interface EntityFrame {
   stance?: number;
   /** Aiming a gun where it looks, how far down the sights 0..1 (players' figures). */
   aim?: number;
+  /** A player's figure (made on each screen from the players' frames): off the ground, sprinting, reloading, aiming down the sights 0..1. */
+  air?: boolean;
+  sprint?: boolean;
+  reloading?: boolean;
+  ads?: number;
 }
 
 /** One projectile in flight (or stuck in a wall). */
