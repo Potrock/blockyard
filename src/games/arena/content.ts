@@ -82,7 +82,7 @@ export function defineMonsters(game: GameContext) {
     hitbox: { width: 0.6, height: 1.95 },
     health: 16,
     speed: 3.4,
-    ai: Behaviors.ranged({ projectile: ARROW, range: 22, preferred: 10, cooldown: 2.1 }),
+    ai: Behaviors.ranged({ projectile: ARROW, range: 22, preferred: 10, cooldown: 1.6 }),
     drops: [
       { item: 'arrow_bundle', chance: 0.6 },
       { item: 'heart', chance: 0.08 },
