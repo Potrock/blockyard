@@ -6,6 +6,11 @@ import { check, launch, lastScreen } from './_harness';
  * go ashore at an island and light its beacon, light the rest and finish the voyage.
  */
 export default function skyship() {
+  voyage();
+  aground();
+}
+
+function voyage() {
   const h = launch('skyship', { seed: 3 });
   const g = h.ctx;
   const me = g.player;
@@ -64,4 +69,41 @@ export default function skyship() {
   h.run(3);
   check(lastScreen(h) === 'Voyage complete', `voyage complete: ${lastScreen(h)}`);
   console.log(`  boarded, took the helm, sailed ${sailed.toFixed(0)} blocks with the helmsman at the wheel, fell overboard and got hauled back, lit five beacons`);
+}
+
+/**
+ * Run aground and get off again: turn in place until the bow swings into an island, keep driving
+ * into it turning, then back off. The ship never jumps (its bank and pitch ease; a move into rock
+ * changes nothing about it) and always gets clear: backing off, it scrapes along the rock.
+ */
+function aground() {
+  const h = launch('skyship', { seed: 3 });
+  const g = h.ctx;
+  const me = g.player;
+  h.run(1);
+  h.run(5, { pilot: () => ({ down: ['KeyW'], yaw: -Math.PI / 2 }), until: () => me.riding !== null });
+  const ship = me.riding!;
+  g.commands.run('warp 1');
+  h.run(0.5);
+  const w = ship.position.clone().add({ x: 0.5, y: 4.2, z: 10.2 } as never);
+  me.teleport({ x: w.x, y: w.y, z: w.z });
+  h.run(0.5);
+  h.step(1 / 60, { pressed: ['KeyE'], down: ['KeyE'] });
+  let worst = 0;
+  const q = ship.quaternion.clone();
+  const pilot = (keys: string[]) => () => {
+    worst = Math.max(worst, ship.quaternion.angleTo(q));
+    q.copy(ship.quaternion);
+    return { down: keys };
+  };
+  h.run(14, { pilot: pilot(['KeyA']) });
+  h.run(10, { pilot: pilot(['KeyW', 'KeyA']) });
+  const at = ship.position.clone();
+  // Full astern: time to stop if it's still going ahead (it may have scraped along clear), then back off.
+  h.run(12, { pilot: pilot(['KeyS']) });
+  const backed = ship.position.distanceTo(at);
+  check(backed > 5, `backed off the island: ${backed.toFixed(2)} blocks`);
+  check(worst < 0.01, `the ship never jerked round: worst turn in a tick ${worst.toFixed(4)} rad`);
+  check(me.riding === ship, 'the helmsman is still aboard');
+  console.log(`  ran aground turning into an island, backed off ${backed.toFixed(0)} blocks; worst turn in a tick ${worst.toFixed(4)} rad`);
 }

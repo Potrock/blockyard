@@ -26,6 +26,9 @@ interface ShipState {
   speed: number;
   turn: number;
   climb: number;
+  /** Banked into turns, nose up when climbing: eased, like everything else that moves it. */
+  roll: number;
+  pitch: number;
   /** Seconds afloat (the bob), and the propeller's angle. */
   t: number;
   spin: number;
@@ -45,6 +48,8 @@ let lit: boolean[] = [];
 let startedAt = 0;
 let done = false;
 let wind: LoopHandle | null = null;
+/** When it last hit rock (one thud a bump). */
+let thudAt = -Infinity;
 /** What each player's HUD last showed, and the objective (only changes go out). */
 const shown = new Map<string, string>();
 let objective = '';
@@ -55,26 +60,25 @@ function onShip(l: Vec3): Vec3 {
   return { x: v.x, y: v.y, z: v.z };
 }
 
-/** The ship's pose from its state: banked into turns, nose up when climbing, bobbing gently. */
+/** The ship's pose from its state: where it is, which way it heads, its bank and pitch, bobbing gently. */
 function pose(st: ShipState, p: InstanceType<typeof math.Vector3>, q: InstanceType<typeof math.Quaternion>) {
-  const roll = st.turn * Math.min(1, Math.abs(st.speed) / MAX_SPEED) * 0.18;
-  const pitch = (st.climb / CLIMB) * 0.035;
   p.set(st.x, st.y + Math.sin(st.t * 0.8) * 0.18, st.z);
-  q.setFromEuler(new math.Euler(pitch, st.yaw, roll, 'YXZ'));
+  q.setFromEuler(new math.Euler(st.pitch, st.yaw, st.roll, 'YXZ'));
 }
 
-/** Would the ship at this state be in rock? */
-function aground(game: GameContext, st: ShipState): boolean {
+/** How much of the ship (points round its hull) would be in rock at this state. */
+function inRock(game: GameContext, st: ShipState): number {
   const p = new math.Vector3();
   const q = new math.Quaternion();
   pose(st, p, q);
   const v = new math.Vector3();
+  let n = 0;
   for (const h of hull) {
     v.set(h.x, h.y, h.z).applyQuaternion(q).add(p);
     const id = game.world.getBlock(v.x, v.y, v.z);
-    if (id > 0 && game.world.blockInfo(id)?.solid) return true;
+    if (id > 0 && game.world.blockInfo(id)?.solid) n++;
   }
-  return false;
+  return n;
 }
 
 /** The helmsman's controls sail it; nobody at the helm, it drifts to a stop and holds its height. */
@@ -87,25 +91,40 @@ function sail(game: GameContext, dt: number) {
   s.speed += (target - s.speed) * (1 - Math.exp(-(thrust ? 0.45 : 0.3) * dt));
   s.turn += (turn * TURN * Math.min(1, 0.35 + Math.abs(s.speed) / MAX_SPEED) - s.turn) * (1 - Math.exp(-2 * dt));
   s.climb += (lift * CLIMB - s.climb) * (1 - Math.exp(-1.5 * dt));
-  const next: ShipState = {
-    ...s,
-    yaw: s.yaw + s.turn * dt,
-    x: s.x - Math.sin(s.yaw) * s.speed * dt,
-    z: s.z - Math.cos(s.yaw) * s.speed * dt,
-    y: Math.max(LOW, Math.min(HIGH, s.y + s.climb * dt)),
-    t: s.t + dt,
-  };
-  if (aground(game, next)) {
-    // Scraped rock: stop dead, and back off a touch.
-    if (Math.abs(s.speed) > 2) {
-      game.audio.play('thud', { at: ship.position });
-      for (const p of game.players) if (p.riding === ship) p.fx.shake(0.5, 0.4);
-    }
-    s.speed *= -0.2;
-    s.turn = 0;
-    s.climb = 0;
-    s.t += dt;
-  } else s = next;
+  // It moves in three parts, like a walker's axes: sailing, turning (and banking), rising (and
+  // pitching, and the bob). Each goes ahead unless it would put more of the hull into rock than
+  // is in it now; sailing into rock it scrapes along (east-west or north-south alone) if it can.
+  // So a ship pressed against an island can always back off, turn away or climb out.
+  const ease = 1 - Math.exp(-3 * dt);
+  const dx = -Math.sin(s.yaw) * s.speed * dt;
+  const dz = -Math.cos(s.yaw) * s.speed * dt;
+  const parts: [part: 'sail' | 'turn' | 'rise', steps: ((st: ShipState) => ShipState)[]][] = [
+    ['sail', [(st) => ({ ...st, x: st.x + dx, z: st.z + dz }), (st) => ({ ...st, x: st.x + dx }), (st) => ({ ...st, z: st.z + dz })]],
+    ['turn', [(st) => ({ ...st, yaw: st.yaw + st.turn * dt, roll: st.roll + (st.turn * Math.min(1, Math.abs(st.speed) / MAX_SPEED) * 0.18 - st.roll) * ease })]],
+    ['rise', [(st) => ({ ...st, y: Math.max(LOW, Math.min(HIGH, st.y + st.climb * dt)), pitch: st.pitch + ((st.climb / CLIMB) * 0.035 - st.pitch) * ease, t: st.t + dt })]],
+  ];
+  let rock = inRock(game, s);
+  for (const [part, steps] of parts) {
+    const moved = steps.some((step) => {
+      const next = step(s);
+      const n = inRock(game, next);
+      if (n > rock) return false;
+      s = next;
+      rock = n;
+      return true;
+    });
+    if (moved) continue;
+    if (part === 'sail') {
+      // Ran into rock: a thud (one a bump), and it bounces back a little.
+      if (Math.abs(s.speed) > 3 && game.clock.now - thudAt > 1) {
+        thudAt = game.clock.now;
+        game.audio.play('thud', { at: ship.position });
+        for (const p of game.players) if (p.riding === ship) p.fx.shake(0.3, 0.3);
+      }
+      s.speed *= -0.25;
+    } else if (part === 'turn') s.turn = 0;
+    else s.climb = 0;
+  }
   pose(s, ship.position, ship.quaternion);
   s.spin += (s.speed * 1.4 + (helm ? 1.5 : 0.3)) * dt;
   screw.position.set(PROPELLER.x, PROPELLER.y, PROPELLER.z);
@@ -259,7 +278,7 @@ export default defineGame({
         const isle = ISLES[Number(n) - 1];
         if (!isle) throw new Error('Which island? 1 to 5');
         const riders = game.players.filter((p) => p.riding === ship);
-        s = { ...s, x: isle.at.x + isle.radius + 9, y: isle.at.y + 1, z: isle.at.z, yaw: 0, speed: 0, turn: 0, climb: 0 };
+        s = { ...s, x: isle.at.x + isle.radius + 9, y: isle.at.y + 1, z: isle.at.z, yaw: 0, speed: 0, turn: 0, climb: 0, roll: 0, pitch: 0 };
         pose(s, ship.position, ship.quaternion);
         for (const p of riders) aboard(p);
         return `Alongside ${isle.name}`;
@@ -273,7 +292,8 @@ export default defineGame({
     lit = ISLES.map(() => false);
     shown.clear();
     objective = '';
-    s = { x: MOORING.x, y: MOORING.y, z: MOORING.z, yaw: 0, speed: 0, turn: 0, climb: 0, t: 0, spin: 0 };
+    s = { x: MOORING.x, y: MOORING.y, z: MOORING.z, yaw: 0, speed: 0, turn: 0, climb: 0, roll: 0, pitch: 0, t: 0, spin: 0 };
+    thudAt = -Infinity;
     ship = game.props.spawn(shipModel, { solid: true });
     screw = game.props.spawn(screwModel);
     screw.attach(ship);
