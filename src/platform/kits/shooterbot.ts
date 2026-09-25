@@ -187,6 +187,8 @@ interface Brain extends BotMind {
   /** Aim error (blocks at the target), settling while it tracks. */
   err: Vec3;
   head: boolean;
+  /** How much of its target it can see: all of it, or only the head (over cover, through a hole). */
+  seen: 'body' | 'head';
   lastSeen: Vec3 | null;
   lastSeenAt: number;
   heard: { at: Vec3; t: number } | null;
@@ -207,6 +209,8 @@ interface Brain extends BotMind {
   wander: number;
   slideCool: number;
   thrownAt: number;
+  /** The grid's `opened` when it last planned: a new way since, and it plans again. */
+  opened: number;
 }
 
 const AIM: BotAim = {
@@ -291,6 +295,7 @@ class Brains implements ShooterBots {
       react: 0,
       err: { x: 0, y: 0, z: 0 },
       head: false,
+      seen: 'body',
       lastSeen: null,
       lastSeenAt: -99,
       heard: null,
@@ -310,6 +315,7 @@ class Brains implements ShooterBots {
       wander: 0,
       slideCool: 0,
       thrownAt: -99,
+      opened: 0,
     });
   }
 
@@ -390,6 +396,7 @@ class Brains implements ShooterBots {
     const look = bot.look;
     let best: Player | null = null;
     let bestScore = Infinity;
+    let bestSeen: Brain['seen'] = 'body';
     for (const p of game.players) {
       if (p === bot || !p.alive || (this.opts.hostile && !this.opts.hostile(bot, p))) continue;
       const t = chest(p);
@@ -401,13 +408,20 @@ class Brains implements ShooterBots {
       const facing = (dx * look.x + dy * look.y + dz * look.z) / d;
       const heardThem = b.heard && now - b.heard.t < 2 && Math.hypot(b.heard.at.x - p.position.x, b.heard.at.z - p.position.z) < 4;
       if (facing < senses.view && d > senses.near && !heardThem && p !== b.target) continue;
-      if (!game.world.lineOfSight(eye, t)) continue;
+      // Its chest in view, or failing that its head (over cover, through a hole in a wall).
+      let seen: Brain['seen'] = 'body';
+      if (!game.world.lineOfSight(eye, t)) {
+        if (!game.world.lineOfSight(eye, head(p))) continue;
+        seen = 'head';
+      }
       const score = d * (p === b.target ? 0.55 : 1) * (facing > 0.8 ? 0.8 : 1);
       if (score < bestScore) {
         bestScore = score;
         best = p;
+        bestSeen = seen;
       }
     }
+    b.seen = bestSeen;
     if (best !== b.target) {
       b.target = best;
       if (best) {
@@ -433,8 +447,8 @@ class Brains implements ShooterBots {
       b.lastSeen = { ...t.position };
       b.lastSeenAt = now;
       b.react -= dt;
-      // Aim: at the chest (or head), leading a little, off by the error, which settles.
-      const aimAt = b.head ? head(t) : chest(t);
+      // Aim: at the chest (or head, or what it can see), leading a little, off by the error, which settles.
+      const aimAt = b.head || b.seen === 'head' ? head(t) : chest(t);
       const v = t.velocity;
       const dist = Math.hypot(aimAt.x - eye.x, aimAt.y - eye.y, aimAt.z - eye.z);
       // The right weapon for the range, if the game says.
@@ -498,6 +512,17 @@ class Brains implements ShooterBots {
         if (other) this.switchTo(bot, other.item);
         else c.press('KeyR');
       }
+      // Seen through a gap (a hole shot in a wall, a crack between crates): a step either way and
+      // the line's gone, so it holds still and shoots through it. (A side with a wall right there
+      // isn't a step it could take.)
+      const tx = t.position.x - pos.x;
+      const tz = t.position.z - pos.z;
+      const td = Math.hypot(tx, tz) || 1;
+      const lost = (side: number) => {
+        const e = { x: eye.x - (tz / td) * 0.4 * side, y: eye.y, z: eye.z + (tx / td) * 0.4 * side };
+        return !game.world.blockInfo(game.world.getBlock(e.x, e.y, e.z))?.solid && !game.world.lineOfSight(e, aimAt);
+      };
+      const peep = lost(1) && lost(-1);
       // Move: strafe side to side, closing to or backing off to the range the gun likes.
       b.strafeT -= dt;
       if (b.strafeT <= 0) {
@@ -506,13 +531,16 @@ class Brains implements ShooterBots {
         if (moves.hop > 0 && Math.random() < moves.hop * s && bot.onGround) wantJump = true;
         if (moves.crouch > 0 && Math.random() < moves.crouch && wantAds) b.crouchT = 0.6 + Math.random() * 0.8;
       }
-      const tx = t.position.x - pos.x;
-      const tz = t.position.z - pos.z;
-      const td = Math.hypot(tx, tz) || 1;
       const range = w.range ?? moves.range;
-      const close = td > range * moves.keep[0] ? 1 : td < range * moves.keep[1] ? -1 : 0;
-      moveX = (tx / td) * close + (-tz / td) * b.strafe;
-      moveZ = (tz / td) * close + (tx / td) * b.strafe;
+      const close = peep ? 0 : td > range * moves.keep[0] ? 1 : td < range * moves.keep[1] ? -1 : 0;
+      const strafe = peep ? 0 : b.strafe;
+      moveX = (tx / td) * close + (-tz / td) * strafe;
+      moveZ = (tz / td) * close + (tx / td) * strafe;
+      if (peep) {
+        // (Crouching or hopping would lose the line too.)
+        b.crouchT = 0;
+        wantJump = false;
+      }
       if (b.crouchT > 0) {
         b.crouchT -= dt;
         c.hold('KeyC', true);
@@ -558,17 +586,27 @@ class Brains implements ShooterBots {
         b.goal = goal;
         b.path = nav.path(pos, goal);
         b.step = 0;
+        b.opened = nav.opened;
         b.replan = moves.replan[0] + Math.random() * (moves.replan[1] - moves.replan[0]);
         if (!b.path) b.goal = null;
+      }
+      // A new way has opened since it planned (a hole blown through a wall, a block broken): it may be shorter.
+      if (nav && b.path && b.goal && nav.opened !== b.opened) {
+        b.opened = nav.opened;
+        b.path = nav.path(pos, b.goal);
+        b.step = 0;
       }
       b.wander -= dt;
       const path = b.path;
       if (nav && path && b.step < path.length) {
-        // Skip waypoints already reached; head for the next.
+        // Skip waypoints already reached; head for the next. A hole is only as wide as it is, so
+        // near one it goes cell by cell, lined up, looking straight through it.
+        const lining = (i: number) => path[i].hole || !!path[i + 1]?.hole;
         let wp = path[b.step];
-        while (b.step < path.length - 1 && Math.hypot(wp.at.x - pos.x, wp.at.z - pos.z) < 0.7 && Math.abs(wp.y - pos.y) < 1.2) wp = path[++b.step];
+        while (b.step < path.length - 1 && Math.hypot(wp.at.x - pos.x, wp.at.z - pos.z) < (lining(b.step) ? 0.3 : 0.7) && Math.abs(wp.y - pos.y) < 1.2) wp = path[++b.step];
         if (b.step === path.length - 1 && Math.hypot(wp.at.x - pos.x, wp.at.z - pos.z) < 0.7) b.step++;
-        const ahead = path[Math.min(path.length - 1, b.step + 2)];
+        const lined = b.step < path.length && lining(b.step);
+        const ahead = lined ? wp : path[Math.min(path.length - 1, b.step + 2)];
         const dx = wp.at.x - pos.x;
         const dz = wp.at.z - pos.z;
         const d = Math.hypot(dx, dz) || 1;
@@ -580,7 +618,7 @@ class Brains implements ShooterBots {
         // Look where it's going (a little ahead), glancing about.
         const lx = ahead.at.x - eye.x;
         const lz = ahead.at.z - eye.z;
-        const wantYaw = Math.atan2(-lx, -lz) + Math.sin(now * 0.9 + s * 10) * moves.glance;
+        const wantYaw = Math.atan2(-lx, -lz) + (lined ? 0 : Math.sin(now * 0.9 + s * 10) * moves.glance);
         b.yaw += clampAngle(angleDiff(wantYaw, b.yaw), 5 * dt);
         b.pitch += (Math.atan2(ahead.y + 1.2 - eye.y, Math.hypot(lx, lz)) * 0.5 - b.pitch) * Math.min(1, dt * 4);
         c.look(b.yaw, b.pitch);
