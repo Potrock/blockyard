@@ -1,4 +1,4 @@
-import { defineGame, type Bot, type GameContext, type MenuHandle, type Pickup, type Player } from '@platform';
+import { defineGame, Models, type Bot, type GameContext, type MenuHandle, type Pickup, type Player } from '@platform';
 import { ATLAS, defineArt, OUTFITS, skinOrigin } from './art';
 import { Bots } from './bots';
 import { MAP, type SpawnPoint } from './map';
@@ -6,6 +6,10 @@ import { NavGrid } from './nav';
 import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, PRIMARIES, WEAPONS, type Primary } from './weapons';
 import { GUNS } from './models';
+import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
+
+/** Each outfit's fighter (in the same order as `OUTFITS`): a model on the platform's humanoid rig, animated by it. */
+const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfit % FIGHTER_MODELS.length].url, { rig: 'humanoid' });
 
 /**
  * Call of Blocky: a fast free-for-all on Jackrabbit Lane, a Nuketown-style cul-de-sac painted
@@ -109,7 +113,9 @@ function addFighter(game: GameContext, p: Player): Fighter {
     heartbeat: 0,
     chose: false,
   };
+  // Their fighter, and the skin behind it (the box figure, for a client still fetching the model).
   p.setSkin(skinOrigin(outfit), ATLAS);
+  p.setModel(fighterModel(outfit));
   fighters.set(p.id, f);
   boardDirty = true;
   return f;
@@ -472,6 +478,7 @@ export default defineGame({
     hotbar: 'items',
     skin: skinOrigin(0),
     skinAtlas: ATLAS,
+    model: fighterModel(0),
     movement: {
       walk: 6,
       sprint: 8.4,
