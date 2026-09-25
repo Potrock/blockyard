@@ -1534,7 +1534,7 @@ export interface ThrowableItem extends ItemBase {
   cook?: boolean;
   /** It goes off where it first hits a block or someone (a molotov), rather than bouncing until the fuse is out. */
   impact?: boolean;
-  /** A key that throws it whatever's in hand (hold to cook, let go to throw), e.g. `'KeyG'`. The mouse wheel skips it in the hotbar. */
+  /** A key that throws it whatever's in hand (hold to cook, let go to throw), e.g. `'KeyG'`. In hand, the fire button throws it too. */
   key?: string;
   /** Blocks a second it leaves the hand at (default 20), lobbed `lift` degrees above where they look (default 7). */
   speed?: number;

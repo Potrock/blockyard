@@ -489,7 +489,7 @@ A `kind: 'throwable'` item is thrown: a grenade that bounces, rolls and goes off
 game.items.define('frag', {
   kind: 'throwable', name: 'The Pineapple', icon: { gltf: fragUrl },
   hold: { style: 'throw', model: HeldModels.gltf(fragUrl, { rotation: [90, 180, 0] }) },
-  key: 'KeyG',                                  // thrown from whatever's in hand; the wheel skips it
+  key: 'KeyG',                                  // thrown from whatever's in hand (or fire with it in hand)
   fuse: 3.2, cook: true,                        // held too long, it goes off in the hand
   speed: 21, lift: 8,                           // blocks a second, lobbed 8 degrees over the view
   physics: { gravity: 24, bounce: 0.18, friction: 0.55, radius: 0.1 },     // dies against a wall, stays by it
