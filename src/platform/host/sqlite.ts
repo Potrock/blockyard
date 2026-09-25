@@ -3,6 +3,31 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { SavedPlayer, SavedWorld, Store } from './store';
 
+/** Each connection's setup: the tables, if they're not there yet. */
+const SETUP = `
+  PRAGMA journal_mode = WAL;
+  PRAGMA synchronous = NORMAL;
+  CREATE TABLE IF NOT EXISTS world (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    game TEXT NOT NULL,
+    seed INTEGER NOT NULL,
+    edits BLOB,
+    time REAL NOT NULL DEFAULT 0.3,
+    created TEXT NOT NULL DEFAULT (datetime('now')),
+    saved TEXT
+  );
+  CREATE TABLE IF NOT EXISTS players (
+    name TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    seen TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`;
+
 /**
  * A game server's store: one SQLite file per server (Node's built-in `node:sqlite`). The world,
  * players by name, and the game's `game.store` data. Changes to the game's data are kept in
@@ -22,33 +47,29 @@ export class SqliteStore implements Store {
     private game: string,
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    // A game's rooms each open it (in threads of their own): wait for another's write to finish.
-    this.db.exec(`
-      PRAGMA busy_timeout = 5000;
-      PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = NORMAL;
-      CREATE TABLE IF NOT EXISTS world (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        game TEXT NOT NULL,
-        seed INTEGER NOT NULL,
-        edits BLOB,
-        time REAL NOT NULL DEFAULT 0.3,
-        created TEXT NOT NULL DEFAULT (datetime('now')),
-        saved TEXT
-      );
-      CREATE TABLE IF NOT EXISTS players (
-        name TEXT PRIMARY KEY,
-        state TEXT NOT NULL,
-        seen TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE TABLE IF NOT EXISTS kv (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-    `);
+    this.db = SqliteStore.connect(path);
     this.refresh();
+  }
+
+  /**
+   * Open the file and set it up. A game's rooms each open it, in threads of their own, and wait
+   * for one another's writes (the timeout). Two setting up a new file at once can still find
+   * each other in the way (SQLite then answers "locked" at once rather than wait for a deadlock
+   * to clear): the one turned away tries again a moment later.
+   */
+  private static connect(path: string): DatabaseSync {
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (let attempt = 0; ; attempt++) {
+      const db = new DatabaseSync(path, { timeout: 5000 });
+      try {
+        db.exec(SETUP);
+        return db;
+      } catch (err) {
+        db.close();
+        if (attempt >= 50 || !/locked|busy/i.test(String(err))) throw err;
+        Atomics.wait(pause, 0, 0, 10 + Math.random() * 40);
+      }
+    }
   }
 
   /**
@@ -119,7 +140,8 @@ export class SqliteStore implements Store {
     if (!this.dirty.size) return;
     const set = this.db.prepare(`INSERT INTO kv (key, value, updated) VALUES (?, ?, datetime('now')) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated = excluded.updated`);
     const del = this.db.prepare('DELETE FROM kv WHERE key = ?');
-    this.db.exec('BEGIN');
+    // Taking the write lock up front (rather than on the first write) waits its turn behind other rooms.
+    this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const [k, v] of this.dirty) {
         if (v === undefined) del.run(k);
