@@ -89,10 +89,16 @@ export class Effects implements FxApi {
     this.onBlast?.(at, k);
     const fire = linearColor(opts.color ?? '#ff9a3c');
     const p = this.particles;
-    // White-hot core, a fireball, rising smoke and flying sparks.
-    p.burstColor(at.x, at.y, at.z, [1, 0.95, 0.8], { count: Math.round(10 * k), speed: 2.5 * k, size: 0.5 * k, glow: 2, life: 0.25, drag: 4, gravity: 0, spread: 0.4 * k, up: 0, collide: false });
-    p.burstColor(at.x, at.y, at.z, fire, { count: Math.round(28 * k), speed: 6 * k, size: 0.35 * k, glow: 1.4, life: 0.55, drag: 3.5, gravity: -1, spread: 0.8 * k, up: 0.5, collide: false });
-    p.burstColor(at.x, at.y, at.z, [0.13, 0.12, 0.11], { count: Math.round(18 * k), speed: 2.6 * k, size: 0.5 * k, glow: 0, life: 1.8, drag: 1.8, gravity: -1.5, spread: 1.2 * k, up: 1, collide: false });
+    // White-hot core, a fireball, rising smoke and flying sparks. A bigger blast throws more
+    // puffs, not bigger ones (past 1.2 or so, a square the size of a block reads as cardboard).
+    const n = k > 1 ? k * k : k;
+    const big = (most: number) => Math.min(k, most);
+    p.burstColor(at.x, at.y, at.z, [1, 0.95, 0.8], { count: Math.round(10 * n), speed: 2.5 * k, size: 0.5 * big(1.2), glow: 2, life: 0.25, drag: 4, gravity: 0, spread: 0.4 * k, up: 0, collide: false });
+    p.burstColor(at.x, at.y, at.z, fire, { count: Math.round(28 * n), speed: 6 * k, size: 0.35 * big(1.3), glow: 1.4, life: 0.55, drag: 3.5, gravity: -1, spread: 0.8 * k, up: 0.5, collide: false });
+    const smoke = Math.round(18 * n);
+    const pale = k > 1 ? Math.round(smoke * 0.4) : 0;
+    p.burstColor(at.x, at.y, at.z, [0.13, 0.12, 0.11], { count: smoke - pale, speed: 2.6 * k, size: 0.5 * big(1.1), glow: 0, life: 1.8, drag: 1.8, gravity: -1.5, spread: 1.2 * k, up: 1, collide: false });
+    if (pale) p.burstColor(at.x, at.y, at.z, [0.3, 0.28, 0.25], { count: pale, speed: 3 * k, size: 0.4 * big(1.1), glow: 0, life: 1.4, drag: 2, gravity: -1.2, spread: 1.4 * k, up: 0.8, collide: false });
     p.burstColor(at.x, at.y, at.z, [1, 0.7, 0.3], { count: Math.round(14 * k), speed: 14 * k, size: 0.07, glow: 1.5, life: 1.1, drag: 0.6, gravity: 12, spread: 0.5, up: 2, collide: true });
     if (k >= 2) this.shockwave(at, 2.5 * k, opts.color ?? '#ffb347');
     const cam = this.cameraPos?.();

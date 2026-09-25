@@ -162,9 +162,11 @@ export const LETHALS: Record<string, ThrowableItem> = {
     fuse: 3.2,
     speed: 21,
     lift: 8,
-    physics: { gravity: 24, bounce: 0.3, friction: 0.35, radius: 0.1 },
-    // Lethal within about two and a half blocks, a scratch at five and a half.
-    blast: { radius: 5.5, damage: [165, 18], knockback: 1.2, carve: 1.45 },
+    // It doesn't bounce far off a wall, so it goes off by the wall it was thrown at.
+    physics: { gravity: 24, bounce: 0.18, friction: 0.55, radius: 0.1 },
+    // Lethal within about two and a half blocks, a scratch at five and a half; it blows through a
+    // wall a block thick from a block away.
+    blast: { radius: 5.5, damage: [165, 18], knockback: 1.2, carve: 2.4, size: 2.2 },
     cooldown: 0.9,
     stack: 2,
     sounds: { draw: 'pin', use: 'toss', hit: 'clink' },

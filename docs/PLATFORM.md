@@ -492,8 +492,8 @@ game.items.define('frag', {
   key: 'KeyG',                                  // thrown from whatever's in hand; the wheel skips it
   fuse: 3.2, cook: true,                        // held too long, it goes off in the hand
   speed: 21, lift: 8,                           // blocks a second, lobbed 8 degrees over the view
-  physics: { gravity: 24, bounce: 0.3, friction: 0.35, radius: 0.1 },
-  blast: { radius: 5.5, damage: [165, 18], knockback: 1.2, carve: 1.45 },   // the crater's 1.45 blocks round
+  physics: { gravity: 24, bounce: 0.18, friction: 0.55, radius: 0.1 },     // dies against a wall, stays by it
+  blast: { radius: 5.5, damage: [165, 18], knockback: 1.2, carve: 2.4, size: 2.2 },   // a crater 2.4 blocks round; a big bang
   cooldown: 0.9, stack: 2,
   sounds: { draw: 'pin', use: 'toss', hit: 'clink' },                       // pin, throw, bounce
 });
