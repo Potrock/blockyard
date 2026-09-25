@@ -8,6 +8,7 @@ pub mod cull;
 pub mod entities;
 pub mod entitytex;
 pub mod gen;
+pub mod json;
 pub mod mesher;
 pub mod movers;
 pub mod noise;
@@ -22,6 +23,21 @@ pub mod testutil;
 #[wasm_bindgen]
 pub fn block_registry_json() -> String {
     blocks::registry_json()
+}
+
+/// Use a game's own blocks from now on (in this engine instance): a JSON list of variants (see
+/// `blocks::set_game_blocks`), ids from `game_block_first()` in order; `[]` for none. Call it
+/// before making the generator, mesher or world that should know them. Returns how many; throws
+/// the reason if the list is wrong (the blocks in use don't change then).
+#[wasm_bindgen]
+pub fn set_game_blocks(json: &str) -> Result<u32, JsValue> {
+    blocks::set_game_blocks(json).map(|n| n as u32).map_err(|e| JsValue::from_str(&e))
+}
+
+/// The first id a game's own blocks get; they go up to 254.
+#[wasm_bindgen]
+pub fn game_block_first() -> u32 {
+    blocks::GAME_FIRST as u32
 }
 
 /// Albedo layers followed by material layers (see `texgen`).

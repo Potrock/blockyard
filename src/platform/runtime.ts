@@ -18,12 +18,14 @@ import { worldQuery } from './sim/worldquery';
 import { Models, Skins } from './api/models';
 import { LAYER_CHUNKS, Renderer, type FrameHooks } from './render/pipeline';
 import { Environment } from './render/environment';
-import { BiomeMap, createBlockTextures, createNoiseTexture, type TextureSet } from './render/textures';
+import { BiomeMap, builtinTextures, createBlockTextures, createNoiseTexture, type TextureSet } from './render/textures';
+import { paintGameTextures } from './render/blocktextures';
 import { Particles } from './render/particles';
 import { BlockHighlight } from './render/highlight';
 import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
+import { gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from './world/blocks';
 import { blockIdOf, DEFAULT_TINT, loadRegistry, variant, type Registry } from './world/registry';
 import { Input } from './player/input';
 import { padBindings, padHints, rumble } from './player/gamepad';
@@ -74,6 +76,8 @@ function disposeTree(root: THREE.Object3D) {
 
 interface SaveData {
   edits: string;
+  /** The game's own blocks' keys in id order: the edits are translated by name when they load. */
+  blocks?: string[];
   player: [number, number, number, number, number];
   flying: boolean;
   time: number;
@@ -102,6 +106,8 @@ export class Runtime {
   private pool!: WorkerPool;
   private chunks!: ChunkManager;
   private registry!: Registry;
+  /** The game's own blocks (`def.blocks`). */
+  private blocks!: GameBlocks;
   private textures!: TextureSet;
   private biome!: BiomeMap;
   /** Every listener this game adds goes when it's aborted (switching games). */
@@ -310,7 +316,11 @@ export class Runtime {
     const def = this.def;
     this.title.progress(0.02, 'Compiling WebAssembly engine…');
     const module = await loadEngine();
-    this.registry = loadRegistry();
+    // The game's own blocks (with the ids a server gave them, if it said), before anything that
+    // needs to know them: the registry, the terrain workers, the world.
+    this.blocks = gameBlocks(def, this.server?.welcome.blocks);
+    useGameBlocks(this.blocks);
+    this.registry = loadRegistry(this.blocks);
     if (def.world?.persist) {
       try {
         localStorage.setItem(`voxel.${def.id}.lastSeed`, String(this.seed));
@@ -322,20 +332,29 @@ export class Runtime {
     this.title.progress(0.06, 'Generating textures…');
     const worldCfg = worldGenConfig(def, (b) => this.blockId(b));
     const workers = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 2));
-    const poolPromise = WorkerPool.create(module, this.seed, workers, worldCfg);
+    const poolPromise = WorkerPool.create(module, this.seed, workers, worldCfg, this.blocks.json);
+    // The game's own block textures after the built-in ones (images fetched meanwhile).
+    const own = this.blocks.textures.length ? { ...(await paintGameTextures(this.blocks.textures, builtinTextures(), this.blocks.textureNames)), key: this.blocks.textureKey } : undefined;
 
-    // The renderer and block textures carry over from the previous game, if there was one.
+    // The renderer and block textures carry over from the previous game, if there was one (the
+    // textures only if its own blocks were this one's).
     const c = this.carried;
     if (c) {
       this.renderer = c.renderer;
       this.textures = c.textures;
       this.biome = c.biome;
+      if (c.textures.key !== this.blocks.textureKey) {
+        c.textures.albedo.dispose();
+        c.textures.material.dispose();
+        this.textures = createBlockTextures(this.renderer.gl, own);
+        this.renderer.setTextures(this.textures.albedo, this.textures.material, this.biome.texture);
+      }
     } else {
       const noise = createNoiseTexture();
       const torchLayer = this.registry.byName.get('torch')?.tex[0] ?? 0;
       this.renderer = new Renderer(this.canvas, toRenderSettings(this.settings), noise, torchLayer);
       this.renderer.fxScene.matrixWorldAutoUpdate = true;
-      this.textures = createBlockTextures(this.renderer.gl);
+      this.textures = createBlockTextures(this.renderer.gl, own);
       this.biome = new BiomeMap(this.renderer.gl);
       this.renderer.setTextures(this.textures.albedo, this.textures.material, this.biome.texture);
     }
@@ -969,15 +988,15 @@ export class Runtime {
       save = null;
     }
     if (!save) return null;
-    let edits = new Uint8Array(0);
+    let edits: Uint8Array = new Uint8Array(0);
     try {
-      edits = fromB64(save.edits);
+      edits = remapEdits(fromB64(save.edits), save.blocks, this.blocks);
       this.chunks.world.import_edits(edits);
     } catch {
       // Corrupt edits are ignored.
       edits = new Uint8Array(0);
     }
-    return { edits, player: save.player, flying: save.flying, time: save.time };
+    return { edits, blocks: this.blocks.keys, player: save.player, flying: save.flying, time: save.time };
   }
 
   private save() {
@@ -988,6 +1007,7 @@ export class Runtime {
     // This client's world has every edit the host made (mirrored), loaded or not.
     const data: SaveData = {
       edits: toB64(this.chunks.world.export_edits()),
+      blocks: this.blocks.keys,
       player: [s.x, s.y, s.z, this.view.yaw, this.view.pitch],
       flying: s.flying,
       time: f.time,

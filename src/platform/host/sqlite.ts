@@ -63,12 +63,27 @@ export class SqliteStore implements Store {
       const db = new DatabaseSync(path, { timeout: 5000 });
       try {
         db.exec(SETUP);
+        SqliteStore.migrate(db);
         return db;
       } catch (err) {
         db.close();
         if (attempt >= 50 || !/locked|busy/i.test(String(err))) throw err;
         Atomics.wait(pause, 0, 0, 10 + Math.random() * 40);
       }
+    }
+  }
+
+  /**
+   * Columns added since a file was made: the world's `blocks` (the game's own blocks' keys, JSON).
+   * Another room opening the file at the same moment may add it first.
+   */
+  private static migrate(db: DatabaseSync) {
+    const columns = db.prepare('PRAGMA table_info(world)').all() as { name: string }[];
+    if (columns.some((c) => c.name === 'blocks')) return;
+    try {
+      db.exec('ALTER TABLE world ADD COLUMN blocks TEXT');
+    } catch (err) {
+      if (!/duplicate column/i.test(String(err))) throw err;
     }
   }
 
@@ -100,17 +115,20 @@ export class SqliteStore implements Store {
   }
 
   world(): SavedWorld | null {
-    const row = this.db.prepare('SELECT game, seed, edits, time FROM world WHERE id = 1').get() as { game: string; seed: number; edits: Uint8Array | null; time: number } | undefined;
-    return row ? { game: row.game, seed: row.seed >>> 0, edits: row.edits ? new Uint8Array(row.edits) : null, time: row.time } : null;
+    const row = this.db.prepare('SELECT game, seed, edits, blocks, time FROM world WHERE id = 1').get() as
+      | { game: string; seed: number; edits: Uint8Array | null; blocks: string | null; time: number }
+      | undefined;
+    if (!row) return null;
+    return { game: row.game, seed: row.seed >>> 0, edits: row.edits ? new Uint8Array(row.edits) : null, blocks: row.blocks ? (JSON.parse(row.blocks) as string[]) : null, time: row.time };
   }
 
   saveWorld(w: SavedWorld) {
     this.db
       .prepare(
-        `INSERT INTO world (id, game, seed, edits, time, saved) VALUES (1, ?, ?, ?, ?, datetime('now'))
-         ON CONFLICT (id) DO UPDATE SET seed = excluded.seed, edits = excluded.edits, time = excluded.time, saved = excluded.saved`,
+        `INSERT INTO world (id, game, seed, edits, blocks, time, saved) VALUES (1, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT (id) DO UPDATE SET seed = excluded.seed, edits = excluded.edits, blocks = excluded.blocks, time = excluded.time, saved = excluded.saved`,
       )
-      .run(this.game, w.seed, w.edits, w.time);
+      .run(this.game, w.seed, w.edits, w.blocks?.length ? JSON.stringify(w.blocks) : null, w.time);
   }
 
   player(name: string): SavedPlayer | null {

@@ -6,7 +6,7 @@ The platform is a complete voxel engine: an endless procedural world, lighting, 
 src/games/
   index.ts              the list of registered games
   heart-hunt/index.ts   ~70 lines: the tutorial below
-  sandbox/index.ts      ~17 lines: creative building
+  sandbox/index.ts      ~30 lines: creative building, with a few blocks of its own
   arena/                waves of monsters, weapons, a boss
     index.ts            rules: waves, rewards, win/lose
     content.ts          items, monsters, boss AI
@@ -118,7 +118,7 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant or replaceable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
 
 ### Block shapes and states
 
@@ -132,6 +132,58 @@ bp.set(x + 1, y, z, 'red_bed[facing=east,part=head]');
 ```
 
 `placeBlock` with a plain name turns the block the way a player's hand would: pass `against` (the `raycast` hit being aimed at) and a torch hangs on the side of the block aimed at (or stands on the floor), a slab or stairs take the upper half when aimed at a ceiling or high on a side, a slab aimed at the open side of the same kind of slab fills it in to a full block, and a log lies along the axis aimed along. Stairs climb, and a bed's head points, toward `facing` (or the way `by` is looking). A bed takes its two cells or none. Breaking a block (`breakBlock`, explosions) takes what hangs on it or stands on it with it, and either half of a bed takes the other; each gets its own `blockBreak`. The building kit and Sandbox place this way. `RayHit.point` is where exactly a ray met a block.
+
+### Blocks of your own
+
+A game adds blocks in its definition and uses them by name, like the built-in ones: in blueprints and `world.structures`, `setBlock`, `placeBlock`, `breakBlock`, `blockInfo`, and the creative block picker. They're defined here rather than in `setup` (like `vehicles`) because every player's screen generates its terrain, structures included, and draws it; so each screen has them from the start, on a server too, and saves keep them by name. Sandbox has four:
+
+```ts
+import crate from './blocks/crate.png?url';
+
+const MARBLE = { color: '#d9dcdf', noise: 0.22, scale: 3 };
+
+export default defineGame({
+  id: 'sandbox',
+  // ...
+  blocks: {
+    crate: { texture: crate, hardness: 1.2 },                            // a 16 x 16 PNG on every face
+    marble: { texture: MARBLE },                                          // a colour, mottled
+    marble_slab: { texture: MARBLE, shape: 'slab', full: 'marble' },      // two make a marble block
+    paper_lantern: { texture: { top: { color: '#7a4a24' }, bottom: { color: '#7a4a24' }, side: { color: ['#ffb347', '#ffc061', '#ffa630'], scale: 4 } }, light: 13, glow: 0.8 },
+  },
+});
+```
+
+A texture is one of:
+
+- an image, imported with `?url` (`import crate from './crate.png?url'`): 16 x 16 pixels, or scaled to fit (a tall strip of animation frames shows its top square);
+- a built-in texture by name: `'oak_planks'`, `'glass'`, `'neon_red'`, `'grass_top'` (the names are in `engine/src/blocks.rs`, `tex::NAMES`);
+- a colour, mottled by tiling noise: `{ color: '#8a8f96', noise: 0.25, scale: 3, seed: 2 }` (`noise` 0..1 is how much it varies, default 0.12; `scale` the blotches' size in pixels, default 2). Several colours, `{ color: ['#5b3a1e', '#6e4827', '#82562f'] }`, are picked between by the noise in equal shares, pixel-art style;
+- pixel art: `{ pixels: ['#.#.', '#.#.', '####', '#.#.'], palette: { '#': '#3b3f44' } }`, rows of characters each looked up in the palette (`.` or a character it hasn't got is clear), scaled to 16 x 16;
+- painted by code: `{ paint: (x, y) => (x === y ? '#fff' : null) }`, a colour per pixel (null: clear), row 0 at the top.
+
+Give one texture for every face, or face by face: `{ top, bottom, side }`, or one side (`north`, `south`, `east`, `west`), with `all` for any face not named. Every texture gets a normal map from its brightness (or its noise), so custom blocks catch the light like the built-in ones.
+
+| Option | Default | |
+| --- | --- | --- |
+| `label` | the name in words | its name in the picker and `blockInfo` (`neon_sign` is "Neon Sign") |
+| `like` | | start from a built-in full block or plant, `{ like: 'stone', breakable: false }`: its textures, light and the rest, which anything given changes. `{ like: 'neon_red' }` is that block exactly, textures and all |
+| `shape` | `'cube'` | `'cross'` (two crossed planes, like flowers: walked through, broken at a touch, needs ground under it), `'slab'` (`name[type=top]` is the upper half), `'stairs'` (`name[facing=east,half=top]`); slabs and stairs are placed the way the built-in ones are |
+| `full` | none | a slab's full block, made by placing one slab on another |
+| `transparency` | `'opaque'` | `'cutout'`: light and sight go through the clear pixels (grates, leaves); `'transparent'`: like glass (faces between two of it aren't drawn). A pixel is there or not: half-clear colours show solid |
+| `solid` | `true` (a `cross`, false) | bodies collide with it |
+| `light` | 0 | light it gives off, 0..15 (a torch is 14, glowstone 15) |
+| `glow` | `light / 15` | how much its textures glow, 0..1: lit by themselves at night, and blooming |
+| `tint` | none | multiply its textures by a colour (one grey texture, many colours), or `'grass'`: the biome's grass colour |
+| `picker` | `true` | in the creative block picker |
+| `breakable` | `true` | players and explosions can break it (`blockInfo().breakable`; bedrock and liquids say false) |
+| `hardness` | like stone | seconds to mine it by hand with the building kit (`blockInfo().hardness`) |
+| `replaceable` | `false` (a `cross`, true) | placing a block into its cell replaces it |
+| `sounds` | the platform's | `{ break, place }`: sounds (built-in or `audio.define`d) when it's broken and placed |
+
+A game has room for 68 block variants of its own (a slab is two, stairs are eight), with ids after the built-in ones (187 to 254), in the order they're defined: `world.blockId('crate')` tells you one. Names are lower case, digits and `_`, and not a built-in block's. Ids needn't stay put: a save records the names of the ids it used, so a save outlives definitions that are reordered, added to or taken from (a block no longer defined becomes air), and a server's welcome tells each joining player its ids, so a player whose copy of the game is older still agrees with it (a block their copy hasn't got shows as a magenta "missing" block). Hotbars kept on a server keep them by name too.
+
+Under the hood `world/blocks.ts` turns the definitions into the engine's block variants (`engine.set_game_blocks`, in every engine instance: the host's, the page's, each terrain worker's) and into texture layers after the built-in ones, which `render/blocktextures.ts` paints on each screen (fetching the images). The built-in blocks keep their ids, so no existing world or save changes.
 
 ## Player
 

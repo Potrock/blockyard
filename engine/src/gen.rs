@@ -1104,11 +1104,12 @@ impl Generator {
     fn pack(&self, cx: i32, cz: i32) -> Vec<u8> {
         let mut mask: u16 = 0;
         let mut emit: u16 = 0;
+        let emits = &registry().emit;
         for s in 0..16 {
             let sec = &self.blocks[s * 4096..(s + 1) * 4096];
             if sec.iter().any(|&b| b != AIR) {
                 mask |= 1 << s;
-                if sec.iter().any(|&b| EMIT[b as usize] > 0) {
+                if sec.iter().any(|&b| emits[b as usize] > 0) {
                     emit |= 1 << s;
                 }
             }

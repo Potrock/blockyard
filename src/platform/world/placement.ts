@@ -75,12 +75,13 @@ export function placement(
       return sturdy(x, y - 1, z, 2) ? one(variant(reg, def, { facing: undefined })) : null;
     }
     case 'slab': {
-      // Aimed at a slab of this kind from its open side: fill it in.
+      // Aimed at a slab of this kind from its open side: fill it in (if two make a block: a
+      // game's slab may not).
       const t = a && reg.blocks[a.block];
-      if (a && n && t?.name === def.name && ((t.state.type === 'bottom' && n.y > 0) || (t.state.type === 'top' && n.y < 0))) {
+      if (def.double && a && n && t?.name === def.name && ((t.state.type === 'bottom' && n.y > 0) || (t.state.type === 'top' && n.y < 0))) {
         return { cells: [[a.x, a.y, a.z, def.double]], join: true };
       }
-      if (block(x, y, z)?.name === def.name) return { cells: [[x, y, z, def.double]], join: true };
+      if (def.double && block(x, y, z)?.name === def.name) return { cells: [[x, y, z, def.double]], join: true };
       return exact ? one(def) : one(variant(reg, def, { type: upper() ? 'top' : 'bottom' }));
     }
     case 'stairs':

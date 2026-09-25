@@ -67,6 +67,14 @@ export interface GameDefinition {
    * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
    */
   vehicles?: Record<string, VehicleDefinition>;
+  /**
+   * Blocks of the game's own, by name: `{ crate: { texture: crateUrl }, lamp: { texture: { color:
+   * '#ffd27a' }, light: 15 } }` (see `BlockDefinition`). They're used like the built-in blocks, by
+   * name: `world.setBlock`, `Blueprint`s and `world.structures`, the creative block picker,
+   * `world.blockInfo`; saves keep them by name, and every player gets them. Defined here, not in
+   * `setup`, because each player's screen generates the terrain (structures too) and draws it.
+   */
+  blocks?: Record<string, BlockDefinition>;
   /** How the HUD looks: the health display, health bars over heads, fonts and colours. */
   hud?: HudOptions;
 }
@@ -608,6 +616,104 @@ export interface BlockInfo {
   replaceable: boolean;
   /** Light it gives off, 0..15. */
   light: number;
+  /** Players and explosions can break it (not bedrock, not liquids, not a game block made unbreakable). */
+  breakable: boolean;
+  /** A game's own block: seconds to mine it by hand, if the game gave it (`BlockDefinition.hardness`). */
+  hardness?: number;
+}
+
+/**
+ * A block of the game's own (`GameDefinition.blocks`). A texture (or a built-in block it's
+ * `like`) is all it needs: the rest defaults to a plain solid block, like stone.
+ */
+export interface BlockDefinition {
+  /** Its name for players (the block picker, `blockInfo`). Default: the name in words (`neon_sign` is "Neon Sign"). */
+  label?: string;
+  /**
+   * What it looks like: one texture on every face, or face by face (`{ top, bottom, side }`, see
+   * `BlockFaces`).
+   */
+  texture?: BlockTexture | BlockFaces;
+  /**
+   * Start from a built-in full block or plant (`'glass'`, `'neon_red'`, `'poppy'`): its textures,
+   * shape, light and the rest, which anything given here changes (`{ like: 'stone', breakable:
+   * false }`, `{ like: 'white_wool', tint: '#e0457b' }`).
+   */
+  like?: string;
+  /**
+   * `cube` (default); `cross`: two crossed planes, like flowers (walked through, broken at a
+   * touch, needs ground under it); `slab`: half a block (`name[type=top]` is the upper half);
+   * `stairs` (`name[facing=east,half=top]`). Slabs and stairs are placed the way the built-in ones
+   * are: in the half aimed at, climbing away from whoever places them.
+   */
+  shape?: 'cube' | 'cross' | 'slab' | 'stairs';
+  /** A slab: the block two of them make, one placed on the other (default: they don't join). */
+  full?: string;
+  /**
+   * How light and sight get through: `opaque` (default); `cutout`: through the clear pixels of
+   * its texture (grates, leaves, fences); `transparent`: like glass (clear pixels show through,
+   * and faces between two of it aren't drawn). A pixel is there or not: half-clear colours show
+   * solid.
+   */
+  transparency?: 'opaque' | 'cutout' | 'transparent';
+  /** Bodies collide with it. Default: true (a `cross` plant is walked through). */
+  solid?: boolean;
+  /** Light it gives off, 0..15 (a torch is 14, glowstone 15). Default 0. */
+  light?: number;
+  /**
+   * How much its textures glow, 0..1: lit by themselves in the dark, and blooming (neon, lamps).
+   * Default: `light / 15`, so a lamp looks lit.
+   */
+  glow?: number;
+  /**
+   * Multiply its textures by a colour (`'#e0457b'`: one grey texture, many colours), or by the
+   * grass colour of where it stands (`'grass'`, like grass and leaves).
+   */
+  tint?: string;
+  /** In the creative block picker (games with `player.build`). Default true. */
+  picker?: boolean;
+  /** Players and explosions can break it (`world.breakBlock`, `world.explode`, building). Default true. */
+  breakable?: boolean;
+  /** Seconds to mine it by hand with the `building` kit (`blockInfo().hardness`). Default: like stone. */
+  hardness?: number;
+  /** Placing a block into its cell replaces it (default: only `cross` plants). */
+  replaceable?: boolean;
+  /** Sounds when it's broken and placed (built-in or `audio.define`d). Default: the platform's. */
+  sounds?: { break?: SoundName; place?: SoundName };
+}
+
+/**
+ * One face's texture, 16 x 16 pixels:
+ * - an image: a PNG imported with `?url` (`import crate from './crate.png?url'`); other sizes are
+ *   scaled to fit, and a tall strip (animation frames) shows its top square;
+ * - a built-in block texture by name: `'oak_planks'`, `'glass'`, `'neon_red'`, `'grass_top'`;
+ * - a colour, mottled: `{ color: '#8a8f96', noise: 0.25 }`. `noise` 0..1 (default 0.12) is how
+ *   much it varies, `scale` the size of its blotches in pixels (default 2), `seed` another
+ *   pattern. Several colours (`['#5b3a1e', '#6e4827', '#82562f']`) are picked between by the
+ *   noise, pixel-art style;
+ * - pixel art: 16 rows of 16 characters, each a colour from `palette` (`.` or a character not in
+ *   it is clear);
+ * - painted by code: `paint(x, y)` gives each pixel's colour (`null`: clear), row 0 at the top.
+ */
+export type BlockTexture =
+  | string
+  | { color: string | string[]; noise?: number; scale?: number; seed?: number }
+  | { pixels: string[]; palette: Record<string, string> }
+  | { paint(x: number, y: number): string | null };
+
+/**
+ * A block's textures face by face: `top`, `bottom`, the four `side`s, or one side (`north`,
+ * `south`, `east`, `west`); `all` for any face not given.
+ */
+export interface BlockFaces {
+  all?: BlockTexture;
+  top?: BlockTexture;
+  bottom?: BlockTexture;
+  side?: BlockTexture;
+  north?: BlockTexture;
+  south?: BlockTexture;
+  east?: BlockTexture;
+  west?: BlockTexture;
 }
 
 /** Anything that can be packed into generator data (the `Blueprint` class). */

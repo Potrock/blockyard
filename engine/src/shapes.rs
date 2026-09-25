@@ -13,8 +13,6 @@
 //! - `cover`: which parts of each of the cell's six sides it fills with opaque faces, as a 4x4
 //!   grid, so a neighbour's face against a filled side isn't drawn.
 
-use std::sync::OnceLock;
-
 use crate::blocks::*;
 
 /// A box face that isn't drawn.
@@ -56,9 +54,10 @@ pub struct Shapes {
     pub cover: [[u16; 6]; 256],
 }
 
+/// The shapes of the blocks in use (see `blocks::registry`).
+#[inline(always)]
 pub fn shapes() -> &'static Shapes {
-    static SHAPES: OnceLock<Shapes> = OnceLock::new();
-    SHAPES.get_or_init(build)
+    &registry().shapes
 }
 
 /// The face opposite each face.
@@ -288,15 +287,17 @@ pub fn side_axes(f: usize) -> (usize, usize) {
     }
 }
 
-fn build() -> Shapes {
+/// The shapes of every id's block (`blocks` has all 256; ids from `count` on are unknown, and
+/// fill their cell like stone).
+pub(crate) fn build(blocks: &[Block], count: usize) -> Shapes {
     let mut models = Vec::with_capacity(256);
     let mut cover = [[0u16; 6]; 256];
     for id in 0..256usize {
-        let b = block(id as u8);
-        let m = if id < BLOCK_COUNT { model_of(b) } else { None };
+        let b = &blocks[id];
+        let m = if id < count { model_of(b) } else { None };
         cover[id] = match &m {
             Some(m) => m.cover,
-            None if id >= BLOCK_COUNT || OPAQUE[id] == 1 => [FULL_SIDE; 6],
+            None if id >= count || b.opaque => [FULL_SIDE; 6],
             None => [0; 6],
         };
         models.push(m);

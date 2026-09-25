@@ -8,7 +8,8 @@ import { Sim } from '../sim/sim';
 import type { WorldHost } from '../sim/world';
 import { applyWorldConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
-import { blockIdOf, loadRegistry } from '../world/registry';
+import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from '../world/blocks';
+import { blockIdOf, loadRegistry, type Registry } from '../world/registry';
 import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
 import { PresentState } from './state';
 import { MemoryStore, type SavedPlayer, type Store } from './store';
@@ -152,6 +153,9 @@ export class GameHost {
   readonly seed: number;
   radius: number;
   readonly store: Store;
+  /** The game's own blocks (`def.blocks`): their ids, by key, are what saves and joining players get. */
+  readonly blocks: GameBlocks;
+  private readonly registry: Registry;
   private onError?: (err: unknown) => void;
   private budget: number;
   private events: HostEvent[] = [];
@@ -169,7 +173,10 @@ export class GameHost {
     o: GameHostOptions,
   ) {
     loadEngineSync(o.engine);
-    const registry = loadRegistry();
+    // The game's own blocks, before anything is made that needs to know them.
+    const blocks = (this.blocks = gameBlocks(def));
+    useGameBlocks(blocks);
+    const registry = (this.registry = loadRegistry(blocks));
     const seed = (this.seed = (def.world?.seed ?? o.seed) >>> 0);
     const store = (this.store = o.store ?? new MemoryStore());
     this.onError = o.onError;
@@ -221,10 +228,10 @@ export class GameHost {
     if (o.dayLength && !def.world?.freezeTime) this.sim.env.dayLength = o.dayLength;
     this.sim.setup();
 
-    // A kept world picks up where it was: its builds, its time of day.
+    // A kept world picks up where it was: its builds (the game's own blocks by name), its time of day.
     const kept = this.keeps ? store.world() : null;
     if (kept?.edits && !o.save) {
-      w.import_edits(kept.edits);
+      w.import_edits(remapEdits(kept.edits, kept.blocks ?? undefined, blocks));
       this.sim.env.time = kept.time;
     }
 
@@ -232,7 +239,7 @@ export class GameHost {
     const me = this.sim.local;
     const save = o.save;
     if (save) {
-      w.import_edits(save.edits);
+      w.import_edits(remapEdits(save.edits, save.blocks, blocks));
       const [x, y, z, yaw, pitch] = save.player;
       this.sim.env.time = save.time;
       this.sim.spawn = { x, y, z, yaw };
@@ -285,6 +292,7 @@ export class GameHost {
    * for `command`, `step`'s batches and `disconnect`.
    */
   connect(name?: string): { id: string; player: string | null; batch: HostBatch } {
+    useGameBlocks(this.blocks);
     const client: Client = { player: null, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 };
     let id = `c${this.nextClient++}`;
     if (name !== undefined) {
@@ -314,7 +322,7 @@ export class GameHost {
       this.world.update([was], 4, Infinity);
       this.world.world.set_flying(player.slot, was.flying && player.allowFlight);
       player.place(was.x, was.y, was.z, was.yaw, was.pitch);
-      if (was.hotbar && player.creative) player.creative.hotbar.splice(0, was.hotbar.length, ...was.hotbar);
+      if (was.hotbar && player.creative) player.creative.hotbar.splice(0, was.hotbar.length, ...was.hotbar.map((b) => this.hotbarId(b)));
     }
     client.player = player;
     this.events.push({ t: 'joined', player: player.id, client: id });
@@ -330,6 +338,7 @@ export class GameHost {
   disconnect(id: string) {
     const c = this.clients.get(id);
     if (!c) return;
+    useGameBlocks(this.blocks);
     this.clients.delete(id);
     const p = c.player;
     if (!p) return;
@@ -346,8 +355,21 @@ export class GameHost {
   private keepPlayer(p: PlayerSim) {
     if (!this.keeps || p.vacant) return;
     const s = p.state;
-    const saved: SavedPlayer = { x: s.x, y: s.y, z: s.z, yaw: p.yaw, pitch: p.pitch, flying: s.flying, hotbar: p.creative ? [...p.creative.hotbar] : undefined };
+    // The game's own blocks in the hotbar are kept by name: their ids follow the definitions.
+    const first = firstGameBlock();
+    const hotbar = p.creative?.hotbar.map((id) => (id >= first ? (this.registry.blocks[id]?.key ?? id) : id));
+    const saved: SavedPlayer = { x: s.x, y: s.y, z: s.z, yaw: p.yaw, pitch: p.pitch, flying: s.flying, hotbar };
     this.store.savePlayer(p.name, saved);
+  }
+
+  /** A kept hotbar slot's block: an id, or a game block's key (stone if it's no longer defined). */
+  private hotbarId(b: number | string): number {
+    if (typeof b === 'number') return b;
+    try {
+      return blockIdOf(this.registry, b);
+    } catch {
+      return 1;
+    }
   }
 
   /**
@@ -356,8 +378,9 @@ export class GameHost {
    * it stops.
    */
   persist() {
+    useGameBlocks(this.blocks);
     const w = this.world.world;
-    this.store.saveWorld({ game: this.def.id, seed: this.seed, edits: this.keeps ? w.export_edits() : null, time: this.sim.env.time });
+    this.store.saveWorld({ game: this.def.id, seed: this.seed, edits: this.keeps ? w.export_edits() : null, blocks: this.blocks.keys, time: this.sim.env.time });
     for (const c of this.clients.values()) if (c.player) this.keepPlayer(c.player);
     this.store.flush();
   }
@@ -371,6 +394,7 @@ export class GameHost {
   command(id: string, c: ClientCommand) {
     const client = this.clients.get(id);
     if (!client) return;
+    useGameBlocks(this.blocks);
     this.acting = id;
     this.guard(() => this.run(id, client, c));
     this.acting = undefined;
@@ -381,6 +405,8 @@ export class GameHost {
    * calls for everyone and for them, their replies, the rest, and the frame.
    */
   step(dt: number, running = true): Map<string, HostBatch> {
+    // (Hosts sharing a thread, a test server's rooms, each run with their own blocks.)
+    useGameBlocks(this.blocks);
     const sim = this.sim;
     this.guard(() => {
       this.world.update(

@@ -559,7 +559,7 @@ export class Sim {
           const id = world.get_block(x, y, z);
           if (id === 0 || id === 255) continue;
           const def = this.registry.blocks[id];
-          if (!def || def.name === 'bedrock' || def.shape === 'liquid') continue;
+          if (!def || !def.breakable || def.shape === 'liquid') continue;
           if (opts.filter && !opts.filter({ x, y, z }, def.name)) continue;
           cells.push([x, y, z, 0]);
           removed.push([x, y, z, id]);
@@ -593,11 +593,12 @@ export class Sim {
     const id = world.get_block(x, y, z);
     if (id === 0 || id === 255) return false;
     const def = this.registry.blocks[id];
-    if (!def || def.name === 'bedrock' || def.shape === 'liquid') return false;
+    if (!def || !def.breakable || def.shape === 'liquid') return false;
     const loose = dependents(this.registry, x, y, z, id, (a, b, c) => world.get_block(a, b, c)).map(([a, b, c]) => [a, b, c, world.get_block(a, b, c)]);
     if (!this.host.edit(x, y, z, 0)) return false;
     this.debris(x, y, z, id);
-    this.ctx.audio.play('hit', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.45, pitch: 1.6 });
+    if (def.sounds?.break) this.ctx.audio.play(def.sounds.break, { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 } });
+    else this.ctx.audio.play('hit', { at: { x: x + 0.5, y: y + 0.5, z: z + 0.5 }, volume: 0.45, pitch: 1.6 });
     this.emit('blockBreak', { x, y, z, block: def.name, by });
     for (const [a, b, c, was] of loose) {
       if (!this.host.edit(a, b, c, 0)) continue;
@@ -636,8 +637,10 @@ export class Sim {
       if (!this.host.edit(cx, cy, cz, cid)) return false;
       this.emit('blockPlace', { x: cx, y: cy, z: cz, block: reg.blocks[cid].name, by });
     }
-    const [cx, cy, cz] = plan.cells[0];
-    this.ctx.audio.play('click', { at: { x: cx + 0.5, y: cy + 0.5, z: cz + 0.5 }, volume: 0.5, pitch: 0.7 });
+    const [cx, cy, cz, cid] = plan.cells[0];
+    const sound = reg.blocks[cid]?.sounds?.place;
+    if (sound) this.ctx.audio.play(sound, { at: { x: cx + 0.5, y: cy + 0.5, z: cz + 0.5 } });
+    else this.ctx.audio.play('click', { at: { x: cx + 0.5, y: cy + 0.5, z: cz + 0.5 }, volume: 0.5, pitch: 0.7 });
     return true;
   }
 
@@ -699,7 +702,7 @@ export class Sim {
             return null;
           }
           return d
-            ? { id: d.id, name: d.name, label: d.label, state: d.state, variant: d.key, solid: d.solid, liquid: d.shape === 'liquid', plant: d.small, replaceable: d.replaceable, light: d.emit }
+            ? { id: d.id, name: d.name, label: d.label, state: d.state, variant: d.key, solid: d.solid, liquid: d.shape === 'liquid', plant: d.small, replaceable: d.replaceable, light: d.emit, breakable: d.breakable, ...(d.hardness !== undefined && { hardness: d.hardness }) }
             : null;
         },
         seaLevel: engine.sea_level(),
