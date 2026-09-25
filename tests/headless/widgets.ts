@@ -145,6 +145,18 @@ function hosting() {
   step();
   check(calls(ann.id, 'widget').length === 1, 'set after a restart puts it up again, whole');
 
+  // The first player's place, left and taken again by someone who watched first: their screen is
+  // new, so the widget comes whole, not as a change to what the last one there had.
+  host.sim.local.api.hud.widget('shop', { item: 'sword' });
+  step();
+  host.disconnect(ann.id);
+  const eve = host.connect();
+  host.command(eve.id, { t: 'start', name: 'Eve' });
+  check(host.sim.local.name === 'Eve', `Eve took the first place: ${host.sim.local.name}`);
+  host.sim.local.api.hud.widget('shop', { item: 'sword' });
+  step();
+  check(calls(eve.id, 'widget').length === 1 && calls(eve.id, 'widgetSet').length === 0, `Eve gets the shop whole: ${calls(eve.id).map((c) => c.method)}`);
+
   // Everything crosses a socket as it is.
   for (const b of last.values()) decode<HostBatch>(encode(b));
   const call: PresentCall = { to: null, target: 'hud', method: 'widgetSet', args: ['score', { a: [1, 'x', null], b: { c: true } }] };
