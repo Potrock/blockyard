@@ -174,6 +174,8 @@ export interface ShooterBots {
   update(dt: number, frozen?: boolean): void;
   /** What a bot has in mind. */
   mind(bot: Player): BotMind | null;
+  /** A noise worth looking into (an explosion, a door) at `at`, made by `by`: bots in earshot go to see. Gunshots they hear by themselves. */
+  hear(at: Vec3, by?: Player | null): void;
   /** Stop listening to the game's events (shots, hits). */
   dispose(): void;
 }
@@ -335,13 +337,22 @@ class Brains implements ShooterBots {
     b.bot.controls.look(b.yaw, 0);
   }
 
-  /** Someone fired: bots in earshot turn toward it. */
-  private heardShot(shooter: Player, at: Vec3) {
+  hear(at: Vec3, by: Player | null = null) {
+    this.noise(at, at, by);
+  }
+
+  /** Someone fired: bots in earshot turn toward the shooter. */
+  private heardShot(shooter: Player, from: Vec3) {
+    this.noise(from, shooter.position, shooter);
+  }
+
+  /** A noise at `from`: bots in earshot (not whoever made it) go to see, at `at`. */
+  private noise(from: Vec3, at: Vec3, by: Player | null) {
     const now = this.game.clock.now;
     for (const b of this.brains.values()) {
-      if (b.bot === shooter || !b.bot.alive) continue;
+      if (b.bot === by || !b.bot.alive) continue;
       const p = b.bot.position;
-      if (Math.hypot(p.x - at.x, p.z - at.z) < this.senses.hearing) b.heard = { at: { ...shooter.position }, t: now };
+      if (Math.hypot(p.x - from.x, p.z - from.z) < this.senses.hearing) b.heard = { at: { ...at }, t: now };
     }
   }
 

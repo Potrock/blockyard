@@ -216,6 +216,8 @@ class Grid implements NavGrid {
           if (p) this.add(x, y, z, p);
         }
     for (const c of this.list) c.edges = this.link(c);
+    // Built again: paths planned on the old grid are worth planning again.
+    if (this.built) this.opened++;
     this.built = true;
     return true;
   }
