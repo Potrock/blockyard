@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { h } from './dom';
-import type { HudApi, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3 } from '../api/types';
+import type { FeedPart, HudApi, HudTheme, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3 } from '../api/types';
 import type { AnchorRef, RadarWire } from '../net/protocol';
 
 interface Marker {
@@ -30,11 +30,27 @@ interface FloatingNumber {
   vy: number;
 }
 
+/** `Scoreboard` on the wire: rows name their player by id. */
+export interface ScoreboardWire {
+  title?: string;
+  columns: string[];
+  rows: { name: string; values: (string | number)[]; color?: string; player?: string }[];
+  footer?: string;
+  show?: boolean;
+}
+
+/** A hit from somewhere: an arrow at the screen's edge pointing to it, fading. */
+interface HurtArrow {
+  el: HTMLElement;
+  from: THREE.Vector3;
+  age: number;
+}
+
 /**
  * Game-facing HUD widgets layered over the base HUD. (Markers and the radar take anchors as they
  * come over the wire, and place what they follow every frame with `locate`.)
  */
-export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
+export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> {
   readonly root: HTMLElement;
   private hearts: HTMLElement;
   private heartEls: HTMLElement[] = [];
@@ -80,6 +96,21 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
   private radarPos = new THREE.Vector3();
   private radarCenter = new THREE.Vector3();
   private screens: HTMLElement[] = [];
+  private popEl: HTMLElement;
+  private popTimer = 0;
+  private boardEl: HTMLElement;
+  private board: ScoreboardWire | null = null;
+  private boardHeld = false;
+  /** Whose screen this is (their scoreboard row is highlighted). */
+  player: string | null = null;
+  private hurts: HurtArrow[] = [];
+  private healthStyle: 'hearts' | 'bar' | 'none' = 'hearts';
+  private barEl: HTMLElement;
+  private barFill: HTMLElement;
+  private barLag: HTMLElement;
+  private barText: HTMLElement;
+  private ammoEl: HTMLElement;
+  private ammoKey = '';
   /** An open menu's key listener, removed when it closes, however it closes. */
   private unhooks = new Map<HTMLElement, () => void>();
 
@@ -100,6 +131,16 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
     this.markersEl = h('div.markers');
     this.radarCanvas = h('canvas.radar', { width: 150, height: 150 }) as HTMLCanvasElement;
     this.radarCanvas.style.display = 'none';
+    this.popEl = h('div.hud-pop');
+    this.boardEl = h('div.scoreboard');
+    this.boardEl.style.display = 'none';
+    this.barFill = h('div.healthbar-fill');
+    this.barLag = h('div.healthbar-lag');
+    this.barText = h('span.healthbar-text');
+    this.barEl = h('div.healthbar', {}, h('div.healthbar-track', {}, this.barLag, this.barFill), this.barText);
+    this.barEl.style.display = 'none';
+    this.ammoEl = h('div.ammo');
+    this.ammoEl.style.display = 'none';
     this.root = h(
       'div.gamehud',
       {},
@@ -116,6 +157,10 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
       this.progressEl,
       this.metersEl,
       this.radarCanvas,
+      this.popEl,
+      this.barEl,
+      this.ammoEl,
+      this.boardEl,
     );
     parent.append(this.root);
     this.boss.style.display = 'none';
@@ -125,8 +170,16 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
     this.root.style.display = v ? '' : 'none';
   }
 
-  /** Hearts: health in half-hearts. Hidden when max is 0 (damage disabled). */
+  /** How the player's own health shows (the game's `hud.health`). */
+  setHealthStyle(style: 'hearts' | 'bar' | 'none') {
+    this.healthStyle = style;
+    this.hearts.style.display = style === 'hearts' && this.lastMax > 0 ? '' : 'none';
+    this.barEl.style.display = style === 'bar' && this.lastMax > 0 ? '' : 'none';
+  }
+
+  /** Hearts (or a bar): health in half-hearts. Hidden when max is 0 (damage disabled). */
   setHealth(health: number, max: number) {
+    if (this.healthStyle !== 'hearts') return this.setHealthBar(health, max);
     const hp = Math.max(0, Math.ceil(health));
     if (hp === this.lastHealth && max === this.lastMax) return;
     const damaged = hp < this.lastHealth;
@@ -160,6 +213,104 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
       void this.hearts.offsetWidth;
       this.hearts.classList.add('shake');
     }
+  }
+
+  /** The health bar: the fill drops at once, a lighter trail follows it down; the number beside it. */
+  private setHealthBar(health: number, max: number) {
+    const hp = Math.max(0, Math.ceil(health));
+    if (hp === this.lastHealth && max === this.lastMax) return;
+    const damaged = hp < this.lastHealth;
+    this.lastHealth = hp;
+    this.lastMax = max;
+    this.hearts.style.display = 'none';
+    this.barEl.style.display = this.healthStyle === 'bar' && max > 0 ? '' : 'none';
+    if (max <= 0) return;
+    const f = `${Math.max(0, Math.min(1, hp / max)) * 100}%`;
+    this.barFill.style.width = f;
+    this.barLag.style.width = f;
+    this.barText.textContent = String(hp);
+    this.barEl.classList.toggle('low', hp <= max * 0.3);
+    if (damaged) {
+      this.barEl.classList.remove('hit');
+      void this.barEl.offsetWidth;
+      this.barEl.classList.add('hit');
+    }
+  }
+
+  /** The held gun's rounds (bottom right): the magazine big, the spare beside it; null hides it. */
+  ammo(a: { mag: number; reserve: number; size: number; name: string; reloading: boolean } | null) {
+    const key = a ? `${a.mag}|${a.reserve}|${a.size}|${a.name}|${a.reloading}` : '';
+    if (key === this.ammoKey) return;
+    const prev = this.ammoKey.split('|');
+    this.ammoKey = key;
+    this.ammoEl.style.display = a ? '' : 'none';
+    if (!a) return;
+    // One pip per round in the magazine (up to a drum's worth), spent ones hollow.
+    const pips = Math.min(a.size, 40);
+    const bullets = h('div.ammo-pips');
+    for (let i = 0; i < pips; i++) bullets.append(h(`span.ammo-pip${i < Math.round((a.mag / a.size) * pips) ? '' : '.spent'}`));
+    const note = a.reloading ? h('div.ammo-reload', {}, 'RELOADING') : a.mag === 0 && a.reserve === 0 ? h('div.ammo-reload.out', {}, 'NO AMMO') : a.mag <= Math.ceil(a.size * 0.25) ? h('div.ammo-reload.low', {}, 'RELOAD') : null;
+    this.ammoEl.replaceChildren(
+      ...[h('div.ammo-name', {}, a.name), h('div.ammo-count', {}, h('span.ammo-mag', {}, String(a.mag)), h('span.ammo-sep', {}, '/'), h('span.ammo-reserve', {}, String(a.reserve))), bullets, note].filter((x): x is HTMLElement => x !== null),
+    );
+    this.ammoEl.classList.toggle('low', a.mag <= Math.ceil(a.size * 0.25));
+    if (prev[0] !== undefined && Number(prev[0]) > a.mag) {
+      this.ammoEl.classList.remove('fired');
+      void this.ammoEl.offsetWidth;
+      this.ammoEl.classList.add('fired');
+    }
+  }
+
+  /** A short pop-up under the crosshair ("+100", "Headshot!"). */
+  pop(text: string, opts: { color?: string; big?: boolean; sub?: string } = {}) {
+    this.popEl.replaceChildren(h('div.hud-pop-text', { style: opts.color ? { color: opts.color } : {} }, text));
+    if (opts.sub) this.popEl.append(h('div.hud-pop-sub', {}, opts.sub));
+    this.popEl.className = `hud-pop${opts.big ? ' big' : ''}`;
+    void this.popEl.offsetWidth;
+    this.popEl.classList.add('show');
+    window.clearTimeout(this.popTimer);
+    this.popTimer = window.setTimeout(() => this.popEl.classList.remove('show'), opts.big ? 1800 : 1100);
+  }
+
+  /** The scoreboard: shown while Tab is held (see `holdScoreboard`), or kept up (`show`). */
+  scoreboard(b: ScoreboardWire | null) {
+    this.board = b;
+    this.renderBoard();
+  }
+
+  /** Tab went down or up. */
+  holdScoreboard(held: boolean) {
+    if (held === this.boardHeld) return;
+    this.boardHeld = held;
+    this.renderBoard();
+  }
+
+  private renderBoard() {
+    const b = this.board;
+    const show = !!b && (this.boardHeld || !!b.show);
+    this.boardEl.style.display = show ? '' : 'none';
+    if (!b || !show) return;
+    const head = h('tr', {}, h('th.sb-rank', {}, '#'), h('th.sb-name', {}, 'Name'), ...b.columns.map((c) => h('th', {}, c)));
+    const rows = b.rows.map((r, i) =>
+      h(
+        `tr${r.player && r.player === this.player ? '.me' : ''}`,
+        {},
+        h('td.sb-rank', {}, String(i + 1)),
+        h('td.sb-name', { style: r.color ? { color: r.color } : {} }, r.name),
+        ...r.values.map((v) => h('td', {}, String(v))),
+      ),
+    );
+    this.boardEl.replaceChildren(h('table.sb-table', {}, h('thead', {}, head), h('tbody', {}, ...rows)));
+    if (b.title) this.boardEl.prepend(h('div.sb-title', {}, b.title));
+    if (b.footer) this.boardEl.append(h('div.sb-footer', {}, b.footer));
+  }
+
+  /** Hit from `from` (a world point): an arrow on the screen's edge pointing to it. */
+  hurtFrom(from: Vec3) {
+    const el = h('div.hurt-arrow');
+    this.root.append(el);
+    this.hurts.push({ el, from: new THREE.Vector3(from.x, from.y, from.z), age: 0 });
+    while (this.hurts.length > 6) this.hurts.shift()!.el.remove();
   }
 
   banner(title: string, subtitle?: string, opts: { duration?: number; color?: string } = {}) {
@@ -242,9 +393,16 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
     }
     m.at = at;
     m.opts = opts;
-    m.el.className = `marker ${opts.shape ?? 'box'}${opts.pulse ? ' pulse' : ''}`;
+    const cls = `marker ${opts.shape ?? 'box'}${opts.pulse ? ' pulse' : ''}${opts.bar !== undefined ? ' has-bar' : ''}`;
+    if (m.el.className !== cls) m.el.className = cls;
     m.el.style.setProperty('--c', opts.color ?? '#ff5a4f');
-    m.label.textContent = opts.label ?? '';
+    if (m.label.textContent !== (opts.label ?? '')) m.label.textContent = opts.label ?? '';
+    if (opts.bar !== undefined) {
+      let bar = m.el.querySelector('.marker-bar') as HTMLElement | null;
+      if (!bar) m.el.append((bar = h('div.marker-bar', {}, h('div.marker-bar-fill'))));
+      (bar.firstElementChild as HTMLElement).style.width = `${Math.max(0, Math.min(1, opts.bar)) * 100}%`;
+      bar.classList.toggle('low', opts.bar < 0.35);
+    }
   }
 
   crosshair(visible: boolean) {
@@ -382,8 +540,19 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
     this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), 1800);
   }
 
-  feed(text: string, opts: { color?: string } = {}) {
-    const line = h('div.feed-line', {}, text);
+  feed(text: string | FeedPart[], opts: { color?: string } = {}) {
+    const parts = typeof text === 'string' ? [text] : text;
+    const line = h(
+      'div.feed-line',
+      {},
+      ...parts.map((p) =>
+        typeof p === 'string'
+          ? h('span', {}, p)
+          : 'icon' in p
+            ? h(`img.feed-icon${typeof p.icon === 'object' && 'gltf' in p.icon && p.icon.view === 'side' ? '.wide' : ''}`, { src: this.iconFor(p.icon), alt: '' })
+            : h('span', { style: p.color ? { color: p.color } : {} }, p.text),
+      ),
+    );
     if (opts.color) line.style.color = opts.color;
     this.feedEl.append(line);
     while (this.feedEl.childElementCount > 6) this.feedEl.firstElementChild!.remove();
@@ -532,11 +701,13 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
     el.style.opacity = '0';
   }
 
-  hitMarker(crit: boolean) {
-    this.hitEl.classList.remove('show', 'crit');
+  /** A hit landed (`true`: a critical or head hit; `'kill'`: it killed). */
+  hitMarker(kind: boolean | 'kill') {
+    this.hitEl.classList.remove('show', 'crit', 'kill');
     void this.hitEl.offsetWidth;
     this.hitEl.classList.add('show');
-    if (crit) this.hitEl.classList.add('crit');
+    if (kind === 'kill') this.hitEl.classList.add('kill');
+    else if (kind) this.hitEl.classList.add('crit');
   }
 
   damageNumber(pos: THREE.Vector3, amount: number, crit: boolean, color?: string) {
@@ -549,6 +720,25 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
   /** Per frame: project floating numbers and markers. */
   update(dt: number, camera: THREE.Camera, width: number, height: number) {
     if (this.markers.size) this.placeMarkers(camera, width, height);
+    if (this.hurts.length) {
+      // Each arrow points from the screen's middle toward where the hit came from, seen from above.
+      const fwd = this.tmp.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      const yaw = Math.atan2(-fwd.x, -fwd.z);
+      for (let i = this.hurts.length - 1; i >= 0; i--) {
+        const a = this.hurts[i];
+        a.age += dt;
+        if (a.age > 1.6) {
+          a.el.remove();
+          this.hurts.splice(i, 1);
+          continue;
+        }
+        const dx = a.from.x - camera.position.x;
+        const dz = a.from.z - camera.position.z;
+        const ang = Math.atan2(-dx, -dz) - yaw;
+        a.el.style.transform = `translate(-50%, -50%) rotate(${-ang}rad) translateY(-min(22vh, 180px))`;
+        a.el.style.opacity = String(Math.min(1, (1.6 - a.age) / 0.6));
+      }
+    }
     if (this.radarLive && this.radarData) this.drawRadar(this.radarData);
     for (let i = this.numbers.length - 1; i >= 0; i--) {
       const n = this.numbers[i];
@@ -589,6 +779,47 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar'> {
     this.highlight(null);
     for (const n of this.numbers) n.el.remove();
     this.numbers = [];
+    this.scoreboard(null);
+    this.ammo(null);
+    for (const a of this.hurts) a.el.remove();
+    this.hurts = [];
+    this.popEl.classList.remove('show');
     this.closeScreens();
   }
+}
+
+/**
+ * A game's HUD theme (`hud.theme`): fonts and colours as CSS variables on the HUD, menus and
+ * result screens, the fonts fetched from Google Fonts, and the comic look as a class.
+ */
+export function applyTheme(ui: HTMLElement, theme: HudTheme | undefined): () => void {
+  if (!theme) return () => {};
+  const links: HTMLLinkElement[] = [];
+  if (theme.fonts?.length) {
+    const families = theme.fonts.map((f) => `family=${encodeURIComponent(f).replace(/%20/g, '+')}:wght@400;700`).join('&');
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css2?${families}&display=swap`;
+    document.head.append(link);
+    links.push(link);
+  }
+  const c = theme.colors ?? {};
+  const vars: Record<string, string | undefined> = {
+    '--hud-display': theme.display,
+    '--hud-text': theme.text,
+    '--hud-accent': c.accent,
+    '--hud-ink': c.ink,
+    '--hud-paper': c.paper,
+    '--hud-fg': c.text,
+    '--hud-danger': c.danger,
+    '--hud-good': c.good,
+  };
+  for (const [k, v] of Object.entries(vars)) if (v) ui.style.setProperty(k, v);
+  ui.classList.add('hud-themed');
+  if (theme.comic) ui.classList.add('hud-comic');
+  return () => {
+    for (const k of Object.keys(vars)) ui.style.removeProperty(k);
+    ui.classList.remove('hud-themed', 'hud-comic');
+    for (const l of links) l.remove();
+  };
 }

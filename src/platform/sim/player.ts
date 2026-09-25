@@ -1,15 +1,17 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, OrbitOptions, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
-import { IDLE_INPUT } from '../net/protocol';
-import { Combat } from './combat';
+import type { Bot, BotControls, CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, OrbitOptions, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
+import { IDLE_INPUT, type PlayerInput } from '../net/protocol';
+import { Combat, type ShotWire } from './combat';
+import { moveMods, type Stance } from './guns';
+import type { BulletHit } from './hitscan';
 import type { EntitySim } from './entities';
 import { PlayerHealth } from './health';
 import { SimInput } from './input';
 import { Inventory, type ItemSim } from './items';
 import type { Presentation } from './present';
 import type { CreativeBuild } from './creative';
-import { freshMemory, stepMovement, type MoveMemory } from './movement';
+import { freshMemory, resolveMovement, stepMovement, type MoveMemory, type MoveTune } from './movement';
 import type { PropState } from './props';
 import { VehicleSim } from './vehicle';
 
@@ -35,6 +37,12 @@ export interface PlayerFrame {
   bob: number;
   sneaking: boolean;
   sprinting: boolean;
+  /** Sliding (`movement.slide`). */
+  sliding: boolean;
+  /** Their movement speed multiplier (`player.speed`): prediction moves them the same. */
+  speed: number;
+  /** A bot (`game.bots`), not a person. */
+  bot: boolean;
   /** Where the simulation last turned them (it counts up each time: `teleport` with a view, spawn). */
   view: { seq: number; yaw: number; pitch: number };
   health: number;
@@ -46,8 +54,11 @@ export interface PlayerFrame {
   deathTime: number;
   /** The items hotbar (item games). */
   hotbar: { slots: (ItemStack | null)[]; selected: number } | null;
-  /** The held weapon: bow draw, and melee readiness 0..1. */
-  hand: { drawing: boolean; charge: number; strength: number };
+  /**
+   * The held weapon: bow draw, melee readiness 0..1, and a held gun's rounds, reload (seconds
+   * left, -1 when not reloading), its last shot's serial and how far it's aimed down the sights.
+   */
+  hand: { drawing: boolean; charge: number; strength: number; gun?: { mag: number; reserve: number; reload: number; serial: number; aim: number } };
   /**
    * The game's camera (`controller: 'none'`), or, `follow`ing, the vehicle's (the client works it
    * out from the vehicle's state, every frame).
@@ -99,6 +110,8 @@ export interface PlayerSimParts {
   items: ItemSim;
   /** Props by id (what they ride). */
   props: { byId(id: number): Prop | null };
+  /** Guns: a bullet's path from this player (see `castBullet`). */
+  bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player): BulletHit;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
 }
@@ -119,6 +132,13 @@ export class PlayerSim {
   allowFlight: boolean;
   sneaking = false;
   sprinting = false;
+  sliding = false;
+  /** Movement speed multiplier (`player.speed`). */
+  speedMul = 1;
+  /** How they move (the game's `player.movement`). */
+  readonly tune: MoveTune;
+  /** A bot's controls (`game.bots`); null for a person. */
+  bot: BotControlsImpl | null = null;
   readonly state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: false, inWater: false, eyesInWater: false, inLava: false, flying: false, bob: 0, frozen: false, ride: 0, rideX: 0, rideY: 0, rideZ: 0 };
   readonly input = new SimInput();
   readonly inventory: Inventory;
@@ -162,6 +182,8 @@ export class PlayerSim {
     this.walker = (o.controller ?? 'walk') === 'walk';
     this.itemMode = this.walker && (o.hotbar ?? (o.build ? 'blocks' : 'items')) === 'items';
     this.allowFlight = o.fly ?? false;
+    this.tune = resolveMovement(o.movement);
+    p.world.player_tune(this.slot, new Float64Array(this.tune.params));
     const present = p.present;
     this.inventory = new Inventory(p.items.defs);
     this.health = new PlayerHealth(
@@ -172,7 +194,10 @@ export class PlayerSim {
       p.emit,
       () => this.position,
       () => this.api,
-      () => present.send(this.id, 'view', 'kick', [0.6]),
+      (from) => {
+        present.send(this.id, 'view', 'kick', [0.6]);
+        if (from) present.send(this.id, 'hud', 'hurtFrom', [{ x: from.x, y: from.y, z: from.z }]);
+      },
     );
     this.health.configure(o);
     const me = this;
@@ -191,10 +216,32 @@ export class PlayerSim {
         get look() {
           return me.look;
         },
+        get yaw() {
+          return me.yaw;
+        },
+        get pitch() {
+          return me.pitch;
+        },
         get falling() {
           const s = me.state;
           return !s.onGround && s.vy < -1 && !s.inWater;
         },
+        get onGround() {
+          return me.state.onGround;
+        },
+        get moving() {
+          const s = me.state;
+          return Math.hypot(s.vx, s.vz) / Math.max(1, me.tune.params[0]);
+        },
+        get stance(): Stance {
+          return me.sliding ? 2 : me.sneaking ? 1 : 0;
+        },
+        bullet: (from, dir, range, seen) => p.bullet(from, dir, range, seen, me.api),
+        shotSeen: (shot: ShotWire, sound: string, at: Vec3) => {
+          present.send(null, 'client', 'shot', [shot], this.id);
+          present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z } }], this.id);
+        },
+        emit: (k, e) => p.emit(k, e),
         view: (method, power) => {
           if (method === 'swing' || method === 'use') this.swings++;
           present.send(this.id, 'view', method, [power ?? 1]);
@@ -202,7 +249,7 @@ export class PlayerSim {
         audio: present.audio(this.id),
         fx: present.fx(this.id),
         hud: present.hud(this.id),
-        hitMarker: (crit) => present.send(this.id, 'hud', 'hitMarker', [crit]),
+        hitMarker: (kind) => present.send(this.id, 'hud', 'hitMarker', [kind]),
       },
       present.fx(null),
       p.ctx,
@@ -267,6 +314,8 @@ export class PlayerSim {
     this.ack = -1;
     this.lead = 0;
     this.swings = 0;
+    this.speedMul = 1;
+    this.sliding = false;
     this.memory = freshMemory();
     this.input.set(IDLE_INPUT);
     this.place(x, y, z, yaw);
@@ -315,10 +364,13 @@ export class PlayerSim {
       this.yaw = inp.yaw;
       this.pitch = inp.pitch;
     }
-    const { sneak, sprint } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt);
+    const held = this.inventory.held;
+    const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul);
+    const { sneak, sprint, slide } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods);
     this.syncState();
     this.sneaking = sneak;
-    this.sprinting = sprint && Math.hypot(this.state.vx, this.state.vz) > 4.5;
+    this.sliding = slide;
+    this.sprinting = sprint && Math.hypot(this.state.vx, this.state.vz) > Math.min(4.5, this.tune.params[0] * 1.02);
   }
 
   /**
@@ -365,6 +417,7 @@ export class PlayerSim {
     const c = this.combat;
     const q = this.cam.quat;
     const p = this.cam.pos;
+    const g = c.heldGun();
     return {
       id: this.id,
       name: this.name,
@@ -382,6 +435,9 @@ export class PlayerSim {
       bob: s.bob,
       sneaking: this.sneaking,
       sprinting: this.sprinting,
+      sliding: this.sliding,
+      speed: this.speedMul,
+      bot: !!this.bot,
       view: { seq: this.viewSeq, yaw: this.yaw, pitch: this.pitch },
       health: h.health,
       maxHealth: h.max,
@@ -389,7 +445,9 @@ export class PlayerSim {
       dead: h.dead,
       deathTime: h.deathTime,
       hotbar: this.itemMode ? { slots: this.inventory.slots.map((st) => (st ? { ...st } : null)), selected: this.inventory.selected } : null,
-      hand: { drawing: c.isDrawing, charge: c.charge, strength: c.strength },
+      hand: g
+        ? { drawing: false, charge: 0, strength: 1, gun: { mag: g.state.mag, reserve: g.state.reserve, reload: g.state.reload, serial: g.state.serial, aim: g.state.aim } }
+        : { drawing: c.isDrawing, charge: c.charge, strength: c.strength },
       camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov, follow: this.followVehicle && !!this.vehicle },
       vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
@@ -567,6 +625,99 @@ export class PlayerSim {
       get riding() {
         return me.state.ride ? me.p.props.byId(me.state.ride) : null;
       },
+      get bot() {
+        return !!me.bot;
+      },
+      get crouching() {
+        return me.sneaking;
+      },
+      get sliding() {
+        return me.sliding;
+      },
+      get aiming() {
+        return (me.combat.heldGun()?.state.aim ?? 0) > 0.5;
+      },
+      get speed() {
+        return me.speedMul;
+      },
+      set speed(v: number) {
+        me.speedMul = Math.max(0, Math.min(5, Number.isFinite(v) ? v : 1));
+      },
+      protect: (seconds) => this.health.protect(seconds),
     };
   }
 }
+
+/**
+ * A bot's keyboard and mouse (`game.bots`): what the game's code holds, presses and aims each
+ * tick becomes the bot's `PlayerInput`, read like anyone's.
+ */
+export class BotControlsImpl implements BotControls {
+  private keys = new Set<string>();
+  private pressedKeys = new Set<string>();
+  private held = 0;
+  private clicks = 0;
+  yaw = 0;
+  pitch = 0;
+
+  constructor(private eye: () => Vec3) {}
+
+  hold(code: string, down = true) {
+    if (down) this.keys.add(code);
+    else this.keys.delete(code);
+  }
+
+  press(code: string) {
+    this.pressedKeys.add(code);
+  }
+
+  button(b: number, down = true) {
+    if (down) this.held |= 1 << b;
+    else this.held &= ~(1 << b);
+  }
+
+  click(b: number) {
+    this.clicks |= 1 << b;
+    this.held |= 0;
+  }
+
+  look(yaw: number, pitch: number) {
+    this.yaw = yaw;
+    this.pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, pitch));
+  }
+
+  lookAt(point: Vec3) {
+    const e = this.eye();
+    const dx = point.x - e.x;
+    const dy = point.y - e.y;
+    const dz = point.z - e.z;
+    this.look(Math.atan2(-dx, -dz), Math.atan2(dy, Math.hypot(dx, dz)));
+  }
+
+  release() {
+    this.keys.clear();
+    this.held = 0;
+  }
+
+  /** This tick's controls; presses and clicks are used up. `viewSeq` keeps the look theirs. */
+  snapshot(active: boolean, viewSeq: number): PlayerInput {
+    const i: PlayerInput = {
+      active,
+      down: [...this.keys],
+      pressed: [...this.pressedKeys],
+      buttons: this.held | this.clicks,
+      clicked: this.clicks,
+      mouseX: 0,
+      mouseY: 0,
+      wheel: 0,
+      yaw: this.yaw,
+      pitch: this.pitch,
+      viewSeq,
+    };
+    this.pressedKeys.clear();
+    this.clicks = 0;
+    return i;
+  }
+}
+
+export type { Bot };

@@ -4,6 +4,7 @@ import { DEFAULT_TINT } from '../world/registry';
 import type { HeldModelSpec, HoldSpec, HoldStyle, ViewAnimation, ViewKey, ViewModelApi } from '../api/types';
 import { boxGeometry, type EntityGraphics } from './entities';
 import { itemFaces } from './blockmodel';
+import type { ItemPoint } from '../client/gltf';
 
 /**
  * First-person view model, built from Minecraft's own transforms: the arm is posed exactly like
@@ -142,7 +143,48 @@ const STYLES: Record<HoldStyle, StyleDef> = {
   block: { rotation: [0, 45, 0], scale: 0.4, grip: [8, 16], translation: [0, 0, 0], use: 'swing' },
   // Two hands on the shaft, aimed at the crosshair (see `polearmRest`).
   polearm: { rotation: [0, 0, 0], scale: 0.85, grip: [8, 8], translation: [0, 0, 0], use: 'jab' },
+  // Two hands on a gun: at the hip, up to the eye, across the chest (see `gunRest`).
+  gun: { rotation: [0, 0, 0], scale: 0.62, grip: [8, 8], translation: [0, 0, 0], use: 'fire' },
 };
+
+/**
+ * A gun's poses (camera space, right hand): at the hip (the fist low at the right, the barrel
+ * converging on the crosshair far ahead, canted a little), compact guns (pistols) nearer the
+ * middle, sprinting (swung down and across the chest) and aiming down the sights (the sight on
+ * the eye line, `ads` blocks ahead). Forearms run from each fist toward its elbow.
+ */
+const GUN = {
+  fist: [0.25, -0.27, -0.55] as V3,
+  compactFist: [0.15, -0.22, -0.47] as V3,
+  aimAt: [0, -0.02, -14] as V3,
+  roll: -0.07,
+  sprint: { yaw: 0.8, pitch: -0.5, roll: -0.45, move: [-0.08, -0.06, 0.08] as V3 },
+  slide: { roll: 0.35, move: [-0.04, -0.03, 0.02] as V3 },
+  ads: 0.2,
+  scopeAds: 0.3,
+  forearm: [0.32, -0.74, 0.6] as V3,
+  forearm2: [-0.52, -0.72, 0.48] as V3,
+  adsForearm: [0.22, -0.64, 0.74] as V3,
+  adsForearm2: [-0.4, -0.72, 0.56] as V3,
+  /** Blocks of camera-space kick back and degrees of rise per unit of recoil. */
+  kick: 0.075,
+  rise: 7,
+};
+
+/** What the runtime tells the view model about the gun in hand, each frame. */
+export interface GunView {
+  /** Aimed down the sights 0..1, sprinting 0..1, sliding 0..1. */
+  aim: number;
+  sprint: number;
+  slide: number;
+  /** Reload progress 0..1, or -1; a shotgun's rounds go in one at a time (`shells`, how many are going in). */
+  reload: number;
+  shells: number;
+  /** What aiming looks through: a scope hides the gun once it's up. */
+  sight: 'iron' | 'dot' | 'scope';
+  /** Worked after each shot. */
+  action?: 'pump' | 'bolt';
+}
 
 /** Java's first-person item point (`applyItemArmTransform`) and bow display. */
 const HAND_POINT: V3 = [0.56, -0.52, -0.72];
@@ -333,6 +375,80 @@ function polearmRest(d: StyleDef, model: HeldModelSpec | undefined, side: number
   out.grip2.copy(front);
   out.arm2Offset.copy(front).addScaledVector(f2, (4.5 / 16) * POLE.hand * POLE.stretch);
   out.twoHanded = true;
+}
+
+/** A gun's marked points (its own space, blocks): where the hands go, the muzzle, the sight, the magazine. */
+interface GunPoints {
+  grip: THREE.Vector3;
+  grip2: THREE.Vector3;
+  muzzle: THREE.Vector3;
+  sight: THREE.Vector3;
+  mag: THREE.Vector3;
+}
+
+const _qa = new THREE.Quaternion();
+const _qb = new THREE.Quaternion();
+const _qc = new THREE.Quaternion();
+const _fa = new THREE.Vector3();
+const _fb = new THREE.Vector3();
+const _fc = new THREE.Vector3();
+
+/** An item turned to point along `axis` (its +z), upright (its +y as near up as it goes), then rolled about the axis. */
+function aimBasis(axis: THREE.Vector3, roll: number, out: THREE.Quaternion): THREE.Quaternion {
+  const up = _s.set(0, 1, 0).addScaledVector(axis, -axis.y).normalize().applyAxisAngle(axis, roll);
+  _m.makeBasis(_v.crossVectors(up, axis), up, axis);
+  return out.setFromRotationMatrix(_m);
+}
+
+/** A gun has the whole of a pistol's length or less ahead of the hand: held nearer the middle. */
+const isCompact = (pts: GunPoints) => pts.muzzle.z - pts.grip.z < 11 / 16;
+
+/**
+ * Two hands on a gun, blending its poses: at the hip, swung across the chest to sprint, leaning
+ * into a slide, and up to the eye with the sight on the eye line to aim down the sights.
+ */
+function gunRest(pts: GunPoints, hold: HoldSpec, side: number, drop: number, gv: GunView, out: Rest) {
+  const S = STYLES.gun.scale * (hold.scale ?? 1);
+  const f0 = isCompact(pts) ? GUN.compactFist : GUN.fist;
+  // At the hip.
+  const fistH = _fa.set(side * f0[0], f0[1], f0[2]);
+  const axis = _fb.set(side * GUN.aimAt[0], GUN.aimAt[1], GUN.aimAt[2]).sub(fistH).normalize();
+  const qH = aimBasis(axis, side * GUN.roll, _qa);
+  // Sprinting: swung down and across.
+  const sp = GUN.sprint;
+  const qS = _qb.setFromEuler(new THREE.Euler(sp.pitch, side * sp.yaw, side * sp.roll, 'YXZ')).multiply(qH);
+  // Aiming down the sights: dead ahead, the sight on the eye line.
+  const qA = aimBasis(_fc.set(0, 0, -1), 0, _qc);
+  const k = gv.sprint * (1 - gv.aim);
+  const a = gv.aim * gv.aim * (3 - 2 * gv.aim);
+  out.itemRot.copy(qH).slerp(qS, k);
+  const sl = gv.slide * (1 - gv.aim);
+  if (sl > 0) out.itemRot.premultiply(new THREE.Quaternion().setFromAxisAngle(Z, side * GUN.slide.roll * sl));
+  out.itemRot.slerp(qA, a);
+  const sightCam = new THREE.Vector3().subVectors(pts.sight, pts.grip).multiplyScalar(S).applyQuaternion(qA);
+  const dist = gv.sight === 'scope' ? GUN.scopeAds : GUN.ads;
+  const fistA = new THREE.Vector3(0, 0, -dist).sub(sightCam);
+  out.grip
+    .copy(fistH)
+    .add(_v.set(side * sp.move[0], sp.move[1], sp.move[2]).multiplyScalar(k))
+    .add(_v.set(side * GUN.slide.move[0], GUN.slide.move[1], GUN.slide.move[2]).multiplyScalar(sl))
+    .lerp(fistA, a);
+  out.grip.y -= drop;
+  out.itemScale = S;
+  out.gripLocal.copy(pts.grip);
+  out.itemOffset.set(0, 0, 0);
+  out.axis.set(0, 0, 1).applyQuaternion(out.itemRot);
+  // Forearms: the firing hand's from the grip, the other's from the handguard (or the pistol's grip).
+  const fr = _v.set(side * GUN.forearm[0], GUN.forearm[1], GUN.forearm[2]).lerp(_s.set(side * GUN.adsForearm[0], GUN.adsForearm[1], GUN.adsForearm[2]), a).normalize();
+  forearmDir(fr.clone(), out.axis, out.armRot);
+  out.armScale = S;
+  out.armStretch = 1;
+  out.armOffset.copy(fr).multiplyScalar(((4.5 + 1.8) / 16) * S);
+  out.twoHanded = true;
+  out.grip2.subVectors(pts.grip2, pts.grip).multiplyScalar(S).applyQuaternion(out.itemRot);
+  const fl = _v.set(side * GUN.forearm2[0], GUN.forearm2[1], GUN.forearm2[2]).lerp(_s.set(side * GUN.adsForearm2[0], GUN.adsForearm2[1], GUN.adsForearm2[2]), a).normalize();
+  forearmDir(fl.clone(), out.axis, out.arm2Rot);
+  out.arm2Offset.copy(out.grip2).addScaledVector(fl, ((4.5 + 1.8) / 16) * S);
 }
 
 /** Default actions for 3D models (sprites use Minecraft's swing). */
@@ -670,6 +786,8 @@ export interface ViewInput {
   down: boolean;
   /** Melee readiness 0..1 (Minecraft's attack strength): the item dips after a hit and rises as it recovers. */
   strength: number;
+  /** The gun in hand (the `gun` hold style). */
+  gun?: GunView;
 }
 
 interface HeldSprite {
@@ -679,6 +797,8 @@ interface HeldSprite {
   emissive: THREE.Texture;
   hold: HoldSpec;
   style: HoldStyle;
+  /** Points the model marks (guns: grip2, muzzle, sight, mag), in its own space. */
+  points?: Partial<Record<ItemPoint, THREE.Vector3>>;
 }
 interface HeldBlock {
   kind: 'block';
@@ -750,6 +870,20 @@ export class ViewModel implements ViewModelApi {
   private drop = 0;
   private tmpQ = new THREE.Quaternion();
 
+  // --- guns ---
+  /** The held gun's points (its own space, blocks). */
+  private gunPts: GunPoints | null = null;
+  /** The hands on a gun (palms and fingers, in the gun's own space, so they move with it). */
+  private gunHands = new THREE.Group();
+  private gunHand2 = new THREE.Group();
+  /** Springs: the kick back and the muzzle rise after a shot. */
+  private recoil = { z: 0, vz: 0, r: 0, vr: 0, roll: 0, vroll: 0 };
+  /** Working a pump or bolt after a shot: seconds in, or -1. */
+  private cycleT = -1;
+  private flash: THREE.Mesh;
+  private flashT = 0;
+  private lastGun: GunView | null = null;
+
   constructor(albedo: THREE.Texture, material: THREE.Texture, private graphics: EntityGraphics) {
     const blockUniforms = {
       uAlbedo: { value: albedo },
@@ -787,6 +921,17 @@ export class ViewModel implements ViewModelApi {
       m.visible = false;
     }
     this.arm.visible = !!this.skin;
+    this.flash = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ map: flashTexture(), color: new THREE.Color(7, 5, 2.4), blending: THREE.AdditiveBlending, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    this.flash.visible = false;
+    this.flash.frustumCulled = false;
+    this.flash.renderOrder = 10;
+    this.spriteMesh.add(this.gunHands);
+    this.gunHands.visible = false;
+    this.gunHands.add(this.gunHand2);
+    this.spriteMesh.add(this.flash);
   }
 
   private makeSpriteMaterial(side: THREE.Side) {
@@ -842,8 +987,9 @@ export class ViewModel implements ViewModelApi {
 
   // --- runtime-facing ----------------------------------------------------------------------
 
-  /** The held item's own action: swing, drink, loose a bow, place a block, punch. */
+  /** The held item's own action: swing, drink, loose a bow, place a block, punch, fire. */
   use(power = 1) {
+    if (this.holdingGun) return this.fire(power);
     let anim: string | ViewAnimation;
     if (this.held.kind === 'sprite') anim = this.hold.use ?? ((this.hold.model && MODEL_USE[this.held.style]) || STYLES[this.held.style].use);
     else if (this.held.kind === 'block') anim = 'swing';
@@ -856,11 +1002,37 @@ export class ViewModel implements ViewModelApi {
     this.play(this.held.kind === 'empty' ? 'punch' : 'swing', { power });
   }
 
-  /** Hold an extruded sprite item. */
-  setItem(geometry: THREE.BufferGeometry, albedo: THREE.Texture, emissive: THREE.Texture, hold: HoldSpec, fallback: HoldStyle) {
+  /** Hold an extruded sprite item, or a model (with the points it marks: a gun's muzzle and sight). */
+  setItem(geometry: THREE.BufferGeometry, albedo: THREE.Texture, emissive: THREE.Texture, hold: HoldSpec, fallback: HoldStyle, points?: Partial<Record<ItemPoint, THREE.Vector3>>) {
     const target = this.pending ?? this.held;
     if (target.kind === 'sprite' && target.geometry === geometry) return;
-    this.pending = { kind: 'sprite', geometry, albedo, emissive, hold, style: hold.style ?? fallback };
+    this.pending = { kind: 'sprite', geometry, albedo, emissive, hold, style: hold.style ?? fallback, points };
+  }
+
+  /** A gun went off: the kick, the rise, the flash (and then its pump or bolt, if it has one). */
+  fire(power = 1) {
+    if (this.styleName !== 'gun') return;
+    const aim = this.lastGun?.aim ?? 0;
+    const k = power * (1 - 0.55 * aim);
+    this.recoil.vz += 7 * k;
+    this.recoil.vr += 9 * k;
+    this.recoil.vroll += (Math.random() - 0.5) * 6 * k;
+    this.flashT = 0.055;
+    this.flash.rotation.z = Math.random() * Math.PI * 2;
+    if (this.lastGun?.action) this.cycleT = 0;
+  }
+
+  /** The held gun's muzzle, in the view's own (camera) space, as drawn this frame; false without a gun. */
+  muzzle(out: THREE.Vector3): boolean {
+    if (this.styleName !== 'gun' || !this.gunPts || this.held.kind !== 'sprite') return false;
+    this.spriteMesh.updateWorldMatrix(true, false);
+    out.copy(this.gunPts.muzzle).applyMatrix4(this.spriteMesh.matrixWorld);
+    return true;
+  }
+
+  /** A gun is in hand (posed as one). */
+  get holdingGun(): boolean {
+    return this.styleName === 'gun' && this.held.kind === 'sprite';
   }
 
   /** Swap the geometry immediately (bow draw frames). */
@@ -954,14 +1126,74 @@ export class ViewModel implements ViewModelApi {
     if (!this.skin) return;
     const a = this.graphics.atlas(this.skin.atlas);
     const [u, v] = this.skin.uv;
+    // Holding a gun: just the sleeve (the hands are on the gun, see `buildGunHands`).
+    const sleeve = this.styleName === 'gun';
     const box = (mirror: boolean) =>
-      boxGeometry({ name: 'arm', size: [4, 12, 4], uv: [u + 40, v + 16], pivot: [0, 0, 0], offset: [0, 0, 0], mirror }, a.width, a.height);
+      boxGeometry({ name: 'arm', size: [4, sleeve ? 9 : 12, 4], uv: [u + 40, v + 16], pivot: [0, 0, 0], offset: [0, 0, 0], mirror }, a.width, a.height);
     if (!this.arm.geometry.userData.shared) this.arm.geometry.dispose();
     this.arm.geometry = box(this.armSide < 0);
     if (!this.arm2.geometry.userData.shared) this.arm2.geometry.dispose();
     this.arm2.geometry = box(this.armSide > 0);
     this.armMaterial.uniforms.uAtlas.value = a.albedo;
     this.armMaterial.uniforms.uEmissive.value = a.emissive;
+    this.buildGunHands();
+  }
+
+  /**
+   * The hands around a gun, in its own space (so they go wherever it goes): a palm on the grip
+   * with a finger on the trigger and a thumb along the side, and the other palm under the
+   * handguard with its fingers wrapped round (a pistol's cups the grip). Made of the skin's hand.
+   */
+  private buildGunHands() {
+    for (const c of [...this.gunHands.children, ...this.gunHand2.children]) {
+      if (c === this.gunHand2) continue;
+      c.removeFromParent();
+      (c as THREE.Mesh).geometry?.dispose();
+    }
+    const pts = this.gunPts;
+    this.gunHands.visible = !!pts && this.styleName === 'gun' && !!this.skin && !this.armLook;
+    if (!pts || !this.skin || this.armLook) return;
+    const a = this.graphics.atlas(this.skin.atlas);
+    const [u, v] = this.skin.uv;
+    // One texel of the hand (the right arm's front, near the bottom): skin-coloured boxes.
+    const tu = (u + 45.5) / a.width;
+    const tv = (v + 30.5) / a.height;
+    const px = 1 / 16;
+    const box = (parent: THREE.Object3D, size: V3, at: THREE.Vector3, rx = 0, ry = 0) => {
+      const g = new THREE.BoxGeometry(size[0] * px, size[1] * px, size[2] * px);
+      const uv = g.attributes.uv as THREE.BufferAttribute;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, tu, tv);
+      const m = new THREE.Mesh(g, this.armMaterial);
+      m.position.copy(at);
+      m.rotation.set(rx, ry, 0);
+      m.frustumCulled = false;
+      parent.add(m);
+    };
+    const g = pts.grip;
+    const P = (x: number, y: number, z: number) => new THREE.Vector3(g.x + x * px, g.y + y * px, g.z + z * px);
+    // Firing hand: palm round the raked grip, trigger finger, thumb up the near side.
+    box(this.gunHands, [3.4, 4.4, 3.6], P(0, -0.4, -0.3), 0.26);
+    box(this.gunHands, [1.1, 1.1, 2.4], P(0.2, 1.5, 2.1));
+    box(this.gunHands, [1.1, 3.4, 1.4], P(0, -0.6, 2.0), 0.26);
+    box(this.gunHands, [1.1, 1.1, 2.8], P(1.9, 1.6, 0.7));
+    // Support hand, placed at grip2 (moved there each frame: a reload takes it away).
+    const hw = this.halfWidthAt(pts.grip2.z);
+    if (isCompact(pts)) {
+      box(this.gunHand2, [3.6, 3.6, 3.6], new THREE.Vector3(0, -0.2 * px, 0));
+      box(this.gunHand2, [1.1, 1.1, 3.0], new THREE.Vector3(2.0 * px, 1.3 * px, 0.6 * px));
+    } else {
+      box(this.gunHand2, [3.6, 2.4, 4.2], new THREE.Vector3(0, -1.0 * px, 0));
+      box(this.gunHand2, [1.1, 2.6, 4.0], new THREE.Vector3(hw + 0.6 * px, 0.6 * px, 0));
+      box(this.gunHand2, [1.1, 1.2, 3.0], new THREE.Vector3(-hw - 0.6 * px, 0.8 * px, 0.3 * px));
+    }
+  }
+
+  /** How far the held gun's sides are from its middle at a point along it (for fingers wrapped round the handguard). */
+  private halfWidthAt(z: number): number {
+    const pos = this.spriteMesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    let w = 0;
+    if (pos) for (let i = 0; i < pos.count; i++) if (Math.abs(pos.getZ(i) - z) < 1.5 / 16) w = Math.max(w, Math.abs(pos.getX(i)));
+    return w > 0 ? w : 1.2 / 16;
   }
 
   private apply(h: Held) {
@@ -1002,7 +1234,26 @@ export class ViewModel implements ViewModelApi {
       };
     }
     this.side = (this.hold.hand ?? 'right') === 'left' ? -1 : 1;
-    if (this.side !== this.armSide) {
+    // A gun's points: marked on its model, else from its spec (pixels), else guessed from its size.
+    const wasGun = this.gunPts !== null;
+    this.gunPts = null;
+    if (this.styleName === 'gun' && h.kind === 'sprite') {
+      const m = h.hold.model;
+      const px = (p?: [number, number, number]) => p && new THREE.Vector3(p[0] / 16, p[1] / 16, p[2] / 16);
+      const box = new THREE.Box3().setFromBufferAttribute(h.geometry.getAttribute('position') as THREE.BufferAttribute);
+      const grip = px(m?.grip) ?? h.points?.grip?.clone() ?? new THREE.Vector3();
+      this.gunPts = {
+        grip,
+        grip2: px(m?.grip2) ?? h.points?.grip2?.clone() ?? new THREE.Vector3(grip.x, grip.y + 0.5 / 16, (grip.z + box.max.z) / 2),
+        muzzle: px(m?.muzzle) ?? h.points?.muzzle?.clone() ?? new THREE.Vector3(grip.x, box.max.y - 1 / 16, box.max.z),
+        sight: px(m?.sight) ?? h.points?.sight?.clone() ?? new THREE.Vector3(grip.x, box.max.y + 0.5 / 16, grip.z),
+        mag: px(m?.mag) ?? h.points?.mag?.clone() ?? new THREE.Vector3(grip.x, box.min.y + 1 / 16, grip.z + 3 / 16),
+      };
+      this.flash.position.copy(this.gunPts.muzzle);
+    }
+    this.flash.visible = false;
+    this.cycleT = -1;
+    if (this.side !== this.armSide || wasGun !== (this.gunPts !== null) || this.gunPts) {
       this.armSide = this.side;
       this.buildArm();
     }
@@ -1031,9 +1282,116 @@ export class ViewModel implements ViewModelApi {
     fit(r.grip2.clone(), off2, this.arm2.quaternion, this.arm2.position, r.grip.clone().add(r.grip2));
   }
 
+  /**
+   * A gun's own motion on top of its pose: the support hand leaving for the magazine on a reload
+   * (or feeding shells one by one), working a pump, the gun tipped to show its magazine side.
+   */
+  private gunMotion(dt: number, gv: GunView, r: Rest) {
+    const pts = this.gunPts!;
+    const S = r.itemScale;
+    const smooth = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+    // Where the support hand is, in the gun's space.
+    const hand = _fa.copy(pts.grip2);
+    let tip = 0;
+    let jolt = 0;
+    if (gv.reload >= 0) {
+      const p = gv.reload;
+      tip = smooth(p / 0.14) * smooth((1 - p) / 0.16);
+      const mag = pts.mag;
+      const below = _fb.copy(mag).add(_fc.set(0.02, -0.7, -0.15));
+      if (gv.shells > 0) {
+        // Round by round: to the loading port, push, back.
+        const n = Math.max(1, gv.shells);
+        const q = Math.min(0.999, Math.max(0, (p - 0.1) / 0.8)) * n;
+        const f = q - Math.floor(q);
+        const push = f < 0.5 ? smooth(f / 0.5) : 1 - smooth((f - 0.5) / 0.5);
+        const at = _v.copy(mag).add(_s.set(0, -0.28 + push * 0.22, -0.05));
+        hand.lerp(at, smooth(p / 0.1) * smooth((1 - p) / 0.1));
+        jolt = f > 0.45 && f < 0.6 ? 1 : 0;
+      } else {
+        const keys: [number, THREE.Vector3][] = [
+          [0, pts.grip2],
+          [0.15, mag],
+          [0.3, below],
+          [0.48, below],
+          [0.64, mag],
+          [0.8, pts.grip2],
+          [1, pts.grip2],
+        ];
+        let i = 1;
+        while (i < keys.length - 1 && keys[i][0] < p) i++;
+        const [t0, a] = keys[i - 1];
+        const [t1, b] = keys[i];
+        hand.copy(a).lerp(b, smooth((p - t0) / Math.max(1e-3, t1 - t0)));
+        jolt = p > 0.62 && p < 0.7 ? 1 : 0;
+      }
+    }
+    // A pump: back and forward along the gun; a bolt: the gun rolls over to work it.
+    let roll = 0;
+    if (this.cycleT >= 0) {
+      this.cycleT += dt;
+      const t = (this.cycleT - 0.08) / 0.42;
+      if (t >= 1) this.cycleT = -1;
+      else if (t > 0) {
+        const k = Math.sin(t * Math.PI);
+        if (gv.action === 'pump') hand.z -= (3 / 16) * k;
+        else roll = 0.5 * k;
+      }
+    }
+    this.gunHand2.position.copy(hand);
+    // The support forearm follows its hand.
+    const moved = _fb.subVectors(hand, pts.grip2).multiplyScalar(S).applyQuaternion(r.itemRot);
+    r.grip2.add(moved);
+    r.arm2Offset.add(moved);
+    // Tipped to the side to show the magazine going in (less when aiming).
+    const k = tip * (1 - 0.5 * gv.aim);
+    if (k > 0 || roll > 0) {
+      const q = new THREE.Quaternion().setFromAxisAngle(r.axis, (0.55 * k + roll) * this.side);
+      q.multiply(new THREE.Quaternion().setFromAxisAngle(X, 0.28 * k + jolt * 0.05));
+      r.itemRot.premultiply(q);
+      r.grip2.applyQuaternion(q);
+      r.arm2Offset.applyQuaternion(q);
+      r.grip.add(_fc.set(-0.02 * this.side, -0.05, 0.03).multiplyScalar(k));
+    }
+  }
+
+  /** After the hand is placed: recoil springs, the muzzle flash, hiding it all behind a scope. */
+  private gunAfter(dt: number, input: ViewInput) {
+    const gv = input.gun;
+    const rc = this.recoil;
+    rc.vz += (-rc.z * 420 - rc.vz * 26) * dt;
+    rc.z += rc.vz * dt;
+    rc.vr += (-rc.r * 300 - rc.vr * 22) * dt;
+    rc.r += rc.vr * dt;
+    rc.vroll += (-rc.roll * 300 - rc.vroll * 22) * dt;
+    rc.roll += rc.vroll * dt;
+    this.hand.position.z += rc.z * GUN.kick;
+    this.hand.position.y += rc.r * 0.01;
+    this.hand.quaternion.premultiply(_qa.setFromEuler(new THREE.Euler(rc.r * GUN.rise * DEG, 0, rc.roll * DEG * 4)));
+    this.flashT = Math.max(0, this.flashT - dt);
+    this.flash.visible = this.flashT > 0;
+    if (this.flash.visible) this.flash.scale.setScalar((0.34 + Math.random() * 0.12) / Math.max(0.1, this.rest.itemScale));
+    // Through a scope, the gun is out of the way.
+    this.root.visible = this.apiVisible && !(gv?.sight === 'scope' && gv.aim > 0.9);
+    this.gunHands.visible = !!this.skin && !this.armLook;
+    // The view model's own lens narrows a little when aiming, so the sights fill more of it.
+    const fov = 70 - 12 * (gv?.aim ?? 0);
+    if (Math.abs(this.camera.fov - fov) > 0.01) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
   update(rawDt: number, input: ViewInput) {
     const dt = rawDt * this.timeScale;
     this.time += dt;
+    if (this.styleName !== 'gun') {
+      this.root.visible = this.apiVisible;
+      if (this.camera.fov !== 70) {
+        this.camera.fov = 70;
+        this.camera.updateProjectionMatrix();
+      }
+    }
     this.camera.aspect = input.aspect;
     this.camera.updateProjectionMatrix();
     const l = this.side;
@@ -1059,6 +1417,10 @@ export class ViewModel implements ViewModelApi {
         bowRest(l, this.drop, true, Math.min(1, this.draw), this.restDrawn);
         blendRest(r, this.restDrawn, this.drawBlend * this.drawBlend * (3 - 2 * this.drawBlend));
       }
+    } else if (this.styleName === 'gun' && this.gunPts && input.gun) {
+      this.lastGun = input.gun;
+      gunRest(this.gunPts, this.hold, l, this.drop, input.gun, r);
+      this.gunMotion(dt, input.gun, r);
     } else if (this.styleName === 'polearm' && this.style) {
       polearmRest(this.style, this.hold.model, l, this.drop, r);
     } else if (this.hold.model && this.style && this.styleName && MODEL_GRIPS[this.styleName]) {
@@ -1107,11 +1469,13 @@ export class ViewModel implements ViewModelApi {
       this.arm2.scale.set(r.armScale, r.armScale * r.armStretch, r.armScale);
     }
     // During an animation, forearms turn toward where their elbows were at rest (3D models).
-    if (this.hold.model && (this.playing || this.fadeT < 1) && this.held.kind !== 'empty') this.reach(r);
+    if (this.hold.model && (this.playing || this.fadeT < 1) && this.held.kind !== 'empty' && this.styleName !== 'gun') this.reach(r);
+    if (this.styleName === 'gun' && this.gunPts) this.gunAfter(dt, input);
 
     // Procedural motion: breathing, walk bob, look sway, landing dip, recoil.
-    const breathe = Math.sin(this.time * 1.7);
-    const bob = input.bobAmount;
+    const steady = this.styleName === 'gun' ? 1 - 0.85 * (input.gun?.aim ?? 0) : 1;
+    const breathe = Math.sin(this.time * 1.7) * steady;
+    const bob = input.bobAmount * steady * (this.styleName === 'gun' ? 1.25 : 1);
     if (Number.isNaN(this.lastYaw)) {
       this.lastYaw = input.yaw;
       this.lastPitch = input.pitch;
@@ -1122,8 +1486,8 @@ export class ViewModel implements ViewModelApi {
     this.lastYaw = input.yaw;
     this.lastPitch = input.pitch;
     if (rawDt > 0) {
-      const tx = THREE.MathUtils.clamp((-dyaw / rawDt) * 0.015, -0.07, 0.07);
-      const ty = THREE.MathUtils.clamp((-dpitch / rawDt) * 0.015, -0.06, 0.06);
+      const tx = THREE.MathUtils.clamp((-dyaw / rawDt) * 0.015 * steady, -0.07, 0.07);
+      const ty = THREE.MathUtils.clamp((-dpitch / rawDt) * 0.015 * steady, -0.06, 0.06);
       const k = Math.min(1, rawDt * 12);
       this.sway.x += (tx - this.sway.x) * k;
       this.sway.y += (ty - this.sway.y) * k;
@@ -1143,4 +1507,32 @@ export class ViewModel implements ViewModelApi {
     );
     pyr(this.sway.y + this.dip * 0.2 + this.kickA * 0.15, this.sway.x, this.sway.x * 0.5 + Math.sin(input.bobPhase) * 0.02 * bob, this.root.quaternion);
   }
+}
+
+let flashTex: THREE.Texture | null = null;
+
+/** A muzzle flash: a hot core with spikes, white to orange (drawn additively). */
+function flashTexture(): THREE.Texture {
+  if (flashTex) return flashTex;
+  const n = 64;
+  const px = new Uint8Array(n * n * 4);
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const dx = (x + 0.5) / n - 0.5;
+      const dy = (y + 0.5) / n - 0.5;
+      const r = Math.hypot(dx, dy) * 2;
+      const a = Math.atan2(dy, dx);
+      const spikes = Math.pow(Math.max(0, Math.cos(a * 4)), 18) * Math.max(0, 1 - r) * 1.2 + Math.pow(Math.max(0, Math.cos(a * 4 + Math.PI / 4)), 30) * Math.max(0, 1 - r * 1.3);
+      const core = Math.pow(Math.max(0, 1 - r * 1.9), 1.6);
+      const v = Math.min(1, core + spikes);
+      const i = (y * n + x) * 4;
+      px[i] = 255 * Math.min(1, v * 1.2);
+      px[i + 1] = 255 * Math.min(1, v * (0.55 + core * 0.45));
+      px[i + 2] = 255 * Math.min(1, v * core * 0.9);
+      px[i + 3] = 255 * v;
+    }
+  const t = new THREE.DataTexture(px, n, n, THREE.RGBAFormat);
+  t.needsUpdate = true;
+  flashTex = t;
+  return t;
 }

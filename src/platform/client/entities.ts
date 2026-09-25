@@ -82,7 +82,7 @@ export class EntityView {
         this.scene.add(model.root);
         v = {
           model,
-          anim: { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0 },
+          anim: { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0 },
           yaw: f.yaw,
           attacks: f.attacks,
           probeTimer: Math.random() * 0.2,
@@ -104,6 +104,16 @@ export class EntityView {
       this.shown.delete(id);
     }
     this.syncShots(projectiles);
+  }
+
+  /** The muzzle of the gun in a figure's hand, where it's drawn now; false if it holds none. */
+  muzzle(id: number, out: THREE.Vector3): boolean {
+    const m = this.shown.get(id)?.heldMesh;
+    const p = m?.userData.muzzle as THREE.Vector3 | undefined;
+    if (!m || !p || !m.parent) return false;
+    m.updateWorldMatrix(true, false);
+    out.copy(p).applyMatrix4(m.matrixWorld);
+    return true;
   }
 
   /** Where an entity is drawn now (its feet), plus `offset`; false if it isn't drawn. */
@@ -135,6 +145,9 @@ export class EntityView {
     }
     a.raised = f.raised;
     a.casting = f.casting;
+    const k = Math.min(1, dt * 12);
+    a.aim += ((f.aim ?? 0) - a.aim) * k;
+    a.stance += ((f.stance ?? 0) - a.stance) * k;
     if (running) {
       a.time += dt;
       a.attackT += dt;
@@ -208,12 +221,18 @@ export class EntityView {
     const mesh = new THREE.Mesh(geometry, this.graphics.materialFor(look.albedo, look.emissive));
     // In the fist at the end of the hanging arm (the figure faces +z). A held model runs along
     // +z already: tilt it up a little, its grip in the fist. A sprite stands on edge, turned so
-    // its handle-to-tip diagonal points forward and up, the handle (lower left) in the fist.
-    const scale = model ? 0.5 : 0.62;
+    // its handle-to-tip diagonal points forward and up, the handle (lower left) in the fist. A
+    // gun runs along the arm (raised to aim, it points where the figure looks).
+    const isGun = def.kind === 'gun';
+    const scale = isGun ? 0.7 : model ? 0.5 : 0.62;
     mesh.scale.setScalar(scale);
-    if (model) mesh.rotation.set(-0.3, 0, 0);
+    if (isGun) mesh.rotation.set(Math.PI / 2, 0, 0);
+    else if (model) mesh.rotation.set(-0.3, 0, 0);
     else mesh.rotation.set(0, -Math.PI / 2, 0);
-    const grip = model ? new THREE.Vector3(...(model.grip ?? [0, 0, 0])).divideScalar(16) : new THREE.Vector3(-0.28, -0.28, 0);
+    if (look.points?.muzzle) mesh.userData.muzzle = look.points.muzzle.clone();
+    else if (model?.muzzle) mesh.userData.muzzle = new THREE.Vector3(...model.muzzle).divideScalar(16);
+    const gripPx = model?.grip ?? (look.points?.grip ? (look.points.grip.toArray().map((v) => v * 16) as [number, number, number]) : undefined);
+    const grip = model ? new THREE.Vector3(...(gripPx ?? [0, 0, 0])).divideScalar(16) : new THREE.Vector3(-0.28, -0.28, 0);
     grip.multiplyScalar(scale).applyEuler(mesh.rotation);
     mesh.position.set(0, -0.66, 0).sub(grip);
     arm.add(mesh);

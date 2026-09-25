@@ -884,6 +884,8 @@ pub struct Player {
     pub bob: f64,
     /// The mover they're riding, if any.
     pub ride: Ride,
+    /// How they move (the game's `player.movement`).
+    pub tune: Tuning,
 }
 
 pub const HALF_W: f64 = 0.3;
@@ -903,6 +905,46 @@ pub struct MoveInput {
     pub jump: bool,
     pub sneak: bool,
     pub sprint: bool,
+    /// Sliding: on the ground, speed bleeds away at `Tuning::slide_friction` whatever the wish.
+    pub slide: bool,
+    /// Multiplies the walking, sprinting and sneaking speeds (a heavy weapon, aiming).
+    pub speed: f64,
+}
+
+/// How a player moves: speeds (blocks a second), jump, gravity, acceleration, and the extras a
+/// game can turn on. The defaults are Minecraft's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tuning {
+    pub walk: f64,
+    pub sprint: f64,
+    pub sneak: f64,
+    /// Upward speed of a jump.
+    pub jump: f64,
+    pub gravity: f64,
+    /// How quickly speed follows the wish, on the ground and in the air (per second).
+    pub ground_accel: f64,
+    pub air_accel: f64,
+    /// Sneaking on the ground won't walk off edges.
+    pub edge_guard: bool,
+    /// Running into a ledge in the air climbs onto it if its top is at most this far above the feet (0: off).
+    pub mantle: f64,
+    /// How quickly a slide slows (per second).
+    pub slide_friction: f64,
+}
+
+impl Tuning {
+    pub const MINECRAFT: Tuning = Tuning {
+        walk: 4.317,
+        sprint: 5.61,
+        sneak: 1.31,
+        jump: 9.0,
+        gravity: 32.0,
+        ground_accel: 14.0,
+        air_accel: 3.0,
+        edge_guard: true,
+        mantle: 0.0,
+        slide_friction: 1.4,
+    };
 }
 
 impl Player {
@@ -918,6 +960,7 @@ impl Player {
             frozen: false,
             bob: 0.0,
             ride: Ride::default(),
+            tune: Tuning::MINECRAFT,
         }
     }
 
@@ -981,23 +1024,29 @@ impl Player {
     fn substep(&mut self, world: &World, input: &MoveInput, dt: f64) {
         settle_box(world, &mut self.pos, HALF_W, HEIGHT);
         self.liquid_state(world);
+        let t = self.tune;
         let wish = [input.wish_x, input.wish_z];
+        let k_speed = input.speed.max(0.0);
         let (target_speed, accel) = if self.flying {
             (if input.sprint { 21.0 } else { 10.9 }, 10.0)
         } else if self.in_water || self.in_lava {
             (if input.sprint { 3.4 } else { 2.3 }, 6.0)
+        } else if input.slide && self.on_ground {
+            // A slide: whatever the wish, speed bleeds away.
+            (0.0, t.slide_friction)
         } else if input.sneak {
-            (1.31, if self.on_ground { 14.0 } else { 3.0 })
+            (t.sneak * k_speed, if self.on_ground { t.ground_accel } else { t.air_accel })
         } else if input.sprint {
-            (5.61, if self.on_ground { 14.0 } else { 3.0 })
+            (t.sprint * k_speed, if self.on_ground { t.ground_accel } else { t.air_accel })
         } else {
-            (4.317, if self.on_ground { 14.0 } else { 3.0 })
+            (t.walk * k_speed, if self.on_ground { t.ground_accel } else { t.air_accel })
         };
 
         // Horizontal acceleration toward the wished velocity (exponential approach).
         let k = 1.0 - (-accel * dt).exp();
-        let tx = wish[0] * target_speed;
-        let tz = wish[1] * target_speed;
+        let sliding = input.slide && self.on_ground;
+        let tx = if sliding { 0.0 } else { wish[0] * target_speed };
+        let tz = if sliding { 0.0 } else { wish[1] * target_speed };
         if self.flying || self.on_ground || wish[0] != 0.0 || wish[1] != 0.0 || self.in_water {
             self.vel[0] += (tx - self.vel[0]) * k;
             self.vel[2] += (tz - self.vel[2]) * k;
@@ -1019,16 +1068,16 @@ impl Player {
             self.vel[0] *= hdrag;
             self.vel[2] *= hdrag;
         } else {
-            self.vel[1] -= 32.0 * dt;
+            self.vel[1] -= t.gravity * dt;
             self.vel[1] = self.vel[1].max(-60.0);
             if input.jump && self.on_ground {
-                self.vel[1] = 9.0;
+                self.vel[1] = t.jump;
                 self.on_ground = false;
             }
         }
 
         // Sneaking on the ground: don't walk off edges.
-        let guard = input.sneak && self.on_ground && !self.flying;
+        let guard = input.sneak && self.on_ground && !self.flying && t.edge_guard && !input.slide;
 
         let dy = self.vel[1] * dt;
         let mut ground = None;
@@ -1067,6 +1116,11 @@ impl Player {
                 if self.in_water && input.jump {
                     self.vel[1] = self.vel[1].max(5.0);
                 }
+                // Mantle: in the air, pushing into a ledge whose top is within reach, climb onto it.
+                let push = if axis == 0 { wish[0] } else { wish[1] };
+                if t.mantle > 0.0 && !grounded && !self.flying && !self.in_water && push * d.signum() > 0.3 {
+                    self.mantle(world, axis, d.signum());
+                }
                 self.vel[axis] = 0.0;
             }
         }
@@ -1079,6 +1133,31 @@ impl Player {
         let speed = (self.vel[0] * self.vel[0] + self.vel[2] * self.vel[2]).sqrt();
         if self.on_ground && !self.flying {
             self.bob += speed * dt;
+        }
+    }
+
+    /// Up onto the ledge in front (along `axis`, toward `dir`) if its top is within `tune.mantle`
+    /// of the feet and there's room above: enough upward speed to clear it.
+    fn mantle(&mut self, world: &World, axis: usize, dir: f64) {
+        let t = self.tune;
+        let steps = (t.mantle * 16.0).ceil() as usize;
+        for i in 1..=steps {
+            let h = i as f64 / 16.0;
+            let mut up = self.pos;
+            up[1] += h;
+            if Self::collides(world, up) {
+                // A ceiling first: no room to climb.
+                return;
+            }
+            let mut over = up;
+            over[axis] += dir * 0.3;
+            if !Self::collides(world, over) {
+                let need = (2.0 * t.gravity * (h + 0.08)).sqrt();
+                if self.vel[1] < need {
+                    self.vel[1] = need;
+                }
+                return;
+            }
         }
     }
 }
@@ -1169,10 +1248,52 @@ mod tests {
     }
 
     fn walk(w: &World, p: &mut Player, wish_x: f64, secs: f64) {
-        let input = MoveInput { wish_x, wish_z: 0.0, jump: false, sneak: false, sprint: false };
+        let input = MoveInput { wish_x, wish_z: 0.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
         for _ in 0..(secs * 60.0) as usize {
             p.step(w, &input, 1.0 / 60.0);
         }
+    }
+
+    #[test]
+    fn mantles_onto_ledges_within_reach() {
+        let (mut w, top) = flat();
+        // A block two high and four deep east of the player.
+        for y in top..top + 2 {
+            for z in 6..11 {
+                for x in 11..15 {
+                    w.set(x, y, z, STONE);
+                }
+            }
+        }
+        let run = |mantle: f64| {
+            let mut p = Player::new(8.5, top as f64, 8.5);
+            p.tune.mantle = mantle;
+            walk(&w, &mut p, 0.0, 0.3);
+            let jump = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: true, sneak: false, sprint: false, slide: false, speed: 1.0 };
+            for _ in 0..90 {
+                p.step(&w, &jump, 1.0 / 60.0);
+            }
+            walk(&w, &mut p, 1.0, 0.5);
+            p
+        };
+        let stuck = run(0.0);
+        assert!(stuck.pos[0] < 11.0 && (stuck.pos[1] - top as f64).abs() < 1e-6, "no mantling: stopped at the wall {:?}", stuck.pos);
+        let over = run(1.0);
+        assert!((over.pos[1] - (top as f64 + 2.0)).abs() < 1e-6 && over.pos[0] > 11.0, "mantled onto the wall: {:?}", over.pos);
+    }
+
+    #[test]
+    fn slides_bleed_speed_away() {
+        let (w, top) = flat();
+        let mut p = Player::new(-10.5, top as f64, 8.5);
+        walk(&w, &mut p, 0.0, 0.3);
+        p.impulse([10.0, 0.0, 0.0]);
+        let slide = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: false, sneak: true, sprint: false, slide: true, speed: 1.0 };
+        for _ in 0..30 {
+            p.step(&w, &slide, 1.0 / 60.0);
+        }
+        // Half a second at 1.4/s friction: still well above walking speed, and slowing.
+        assert!(p.vel[0] > 4.5 && p.vel[0] < 10.0, "sliding: {:?}", p.vel);
     }
 
     #[test]
@@ -1229,7 +1350,7 @@ mod tests {
             }
         }
         let mut p = Player::new(8.5, 200.0, 8.5);
-        let input = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: false, sneak: false, sprint: false };
+        let input = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
         for _ in 0..600 {
             p.step(&w, &input, 1.0 / 60.0);
         }

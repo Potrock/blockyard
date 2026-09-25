@@ -1,5 +1,5 @@
 import * as engine from '@engine/voxel_engine.js';
-import type { Actor, Anchor, BlockRef, Entity, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3, VehicleWorld } from '../api/types';
+import type { Actor, Anchor, BlockRef, Bot, BotApi, Entity, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3, VehicleWorld } from '../api/types';
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
@@ -8,7 +8,8 @@ import { dependents, FACING_DIR, placement, type PlaceHow } from '../world/place
 import { CreativeBuild } from './creative';
 import { EntitySim, type EntityFrame, type ProjectileFrame } from './entities';
 import { ItemSim, type PickupFrame } from './items';
-import { PlayerSim, type PlayerFrame } from './player';
+import { BotControlsImpl, PlayerSim, type PlayerFrame } from './player';
+import { castBullet, History, type Hittable } from './hitscan';
 import { Presentation, type Sink } from './present';
 import { toLocal, toWorld } from './movers';
 import { PropSim, PropState, type PropFrame } from './props';
@@ -42,6 +43,8 @@ interface Timer {
 
 /** Everything the clients need to show one tick. */
 export interface SimFrame {
+  /** Host time: seconds of ticks since the host began (clients say which they're showing, for fair hits). */
+  t: number;
   /** Game clock (seconds since `start`). */
   clock: number;
   /** Play has begun (`start`). */
@@ -112,6 +115,13 @@ export class Sim {
   private listeners = new Map<string, Set<(e: unknown) => void>>();
   private timers: Timer[] = [];
   private clockNow = 0;
+  /** Seconds of ticks so far (running or not): the host time frames carry. */
+  time = 0;
+  /** Where everyone was, for the last second (shots are checked where the shooter saw them). */
+  readonly history = new History();
+  /** Bots (`game.bots`), in the order they came. */
+  private botList: Bot[] = [];
+  private nextBot = 1;
 
   constructor(private o: SimOptions) {
     this.def = o.def;
@@ -240,9 +250,11 @@ export class Sim {
    * and items, and finally the built-in hands.
    */
   tick(dt: number, running: boolean, inputs: Record<string, PlayerInput>, premoved?: ReadonlySet<string>) {
+    this.time += dt;
     if (!this.env.frozen) this.env.time = (this.env.time + dt / this.env.dayLength) % 1;
     for (const p of this.players) {
-      p.input.set(inputs[p.id] ?? IDLE_INPUT);
+      // A bot's controls are the game's code's (set last tick); a person's came from their screen.
+      p.input.set(p.bot ? p.bot.snapshot(running && !p.health.dead, p.viewSeq) : (inputs[p.id] ?? IDLE_INPUT));
       // A predicting client's player moved already, input by input (see GameHost.step).
       if (!premoved?.has(p.id)) p.move(dt);
     }
@@ -260,11 +272,44 @@ export class Sim {
       p.updateHands(dt, running);
       p.creative?.update(dt);
     }
+    this.record();
+  }
+
+  /** Where everyone is this tick, for shots checked in the past. */
+  private record() {
+    const players = new Map<string, { x: number; y: number; z: number; stance: 0 | 1 | 2; alive: boolean }>();
+    for (const p of this.players) {
+      if (p.vacant) continue;
+      const s = p.state;
+      players.set(p.id, { x: s.x, y: s.y, z: s.z, stance: p.sliding ? 2 : p.sneaking ? 1 : 0, alive: !p.health.dead });
+    }
+    const entities = new Map<number, { x: number; y: number; z: number; stance: 0; alive: boolean }>();
+    for (const e of this.entities.all()) {
+      const q = e.position;
+      entities.set(e.id, { x: q.x, y: q.y, z: q.z, stance: 0, alive: e.alive });
+    }
+    this.history.record(this.time, players, entities);
+  }
+
+  /** Everyone a bullet could hit, where they are now. */
+  private hittable(): Hittable[] {
+    const out: Hittable[] = [];
+    for (const p of this.players) {
+      if (p.vacant || p.health.dead) continue;
+      const s = p.state;
+      out.push({ target: p.api, key: p.id, now: { x: s.x, y: s.y, z: s.z, stance: p.sliding ? 2 : p.sneaking ? 1 : 0, alive: true } });
+    }
+    for (const e of this.entities.all()) {
+      const q = e.position;
+      out.push({ target: e, key: e.id, now: { x: q.x, y: q.y, z: q.z, stance: 0, alive: true }, box: this.entities.shape(e) });
+    }
+    return out;
   }
 
   frame(): SimFrame {
     const e = this.entities.frame();
     return {
+      t: this.time,
       clock: this.clockNow,
       started: this.started,
       time: this.env.time,
@@ -326,6 +371,29 @@ export class Sim {
     p.remove();
   }
 
+  /** A bot joins (`game.bots.add`): a player with no screen, driven by the game's code, at the spawn. */
+  addBot(name: string): Bot {
+    const p = this.newPlayer(`b${this.nextBot++}`, name);
+    p.bot = new BotControlsImpl(() => p.eye);
+    const bot = Object.assign(p.api, { controls: p.bot }) as Bot;
+    this.players.push(p);
+    this.roster.push(p.api);
+    const sp = this.spawn;
+    p.place(sp.x, sp.y, sp.z, sp.yaw);
+    p.bot.look(sp.yaw, 0);
+    this.host.world.set_frozen(p.slot, false);
+    this.botList.push(bot);
+    this.emit('playerJoin', { player: bot });
+    return bot;
+  }
+
+  removeBot(bot: Player) {
+    const i = this.botList.indexOf(bot as Bot);
+    if (i < 0) return;
+    this.botList.splice(i, 1);
+    this.leave(bot.id);
+  }
+
   /** A player's client started playing (clicked Play): their body wakes up, and the game starts. */
   play(p: PlayerSim) {
     this.host.world.set_frozen(p.slot, p.health.dead);
@@ -358,7 +426,24 @@ export class Sim {
   private query: VehicleWorld | null = null;
 
   private newPlayer(id: string, name: string): PlayerSim {
+    const world = this.host.world;
     const p = new PlayerSim({
+      bullet: (from, dir, range, seen, shooter) =>
+        castBullet(
+          {
+            world,
+            registry: this.registry,
+            history: this.history,
+            prop: (o, d, max) => this.props.raycast(o, d, max),
+            targets: () => this.hittable(),
+          },
+          from,
+          dir,
+          range,
+          this.time,
+          seen,
+          shooter,
+        ),
       id,
       name,
       world: this.host.world,
@@ -399,6 +484,7 @@ export class Sim {
     this.items.clearPickups();
     this.timers = [];
     this.clockNow = 0;
+    this.history.clear();
     this.presentation.reset();
     this.presentation.send(null, 'client', 'reset', []);
     const sp = this.spawn;
@@ -629,6 +715,7 @@ export class Sim {
       camera: local.camera,
       input: local.input,
       props: this.props,
+      bots: this.botApi(),
       env: {
         get time() {
           return sim.env.time;
@@ -666,6 +753,17 @@ export class Sim {
       commands: this.commands,
       restart: () => sim.restart(),
       exit: () => sim.o.exit(),
+    };
+  }
+
+  private botApi(): BotApi {
+    const sim = this;
+    return {
+      add: (name) => sim.addBot(name),
+      remove: (bot) => sim.removeBot(bot),
+      get all() {
+        return sim.botList;
+      },
     };
   }
 

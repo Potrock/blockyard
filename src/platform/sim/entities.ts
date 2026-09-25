@@ -82,6 +82,12 @@ export interface EntityFrame {
   dying: number;
   /** An item in its right hand (players' figures): its id. */
   held?: string | null;
+  /** Health, 0..1 (health bars over heads). */
+  hp?: number;
+  /** Crouching (1) or sliding (2) (players' figures). */
+  stance?: number;
+  /** Aiming a gun where it looks, how far down the sights 0..1 (players' figures). */
+  aim?: number;
 }
 
 /** One projectile in flight (or stuck in a wall). */
@@ -191,8 +197,9 @@ class EntityImpl implements Entity {
     this.m.s.fx.damageNumber({ x: top.x, y: top.y + 0.4, z: top.z }, amount, { crit: opts.crit });
     this.m.s.fx.burst({ x: pos.x, y: pos.y + this.height * 0.6, z: pos.z }, { color: this.def.bloodColor ?? '#b3261e', count: opts.crit ? 22 : 12, speed: 3.5, size: 0.08 });
     this.m.s.audio.play(this.def.sounds?.hurt ?? 'mob_hurt', { at: pos, pitch: 0.9 + Math.random() * 0.2 });
-    this.m.s.emit('entityDamage', { entity: this, amount, source: opts.source });
-    if (this.health <= 0) this.die(opts.source);
+    const how = { weapon: opts.weapon, headshot: opts.headshot };
+    this.m.s.emit('entityDamage', { entity: this, amount, source: opts.source, ...how });
+    if (this.health <= 0) this.die(opts.source, how);
   }
 
   heal(amount: number) {
@@ -206,7 +213,7 @@ class EntityImpl implements Entity {
     }
   }
 
-  private die(killer: DamageOptions['source']) {
+  private die(killer: DamageOptions['source'], how: { weapon?: string; headshot?: boolean } = {}) {
     this.alive = false;
     this.dyingTime = 0;
     const b = this.m.bodies;
@@ -221,7 +228,7 @@ class EntityImpl implements Entity {
     for (const d of this.def.drops ?? []) {
       if (ctx.rng.chance(d.chance)) this.m.s.dropItem(d.item, { x: pos.x, y: pos.y + 0.6, z: pos.z }, d.count ?? 1);
     }
-    this.m.s.emit('entityDeath', { entity: this, killer });
+    this.m.s.emit('entityDeath', { entity: this, killer, ...how });
   }
 
   remove() {
@@ -496,6 +503,12 @@ export class EntitySim implements EntityApi {
     return (e as EntityImpl).def.hitbox;
   }
 
+  /** Its hitbox for bullets: a humanoid's top quarter is its head. */
+  shape(e: Entity): { width: number; height: number; head: boolean } {
+    const d = (e as EntityImpl).def;
+    return { width: d.hitbox.width, height: d.hitbox.height, head: d.model.rig === 'humanoid' || !!d.model.gltf?.head };
+  }
+
   byBody(slot: number): EntityImpl | null {
     return this.bySlot[slot] ?? null;
   }
@@ -668,6 +681,7 @@ export class EntitySim implements EntityApi {
         glow: e.glowColor,
         hurt: e.hurt,
         dying: e.alive ? -1 : e.dyingTime,
+        hp: e.health / e.maxHealth,
       });
     }
     const p = this.projectiles;

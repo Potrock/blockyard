@@ -9,6 +9,9 @@ export class Input {
   /** Buttons and keys claimed this frame (`consume`): they read as idle until the frame ends. */
   private consumedButtons = 0;
   private consumedKeys = new Set<string>();
+  /** Buttons and keys that went down this frame (the page's own systems: a gun's trigger). */
+  private frameButtons = 0;
+  private frameKeys = new Set<string>();
   /** Mouse movement this frame (mouse look). */
   mouseDX = 0;
   mouseDY = 0;
@@ -34,6 +37,7 @@ export class Input {
       }
       this.down.add(e.code);
       this.pressedThisFrame.add(e.code);
+      this.frameKeys.add(e.code);
       if (this.locked && isGameKey(e.code)) e.preventDefault();
       this.onKey?.(e.code, e);
     }, opts);
@@ -46,6 +50,7 @@ export class Input {
       if (!this.locked) return;
       this.buttonsDown |= 1 << e.button;
       this.buttonsPressed |= 1 << e.button;
+      this.frameButtons |= 1 << e.button;
       e.preventDefault();
     }, opts);
     window.addEventListener('mouseup', (e) => {
@@ -133,6 +138,16 @@ export class Input {
     return s;
   }
 
+  /** A button went down this frame (whether or not a snapshot has gone since). */
+  clickedThisFrame(b: number): boolean {
+    return (this.frameButtons & (1 << b)) !== 0;
+  }
+
+  /** A key went down this frame. */
+  keyThisFrame(code: string): boolean {
+    return this.frameKeys.has(code);
+  }
+
   /** Claim a mouse button or key for the rest of this frame. */
   consume(what: number | string) {
     if (typeof what === 'number') this.consumedButtons |= 1 << what;
@@ -143,6 +158,8 @@ export class Input {
   endFrame() {
     this.consumedButtons = 0;
     this.consumedKeys.clear();
+    this.frameButtons = 0;
+    this.frameKeys.clear();
     if (!this.sent) {
       this.carryDX += this.mouseDX;
       this.carryDY += this.mouseDY;

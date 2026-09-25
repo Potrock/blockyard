@@ -78,8 +78,9 @@ export class Presentation {
     readonly content: Content,
   ) {}
 
-  send(to: string | null, target: PresentTarget, method: string, args: unknown[]) {
-    this.sink({ to, target, method, args });
+  /** A call for one player (`to`), or everyone (null), or everyone but `skip`. */
+  send(to: string | null, target: PresentTarget, method: string, args: unknown[], skip?: string) {
+    this.sink(skip ? { to, target, method, args, skip } : { to, target, method, args });
   }
 
   callback(fn: () => void, into: number[]): CallbackRef {
@@ -130,7 +131,10 @@ export class Presentation {
       bossBar: (name: string, fraction: number, color?: string) => send('bossBar', name, fraction, color),
       hideBossBar: () => send('hideBossBar'),
       toast: (text: string) => send('toast', text),
-      feed: (text: string, opts?: { color?: string }) => send('feed', text, opts),
+      feed: (text, opts) => send('feed', text, opts),
+      pop: (text, opts) => send('pop', text, opts),
+      scoreboard: (b) =>
+        send('scoreboard', b && { ...b, rows: b.rows.map((r) => ({ name: r.name, values: [...r.values], color: r.color, player: r.player?.id })) }),
       meter: (id: string, label: string, value: number | null, opts?: { color?: string; text?: string }) => send('meter', id, label, value, opts),
       marker: (id: string, at: Anchor | null, opts?: MarkerOptions) =>
         send('marker', id, at && this.anchor(at), opts?.offset ? { ...opts, offset: { x: opts.offset.x, y: opts.offset.y, z: opts.offset.z } } : opts),

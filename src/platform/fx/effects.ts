@@ -25,6 +25,31 @@ interface Rocket {
   color: [number, number, number];
 }
 
+/** A bullet's glowing streak racing from the muzzle to where it landed. */
+interface Tracer {
+  mesh: THREE.Group;
+  material: THREE.RawShaderMaterial;
+  from: THREE.Vector3;
+  dir: THREE.Vector3;
+  length: number;
+  travelled: number;
+}
+
+/** A bullet hole on a wall, fading after a while. */
+interface Decal {
+  mesh: THREE.Mesh;
+  age: number;
+}
+
+/** A muzzle's flash in the world (someone else's gun): a hot glow for a moment. */
+interface Glow {
+  mesh: THREE.Mesh;
+  age: number;
+}
+
+const TRACER_SPEED = 360;
+const TRACER_LENGTH = 5;
+
 /** Screen and world effects. The camera shake offset is read by the runtime each frame. */
 export class Effects implements FxApi {
   readonly shakeOffset = new THREE.Vector3();
@@ -35,6 +60,18 @@ export class Effects implements FxApi {
   private rockets: Rocket[] = [];
   private time = 0;
   private ringGeo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
+  private tracers: Tracer[] = [];
+  private decals: Decal[] = [];
+  private glows: Glow[] = [];
+  /** Two crossed quads along +z, 1 long, with the bolt shader's UVs (v along the length). */
+  private tracerGeo = (() => {
+    const a = new THREE.PlaneGeometry(0.06, 1).rotateX(Math.PI / 2).translate(0, 0, 0.5);
+    const b = a.clone().rotateZ(Math.PI / 2);
+    return [a, b];
+  })();
+  private decalGeo = new THREE.PlaneGeometry(0.11, 0.11);
+  private decalMat = new THREE.MeshBasicMaterial({ color: 0x0b0b0d, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  private glowGeo = new THREE.PlaneGeometry(1, 1);
 
   constructor(
     private particles: Particles,
@@ -114,6 +151,80 @@ export class Effects implements FxApi {
     }
   }
 
+  /** A bullet's tracer, from a muzzle to where it landed. */
+  tracer(from: Vec3, to: Vec3, color = '#ffd27a') {
+    const f = new THREE.Vector3(from.x, from.y, from.z);
+    const dir = new THREE.Vector3(to.x - from.x, to.y - from.y, to.z - from.z);
+    const length = dir.length();
+    if (length < 1.5) return;
+    dir.divideScalar(length);
+    const material = new THREE.RawShaderMaterial({
+      vertexShader: Shaders.fx.vertex,
+      fragmentShader: Shaders.fx.fragment,
+      glslVersion: THREE.GLSL3,
+      uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 6 }, uTime: { value: 0 }, uMode: { value: 3 } },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const group = new THREE.Group();
+    for (const g of this.tracerGeo) {
+      const m = new THREE.Mesh(g, material);
+      m.frustumCulled = false;
+      group.add(m);
+    }
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+    group.position.copy(f);
+    group.scale.set(1, 1, 0.001);
+    this.fxScene.add(group);
+    this.tracers.push({ mesh: group, material, from: f, dir, length, travelled: 0 });
+  }
+
+  /**
+   * Where a bullet landed: on a block, chips of its colour, a spark and a hole; on someone, a
+   * puff of `body` colour.
+   */
+  impact(at: Vec3, normal: Vec3 | null, color: [number, number, number], body = false) {
+    const n = normal ?? { x: 0, y: 1, z: 0 };
+    const x = at.x + n.x * 0.04;
+    const y = at.y + n.y * 0.04;
+    const z = at.z + n.z * 0.04;
+    if (body) {
+      this.particles.burstColor(x, y, z, color, { count: 10, speed: 3.2, size: 0.09, gravity: 14, life: 0.45, spread: 0.3, up: 1 });
+      return;
+    }
+    this.particles.burstColor(x, y, z, color, { count: 6, speed: 3.5, size: 0.07, gravity: 20, life: 0.6, spread: 0.2, up: 1.2 });
+    this.particles.burstColor(x, y, z, [1, 0.85, 0.5], { count: 3, speed: 6, size: 0.035, glow: 2, gravity: 16, life: 0.18, collide: false, up: 1 });
+    this.particles.burstColor(x, y, z, [0.55, 0.52, 0.48], { count: 2, speed: 0.8, size: 0.18, gravity: -1, life: 0.7, drag: 2, collide: false, up: 0.4 });
+    if (!normal) return;
+    const mesh = new THREE.Mesh(this.decalGeo, this.decalMat);
+    mesh.position.set(at.x + n.x * 0.003, at.y + n.y * 0.003, at.z + n.z * 0.003);
+    mesh.lookAt(mesh.position.x + n.x, mesh.position.y + n.y, mesh.position.z + n.z);
+    mesh.rotateZ(Math.random() * Math.PI);
+    this.fxScene.add(mesh);
+    this.decals.push({ mesh, age: 0 });
+    while (this.decals.length > 80) this.fxScene.remove(this.decals.shift()!.mesh);
+  }
+
+  /** A muzzle flash in the world: a hot glow facing the camera for a moment. */
+  muzzleFlash(at: Vec3, size = 0.5) {
+    const material = new THREE.RawShaderMaterial({
+      vertexShader: Shaders.fx.vertex,
+      fragmentShader: Shaders.fx.fragment,
+      glslVersion: THREE.GLSL3,
+      uniforms: { uColor: { value: new THREE.Color('#ffc46b') }, uIntensity: { value: 7 }, uTime: { value: 0 }, uMode: { value: 2 } },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(this.glowGeo, material);
+    mesh.position.set(at.x, at.y, at.z);
+    mesh.scale.setScalar(size);
+    mesh.frustumCulled = false;
+    this.fxScene.add(mesh);
+    this.glows.push({ mesh, age: 0 });
+  }
+
   damageNumber(at: Vec3, amount: number, opts: { crit?: boolean; color?: string } = {}) {
     this.hud.damageNumber(new THREE.Vector3(at.x, at.y, at.z), amount, opts.crit ?? false, opts.color);
   }
@@ -159,6 +270,40 @@ export class Effects implements FxApi {
       ((r.mesh.material as THREE.RawShaderMaterial).uniforms.uIntensity as { value: number }).value = 3 * (1 - t);
     }
 
+    for (let i = this.tracers.length - 1; i >= 0; i--) {
+      const t = this.tracers[i];
+      t.travelled += TRACER_SPEED * dt;
+      const head = Math.min(t.length, t.travelled);
+      const tail = Math.max(0, t.travelled - TRACER_LENGTH);
+      if (tail >= t.length) {
+        this.fxScene.remove(t.mesh);
+        t.material.dispose();
+        this.tracers.splice(i, 1);
+        continue;
+      }
+      t.mesh.position.copy(t.from).addScaledVector(t.dir, tail);
+      t.mesh.scale.set(1, 1, Math.max(0.001, head - tail));
+    }
+    for (let i = this.decals.length - 1; i >= 0; i--) {
+      const d = this.decals[i];
+      d.age += dt;
+      if (d.age > 8) {
+        this.fxScene.remove(d.mesh);
+        this.decals.splice(i, 1);
+      } else if (d.age > 6) d.mesh.scale.setScalar(Math.max(0.01, (8 - d.age) / 2));
+    }
+    for (let i = this.glows.length - 1; i >= 0; i--) {
+      const g = this.glows[i];
+      g.age += dt;
+      const cam = this.cameraPos?.();
+      if (cam) g.mesh.lookAt(cam.x, cam.y, cam.z);
+      if (g.age > 0.06) {
+        this.fxScene.remove(g.mesh);
+        (g.mesh.material as THREE.Material).dispose();
+        this.glows.splice(i, 1);
+      }
+    }
+
     for (let i = this.rockets.length - 1; i >= 0; i--) {
       const r = this.rockets[i];
       r.fuse -= dt;
@@ -175,6 +320,12 @@ export class Effects implements FxApi {
   clear() {
     for (const r of this.rings) this.fxScene.remove(r.mesh);
     this.rings = [];
+    for (const t of this.tracers) this.fxScene.remove(t.mesh);
+    this.tracers = [];
+    for (const d of this.decals) this.fxScene.remove(d.mesh);
+    this.decals = [];
+    for (const g of this.glows) this.fxScene.remove(g.mesh);
+    this.glows = [];
     this.rockets = [];
     this.shakeStrength = 0;
   }

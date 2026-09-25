@@ -38,6 +38,21 @@ export class SimInput implements InputApi {
     return this.state.viewSeq;
   }
 
+  /** Shots the player's screen fired with these controls (guns), or null for none sent. */
+  get shots(): PlayerInput['shots'] | null {
+    return this.state.active && this.state.shots ? this.state.shots : null;
+  }
+
+  /** The host time the player's screen was showing (others' positions), for lag-compensated hits. */
+  get seen(): number | null {
+    return this.state.seen ?? null;
+  }
+
+  /** The buttons held, as a bit mask (1 left, 2 middle, 4 right). */
+  get buttons(): number {
+    return this.state.active ? this.state.buttons & ~this.consumedButtons : 0;
+  }
+
   isDown(code: string): boolean {
     return this.state.active && this.down.has(code) && !this.consumedKeys.has(code);
   }

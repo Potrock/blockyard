@@ -158,7 +158,7 @@ export class RoomCore {
   }
 
   private count() {
-    const playing = this.host.sim.players.filter((p) => !p.vacant).length;
+    const playing = this.host.sim.players.filter((p) => !p.vacant && !p.bot).length;
     const counts = `${playing}|${this.ids.size - playing}`;
     if (counts === this.lastCounts) return;
     this.lastCounts = counts;

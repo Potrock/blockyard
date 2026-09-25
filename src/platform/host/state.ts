@@ -13,6 +13,7 @@ function keyOf(c: PresentCall): string | null {
       case 'radar':
       case 'progress':
       case 'highlight':
+      case 'scoreboard':
         return c.method;
       case 'bossBar':
       case 'hideBossBar':

@@ -66,6 +66,7 @@ function blend(a: SimFrame, b: SimFrame, k: number): SimFrame {
   const ra = byId(a.props);
   return {
     ...b,
+    t: lerp(a.t, b.t, k),
     clock: lerp(a.clock, b.clock, k),
     players: b.players.map((p) => {
       const o = pa.get(p.id);

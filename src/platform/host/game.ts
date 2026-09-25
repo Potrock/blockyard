@@ -409,6 +409,7 @@ export class GameHost {
       i.wheel = 0;
       i.mouseX = 0;
       i.mouseY = 0;
+      if (i.shots) i.shots = [];
     }
     const events = this.flush();
     const frame = sim.frame();
@@ -417,7 +418,7 @@ export class GameHost {
       const me = c.player?.id;
       out.set(id, {
         events: events.filter((e) => {
-          if (e.t === 'call') return e.call.to === null || e.call.to === me;
+          if (e.t === 'call') return e.call.to === null ? e.call.skip === undefined || e.call.skip !== me : e.call.to === me;
           if (e.t === 'reply' || e.t === 'exit') return !e.client || e.client === id;
           if (e.t === 'joined') return e.client === id;
           return true;
@@ -454,6 +455,9 @@ export class GameHost {
         i.viewSeq = n.viewSeq;
         for (const k of n.pressed) if (!i.pressed.includes(k)) i.pressed.push(k);
         i.clicked |= n.clicked;
+        // Shots add up until a step; a client that sends them (even none) fires its own from then on.
+        if (n.shots) (i.shots ??= []).push(...n.shots);
+        if (n.seen !== undefined) i.seen = n.seen;
         i.wheel += n.wheel;
         i.mouseX += n.mouseX;
         i.mouseY += n.mouseY;

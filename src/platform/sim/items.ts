@@ -1,6 +1,7 @@
 import type { AtlasPixels, GameContext, GameEvents, ItemApi, ItemDefinition, ItemStack, InventoryApi, Pickup, Player, Vec3 } from '../api/types';
 import type { Content } from '../content';
 import type { Presentation } from './present';
+import { freshGun, isGun, type GunState } from './guns';
 
 export interface ItemServices {
   ctx(): GameContext;
@@ -37,6 +38,8 @@ export class Inventory implements InventoryApi {
   readonly slots: (ItemStack | null)[] = new Array(9).fill(null);
   selected = 0;
   onChange: (() => void) | null = null;
+  /** Each gun carried: its rounds and what it's doing (a fresh one comes full). */
+  readonly guns = new Map<string, GunState>();
 
   constructor(private defs: Map<string, ItemDefinition>) {}
 
@@ -46,7 +49,34 @@ export class Inventory implements InventoryApi {
 
   private max(item: string): number {
     const d = this.defs.get(item);
-    return d?.stack ?? (d && (d.kind === 'melee' || d.kind === 'bow') ? 1 : 64);
+    return d?.stack ?? (d && (d.kind === 'melee' || d.kind === 'bow' || d.kind === 'gun') ? 1 : 64);
+  }
+
+  /** A gun's state, if it's carried. */
+  gunState(item: string): GunState | null {
+    const def = this.defs.get(item);
+    if (!isGun(def) || this.count(item) === 0) return null;
+    let g = this.guns.get(item);
+    if (!g) this.guns.set(item, (g = freshGun(def)));
+    return g;
+  }
+
+  ammo(item: string): { magazine: number; reserve: number } | null {
+    const g = this.gunState(item);
+    return g && { magazine: g.mag, reserve: g.reserve };
+  }
+
+  setAmmo(item: string, a: { magazine?: number; reserve?: number }) {
+    const g = this.gunState(item);
+    const def = this.defs.get(item);
+    if (!g || !isGun(def)) return;
+    if (a.magazine !== undefined) g.mag = Math.max(0, Math.min(def.magazine, Math.floor(a.magazine)));
+    if (a.reserve !== undefined) g.reserve = Math.max(0, Math.floor(a.reserve));
+  }
+
+  /** Guns no longer carried lose their state (given again, they come full). */
+  private forget() {
+    for (const item of [...this.guns.keys()]) if (this.count(item) === 0) this.guns.delete(item);
   }
 
   give(item: string, count = 1): number {
@@ -104,6 +134,7 @@ export class Inventory implements InventoryApi {
         if (s.count === 0) this.slots[i] = null;
       }
     }
+    this.forget();
     this.onChange?.();
     return true;
   }
@@ -122,6 +153,7 @@ export class Inventory implements InventoryApi {
   clear() {
     this.slots.fill(null);
     this.selected = 0;
+    this.guns.clear();
     this.onChange?.();
   }
 }

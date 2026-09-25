@@ -116,7 +116,7 @@ function figure(spec: ModelSpec, tex: Pixels) {
     doc.node({ name: `${p.name}_cube`, translation: [(p.offset[0] + p.size[0] / 2) / 16, (p.offset[1] + p.size[1] / 2) / 16, (p.offset[2] + p.size[2] / 2) / 16], mesh: doc.mesh(geo) }, i);
   }
   const model = new ModelInstance(root, pivots, rest, null as unknown as THREE.RawShaderMaterial, spec);
-  const still: AnimState = { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0 };
+  const still: AnimState = { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0 };
   const clip = (name: string, duration: number, at: (t: number) => Partial<AnimState>) => {
     const fps = 24;
     const times: number[] = [];

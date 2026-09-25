@@ -23,7 +23,12 @@ export interface ItemMesh {
   geometry: THREE.BufferGeometry;
   albedo: THREE.Texture;
   emissive: THREE.Texture;
+  /** Points the model marks with empty nodes (`grip`, `grip2`, `muzzle`, `sight`, `mag`), in its own space as held. */
+  points?: Partial<Record<ItemPoint, THREE.Vector3>>;
 }
+
+export type ItemPoint = 'grip' | 'grip2' | 'muzzle' | 'sight' | 'mag';
+const POINTS: ItemPoint[] = ['grip', 'grip2', 'muzzle', 'sight', 'mag'];
 
 const DEG = Math.PI / 180;
 
@@ -105,8 +110,11 @@ export class GltfLibrary {
     let map: THREE.Texture | null = null;
     let emissive: THREE.Texture | null = null;
     let color: THREE.Color | null = null;
+    const points: Partial<Record<ItemPoint, THREE.Vector3>> = {};
     const visit = (o: THREE.Object3D) => {
       if (o.name.toLowerCase() === 'hitbox') return;
+      const marker = POINTS.find((n) => n === o.name.toLowerCase());
+      if (marker && !(o as THREE.Mesh).isMesh) points[marker] = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld);
       const mesh = o as THREE.Mesh;
       if (mesh.isMesh) {
         const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial;
@@ -128,10 +136,13 @@ export class GltfLibrary {
     visit(g.scene);
     const merged = parts.length ? mergeGeometries(parts) : new THREE.BufferGeometry();
     for (const p of parts) p.dispose();
-    if (src.rotation) merged.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(src.rotation[0] * DEG, src.rotation[1] * DEG, src.rotation[2] * DEG)));
-    if (src.scale) merged.scale(src.scale, src.scale, src.scale);
+    const turn = new THREE.Matrix4();
+    if (src.rotation) turn.makeRotationFromEuler(new THREE.Euler(src.rotation[0] * DEG, src.rotation[1] * DEG, src.rotation[2] * DEG));
+    if (src.scale) turn.premultiply(new THREE.Matrix4().makeScale(src.scale, src.scale, src.scale));
+    merged.applyMatrix4(turn);
+    for (const v of Object.values(points)) v.applyMatrix4(turn);
     merged.computeBoundingSphere();
-    hit = { geometry: merged, albedo: map ?? this.swatch(color ?? new THREE.Color(1, 1, 1)), emissive: emissive ?? BLACK };
+    hit = { geometry: merged, albedo: map ?? this.swatch(color ?? new THREE.Color(1, 1, 1)), emissive: emissive ?? BLACK, points };
     this.items.set(key, hit);
     return hit;
   }
@@ -187,8 +198,8 @@ export class GltfLibrary {
    * A picture of a model (an item's icon): drawn once, from above and to the side like an
    * inventory's, as a data URL; empty until its file is here (and on a client that can't draw).
    */
-  icon(url: string, size: number): string {
-    const key = `${url}|${size}`;
+  icon(url: string, size: number, view: 'iso' | 'side' = 'iso'): string {
+    const key = `${url}|${size}|${view}`;
     const hit = this.icons.get(key);
     if (hit !== undefined) return hit;
     const look = this.item({ parts: [], gltf: { url } });
@@ -205,18 +216,24 @@ export class GltfLibrary {
     const box = look.geometry.boundingBox!;
     const centre = box.getCenter(new THREE.Vector3());
     const radius = box.getSize(new THREE.Vector3()).length() / 2 || 1;
-    const cam = new THREE.OrthographicCamera(-radius, radius, radius, -radius, 0.01, radius * 20);
-    cam.position.copy(centre).add(new THREE.Vector3(1, 0.8, 1).normalize().multiplyScalar(radius * 6));
+    // From above and to the side (an inventory's view), or square on from the side, muzzle right (a kill feed's).
+    const side = view === 'side';
+    const extent = box.getSize(new THREE.Vector3());
+    const aspect = side ? 2 : 1;
+    const half = side ? Math.max(extent.z / 2, extent.y) * 1.08 : radius;
+    const cam = new THREE.OrthographicCamera(-half, half, half / aspect, -half / aspect, 0.01, radius * 20);
+    cam.position.copy(centre).add(side ? new THREE.Vector3(-1, 0, 0).multiplyScalar(radius * 6) : new THREE.Vector3(1, 0.8, 1).normalize().multiplyScalar(radius * 6));
     cam.lookAt(centre);
     const px = size * 2;
-    const target = new THREE.WebGLRenderTarget(px, px, { colorSpace: THREE.SRGBColorSpace });
+    const py = Math.round(px / aspect);
+    const target = new THREE.WebGLRenderTarget(px, py, { colorSpace: THREE.SRGBColorSpace });
     const was = { target: r.getRenderTarget(), color: r.getClearColor(new THREE.Color()), alpha: r.getClearAlpha(), autoClear: r.autoClear };
     r.setRenderTarget(target);
     r.setClearColor(0x000000, 0);
     r.clear();
     r.render(scene, cam);
-    const pixels = new Uint8Array(px * px * 4);
-    r.readRenderTargetPixels(target, 0, 0, px, px, pixels);
+    const pixels = new Uint8Array(px * py * 4);
+    r.readRenderTargetPixels(target, 0, 0, px, py, pixels);
     r.setRenderTarget(was.target);
     r.setClearColor(was.color, was.alpha);
     r.autoClear = was.autoClear;
@@ -224,10 +241,11 @@ export class GltfLibrary {
     material.dispose();
     // Rows come bottom-up.
     const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = px;
+    canvas.width = px;
+    canvas.height = py;
     const ctx = canvas.getContext('2d')!;
-    const img = ctx.createImageData(px, px);
-    for (let y = 0; y < px; y++) img.data.set(pixels.subarray((px - 1 - y) * px * 4, (px - y) * px * 4), y * px * 4);
+    const img = ctx.createImageData(px, py);
+    for (let y = 0; y < py; y++) img.data.set(pixels.subarray((py - 1 - y) * px * 4, (py - y) * px * 4), y * px * 4);
     ctx.putImageData(img, 0, 0);
     const out = canvas.toDataURL();
     this.icons.set(key, out);

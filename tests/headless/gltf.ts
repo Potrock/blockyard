@@ -84,7 +84,7 @@ export default function gltfModels() {
   const figHitbox = fig.pivots.get('hitbox')!;
   check(!figHitbox.visible && hitbox.visible, 'its hitbox node is hidden (the file untouched)');
   check(fig.pivots.get('leg') !== leg && !!fig.pivots.get('head'), 'each figure has its own copy of the nodes');
-  const s: AnimState = { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0 };
+  const s: AnimState = { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0 };
   const angle = (name: string) => new THREE.Euler().setFromQuaternion(fig.pivots.get(name)!.quaternion);
   const run = (seconds: number, change: (s: AnimState) => void = () => {}) => {
     for (let t = 0; t < seconds; t += 1 / 60) {

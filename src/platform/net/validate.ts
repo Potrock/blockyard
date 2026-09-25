@@ -63,7 +63,28 @@ function sanitizeInput(raw: unknown): PlayerInput | null {
   const pitch = num(raw.pitch, -Math.PI / 2, Math.PI / 2);
   const viewSeq = int(raw.viewSeq, -1, Number.MAX_SAFE_INTEGER);
   if (typeof raw.active !== 'boolean' || !down || !pressed || buttons === null || clicked === null || mouseX === null || mouseY === null || wheel === null || yaw === null || pitch === null || viewSeq === null) return null;
-  return { active: raw.active, down, pressed, buttons, clicked, mouseX, mouseY, wheel, yaw, pitch, viewSeq };
+  const out: PlayerInput = { active: raw.active, down, pressed, buttons, clicked, mouseX, mouseY, wheel, yaw, pitch, viewSeq };
+  if (raw.seen !== undefined) {
+    const seen = num(raw.seen, 0, 1e9);
+    if (seen === null) return null;
+    out.seen = seen;
+  }
+  if (raw.shots !== undefined) {
+    // A few shots an input at most (a gun fires a few times a frame at most).
+    if (!Array.isArray(raw.shots) || raw.shots.length > 8) return null;
+    const shots: [number, number, number, number][] = [];
+    for (const s of raw.shots) {
+      if (!Array.isArray(s) || s.length !== 4) return null;
+      const serial = int(s[0], 0, Number.MAX_SAFE_INTEGER);
+      const y = num(s[1], -1e6, 1e6);
+      const p = num(s[2], -Math.PI / 2, Math.PI / 2);
+      const spread = num(s[3], 0, 45);
+      if (serial === null || y === null || p === null || spread === null) return null;
+      shots.push([serial, y, p, spread]);
+    }
+    out.shots = shots;
+  }
+  return out;
 }
 
 function sanitizeMessage(raw: unknown): ClientMessage | null {

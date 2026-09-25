@@ -4,6 +4,7 @@ import type { PlayerFrame } from '../sim/player';
 
 const EYE = 1.62;
 const SNEAK_EYE = 1.27;
+const SLIDE_EYE = 0.95;
 
 const smoothstep = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
@@ -19,6 +20,8 @@ export class PlayerCamera {
   sensitivity = 1;
   baseFov = 75;
   viewBobbing = true;
+  /** Aiming down the sights: the field of view is divided by this (the runtime eases it). */
+  aimZoom = 1;
   private eye = EYE;
   private fov = 75;
   /** The last view the simulation set that we've taken on. */
@@ -90,8 +93,8 @@ export class PlayerCamera {
       this.yaw = f.view.yaw;
       this.pitch = f.view.pitch;
     }
-    const targetEye = f.sneaking && !f.flying ? SNEAK_EYE : EYE;
-    this.eye += (targetEye - this.eye) * (1 - Math.exp(-dt * 14));
+    const targetEye = f.sliding ? SLIDE_EYE : f.sneaking && !f.flying ? SNEAK_EYE : EYE;
+    this.eye += (targetEye - this.eye) * (1 - Math.exp(-dt * (f.sliding ? 18 : 14)));
 
     const speed = Math.hypot(f.vx, f.vz);
     const bobAmt = this.viewBobbing && f.onGround && !f.flying ? Math.min(1, speed / 4.3) : 0;
@@ -115,8 +118,10 @@ export class PlayerCamera {
       this.camera.position.copy(pivot).addScaledVector(back, Math.min(this.distance, this.clearance(pivot, back, this.distance)));
     }
 
-    const targetFov = this.baseFov + (f.sprinting ? 9 : 0) + (f.flying && speed > 12 ? 6 : 0);
-    this.fov += (targetFov - this.fov) * (1 - Math.exp(-dt * 8));
+    const aiming = this.aimZoom > 1.01;
+    const targetFov = (this.baseFov + (f.sprinting && !aiming ? 9 : 0) + (f.sliding ? 6 : 0) + (f.flying && speed > 12 ? 6 : 0)) / this.aimZoom;
+    // Aiming snaps in quicker than the sprint kick eases.
+    this.fov += (targetFov - this.fov) * (1 - Math.exp(-dt * (aiming ? 22 : 8)));
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();

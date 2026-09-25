@@ -1,6 +1,6 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { PlayerInput } from '../net/protocol';
-import { freshMemory, stepMovement, type MoveControls, type MoveMemory } from '../sim/movement';
+import { DEFAULT_TUNE, freshMemory, NO_MODS, stepMovement, type MoveControls, type MoveMemory, type MoveMods, type MoveTune } from '../sim/movement';
 import type { PlayerFrame } from '../sim/player';
 
 /** A `PlayerInput` read the way movement reads controls. */
@@ -33,6 +33,7 @@ export interface Predicted {
   bob: number;
   sneaking: boolean;
   sprinting: boolean;
+  sliding: boolean;
   /** On a solid prop: which, and where their feet are on it (show them where it's drawn). */
   ride: { prop: number; p: [number, number, number] } | null;
 }
@@ -53,6 +54,7 @@ export class Predictor {
   private allowFlight = false;
   private sneak = false;
   private sprint = false;
+  private slide = false;
   /**
    * Shown minus predicted, fading: corrections ease in instead of snapping. Riding a prop, it's
    * on the prop (`errorRide`), since the prop moves on between the server's frames.
@@ -62,9 +64,16 @@ export class Predictor {
   /** How far the last server frame moved the prediction (blocks): ~0 when prediction holds. */
   lastCorrection = 0;
 
-  constructor(private world: VoxelWorld) {
+  constructor(
+    private world: VoxelWorld,
+    /** The game's movement (`player.movement`), as the server moves them. */
+    private tune: MoveTune = DEFAULT_TUNE,
+    /** What their held item and buttons do to their movement for an input (a gun's weight, aiming). */
+    private mods: (input: PlayerInput) => MoveMods = () => NO_MODS,
+  ) {
     this.slot = world.player_add(0, 300, 0);
     world.set_frozen(this.slot, true);
+    world.player_tune(this.slot, new Float64Array(tune.params));
   }
 
   /** This frame's controls (numbered `seq` for the server): move now. */
@@ -91,6 +100,7 @@ export class Predictor {
     this.allowFlight = me.canFly;
     this.sneak = me.sneaking;
     this.sprint = me.sprinting;
+    this.slide = me.sliding;
     while (this.pending.length && this.pending[0].seq <= me.ack) this.pending.shift();
     for (const m of this.pending) this.run(m.input, m.dt);
     this.ready = true;
@@ -133,6 +143,7 @@ export class Predictor {
       bob: s[11],
       sneaking: this.sneak,
       sprinting: this.sprint,
+      sliding: this.slide,
       ride: ride ? { prop: ride, p: [s[14] + e[0], s[15] + e[1], s[16] + e[2]] } : null,
     };
   }
@@ -144,9 +155,10 @@ export class Predictor {
   }
 
   private run(input: PlayerInput, dt: number) {
-    const r = stepMovement(this.world, this.slot, new Controls(input), input.yaw, this.allowFlight, this.memory, dt);
+    const r = stepMovement(this.world, this.slot, new Controls(input), input.yaw, this.allowFlight, this.memory, dt, this.tune, this.mods(input));
     this.sneak = r.sneak;
+    this.slide = r.slide;
     const s = this.world.player_state(this.slot);
-    this.sprint = r.sprint && Math.hypot(s[3], s[5]) > 4.5;
+    this.sprint = r.sprint && Math.hypot(s[3], s[5]) > Math.min(4.5, this.tune.params[0] * 1.02);
   }
 }

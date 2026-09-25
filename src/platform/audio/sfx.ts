@@ -303,6 +303,43 @@ const VOICES: Record<BuiltinSound, Voice> = {
   whoosh(this: Sfx, ctx, out, t, p) {
     noiseBurst(this, ctx, out, t, 0.6, 'bandpass', 500 * p, 1800 * p, 0.4, 1.5);
   },
+  // A generic gunshot: a thump, a blast of noise and a crack on top.
+  gunshot(this: Sfx, ctx, out, t, p) {
+    tone(ctx, out, 'sine', 150 * p, 42, t, 0.13, 0.9);
+    noiseBurst(this, ctx, out, t, 0.2, 'lowpass', 6000 * p, 500, 0.75);
+    noiseBurst(this, ctx, out, t, 0.035, 'highpass', 4000, 2500, 0.45);
+  },
+  // Magazine out, magazine in, the charging handle.
+  gun_reload(this: Sfx, ctx, out, t, p) {
+    noiseBurst(this, ctx, out, t + 0.05, 0.05, 'bandpass', 2200 * p, 1600 * p, 0.35, 3);
+    tone(ctx, out, 'square', 700 * p, 420 * p, t + 0.05, 0.04, 0.12, 2400);
+    noiseBurst(this, ctx, out, t + 0.55, 0.06, 'bandpass', 1800 * p, 1200 * p, 0.45, 3);
+    tone(ctx, out, 'square', 520 * p, 300 * p, t + 0.56, 0.05, 0.16, 2000);
+    noiseBurst(this, ctx, out, t + 0.85, 0.09, 'bandpass', 3000 * p, 1400 * p, 0.35, 2);
+  },
+  // Pulling the trigger on nothing.
+  gun_empty(this: Sfx, ctx, out, t, p) {
+    tone(ctx, out, 'square', 1900 * p, 1300 * p, t, 0.025, 0.15, 5000);
+    noiseBurst(this, ctx, out, t, 0.02, 'highpass', 4500, 3000, 0.2);
+  },
+  // A pump or bolt worked: back, forward.
+  gun_cycle(this: Sfx, ctx, out, t, p) {
+    noiseBurst(this, ctx, out, t + 0.08, 0.08, 'bandpass', 1400 * p, 900 * p, 0.35, 2);
+    tone(ctx, out, 'square', 480 * p, 300 * p, t + 0.12, 0.04, 0.12, 1800);
+    noiseBurst(this, ctx, out, t + 0.26, 0.07, 'bandpass', 1800 * p, 1200 * p, 0.35, 2);
+    tone(ctx, out, 'square', 620 * p, 420 * p, t + 0.3, 0.04, 0.14, 2000);
+  },
+  // A shot landed: a sharp little tick.
+  hitmarker(this: Sfx, ctx, out, t, p) {
+    tone(ctx, out, 'square', 2600 * p, 2100 * p, t, 0.035, 0.12, 6000);
+    noiseBurst(this, ctx, out, t, 0.025, 'highpass', 5000, 4000, 0.18);
+  },
+  // A kill: a bright double ding over a thump.
+  kill(this: Sfx, ctx, out, t, p) {
+    tone(ctx, out, 'sine', 180 * p, 60, t, 0.12, 0.5);
+    tone(ctx, out, 'triangle', 1320 * p, 1320 * p, t, 0.18, 0.22);
+    tone(ctx, out, 'triangle', 1760 * p, 1760 * p, t + 0.07, 0.3, 0.2);
+  },
 };
 
 type Loop = { set(volume: number, pitch: number): void; stop(): void };

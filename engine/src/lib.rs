@@ -266,10 +266,11 @@ impl VoxelWorld {
 
     pub fn player_reset(&mut self, i: u32, x: f64, y: f64, z: f64) {
         let Some(p) = self.player_mut(i) else { return };
-        let (flying, frozen) = (p.flying, p.frozen);
+        let (flying, frozen, tune) = (p.flying, p.frozen, p.tune);
         *p = world::Player::new(x, y, z);
         p.flying = flying;
         p.frozen = frozen;
+        p.tune = tune;
     }
 
     pub fn set_flying(&mut self, i: u32, on: bool) {
@@ -286,9 +287,29 @@ impl VoxelWorld {
         }
     }
 
+    /// How a player moves: [walk, sprint, sneak, jump, gravity, ground_accel, air_accel,
+    /// edge_guard (0/1), mantle, slide_friction] (see `world::Tuning`). Kept across `player_reset`.
+    pub fn player_tune(&mut self, i: u32, t: &[f64]) {
+        let Some(p) = self.player_mut(i) else { return };
+        let d = world::Tuning::MINECRAFT;
+        let at = |k: usize, def: f64| t.get(k).copied().filter(|v| v.is_finite()).unwrap_or(def);
+        p.tune = world::Tuning {
+            walk: at(0, d.walk),
+            sprint: at(1, d.sprint),
+            sneak: at(2, d.sneak),
+            jump: at(3, d.jump),
+            gravity: at(4, d.gravity),
+            ground_accel: at(5, d.ground_accel),
+            air_accel: at(6, d.air_accel),
+            edge_guard: at(7, 1.0) > 0.5,
+            mantle: at(8, d.mantle).clamp(0.0, 2.0),
+            slide_friction: at(9, d.slide_friction),
+        };
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub fn player_step(&mut self, i: u32, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, dt: f64) {
-        let input = world::MoveInput { wish_x, wish_z, jump, sneak, sprint };
+    pub fn player_step(&mut self, i: u32, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, slide: bool, speed: f64, dt: f64) {
+        let input = world::MoveInput { wish_x, wish_z, jump, sneak, sprint, slide, speed };
         let VoxelWorld { inner, players, .. } = self;
         if let Some(Some(p)) = players.get_mut(i as usize) {
             p.step(inner, &input, dt);

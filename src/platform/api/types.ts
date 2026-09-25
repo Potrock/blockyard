@@ -58,6 +58,39 @@ export interface GameDefinition {
    * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
    */
   vehicles?: Record<string, VehicleDefinition>;
+  /** How the HUD looks: the health display, health bars over heads, fonts and colours. */
+  hud?: HudOptions;
+}
+
+/** The HUD's look for a game (read by each player's screen, so it's data). */
+export interface HudOptions {
+  /** The player's own health: Minecraft's hearts (default), a bar with the number, or nothing. */
+  health?: 'hearts' | 'bar' | 'none';
+  /** Health bars over other players' heads (and creatures'), under their names. */
+  healthBars?: boolean;
+  /**
+   * Other players' names over their heads: always (default), only while nothing blocks the view
+   * of them (shooters: no seeing names through walls), or never.
+   */
+  nameTags?: 'always' | 'sight' | 'never';
+  /** Fonts and colours for the whole HUD, the menus and the result screens. */
+  theme?: HudTheme;
+}
+
+export interface HudTheme {
+  /** Font for titles, banners, big numbers (a CSS font-family). */
+  display?: string;
+  /** Font for everything else. */
+  text?: string;
+  /** Google Fonts families to load for them, e.g. `['Bangers', 'Anton']`. */
+  fonts?: string[];
+  /**
+   * `accent`: highlights and your own row; `ink`: outlines and shadows; `paper`: panel
+   * backgrounds; `text`; `danger`: damage and low health; `good`: health and healing.
+   */
+  colors?: { accent?: string; ink?: string; paper?: string; text?: string; danger?: string; good?: string };
+  /** Comic-book style: hard offset shadows and outlines on text and panels. */
+  comic?: boolean;
 }
 
 export interface WorldOptions {
@@ -119,6 +152,44 @@ export interface PlayerOptions {
    * Off by default, so co-op games have no friendly fire.
    */
   pvp?: boolean;
+  /** How players move (see `MovementOptions`). Default: Minecraft's walking. */
+  movement?: MovementOptions;
+  /** Seconds a player ignores further damage after a hit (Minecraft's 0.45; 0 for shooters). */
+  hurtCooldown?: number;
+}
+
+/**
+ * How players move: speeds in blocks a second, and the extras a game can turn on. Movement runs on
+ * each player's own screen as well as the host (prediction), so it's data, not code. Defaults are
+ * Minecraft's.
+ */
+export interface MovementOptions {
+  /** Walking (4.3), sprinting (5.6) and crouching (1.3) speeds. */
+  walk?: number;
+  sprint?: number;
+  crouch?: number;
+  /** Jump height in blocks (1.27). */
+  jump?: number;
+  /** Blocks a second per second (32). */
+  gravity?: number;
+  /** How quickly speed follows the controls: on the ground (14) and in the air (3), per second. */
+  acceleration?: number;
+  airControl?: number;
+  /** Keys (KeyboardEvent.code) that sprint and crouch. Default: Ctrl sprints, Shift crouches (sneaks). */
+  sprintKeys?: string[];
+  crouchKeys?: string[];
+  /** Double-tapping W sprints. Default true. */
+  doubleTapSprint?: boolean;
+  /** Crouching on the ground stops at edges, like Minecraft's sneaking. Default true. */
+  edgeGuard?: boolean;
+  /**
+   * Crouching out of a sprint slides: a burst of `speed` (default 1.45 x sprint) that bleeds away
+   * (`friction` per second, 1.4) over up to `time` seconds (0.75); jumping out of it keeps the
+   * speed. `cooldown` seconds (0.5) before the next. `true` for the defaults.
+   */
+  slide?: boolean | { speed?: number; time?: number; friction?: number; cooldown?: number };
+  /** Jumping into a ledge climbs onto it if its top is up to this far above the feet (blocks; `true` = 1). */
+  mantle?: boolean | number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -172,6 +243,8 @@ export interface GameContext {
   readonly input: InputApi;
   /** Movable objects: block builds (ships, lifts, vehicles) and glowing bolts. */
   readonly props: PropApi;
+  /** Players driven by the game's code (see `BotApi`). */
+  readonly bots: BotApi;
   /** Clear entities, timers, pickups and HUD, revive the player at spawn, then call `start` again. */
   restart(): void;
   /** Return to the game launcher. */
@@ -549,6 +622,10 @@ export interface DamageOptions {
   from?: Vec3;
   /** Show as a critical hit. */
   crit?: boolean;
+  /** The item it was done with (its id), for kill feeds. */
+  weapon?: string;
+  /** A head hit (guns). */
+  headshot?: boolean;
 }
 
 export interface PlayerApi {
@@ -621,6 +698,58 @@ export interface PlayerApi {
   setModel(model: ModelSpec | null): void;
   /** The colour of their name above their figure (team colours); null for white. */
   color: string | null;
+  /** A bot (`game.bots`): driven by the game's code, not a person. */
+  readonly bot: boolean;
+  /** Crouching (or sneaking), and sliding (`movement.slide`). */
+  readonly crouching: boolean;
+  readonly sliding: boolean;
+  /** Aiming down the sights of the gun they hold (right mouse). */
+  readonly aiming: boolean;
+  /** Multiplies their movement speed (a power-up, a heavy load). Default 1. */
+  speed: number;
+  /** Ignore damage for this long (spawn protection); 0 ends it. */
+  protect(seconds: number): void;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bots
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Players driven by the game's code instead of a person: they're in `game.players`, everyone sees
+ * them like any player (a figure, a name, what they hold), and they move, jump, slide, swing and
+ * shoot by the same rules, through the same controls a person has. Steer each one every tick
+ * with `bot.controls`; what a person's keyboard and mouse would do, they do.
+ */
+export interface BotApi {
+  /** A new bot, standing at the spawn; the game hears `playerJoin`. */
+  add(name: string): Bot;
+  /** It leaves (the game hears `playerLeave`). */
+  remove(bot: Player): void;
+  readonly all: readonly Bot[];
+}
+
+export interface Bot extends PlayerApi {
+  readonly controls: BotControls;
+}
+
+/** A bot's keyboard and mouse. Held keys and buttons stay held until released; presses and clicks last one tick. */
+export interface BotControls {
+  /** Hold or let go of a key (KeyboardEvent.code: 'KeyW', 'ShiftLeft', 'Space'…). */
+  hold(code: string, down?: boolean): void;
+  /** Press a key this tick ('KeyR' to reload, 'Digit2' for the second slot). */
+  press(code: string): void;
+  /** Hold or let go of a mouse button (0 left: attack / fire; 2 right: use / aim). */
+  button(b: number, down?: boolean): void;
+  /** Click a mouse button this tick. */
+  click(b: number): void;
+  /** Turn to look (radians, like `player.yaw` and `pitch`), or toward a point. */
+  look(yaw: number, pitch: number): void;
+  lookAt(point: Vec3): void;
+  /** Let go of every key and button. */
+  release(): void;
+  readonly yaw: number;
+  readonly pitch: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -635,8 +764,10 @@ export interface PlayerApi {
  * - `item`: potions, food, trinkets (`item/generated.json`).
  * - `block`: a small cube on the fist (`block/block.json`).
  * - `polearm`: two-handed, low at the right with the tip just under the crosshair (pikes, spears).
+ * - `gun`: two hands on a gun (guns' default): at the hip, up to the eye to aim down the sights,
+ *   down and across the chest to sprint.
  */
-export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm';
+export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm' | 'gun';
 
 /**
  * A 3D held item made of boxes, for things a 16x16 sprite can't do (pikes, staffs, shields).
@@ -657,6 +788,15 @@ export interface HeldModelSpec {
   /** Where the hands hold it (pixels): the rear / main hand, and the front hand for two-handed styles. */
   grip?: [number, number, number];
   grip2?: [number, number, number];
+  /**
+   * Guns: the barrel's tip (flashes and tracers start there), the point that sits on the eye line
+   * when aiming down the sights, and the magazine (a reload's hand goes there). Pixels. A glTF
+   * model can mark all of these (and the grips) with empty nodes named `grip`, `grip2`, `muzzle`,
+   * `sight` and `mag` instead.
+   */
+  muzzle?: [number, number, number];
+  sight?: [number, number, number];
+  mag?: [number, number, number];
   /**
    * A glTF or GLB model instead of boxes (`HeldModels.gltf`): its file, turned (degrees about X,
    * then Y, then Z) and scaled so it runs along +z to its tip, like the built-in ones.
@@ -737,6 +877,10 @@ export interface InventoryApi {
   count(item: string): number;
   select(slot: number): void;
   clear(): void;
+  /** A gun's rounds: in the magazine and spare (null for anything else, or if they don't have it). */
+  ammo(item: string): { magazine: number; reserve: number } | null;
+  /** Set a gun's rounds (a refill, a scavenged magazine); what's left out stays as it is. */
+  setAmmo(item: string, ammo: { magazine?: number; reserve?: number }): void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -780,8 +924,12 @@ interface ItemBase {
 }
 
 export interface ItemSounds {
-  /** Melee swing, bow release, or using a consumable. Defaults: `swing`, `bow_shoot`, none. */
+  /** Melee swing, bow release, a gunshot, or using a consumable. Defaults: `swing`, `bow_shoot`, `gunshot`, none. */
   use?: SoundName;
+  /** Guns: reloading (`gun_reload`), pulling the trigger on an empty gun (`gun_empty`), working a pump or bolt (`gun_cycle`). */
+  reload?: SoundName;
+  empty?: SoundName;
+  cycle?: SoundName;
   /** A melee hit landing. Default `hit` (`crit` for critical hits). */
   hit?: SoundName;
   /** Starting to draw a bow. Default `bow_draw`. */
@@ -814,6 +962,57 @@ export interface BowItem extends ItemBase {
   projectile?: SpriteRef;
 }
 
+/**
+ * A hitscan gun: each shot is a ray (a few for shotguns) that hits the first thing along it,
+ * checked against where targets were on the shooter's own screen (so what you aim at is what you
+ * hit, however far away the server is). Firing, recoil, aiming down the sights and reloading
+ * happen at once on the shooter's screen; the host decides the hits. Right-click aims, R
+ * reloads, and an empty gun reloads by itself.
+ */
+export interface GunItem extends ItemBase {
+  kind: 'gun';
+  /** Damage per bullet (per pellet): up close, and at `falloff[1]` blocks and beyond. */
+  damage: number | [near: number, far: number];
+  /** Where damage starts to fall off and where it bottoms out, in blocks. Default [20, 50]. */
+  falloff?: [number, number];
+  /** Damage multiplier for a head hit. Default 1.5. */
+  headshot?: number;
+  /** Rounds per minute. */
+  rpm: number;
+  /** Keeps firing while the trigger is held. Default false: a shot per click. */
+  auto?: boolean;
+  /** Rounds in a magazine, and spare rounds carried (default three magazines' worth). */
+  magazine: number;
+  reserve?: number;
+  /** Seconds to reload a magazine; with `shells`, seconds per round loaded (shotguns), and firing stops it. */
+  reload: number;
+  shells?: boolean;
+  /** Bullets per shot (shotguns). Default 1. */
+  pellets?: number;
+  /**
+   * The cone shots land in, in degrees (half angle): from the hip, aiming down the sights, and
+   * extra while moving or in the air; each shot adds `bloom`, which settles again quickly.
+   */
+  spread?: { hip?: number; aim?: number; move?: number; air?: number; bloom?: number };
+  /** Kick per shot in degrees: up, and at most sideways; `recover` (0..1) is how much of it the view settles back from. */
+  recoil?: { up?: number; side?: number; recover?: number };
+  /**
+   * Aiming down the sights (right mouse): `zoom` (the view's field of view divided by it; default
+   * 1.3), seconds to raise (0.2), speed while aiming (0.6), and what's seen: the gun's own
+   * `iron` sights (default), a `dot` sight, or a `scope` (the view fills with the scope).
+   */
+  aim?: { zoom?: number; time?: number; move?: number; sight?: 'iron' | 'dot' | 'scope' };
+  /** Blocks. Default 150. */
+  range?: number;
+  /** Movement speed while it's held (a heavy gun is slower). Default 1. */
+  mobility?: number;
+  /** A pump or bolt worked after each shot (its animation plays before the next). */
+  action?: 'pump' | 'bolt';
+  /** The tracer's colour, or false for none. Default a warm yellow. */
+  tracer?: string | false;
+  knockback?: number;
+}
+
 export interface ConsumableItem extends ItemBase {
   kind: 'consumable';
   /** Right-click to use. Return true to consume one. */
@@ -824,11 +1023,14 @@ export interface MiscItem extends ItemBase {
   kind: 'misc';
 }
 
-export type ItemDefinition = MeleeItem | BowItem | ConsumableItem | MiscItem;
+export type ItemDefinition = MeleeItem | BowItem | GunItem | ConsumableItem | MiscItem;
 
 /** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
-/** A sprite, a block's picture, or a picture of a glTF model (`{ gltf: url }`, drawn once it has loaded). */
-export type IconRef = SpriteRef | { block: string } | { gltf: string };
+/**
+ * A sprite, a block's picture, or a picture of a glTF model (`{ gltf: url }`, drawn once it has
+ * loaded; `view: 'side'` draws it from the side, the way kill feeds show guns).
+ */
+export type IconRef = SpriteRef | { block: string } | { gltf: string; view?: 'iso' | 'side' };
 
 export interface Pickup {
   readonly id: number;
@@ -1023,6 +1225,20 @@ export interface EntityApi {
 // HUD, effects, audio, environment
 // ---------------------------------------------------------------------------------------------
 
+/** One part of a feed line: text, coloured text, or an icon. */
+export type FeedPart = string | { text: string; color?: string } | { icon: IconRef };
+
+export interface Scoreboard {
+  title?: string;
+  /** Headers of the columns after the name ('Kills', 'Deaths', 'Score'). */
+  columns: string[];
+  rows: { name: string; values: (string | number)[]; color?: string; player?: Player }[];
+  /** A line under the table (time left, the score to win). */
+  footer?: string;
+  /** Keep it up whether or not Tab is held. */
+  show?: boolean;
+}
+
 export interface MenuEntry {
   icon?: IconRef;
   label: string;
@@ -1073,9 +1289,17 @@ export interface HudApi {
   toast(text: string): void;
   /**
    * A line in the message feed (top left): kill feeds, match events, chat. Lines stack, newest at
-   * the bottom, and fade after a few seconds. `color` tints the line.
+   * the bottom, and fade after a few seconds. `color` tints the line. A line can be parts: text,
+   * coloured text and icons (`['Ann', { icon: { gltf: rifle, view: 'side' } }, { text: 'Bob', color: '#f55' }]`).
    */
-  feed(text: string, opts?: { color?: string }): void;
+  feed(text: string | FeedPart[], opts?: { color?: string }): void;
+  /** A short pop-up under the crosshair ("+100", "Headshot!", "Double kill"): `big` for the big moments. */
+  pop(text: string, opts?: { color?: string; big?: boolean; sub?: string }): void;
+  /**
+   * The scoreboard, shown while the player holds Tab (or kept up with `show`, at a match's end);
+   * `null` removes it. Rows naming a `player` are theirs: that player sees their own highlighted.
+   */
+  scoreboard(board: Scoreboard | null): void;
   /** Modal screen with buttons; releases the mouse. Returns a function that closes it. */
   screen(opts: ScreenOptions): () => void;
   /** A labelled bar at the bottom left (shields, fuel, boost); `null` removes it. */
@@ -1120,6 +1344,8 @@ export interface MarkerOptions {
   edge?: boolean;
   /** Pulse (locks, warnings). */
   pulse?: boolean;
+  /** A bar under the label, 0..1 (a health bar over someone's head). */
+  bar?: number;
 }
 
 export interface RadarData {
@@ -1173,7 +1399,13 @@ export type BuiltinSound =
   | 'explosion_big'
   | 'lock'
   | 'alarm'
-  | 'whoosh';
+  | 'whoosh'
+  | 'gunshot'
+  | 'gun_reload'
+  | 'gun_empty'
+  | 'gun_cycle'
+  | 'hitmarker'
+  | 'kill';
 
 /** A built-in sound, or one a game added with `audio.define`. */
 export type SoundName = BuiltinSound | (string & {});
@@ -1233,11 +1465,19 @@ export interface EnvApi {
   frozen: boolean;
 }
 
+/** What a hit was done with, when a weapon did it: its item id, and whether it was a head hit. */
+export interface HitDetails {
+  weapon?: string;
+  headshot?: boolean;
+}
+
 export interface GameEvents {
-  entityDamage: { entity: Entity; amount: number; source: DamageOptions['source'] };
-  entityDeath: { entity: Entity; killer: DamageOptions['source'] };
-  playerDamage: { player: Player; amount: number; source: DamageOptions['source'] };
-  playerDeath: { player: Player; source: DamageOptions['source'] };
+  entityDamage: { entity: Entity; amount: number; source: DamageOptions['source'] } & HitDetails;
+  entityDeath: { entity: Entity; killer: DamageOptions['source'] } & HitDetails;
+  playerDamage: { player: Player; amount: number; source: DamageOptions['source'] } & HitDetails;
+  playerDeath: { player: Player; source: DamageOptions['source'] } & HitDetails;
+  /** A gun went off (every shot; a shotgun's pellets are one shot). */
+  shot: { player: Player; weapon: string; from: Vec3; dir: Vec3 };
   pickup: { player: Player; item: string; count: number };
   /** A player joined a game in progress (multiplayer). */
   playerJoin: { player: Player };

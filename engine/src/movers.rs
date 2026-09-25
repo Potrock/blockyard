@@ -413,7 +413,7 @@ mod tests {
         }
     }
 
-    const IDLE: MoveInput = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: false, sneak: false, sprint: false };
+    const IDLE: MoveInput = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
 
     fn settle(w: &World, p: &mut Player) {
         for _ in 0..90 {
@@ -454,7 +454,7 @@ mod tests {
         let mut p = Player::new(-6.0, 101.0, 0.3);
         settle(&w, &mut p);
         let start = p.pos;
-        let walk = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: false, sneak: false, sprint: false };
+        let walk = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
         for _ in 0..120 {
             p.step(&w, &walk, 1.0 / 60.0);
         }
@@ -462,7 +462,7 @@ mod tests {
         assert!(d > 7.5, "walked {d} blocks in 2 s");
         assert!(p.on_ground && (p.pos[1] - 100.0).abs() < 0.05);
         // And jumping lands back on deck.
-        let jump = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: true, sneak: false, sprint: false };
+        let jump = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: true, sneak: false, sprint: false, slide: false, speed: 1.0 };
         p.step(&w, &jump, 1.0 / 60.0);
         settle(&w, &mut p);
         assert!(p.on_ground && (p.pos[1] - 100.0).abs() < 0.05);
@@ -480,14 +480,14 @@ mod tests {
         settle(&w, &mut p);
         assert!(p.on_ground && p.ride.id == 6, "on the slope");
         let z0 = p.pos[2];
-        let up = MoveInput { wish_x: 0.0, wish_z: -1.0, jump: false, sneak: false, sprint: false };
+        let up = MoveInput { wish_x: 0.0, wish_z: -1.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
         for _ in 0..120 {
             p.step(&w, &up, 1.0 / 60.0);
         }
         assert!(z0 - p.pos[2] > 7.0, "walked uphill {}", z0 - p.pos[2]);
         let surface = 100.0 + (-p.pos[2]) * a.tan();
         assert!((p.pos[1] - surface).abs() < 0.2, "on the surface: {} vs {surface}", p.pos[1]);
-        let down = MoveInput { wish_x: 0.0, wish_z: 1.0, jump: false, sneak: false, sprint: false };
+        let down = MoveInput { wish_x: 0.0, wish_z: 1.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
         let z1 = p.pos[2];
         for _ in 0..120 {
             p.step(&w, &down, 1.0 / 60.0);
@@ -503,7 +503,7 @@ mod tests {
         carry(&mut w, &mut Player::new(0.0, 0.0, 0.0), 0.05);
         let mut p = Player::new(0.5, 101.0, 0.5);
         settle(&w, &mut p);
-        let jump = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: true, sneak: false, sprint: false };
+        let jump = MoveInput { wish_x: 0.0, wish_z: 0.0, jump: true, sneak: false, sprint: false, slide: false, speed: 1.0 };
         let dt = 1.0 / 20.0;
         for i in 0..40 {
             // The deck sails on at 6 blocks a second.
@@ -525,7 +525,7 @@ mod tests {
         let mut p = Player::new(1.5, 101.0, 0.0);
         settle(&w, &mut p);
         let dt = 1.0 / 20.0;
-        let walk = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: false, sneak: false, sprint: false };
+        let walk = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
         let mut vz_after = 0.0;
         for i in 0..60 {
             place(&mut w, 3, [0.0, 100.0, 5.0 * dt * (i + 1) as f64], 0.0);
@@ -600,7 +600,7 @@ mod tests {
         carry(&mut w, &mut Player::new(0.0, 0.0, 0.0), 0.05);
         let mut p = Player::new(0.5, 64.0, 0.5);
         settle(&w, &mut p);
-        let walk = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: false, sneak: false, sprint: false };
+        let walk = MoveInput { wish_x: 1.0, wish_z: 0.0, jump: false, sneak: false, sprint: false, slide: false, speed: 1.0 };
         for _ in 0..90 {
             p.step(&w, &walk, 1.0 / 60.0);
         }

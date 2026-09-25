@@ -21,6 +21,8 @@ export type PresentTarget = 'hud' | 'fx' | 'audio' | 'view' | 'client';
 /** One presentation call: `target.method(...args)` on one player's client (`to`), or everyone's. */
 export interface PresentCall {
   to: string | null;
+  /** For everyone (`to` null) but this player (whose own screen already showed it: their shot). */
+  skip?: string;
   target: PresentTarget;
   method: string;
   args: unknown[];
@@ -80,6 +82,14 @@ export interface PlayerInput {
    * it catches up, its `yaw` / `pitch` are stale and the simulation keeps its own.
    */
   viewSeq: number;
+  /**
+   * Guns: the shots this client fired with these controls, each [serial, yaw, pitch, spread in
+   * degrees]. The client fires at once (it knows the gun's rate and rounds); the host takes each
+   * shot the gun could have fired and decides what it hit.
+   */
+  shots?: [number, number, number, number][];
+  /** The host time (`SimFrame.t`) of what this client was showing when it made these controls: shots hit where targets were then. */
+  seen?: number;
 }
 
 export const IDLE_INPUT: PlayerInput = { active: false, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: -1 };

@@ -15,6 +15,8 @@ export class PlayerHealth {
   private sinceHurt = 99;
   private regen: { delay: number; perSecond: number } | null = null;
   private fallDamage = false;
+  /** Seconds of invulnerability after a hit (`player.hurtCooldown`). */
+  private hurtCooldown = 0.45;
   private prevVy = 0;
   private prevGround = true;
   /** Armour points (0..20), each blocking 4% of damage. */
@@ -31,8 +33,8 @@ export class PlayerHealth {
     private playerPos: () => Vec3,
     /** The player this health belongs to (named in the events). */
     private player: () => Player,
-    /** Hit: the first-person view flinches. */
-    private onHurt: () => void,
+    /** Hit (from where, if anywhere): the first-person view flinches, the HUD points to it. */
+    private onHurt: (from: Vec3 | null) => void,
   ) {}
 
   configure(opts: PlayerOptions) {
@@ -41,6 +43,7 @@ export class PlayerHealth {
     this.health = this.max;
     this.regen = opts.regen ?? null;
     this.fallDamage = opts.fallDamage ?? false;
+    this.hurtCooldown = opts.hurtCooldown ?? 0.45;
     this.refresh();
   }
 
@@ -51,7 +54,7 @@ export class PlayerHealth {
     if (!this.enabled || this.dead || this.invuln > 0 || amount <= 0) return false;
     amount *= 1 - Math.min(20, Math.max(0, this.armor)) * 0.04;
     this.health = Math.max(0, this.health - amount);
-    this.invuln = 0.45;
+    this.invuln = this.hurtCooldown;
     this.sinceHurt = 0;
     const p = this.playerPos();
     const from = opts.from ?? (typeof opts.source === 'object' ? opts.source.position : null);
@@ -63,18 +66,24 @@ export class PlayerHealth {
       this.world.player_impulse(this.slot, (dx / l) * 7 * kb, 5.5 * kb, (dz / l) * 7 * kb);
     }
     this.audio.play('hurt');
-    this.onHurt();
+    this.onHurt(from);
     this.fx.flash('rgba(180, 10, 10, 1)', Math.min(0.5, 0.15 + amount * 0.04), 0.45);
     this.fx.shake(0.06 + amount * 0.012, 0.3);
-    this.emit('playerDamage', { player: this.player(), amount, source: opts.source });
+    const how = { weapon: opts.weapon, headshot: opts.headshot };
+    this.emit('playerDamage', { player: this.player(), amount, source: opts.source, ...how });
     if (this.health <= 0) {
       this.dead = true;
       this.deathTime = 0;
       this.world.set_frozen(this.slot, true);
-      this.emit('playerDeath', { player: this.player(), source: opts.source });
+      this.emit('playerDeath', { player: this.player(), source: opts.source, ...how });
     }
     this.refresh();
     return true;
+  }
+
+  /** Ignore damage for this long (spawn protection); 0 ends it. */
+  protect(seconds: number) {
+    this.invuln = Math.max(0, seconds);
   }
 
   heal(amount: number) {

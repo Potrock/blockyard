@@ -135,7 +135,7 @@ export class EntityGraphics {
 
   /** An icon as a picture (data URL): a sprite, or a model's (empty until its file is here). Blocks are the caller's. */
   icon(ref: Exclude<IconRef, { block: string }>, size = 48): string {
-    return typeof ref === 'object' && 'gltf' in ref ? this.gltf.icon(ref.gltf, size) : this.spriteIcon(ref, size);
+    return typeof ref === 'object' && 'gltf' in ref ? this.gltf.icon(ref.gltf, size, ref.view) : this.spriteIcon(ref, size);
   }
 
   /** A per-instance lit material. Same shader source, so three.js reuses the compiled program. */
@@ -385,6 +385,10 @@ export interface AnimState {
   /** Death tilt 0..1. */
   dying: number;
   time: number;
+  /** Holding a gun up to aim where it looks, 0..1 (both arms forward). */
+  aim: number;
+  /** Standing 0, crouching 1, sliding 2 (blended). */
+  stance: number;
 }
 
 /** A drawn figure: box model (`ModelInstance`) or glTF (`GltfFigure`). */
@@ -432,10 +436,28 @@ export class ModelInstance implements Figure {
         armL = -1.4 * attack + armL * (1 - attack);
       }
       const sway = Math.sin(s.time * 1.7) * 0.05;
-      this.pose('armR', armR, 0, sway + 0.05);
-      this.pose('armL', armL, 0, -sway - 0.05);
+      // A gun: both arms forward along the look, the left reaching across for the handguard.
+      const aim = s.aim;
+      const aimX = -Math.PI / 2 + s.headPitch;
+      const rx = armR + (aimX - armR) * aim;
+      const lx = armL + (aimX + 0.05 - armL) * aim;
+      this.pose('armR', rx, -0.12 * aim, (sway + 0.05) * (1 - aim));
+      this.pose('armL', lx, 0.62 * aim, (-sway - 0.05) * (1 - aim));
       this.pose('head', s.headPitch, s.headYaw);
       this.pose('body', 0);
+      // Crouching: down, legs apart front and back; sliding: leaning back, legs out ahead.
+      const crouch = Math.min(1, s.stance);
+      const slide = Math.max(0, s.stance - 1);
+      const inner = this.root.children[0];
+      if (inner) {
+        inner.position.y = -0.3 * crouch - 0.3 * slide;
+        inner.rotation.x = -0.75 * slide;
+      }
+      if (crouch > 0) {
+        this.pose('legR', legSwing * (1 - crouch) - 0.75 * crouch - 0.5 * slide, 0, 0.08 * crouch);
+        this.pose('legL', -legSwing * (1 - crouch) + 0.55 * crouch - 1.6 * slide, 0, -0.08 * crouch);
+        this.pose('body', 0.3 * crouch * (1 - slide));
+      }
     } else if (this.spec.rig === 'spider') {
       for (let i = 0; i < 4; i++) {
         const ph = s.walkPhase * 1.6 + (i % 2) * Math.PI;

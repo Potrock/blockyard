@@ -35,7 +35,7 @@ export class Presenter {
   ) {}
 
   apply(c: PresentCall) {
-    if (c.to !== null && c.to !== this.player) return;
+    if (c.to !== null ? c.to !== this.player : c.skip !== undefined && c.skip === this.player) return;
     const p = this.parts;
     const args = c.args.map((a) => this.decode(a));
     switch (c.target) {

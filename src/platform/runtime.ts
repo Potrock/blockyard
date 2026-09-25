@@ -6,6 +6,11 @@ import { PageLink, SocketLink, WorkerLink, type SimLink } from './host/link';
 import { MemoryStore } from './host/store';
 import { FrameBuffer } from './client/interp';
 import { Predictor } from './client/predict';
+import { GunController, type FiredShot } from './client/guns';
+import { freshMemory, resolveMovement, type MoveTune } from './sim/movement';
+import { gun as gunOf, isGun, moveMods, playerBoxes, rayBox, DEG } from './sim/guns';
+import { rayHit } from './sim/worldquery';
+import type { ShotWire } from './sim/combat';
 import { ClientMovers, propPose } from './client/movers';
 import { heading, toWorld } from './sim/movers';
 import { VehicleView } from './client/vehicle';
@@ -24,7 +29,7 @@ import { Input } from './player/input';
 import { Effects } from './fx/effects';
 import { Sfx } from './audio/sfx';
 import { Hud } from './ui/hud';
-import { GameHud } from './ui/hudkit';
+import { applyTheme, GameHud } from './ui/hudkit';
 import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
 import { Content } from './content';
@@ -177,6 +182,20 @@ export class Runtime {
   debugActive = false;
   /** On a server, in a room of a player's own: its code. */
   private room: string | null = null;
+  /** The held gun on this screen: it fires at once, and its shots go to the host with the controls. */
+  private guns = new GunController();
+  /** Shots fired and not yet sent (a tick was still on its way to a worker). */
+  private shotQueue: [number, number, number, number][] = [];
+  /** This frame's shots, drawn once the hand is placed (their tracers leave its muzzle). */
+  private ownShots: FiredShot[] = [];
+  /** The host time of the frame last drawn (shots hit where others were then). */
+  private shownT = 0;
+  /** The game's movement, for prediction and a gun's spread. */
+  private tune: MoveTune;
+  /** Undo the game's HUD theme (switching games). */
+  private unTheme: () => void = () => {};
+  /** Average colours of blocks' textures (bullet chips), by block id. */
+  private blockColors = new Map<number, [number, number, number]>();
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -197,6 +216,7 @@ export class Runtime {
     this.camera.layers.enable(LAYER_CHUNKS);
     this.input = new Input(canvas, this.life.signal);
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
+    this.tune = resolveMovement(def.player?.movement);
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
     // On a server, the title screen asks for a name and says who's on; a game with rooms of
     // players' own offers one (or, in one, the link to it and the way back).
@@ -367,6 +387,9 @@ export class Runtime {
       else if (this.mode === 'playing' && navigator.userActivation?.isActive) this.input.lock();
     };
     this.gameHud.onCrosshair = (v) => this.hud.setCrosshair(v);
+    this.gameHud.player = this.playerId;
+    this.gameHud.setHealthStyle(def.hud?.health ?? 'hearts');
+    this.unTheme = applyTheme(this.ui, def.hud?.theme);
     if (!this.walker) this.hud.setHotbarVisible(false);
     this.debug = new DebugOverlay(this.ui);
     this.fx = new Effects(this.particles, this.gameHud, this.renderer.fxScene, this.sfx, () => this.camera.position);
@@ -437,7 +460,8 @@ export class Runtime {
       this.playback = new FrameBuffer(2 / this.server.welcome.tickRate);
       this.server.onClose = () => this.disconnected();
       if (this.walker) {
-        this.predictor = new Predictor(this.chunks.world);
+        // Movement as the server moves them: the game's tuning, and what they hold (a heavy gun, aiming).
+        this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1));
         this.movers = new ClientMovers(this.chunks.world, this.content, this.registry, (b) => this.blockId(b));
       }
     } else {
@@ -548,8 +572,11 @@ export class Runtime {
       if (!def) return;
       const face = def.tex[0];
       this.particles.burst(x, y, z, this.textures.albedoData.subarray(face * 1024, face * 1024 + 1024), def.tint ? DEFAULT_TINT : null);
+    } else if (method === 'shot') {
+      this.othersShot(args[0] as ShotWire);
     } else if (method === 'reset') {
       // A restart: everything the game put on screen goes.
+      this.guns.reset();
       this.entityView.clear();
       this.pickupView.clear();
       this.propView.clear();
@@ -599,6 +626,7 @@ export class Runtime {
           // In the game now, as this player.
           this.playerId = e.player;
           this.presenter.player = e.player;
+          this.gameHud.player = e.player;
           break;
         case 'ready':
           this.hostReady = true;
@@ -629,6 +657,8 @@ export class Runtime {
       if (me) {
         this.predictor?.reconcile(me);
         this.vehicles.reconcile(me);
+        if (me.dead) this.guns.reset();
+        else this.guns.reconcile(me.hand.gun);
       }
     }
   }
@@ -679,6 +709,9 @@ export class Runtime {
       bob: 0,
       sneaking: false,
       sprinting: false,
+      sliding: false,
+      speed: 1,
+      bot: false,
       view: { seq: 0, yaw: sp.yaw, pitch: 0 },
       health: 20,
       maxHealth: 20,
@@ -694,7 +727,7 @@ export class Runtime {
       canFly: false,
       swings: 0,
       ack: -1,
-      move: { time: 0, lastJumpTap: -1, lastForwardTap: -1, sprintLatched: false },
+      move: freshMemory(),
       lead: 0,
       skin: null,
       model: null,
@@ -731,6 +764,8 @@ export class Runtime {
       h.health = p.health;
       h.flash = Math.max(0, h.flash - 0.05);
       this.avatarHurt.set(p.id, h);
+      const held = p.hotbar?.slots[p.hotbar.selected]?.item ?? null;
+      const gunUp = held !== null && this.content.items.get(held)?.kind === 'gun' && !p.dead;
       out.push({
         id,
         type,
@@ -747,13 +782,24 @@ export class Runtime {
         glow: null,
         hurt: h.flash,
         dying: p.dead ? p.deathTime : -1,
-        held: p.hotbar?.slots[p.hotbar.selected]?.item ?? null,
+        held,
+        aim: gunUp ? 1 : 0,
+        stance: p.sliding ? 2 : p.sneaking ? 1 : 0,
       });
       if (mine) continue;
+      const tags = this.def.hud?.nameTags ?? 'always';
+      if (tags === 'never' || p.dead) continue;
+      const top = { x: p.x, y: p.y + (p.sliding ? 1.45 : p.sneaking ? 1.95 : 2.25), z: p.z };
+      // In a shooter, names show only while nothing blocks the view (no finding people through walls).
+      if (tags === 'sight') {
+        const c = this.camera.position;
+        if (!this.chunks.world.line_clear(c.x, c.y, c.z, top.x, top.y - 0.35, top.z)) continue;
+      }
       const tag = `$name:${p.id}`;
       seen.add(tag);
       this.tags.add(tag);
-      this.gameHud.marker(tag, { x: p.x, y: p.y + 2.25, z: p.z }, { label: p.name, shape: 'dot', size: 3, color: p.color ?? '#ffffff' });
+      const bar = this.def.hud?.healthBars && p.maxHealth > 0 ? p.health / p.maxHealth : undefined;
+      this.gameHud.marker(tag, top, { label: p.name, shape: 'dot', size: 3, color: p.color ?? '#ffffff', bar });
     }
     for (const tag of this.tags) {
       if (seen.has(tag)) continue;
@@ -845,6 +891,7 @@ export class Runtime {
     }
     this.graphics?.dispose();
     this.sfx.close();
+    this.unTheme();
     this.gameHud?.closeScreens();
     // The HUD, menus and overlays this game put up; the home page stays.
     for (const el of [...this.ui.children]) if (el !== this.title.root) el.remove();
@@ -1110,10 +1157,10 @@ export class Runtime {
       this.held.swapItemGeometry(look.geometry);
       return;
     }
-    const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : 'item';
+    const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : def.kind === 'gun' ? 'gun' : 'item';
     // Held as a model (boxes or glTF), posed by its grip; else as its sprite.
     const hold = look.model ? { ...def.hold, model: look.model } : def.hold ?? {};
-    this.held.setItem(look.geometry, look.albedo, look.emissive, hold, style);
+    this.held.setItem(look.geometry, look.albedo, look.emissive, hold, style, look.points);
   }
 
   /** Columns the host keeps around the player: what this client shows, within reason. */
@@ -1185,12 +1232,16 @@ export class Runtime {
         }
       }
     }
+    // The held gun fires on this screen at once; its shots go with the next controls sent.
+    const latest = this.walker && this.itemMode ? this.mine(this.frameData) : undefined;
+    this.ownShots = latest ? this.gunFrame(dt, active, latest) : [];
+    for (const shot of this.ownShots) this.shotQueue.push([shot.serial, shot.yaw, shot.pitch, shot.spread]);
     // A server keeps its own clock: it gets the controls every frame. Otherwise one tick at a time:
     // while one is on its way, frame time (and input) adds up for the next. In this page the
     // answer is immediate; from a worker it arrives before the next frame.
     this.tickDt += dt;
     if (this.server) {
-      const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
+      const input = this.withShots(this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq));
       // Numbered, with how long it lasted: walking and vehicles move at once here (prediction),
       // and the server moves them input by input, the same way.
       const seq = ++this.inputSeq;
@@ -1201,7 +1252,7 @@ export class Runtime {
       this.link.send({ t: 'input', input, seq, dt });
     } else if (!this.ticking) {
       this.ticking = true;
-      const input = this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq);
+      const input = this.withShots(this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq));
       const tickDt = Math.min(0.1, this.tickDt);
       this.tickDt = 0;
       try {
@@ -1212,6 +1263,7 @@ export class Runtime {
       }
     }
     const f = this.playback?.sample() ?? this.frameData;
+    if (f) this.shownT = f.t;
     this.updateReadiness();
     const played = this.mine(f);
     // Our own player where prediction has them (a server), else as the frame says.
@@ -1294,6 +1346,9 @@ export class Runtime {
     this.fx.update(dt);
     this.held.setLight(this.probe);
     if (this.walker) this.updateHand(dt, me);
+    this.drawOwnShots();
+    this.gunHud(me);
+    this.gameHud.holdScoreboard(this.mode === 'playing' && this.input.isDown('Tab'));
     // Camera effects: shake and the death tilt (which rights itself after a moment, for someone
     // out of the game a while to watch).
     this.camera.position.add(this.fx.shakeOffset);
@@ -1368,7 +1423,195 @@ export class Runtime {
       vy: me.vy,
       down: me.dead,
       strength: this.itemMode ? me.hand.strength : 1,
+      gun: this.gunView(me),
     });
+  }
+
+  /** The held gun, for the view model: aimed, sprinting, sliding, reloading. */
+  private gunView(me: PlayerFrame) {
+    const st = this.guns.state;
+    const def = this.guns.def;
+    if (!st || !def) return undefined;
+    const g = gunOf(def);
+    return {
+      aim: st.aim,
+      sprint: this.guns.sprint,
+      slide: me.sliding ? 1 : 0,
+      reload: this.guns.reloadProgress,
+      shells: def.shells ? this.guns.shellsToLoad : 0,
+      sight: g.aim.sight,
+      action: def.action,
+    };
+  }
+
+  /** The item in this player's hand, as the newest frame has it. */
+  private heldDef(): ItemDefinition | undefined {
+    const me = this.mine(this.frameData);
+    const stack = me?.hotbar?.slots[me.hotbar.selected];
+    return stack ? this.content.items.get(stack.item) : undefined;
+  }
+
+  /** Shots fired since the last controls sent go with these ones, and what this screen is showing. */
+  private withShots<T extends { shots?: [number, number, number, number][]; seen?: number }>(input: T): T {
+    if (this.walker && this.itemMode) {
+      input.shots = this.shotQueue;
+      this.shotQueue = [];
+    }
+    input.seen = this.shownT;
+    return input;
+  }
+
+  /** This frame's aiming, reloading and firing with the held gun (see `GunController`). */
+  private gunFrame(dt: number, active: boolean, me: PlayerFrame): FiredShot[] {
+    const stack = me.hotbar?.slots[me.hotbar.selected] ?? null;
+    const def = stack ? this.content.items.get(stack.item) : undefined;
+    this.guns.hold(isGun(def) ? stack!.item : null, def, me.hand.gun);
+    if (!this.guns.state) return [];
+    const p = this.predictor?.shown() ?? me;
+    const body = { moving: Math.hypot(p.vx, p.vz) / Math.max(1, this.tune.params[0]), air: !p.onGround, crouch: p.sneaking, sprinting: p.sprinting, dead: me.dead };
+    const c = {
+      active,
+      trigger: this.input.button(0),
+      triggerPressed: this.input.clickedThisFrame(0),
+      aim: this.input.button(2),
+      reload: this.input.keyThisFrame('KeyR'),
+    };
+    const shots = this.guns.update(
+      dt,
+      c,
+      body,
+      this.view.yaw,
+      this.view.pitch,
+      (dPitch, dYaw) => {
+        this.view.pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, this.view.pitch + dPitch));
+        this.view.yaw += dYaw;
+      },
+      (name) => this.sfx.play(name, { volume: 0.8 }),
+    );
+    for (const _ of shots) {
+      this.held.fire(1);
+      this.sfx.play(def?.sounds?.use ?? 'gunshot', { volume: 0.9, pitch: 0.97 + Math.random() * 0.06 });
+    }
+    // Aiming down the sights zooms the view.
+    const g = this.guns.g;
+    const a = this.guns.state?.aim ?? 0;
+    this.view.aimZoom = g ? 1 + (g.aim.zoom - 1) * a * a * (3 - 2 * a) : 1;
+    return shots;
+  }
+
+  /** This screen's own shots: tracers from the gun's muzzle to where each bullet lands here, chips off walls. */
+  private drawOwnShots() {
+    if (!this.ownShots.length) return;
+    const def = this.guns.def;
+    const g = this.guns.g;
+    if (!def || !g) return;
+    const muzzle = new THREE.Vector3();
+    const from = this.held.muzzle(muzzle) ? muzzle.applyMatrix4(this.camera.matrixWorld) : this.camera.position.clone();
+    const eye = this.camera.position.clone().sub(this.fx.shakeOffset);
+    const others = (this.frameData?.players ?? []).filter((p) => p.id !== this.playerId && !p.dead);
+    for (const shot of this.ownShots) {
+      shot.dirs.forEach((d, i) => {
+        const end = this.bulletEnd(eye, d, g.range, others);
+        if (def.tracer !== false && (i === 0 || i % 3 === 0)) this.fx.tracer(from, end.point, def.tracer ?? '#ffd27a');
+        if (end.block >= 0) this.fx.impact(end.point, end.normal, this.blockColor(end.block));
+      });
+    }
+    this.ownShots = [];
+  }
+
+  /** Where a bullet from this screen lands: a block (through foliage), or someone drawn in the way. */
+  private bulletEnd(o: Vec3, d: Vec3, range: number, others: PlayerFrame[]): { point: Vec3; normal: Vec3 | null; block: number } {
+    let end = range;
+    let normal: Vec3 | null = null;
+    let block = -1;
+    let from = o;
+    let travelled = 0;
+    for (let i = 0; i < 12; i++) {
+      const h = rayHit(this.chunks.world, from, d, range - travelled);
+      if (!h) break;
+      const b = this.registry.blocks[h.block];
+      const along = (h.point.x - o.x) * d.x + (h.point.y - o.y) * d.y + (h.point.z - o.z) * d.z;
+      if (b && (b.small || b.name.endsWith('_leaves'))) {
+        travelled = along + 0.02;
+        from = { x: o.x + d.x * travelled, y: o.y + d.y * travelled, z: o.z + d.z * travelled };
+        continue;
+      }
+      end = along;
+      normal = h.normal;
+      block = h.block;
+      break;
+    }
+    for (const p of others) {
+      const b = playerBoxes(p, p.sliding ? 2 : p.sneaking ? 1 : 0);
+      const t = Math.min(rayBox(o, d, b.body[0], b.body[1]) ?? Infinity, rayBox(o, d, b.head[0], b.head[1]) ?? Infinity);
+      if (t < end) {
+        end = t;
+        normal = null;
+        block = -1;
+      }
+    }
+    return { point: { x: o.x + d.x * end, y: o.y + d.y * end, z: o.z + d.z * end }, normal, block };
+  }
+
+  /** Someone else's shot: tracers from their gun's muzzle (as their figure's drawn), a flash, chips where it hit. */
+  private othersShot(w: ShotWire) {
+    const def = this.content.items.get(w.item);
+    const shooter = this.frameData?.players.find((p) => p.id === w.by);
+    const avatar = this.avatarIds.get(w.by);
+    const from = new THREE.Vector3();
+    if (!(avatar !== undefined && this.entityView.muzzle(avatar, from))) {
+      if (!shooter) return;
+      from.set(shooter.x, shooter.y + 1.45, shooter.z);
+    }
+    this.fx.muzzleFlash(from, 0.55);
+    const color = def?.kind === 'gun' && def.tracer !== false ? (def.tracer ?? '#ffd27a') : null;
+    w.ends.forEach(([x, y, z, kind], i) => {
+      const at = { x, y, z };
+      if (color && (i === 0 || i % 3 === 0)) this.fx.tracer(from, at, color);
+      if (kind === 1 && w.blocks[i] >= 0) {
+        const n = w.normals[i];
+        this.fx.impact(at, n ? { x: n[0], y: n[1], z: n[2] } : null, this.blockColor(w.blocks[i]));
+      } else if (kind === 2) this.fx.impact(at, null, [0.75, 0.05, 0.08], true);
+    });
+  }
+
+  /** A block's average colour (linear), for the chips a bullet knocks off it. */
+  private blockColor(id: number): [number, number, number] {
+    let c = this.blockColors.get(id);
+    if (c) return c;
+    const def = this.registry.blocks[id];
+    const layer = def?.tex[0] ?? 0;
+    const px = this.textures.albedoData.subarray(layer * 1024, layer * 1024 + 1024);
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let i = 0; i < 1024; i += 4) {
+      r += (px[i] / 255) ** 2.2;
+      g += (px[i + 1] / 255) ** 2.2;
+      b += (px[i + 2] / 255) ** 2.2;
+    }
+    const tint = def?.tint ? DEFAULT_TINT : [1, 1, 1];
+    c = [(r / 256) * tint[0], (g / 256) * tint[1], (b / 256) * tint[2]];
+    this.blockColors.set(id, c);
+    return c;
+  }
+
+  /** The gun's HUD: rounds, the crosshair opening with the spread, the scope. */
+  private gunHud(me: PlayerFrame) {
+    const st = this.guns.state;
+    const def = this.guns.def;
+    if (!st || !def || me.dead || me.vehicle) {
+      this.gameHud.ammo(null);
+      this.hud.setGunCrosshair(null);
+      this.hud.setScope(false);
+      return;
+    }
+    this.gameHud.ammo({ mag: st.mag, reserve: st.reserve, size: def.magazine, name: def.name, reloading: st.reload >= 0 });
+    const p = this.predictor?.shown() ?? me;
+    const spread = this.guns.spread({ moving: Math.hypot(p.vx, p.vz) / Math.max(1, this.tune.params[0]), air: !p.onGround, crouch: p.sneaking, sprinting: false, dead: false });
+    const focal = window.innerHeight / 2 / Math.tan((this.camera.fov * DEG) / 2);
+    this.hud.setGunCrosshair(Math.tan(spread * DEG) * focal + 5, st.aim > 0.55);
+    this.hud.setScope(gunOf(def).aim.sight === 'scope' && st.aim > 0.9);
   }
 
   /** Render, HUD, autosave, debug overlay, end of input frame. */
