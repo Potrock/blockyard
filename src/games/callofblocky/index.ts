@@ -7,6 +7,8 @@ import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, PRIMARIES, WEAPONS, type Primary } from './weapons';
 import { GUNS } from './models';
 import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
+import hudCss from './hud.css?raw';
+import { DOSSIER, streakPips } from './hud';
 
 /** Each outfit's fighter (in the same order as `OUTFITS`): a model on the platform's humanoid rig, animated by it. */
 const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfit % FIGHTER_MODELS.length].url, { rig: 'humanoid' });
@@ -26,6 +28,8 @@ const TIME_LIMIT = 8 * 60;
 const FIGHTERS = 6;
 const MAX_FIGHTERS = 8;
 const RESPAWN = 3;
+/** How long the Adrenaline Shot lasts. */
+const RUSH = 15;
 const BOT_NAMES = ['Lucky Lou', 'Dolly Dagger', 'Sal Nero', 'Candy Kane', 'Rocco', 'Velma', 'Big Tony', 'Honey', 'Duke', 'Jackie Rabbit', 'Frankie Two-Guns', 'Mona', 'Zed', 'Butch'];
 const COLORS = { gold: '#ffcc00', red: '#e63946', ink: '#111111', cream: '#fdf1d6', pink: '#ff5c8a', teal: '#1fa3a0' };
 
@@ -45,6 +49,8 @@ interface Fighter {
   lastKillAt: number;
   multi: number;
   uavUntil: number;
+  /** How long the UAV they have now lasts in all (its bar drains from full). */
+  uavFor: number;
   rushUntil: number;
   /** Last shot: they show on everyone's radar for a moment. */
   firedAt: number;
@@ -106,6 +112,7 @@ function addFighter(game: GameContext, p: Player): Fighter {
     lastKillAt: -99,
     multi: 0,
     uavUntil: 0,
+    uavFor: 0,
     rushUntil: 0,
     firedAt: -99,
     menu: null,
@@ -267,11 +274,12 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
     // Streak rewards.
     if (k.streak === 3) {
       k.uavUntil = now + 25;
+      k.uavFor = 25;
       killer.hud.banner('UAV ONLINE', 'Everyone shows on your radar', { color: COLORS.gold, duration: 2 });
       killer.audio.play('lock');
     }
     if (k.streak === 5) {
-      k.rushUntil = now + 15;
+      k.rushUntil = now + RUSH;
       killer.speed = 1.2;
       killer.heal(killer.maxHealth);
       killer.hud.banner('ADRENALINE SHOT', 'Faster and patched up, for fifteen seconds', { color: COLORS.pink, duration: 2 });
@@ -334,7 +342,10 @@ function defineBriefcase(game: GameContext) {
       const f = fighters.get(player.id);
       if (!f || !player.alive) return false;
       f.score += BRIEFCASE_POINTS;
-      f.uavUntil = Math.max(f.uavUntil, g.clock.now + 20);
+      if (g.clock.now + 20 > f.uavUntil) {
+        f.uavUntil = g.clock.now + 20;
+        f.uavFor = 20;
+      }
       boardDirty = true;
       briefcase = null;
       bots.objective = null;
@@ -403,17 +414,31 @@ function scoreboard(game: GameContext, show = false) {
   });
 }
 
-/** Each person's corner: their kills, their place, the leader; their radar. */
+/** Each person's corner (the dossier widget, see hud.ts): their kills, place, the leader, their streak and its rewards; their radar. */
 function personalHud(game: GameContext, f: Fighter, dt: number) {
   const p = f.player;
   const table = standings();
   const place = table.indexOf(f) + 1;
   const leader = table[0];
-  p.hud.stat('kills', 'Kills', `${f.kills} / ${SCORE_LIMIT}`);
-  p.hud.stat('place', 'Place', `${ordinal(place)} of ${table.length}`);
-  p.hud.stat('lead', leader === f ? 'Leading by' : 'Leader', leader === f ? String(f.kills - (table[1]?.kills ?? 0)) : `${leader.player.name} · ${leader.kills}`);
-  // The radar: enemies who just fired (unsuppressed), or everyone under a UAV.
   const now = game.clock.now;
+  // Every tick: only what changed goes to their screen.
+  p.hud.widget('dossier', {
+    kills: f.kills,
+    limit: SCORE_LIMIT,
+    place: ordinal(place),
+    fighters: table.length,
+    leading: leader === f,
+    margin: f.kills - (table[1]?.kills ?? 0),
+    leader: leader.player.name,
+    leaderKills: leader.kills,
+    pips: streakPips(f.streak),
+    extra: Math.max(0, f.streak - 5),
+    uav: Math.max(0, Math.ceil(f.uavUntil - now)),
+    uavFor: f.uavFor,
+    rush: Math.max(0, Math.ceil(f.rushUntil - now)),
+    rushFor: RUSH,
+  });
+  // The radar: enemies who just fired (unsuppressed), or everyone under a UAV.
   const uav = f.uavUntil > now;
   const blips = [...fighters.values()].filter((e) => e !== f && e.player.alive && (uav || now - e.firedAt < 1.6)).map((e) => e.player);
   const key = `${uav}|${blips.map((b) => b.id).join(',')}`;
@@ -504,7 +529,8 @@ export default defineGame({
       text: "'Archivo', 'Helvetica Neue', system-ui, sans-serif",
       fonts: ['Bangers', 'Archivo'],
       colors: { accent: COLORS.gold, ink: COLORS.ink, paper: COLORS.cream, text: COLORS.ink, danger: COLORS.red, good: COLORS.gold },
-      comic: true,
+      // The comic-book look: ink outlines, hard shadows, paper panels.
+      css: hudCss,
     },
   },
 
@@ -519,6 +545,7 @@ export default defineGame({
     defineWeapons(game);
     defineBriefcase(game);
     defineSounds(game);
+    game.hud.define('dossier', DOSSIER);
     bots = new Bots(game, () => nav, MAP.hotspots);
     game.events.on('playerJoin', ({ player }) => {
       const f = fighters.get(player.id) ?? addFighter(game, player);
@@ -573,7 +600,7 @@ export default defineGame({
     bots.objective = null;
     nextBriefcase = game.clock.now + 35;
     for (const f of fighters.values()) {
-      Object.assign(f, { kills: 0, deaths: 0, score: 0, streak: 0, best: 0, headshots: 0, diedAt: -1, uavUntil: 0, rushUntil: 0, firedAt: -99, radar: '', multi: 0 });
+      Object.assign(f, { kills: 0, deaths: 0, score: 0, streak: 0, best: 0, headshots: 0, diedAt: -1, uavUntil: 0, uavFor: 0, rushUntil: 0, firedAt: -99, radar: '', multi: 0 });
     }
     for (const p of game.players) if (!fighters.has(p.id)) addFighter(game, p);
     balanceBots(game);

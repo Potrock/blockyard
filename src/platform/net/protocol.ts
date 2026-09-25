@@ -14,6 +14,7 @@ import type { AtlasPixels, EntityDefinition, ItemDefinition, Vec3, ViewAnimation
 import type { RecordedVoice } from '../audio/voice';
 import type { BlueprintData } from '../api/blueprint';
 import type { SimFrame } from '../sim/sim';
+import type { WidgetWire } from '../ui/markup';
 
 /** Where a presentation call goes on the client. */
 export type PresentTarget = 'hud' | 'fx' | 'audio' | 'view' | 'client';
@@ -56,7 +57,11 @@ export type ClientMessage =
   /** A menu was closed on the client (Esc, the close button). */
   | { t: 'menuClosed'; player: string; menu: number }
   /** Creative building: put a block in the current hotbar slot (the block picker). */
-  | { t: 'creativePick'; player: string; block: number };
+  | { t: 'creativePick'; player: string; block: number }
+  /** A button in a game's widget was pressed (`data-action`, with its `data-value`). */
+  | { t: 'widgetAction'; player: string; widget: string; action: string; value: string }
+  /** The player closed a modal widget (Esc, B, a click outside). */
+  | { t: 'widgetClosed'; player: string; widget: string };
 
 /**
  * One player's controls for one tick. The client owns mouse look (it feels immediate), so the
@@ -121,7 +126,9 @@ export type ContentDef =
   | { kind: 'item'; name: string; def: ItemDefinition }
   | { kind: 'model'; id: number; blueprint: BlueprintData; opts: { scale?: number; pivot?: Vec3 } }
   /** A glTF prop model (`props.gltf`): each client fetches the file. */
-  | { kind: 'gltf'; id: number; url: string; opts: { scale?: number; animation?: string } };
+  | { kind: 'gltf'; id: number; url: string; opts: { scale?: number; animation?: string } }
+  /** A HUD widget of the game's own (`hud.define`): its markup and styles; each screen checks them. */
+  | { kind: 'widget'; name: string; def: WidgetWire };
 
 /** What a host tells a client, in the order it happened. */
 export type HostEvent =

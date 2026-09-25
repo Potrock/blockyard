@@ -39,6 +39,7 @@ src/games/
     map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
     models/             the guns and fighters as GLB files (tools/ writes them)
     art.ts sounds.ts    the pulp wardrobe (skins painted in code), gunshots and stingers
+    hud.css hud.ts      its HUD: the comic-book theme (hud.theme.css) and its own corner widget
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
     index.ts            rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
     course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
@@ -837,6 +838,7 @@ game.commands.run('/give pike'); // run one from code
 | `hud.pop(text, { big, sub, color })` | A short pop-up under the crosshair ("+100", "Headshot", "Double kill") |
 | `hud.scoreboard({ title, columns, rows, footer, show })` | The scoreboard players see while holding Tab (or kept up with `show`); a row naming a `player` is highlighted on their screen |
 | `hud.feed([...parts])` | A feed line can be parts: text, `{ text, color }`, `{ icon }` (a gun side on: `{ gltf: url, view: 'side' }`) |
+| `hud.define(name, { html, css, at, modal, actions })`, `hud.widget(name, data)` | HUD widgets of the game's own, from HTML and CSS, filled in from data (see below) |
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
@@ -855,10 +857,47 @@ hud: {
     text: "'Archivo', system-ui, sans-serif",
     fonts: ['Bangers', 'Archivo'],              // fetched from Google Fonts
     colors: { accent: '#ffcc00', ink: '#111', paper: '#fdf1d6', text: '#111', danger: '#e63946', good: '#ffcc00' },
-    comic: true,                                // ink outlines, hard shadows, paper panels
+    css: hudCss,                                // import hudCss from './hud.css?raw': the game's own look
   },
 },
 ```
+
+**A stylesheet of the game's own.** `theme.css` restyles the platform's HUD by its classes: `.stat`, `.objective`, `.banner-title`, `.hud-pop-text`, `.feed-line`, `.scoreboard` and `.sb-table`, `.healthbar-track`, `.ammo-mag`, `.hotbar` and `.slot`, `.menu-card` and `.menu-entry`, `.result-card`, and the rest (find them with the browser's inspector). The platform keeps it to the HUD, the menus, the result screens and the game's widgets (the home page and pause menu stay the platform's), and each rule counts one class more than written, so `.stat { … }` beats the platform's own `.stat`. The `colors` above are there as `var(--hud-ink)`, `--hud-paper`, `--hud-accent`, `--hud-fg`, `--hud-danger` and `--hud-good`, the fonts as `var(--pixel)` (display) and `var(--sans)`. Call of Blocky's comic-book look (ink outlines, hard shadows, paper panels) is all in `src/games/callofblocky/hud.css`: copy it to start from. Left out: `@import`, `@font-face` (use `fonts`), pictures from other sites (`url()` takes `data:` images and files on this site), and anything that could run code.
+
+**Widgets of your own.** When the built-in pieces aren't what a game needs, it makes its own from HTML and CSS, filled in from data. Define it once, then put it up on everyone's screens (`game.hud.widget`) or one player's (`player.hud.widget`) with its data. Call `widget` again whenever you like (every tick is fine): only what changed reaches the screens, as a small patch, and a player who joins late gets what's up now. Heart Hunt's row of hearts:
+
+```ts
+setup(game) {
+  game.hud.define('tally', {
+    at: 'top',   // a corner ('top-left', the default…), an edge's middle, or 'center'; widgets in one place stack
+    html: `<div class="pill"><span data-each="hearts" class="{{.}}">♥</span> <b>{{found}} / 10</b></div>`,
+    css: `.pill { display: flex; gap: 3px; padding: 5px 14px; border-radius: 999px; background: #0a0d148c }
+          .found { color: #ff5a7a } .missing { color: #fff4 }`,
+  });
+},
+update(game) {
+  game.hud.widget('tally', { found, hearts: Array.from({ length: 10 }, (_, i) => (i < found ? 'found' : 'missing')) });
+},
+```
+
+| In the markup | What it does |
+| --- | --- |
+| `{{kills}}`, `{{me.name}}`, `{{rows.0.score}}` | A value from the data, as text, in text or in an attribute (missing: nothing) |
+| `data-if="uav"`, `"!uav"`, `"kills >= 3"`, `"state == 'low'"` | The element shows only while it holds (`==`, `!=`, `>`, `>=`, `<`, `<=`; `!` turns it round) |
+| `data-each="rows"` | The element once for each item of a list (a scoreboard's rows); inside, the item's fields, `{{.}}` the item itself, `{{$i}}` / `{{$n}}` its place counting from 0 / 1 |
+| `style="--fill: {{hp}}"` | CSS variables (or any style) from data: bars (`width: calc(var(--fill) * 100%)`), colours |
+| `class="chip {{state}}"` | Classes from data |
+| `<button data-action="buy" data-value="{{id}}">` | A button: the definition's `actions.buy(player, value)` runs in the game, for whoever pressed it |
+
+Its CSS is kept to it: `.row` means its own `.row`, `:scope` the widget itself (nudge it from its place with `:scope { margin-top: 20px }`), and its `@keyframes` are its own. It can't restyle anything outside (that's what `theme.css` is for), but the platform's classes and the game's theme do reach in, so pick class names of your own (`.stat` would come out as a stat chip). The theme's colours and fonts are there: `var(--hud-accent)`, `var(--pixel)` and the rest.
+
+`hud.widget(name, data)` returns a handle: `set(data)` (merged in, records field by field; `null` clears a field), `remove()`, `shown` and `data`. A player's own call on everyone's widget (`player.hud.widget('score', …)`) gives them a copy of their own from then on. A restart takes widgets down; they stay defined.
+
+**Buttons, and modal widgets.** With `modal: true` a widget works like a menu: it frees the mouse while it's up, a controller's D-pad moves between its buttons (and anything with `data-action`) and A presses, and Esc, B or a click outside closes it (`onClose(player)` hears). A press reaches the game as the player who pressed it, only while the widget is on their screen and only for actions its markup names; the value comes from their screen, so check it like any input. A widget that isn't modal has working buttons only while the mouse is free (a menu is open).
+
+**Safe to show.** A widget's markup and CSS come from the game's code, which may run on a server someone else runs, so each player's screen checks them again and builds them element by element (never as HTML). Left out: `<script>`, `<style>`, frames, forms and fields, SVG, links; `on…` attributes, `id`, `name` and `href`; pictures and `url()` except `data:` images and files on this site; CSS other than style rules, `@media`, `@supports`, `@container` and `@keyframes`, and values that load from elsewhere or could run code. `hud.define` says in the console what it left out. Data is only ever text.
+
+Call of Blocky's corner of the screen (kills, place, the leader, the streak toward the UAV and the Adrenaline Shot, their timers) is a widget: `src/games/callofblocky/hud.ts`.
 
 ## Testing a game headless
 

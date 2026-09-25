@@ -36,6 +36,16 @@ export default defineGame({
         return true; // consumed instead of added to the inventory
       },
     });
+    // The hearts found, as ten hearts across the top: a HUD widget of the game's own, filled in from data.
+    game.hud.define('tally', {
+      at: 'top',
+      html: `<div class="pill"><span data-each="hearts" class="{{.}}">♥</span> <b>{{found}} / 10</b></div>`,
+      css: `.pill { display: flex; align-items: center; gap: 3px; padding: 5px 14px; border-radius: 999px;
+                    background: rgba(10, 13, 20, 0.55); color: #f2f4f8; font: 600 20px var(--sans) }
+            .found { color: #ff5a7a; text-shadow: 0 0 8px rgba(255, 90, 122, 0.7) }
+            .missing { color: rgba(255, 255, 255, 0.22) }
+            b { margin-left: 8px; font-size: 13px }`,
+    });
   },
 
   start(game) {
@@ -52,7 +62,8 @@ export default defineGame({
   },
 
   update(game) {
-    game.hud.objective(`Hearts: ${found} / 10`);
+    // Every tick: only what changed reaches the screen.
+    game.hud.widget('tally', { found, hearts: Array.from({ length: 10 }, (_, i) => (i < found ? 'found' : 'missing')) });
     if (found === 10 && !won) {
       won = true;
       game.fx.fireworks(game.player.position, 4);

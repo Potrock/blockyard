@@ -32,7 +32,11 @@ export class Presenter {
     /** The player this client shows; null while watching a server's game before joining. */
     public player: string | null,
     private parts: PresenterParts,
-  ) {}
+  ) {
+    // A game's widget: a button pressed, or a modal one closed, tells the simulation (as this player).
+    parts.hud.onWidgetAction = (widget, action, value) => parts.send({ t: 'widgetAction', player: this.player ?? '', widget, action, value });
+    parts.hud.onWidgetClosed = (widget) => parts.send({ t: 'widgetClosed', player: this.player ?? '', widget });
+  }
 
   apply(c: PresentCall) {
     if (c.to !== null ? c.to !== this.player : c.skip !== undefined && c.skip === this.player) return;

@@ -316,6 +316,13 @@ export class GameHost {
     const taken = new Set(this.sim.players.filter((p) => !p.vacant).map((p) => p.name));
     let name = asked || 'Player';
     for (let n = 2; taken.has(name); n++) name = `${asked} ${n}`;
+    // Taking the first player's place: a new screen, whatever was shown to the last one there
+    // (else a widget up there before gets only changes, and a stat set the same again nothing).
+    const local = this.sim.local;
+    if (local.vacant) {
+      this.state.forget(local.id);
+      this.sim.presentation.forget(local.id);
+    }
     const player = this.sim.join(name);
     const was = this.keeps ? this.store.player(name) : null;
     if (was) {
@@ -344,7 +351,10 @@ export class GameHost {
     if (!p) return;
     this.guard(() => this.keepPlayer(p));
     this.guard(() => this.sim.leave(p.id));
-    if (p !== this.sim.local) this.state.forget(p.id);
+    if (p !== this.sim.local) {
+      this.state.forget(p.id);
+      this.sim.presentation.forget(p.id);
+    }
   }
 
   /** Whether this game keeps its world (and players' places) across restarts. */

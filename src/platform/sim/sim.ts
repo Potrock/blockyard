@@ -145,6 +145,8 @@ export class Sim {
       const v = a as Vec3;
       return { x: v.x, y: v.y, z: v.z };
     };
+    // A widget's button names who pressed it.
+    this.presentation.playerOf = (id) => this.players.find((p) => p.id === id && !p.vacant)?.api;
     this.entities = new EntitySim({
       world,
       content: o.content,

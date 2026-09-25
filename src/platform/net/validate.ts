@@ -109,6 +109,18 @@ function sanitizeMessage(raw: unknown): ClientMessage | null {
     const block = int(raw.block, 0, 254);
     return block === null ? null : { t: 'creativePick', player: '', block };
   }
+  // A widget's button: names as the game writes them, a value no longer than an attribute's.
+  const name = (v: unknown) => (typeof v === 'string' && /^[\w-]{1,40}$/.test(v) ? v : null);
+  if (raw.t === 'widgetAction') {
+    const widget = name(raw.widget);
+    const action = name(raw.action);
+    if (!widget || !action || (raw.value !== undefined && typeof raw.value !== 'string')) return null;
+    return { t: 'widgetAction', player: '', widget, action, value: String(raw.value ?? '').slice(0, 200) };
+  }
+  if (raw.t === 'widgetClosed') {
+    const widget = name(raw.widget);
+    return widget ? { t: 'widgetClosed', player: '', widget } : null;
+  }
   return null;
 }
 
