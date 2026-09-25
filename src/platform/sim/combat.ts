@@ -3,7 +3,7 @@ import type { AudioApi, BowItem, Entity, FxApi, GameContext, GameEvents, GunItem
 import type { EntitySim } from './entities';
 import type { Inventory, ItemSim } from './items';
 import type { SimInput } from './input';
-import { addBloom, canReload, damageAt, gun, lookDir, pelletDirs, RAISE, rayBox, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunState, type Stance } from './guns';
+import { addBloom, canReload, damageAt, DEFAULT_GUN_RULES, gun, lookDir, pelletDirs, RAISE, rayBox, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunRules, type GunState, type Stance } from './guns';
 import type { BulletHit } from './hitscan';
 
 /** What combat needs of the player it belongs to. */
@@ -68,6 +68,8 @@ export class Combat {
     private ctx: () => GameContext,
     /** Hits land on other players too (`player.pvp`). */
     private pvp = false,
+    /** The game's gun rules (`guns`): reloading by itself, how far shots may run ahead of the rate. */
+    private rules: GunRules = DEFAULT_GUN_RULES,
   ) {}
 
   reset() {
@@ -129,7 +131,7 @@ export class Combat {
       return;
     }
     if (def?.kind === 'bow') {
-      this.bow(dt, input, def);
+      this.bow(dt, input, def, stack!.item);
     } else {
       this.drawing = false;
       this.charge = 0;
@@ -166,7 +168,7 @@ export class Combat {
     st.aim = stepAim(g, st.aim, active && input.button(2), dt);
     st.cooldown = Math.max(0, st.cooldown - dt);
     st.bloom = settleBloom(g, st.bloom, dt);
-    st.tokens = Math.min(3, st.tokens + dt / g.interval);
+    st.tokens = Math.min(this.rules.rateSlack, st.tokens + dt / g.interval);
     stepReload(g, st, dt, trigger);
     if (active && input.pressed('KeyR') && canReload(g, st)) this.reload(g, st);
     const shots = input.shots;
@@ -194,7 +196,7 @@ export class Combat {
       }
     }
     // Empty: reload by itself.
-    if (st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st);
+    if (this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st);
   }
 
   private reload(g: Gun, st: GunState) {
@@ -234,14 +236,11 @@ export class Combat {
     for (const [target, d] of damage) {
       if (!target.alive) continue;
       const was = target.health;
-      const opts = { source: this.me.api, knockback: g.def.knockback ?? 0, crit: d.head, weapon: id, headshot: d.head, from: eye };
-      if (target.kind === 'player') {
-        if (!target.damage(d.amount, opts)) continue;
-        // Numbers for the shooter alone (a creature shows its own to everyone).
-        this.me.fx.damageNumber({ x: d.at.x, y: d.at.y + 0.3, z: d.at.z }, Math.round(Math.min(was, d.amount)), { crit: d.head });
-      } else {
-        target.damage(d.amount, opts);
-      }
+      const opts = { source: this.me.api, knockback: g.def.knockback ?? 0, crit: d.head, weapon: id, headshot: d.head, from: eye, cause: 'gun' as const, part: d.head ? ('head' as const) : ('body' as const) };
+      // A hit that didn't land (protected, or a `damage` listener cancelled it) gets no marker.
+      if (!target.damage(d.amount, opts)) continue;
+      // Numbers for the shooter alone (a creature shows its own to everyone): what it took off them.
+      if (target.kind === 'player') this.me.fx.damageNumber({ x: d.at.x, y: d.at.y + 0.3, z: d.at.z }, Math.round(was - target.health), { crit: d.head });
       this.hits++;
       marker = !target.alive ? 'kill' : marker === 'kill' ? 'kill' : marker || d.head;
     }
@@ -281,7 +280,7 @@ export class Combat {
     if (!target) return;
     const crit = this.me.falling;
     const dmg = def.damage * (crit ? 1.5 : 1);
-    target.damage(dmg, { source: this.me.api, knockback: def.knockback ?? 1, crit, weapon: item });
+    target.damage(dmg, { source: this.me.api, knockback: def.knockback ?? 1, crit, weapon: item, cause: 'melee' });
     this.hits++;
     const hitSound = def.sounds?.hit;
     this.me.audio.play(hitSound ?? (crit ? 'crit' : 'hit'), { at: target.position, pitch: hitSound && crit ? 1.25 : 1 });
@@ -293,13 +292,13 @@ export class Combat {
         if (e === target) continue;
         const p = e.position;
         if (Math.hypot(p.x - cam.x, p.z - cam.z) > (def.reach ?? 3.3) + 1) continue;
-        e.damage(dmg * 0.5, { source: this.me.api, knockback: 0.6 });
+        e.damage(dmg * 0.5, { source: this.me.api, knockback: 0.6, cause: 'melee' });
       }
       this.worldFx.burst({ x: tp.x, y: tp.y + 1, z: tp.z }, { color: '#e8f4ff', count: 14, speed: 4, gravity: 2 });
     }
   }
 
-  private bow(dt: number, input: SimInput, def: BowItem) {
+  private bow(dt: number, input: SimInput, def: BowItem, item: string) {
     const inv = this.me.inventory as InventoryApi;
     const hasAmmo = !def.ammo || inv.count(def.ammo) > 0;
     if (input.button(0) && hasAmmo) {
@@ -327,6 +326,7 @@ export class Combat {
             knockback: 0.3 + c * 0.5,
             sticky: true,
             crit,
+            weapon: item,
           },
           { x: cam.x + dir.x * 0.4, y: cam.y - 0.1 + dir.y * 0.4, z: cam.z + dir.z * 0.4 },
           dir,

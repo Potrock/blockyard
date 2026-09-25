@@ -32,7 +32,7 @@ export const Behaviors = {
         if (s._wind <= 0) {
           s._wind = undefined;
           self.animate('attack');
-          if (d <= reach + 0.6 && self.canSee(target)) target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
+          if (d <= reach + 0.6 && self.canSee(target)) target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1, cause: 'melee' });
         }
         return;
       }
@@ -45,7 +45,7 @@ export const Behaviors = {
           self.animate('raise');
         } else {
           self.animate('attack');
-          target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
+          target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1, cause: 'melee' });
         }
       }
     };
@@ -125,7 +125,7 @@ export const Behaviors = {
       if (d < 1.3 && s._hit <= 0) {
         s._hit = 0.9;
         self.animate('attack');
-        target.damage(opts.damage, { source: self, knockback: 0.8 });
+        target.damage(opts.damage, { source: self, knockback: 0.8, cause: 'melee' });
       }
     };
   },

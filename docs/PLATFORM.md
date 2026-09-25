@@ -158,6 +158,19 @@ player: {
 
 `player.speed` multiplies one player's speeds (a power-up; guns have their own `mobility`), `player.crouching`, `sliding` and `aiming` say what they're doing, and `player.protect(seconds)` makes them ignore damage for a while (spawn protection). `hurtCooldown` (default 0.45, Minecraft's) is how long a player ignores further damage after a hit; shooters set it to 0.
 
+**Changing damage.** Every hit is heard before it lands, from anything: a gun, a blade, an arrow or fireball, a fall, a mob's swing, your own `damage` call. A `damage` listener can change it (`amount`, before armour, and `knockback`) or `cancel()` it, for players and creatures alike; a cancelled hit doesn't land at all (no hurt, no knockback, no `playerDamage` or `entityDamage`, no hit marker for a gun). It says who's hit (`target`), who did it (`source`), what with (`weapon`, the item id), how (`cause`: `'gun'`, `'melee'`, `'projectile'` or `'world'`), and for bullets the `part` hit (`'head'` or `'body'`) and `headshot`:
+
+```ts
+game.events.on('damage', (hit) => {
+  const by = hit.source;
+  if (by !== 'world' && by?.kind === 'player' && hit.target.kind === 'player' && teamOf(by) === teamOf(hit.target)) return hit.cancel(); // no friendly fire
+  if (hit.cause === 'gun' && hit.part === 'head') hit.amount *= 1.25;   // heads hurt more in this game
+  if (hit.cause === 'world') hit.knockback = 0;
+});
+```
+
+Listeners run in the order they were added, each seeing what the last left. Your own `damage(amount, { source, cause, part })` calls can say how they happened; without a `cause`, a hit from someone counts as `melee` and anything else as `world`. `entity.damage` answers whether it landed, like `player.damage`.
+
 **Third person.** `player.camera.orbit(target, { offset, distance, min, max })` lets a walking player scroll out of their eyes to circle `target` with the mouse: a prop (the ship they steer) or a player (themselves).
 - `offset` is the point circled: in the prop's own space, or up from the player's feet. Players default to their eyes.
 - The wheel zooms between `min` and `max` blocks (default 0 and 30). Zoomed all the way in, they're in first person again, and scrolling out glides from their eyes to the target.
@@ -243,17 +256,58 @@ game.items.define('rifle', {
 ```
 
 The platform does the rest:
-- **Fair online.** The shooter's own screen fires the moment the trigger's pulled: the flash, the kick, the tracer, the sound, the rounds. The shots go to the host with the controls. The host takes each one the gun could have fired (its rate, its rounds) and casts it where the targets were *on the shooter's screen*: it keeps a second of everyone's positions and rewinds to the moment that screen was showing, at most 0.35 s back. Spread is seeded per shot, so the tracer you see is where the host's bullet goes.
-- **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself. Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up. On a controller the triggers fire and aim, X reloads, and there's aim assist (`aim.assist`, see Controllers).
-- **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people).
+- **Fair online.** The shooter's own screen fires the moment the trigger's pulled: the flash, the kick, the tracer, the sound, the rounds. The shots go to the host with the controls. The host takes each one the gun could have fired (its rate, its rounds) and casts it where the targets were *on the shooter's screen*: it keeps a second of everyone's positions and rewinds to the moment that screen was showing, at most 0.35 s back (`guns.rewind`). Spread is seeded per shot, so the tracer you see is where the host's bullet goes.
+- **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself (unless `guns.autoReload` is off). Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up. On a controller the triggers fire and aim, X reloads, and there's aim assist (`aim.assist`, see Controllers).
+- **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people). The `damage` event (see Player) can change or cancel a hit before it lands.
 - **Sights.** `iron` sights are the model's own. A `dot` or `holo` sight lights its reticle (a red dot, or a holo's ring and dot; `aim.color`) at the aim point as the optic's window comes up to the eye: model the optic with its window open and its `sight` point in the window's middle. A `scope` fills the view with the scope.
 - **The HUD.** An ammo counter replaces the hotbar's job, and the crosshair opens with the spread (and goes when aiming).
 - **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
-- **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working a pump. A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. Call of Blocky builds its guns in code (`src/games/callofblocky/tools/guns/build.mjs`) and writes them as GLB files that way.
+- **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working a pump. `hold.scale` multiplies its size (0.42 of the model's own), and `hold.gun` moves its poses (next). A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. Call of Blocky builds its guns in code (`src/games/callofblocky/tools/guns/build.mjs`) and writes them as GLB files that way.
+
+**A gun's hold.** `hold.gun` places one gun differently in first person; whatever it gives goes over the default, so give only what you change. Camera space, in blocks (x right, y up, z back, so ahead is -z), written for the right hand:
+
+```ts
+hold: {
+  style: 'gun', model: HeldModels.gltf(rifleUrl),
+  gun: {
+    fist: [0.235, -0.255, -0.62],     // the firing fist at the hip (a compact gun's default: [0.12, -0.19, -0.52])
+    barrel: [-0.1, 0.045, -1],        // which way it points at the hip; roll: -0.22 cants it (radians)
+    ads: 0.42,                        // the sight this far ahead of the eye aiming (by sight: iron 0.42, dot/holo 0.3, scope 0.46)
+    sprint: { yaw: 0.8, pitch: -0.5, roll: -0.45, move: [-0.08, -0.06, 0.08] },
+    slide: { roll: 0.35, move: [-0.04, -0.03, 0.02] },
+    forearm: { hip: [0.32, -0.74, 0.6], ads: [0.22, -0.64, 0.74] },    // fist toward elbow; forearm2 is the support arm's
+    kick: 0.075, rise: 7,             // a shot's kick back (blocks) and muzzle rise (degrees) per unit of recoil
+  },
+},
+```
+
+A humanoid player's own arms on the gun are fitted by their model (`firstPerson`, see glTF and GLB models), since that's about the model's proportions.
+
+**A game's gun rules.** `guns` in the game definition sets how every gun plays. The host and each shooter's own screen both play by it (a screen predicts its own movement and fires its own shots), so it's data. The defaults are Call of Blocky's:
+
+```ts
+defineGame({
+  guns: {
+    rewind: 0.35,                          // seconds a shot may look back for where its target was
+    hitboxes: {                            // players' boxes for bullets, blocks up from the feet; give what you change
+      stand: { height: 2, neck: 1.5, width: 0.72, headWidth: 0.56 },    // the head is from the neck up
+      crouch: { height: 1.7, neck: 1.2, width: 0.76, headWidth: 0.6 },
+      slide: { height: 1.4, neck: 0.85, width: 0.9, headWidth: 0.9 },
+    },
+    aimSlows: true,                        // aiming slows to the gun's aim.move
+    aimStopsSprint: true, fireStopsSprint: true,
+    autoReload: true,                      // an empty gun reloads by itself
+    rateSlack: 3,                          // shots a laggy screen may get ahead of the gun's rate (at least 1)
+    assist: { strength: 0.6, cone: { radius: 1.1, angle: 1.43 }, slow: { hip: 0.45, aim: 0.6 }, follow: { hip: 0.4, aim: 0.6 } },
+  },
+});
+```
+
+`assist` is aim assist's shape for every gun (see Controllers); a gun's own `aim.assist` goes over it, as a strength or the same shape.
 
 ## Controllers
 
-Every game plays with a controller as well as the keyboard and mouse, with nothing to write: a controller presses the same keys and mouse buttons, so `input.isDown('KeyR')` and `button(0)` read it too. The left stick walks, the way it points and as fast as it's pushed (it also holds WASD, for games that read those), and the right stick looks, turning faster the longer it's held all the way over and slower aiming down the sights. Play and Resume pressed with the controller give it the game (no mouse capture needed); Menu pauses. In the menus (the home page, pause, `hud.menu`, `hud.screen`, the block picker) the D-pad or stick moves a highlight, A presses, B backs out, and sliders slide with left and right. With a gun there's aim assist: over a player in sight the stick turns slower, and while the sticks move the view turns a little with them as they move. The strength is the gun's `aim.assist` (0 to 1, default 0.6). Only controllers get it, never a mouse, and each player can turn it off, along with stick sensitivity, invert look and vibration, in the pause menu. The controller rumbles as guns fire and when you're hurt.
+Every game plays with a controller as well as the keyboard and mouse, with nothing to write: a controller presses the same keys and mouse buttons, so `input.isDown('KeyR')` and `button(0)` read it too. The left stick walks, the way it points and as fast as it's pushed (it also holds WASD, for games that read those), and the right stick looks, turning faster the longer it's held all the way over and slower aiming down the sights. Play and Resume pressed with the controller give it the game (no mouse capture needed); Menu pauses. In the menus (the home page, pause, `hud.menu`, `hud.screen`, the block picker) the D-pad or stick moves a highlight, A presses, B backs out, and sliders slide with left and right. With a gun there's aim assist: over a player in sight the stick turns slower, and while the sticks move the view turns a little with them as they move. The strength is the gun's `aim.assist` (0 to 1, default 0.6). It can give the shape too, as can the game's `guns.assist` for every gun: `cone` (who's near enough the crosshair: `radius` blocks round them, 1.1, plus `angle` degrees, about 1.43), `slow` (how much the stick slows over them at full strength, from the hip and aiming: 0.45 and 0.6) and `follow` (how much of their movement the view turns with: 0.4 and 0.6). Only controllers get it, never a mouse, and each player can turn it off, along with stick sensitivity, invert look and vibration, in the pause menu. The controller rumbles as guns fire and when you're hurt.
 
 The platform's layout is a shooter's, and it suits building too:
 
@@ -583,7 +637,7 @@ game.items.define('cutlass', {
   - It crouches, slides, jumps and looks.
   - It holds a gun in both hands, aimed where it looks, with its fists on the gun's `grip` and `grip2`. It carries the gun low across its chest to sprint, tips it to reload while the support hand fetches a magazine, and kicks with each shot.
   - It swings a sword two-handed and falls when it dies.
-  - A player on such a model sees its own forearms and fists on the gun in first person.
+  - A player on such a model sees its own forearms and fists on the gun in first person. `firstPerson` fits them to the model: `Models.gltf(url, { rig: 'humanoid', firstPerson: { scale: 1.2, reach: [0.55, 0.72], support: [0.01, -0.012, 0] } })` (those are the defaults): `scale` times life size (a little bigger reads better round a gun), how far the firing and support arms `reach` from the fist to leave the screen (blocks), and where the `support` fist sits from the handguard's near side (the model's blocks, along the gun: out to the side we see, up, toward the muzzle). It goes with the model, so each player's (`player.setModel`) brings its own.
   - Give `rig: 'humanoid'` in `Models.gltf`, or leave out `clips` and a model with the joints is taken to be one. `tools/rig.html?model=<url>` (in development) shows a model in a row of poses, and `scripts/mannequin.mjs` builds a plain one to start from.
 - **Materials.** glTF's metallic-roughness is honoured, as factors or a `metallicRoughnessTexture` (G roughness, B metalness). Metal and glossy parts catch the sun and reflect the sky, on figures, held items (only a held model's first material is used) and in the first-person hand. Fully rough non-metal materials, like Blockbench's defaults, look as they always have.
 - `tests/headless/_export-models.ts` writes Blockyard's own box models out as glTF files (a node per part, the skin, and their walk, run and swing as animations). Open one in Blockbench, change it, and load it back.

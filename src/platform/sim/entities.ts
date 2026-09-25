@@ -17,6 +17,7 @@ import type {
 } from '../api/types';
 import type { Content } from '../content';
 import { wasmMemory } from '../engine/wasm';
+import { vetDamage } from './health';
 
 // Mirrors engine/src/entities.rs.
 const B = {
@@ -113,7 +114,8 @@ type Target = Player | Entity | Vec3;
 const isPlayer = (t: unknown): t is Player => typeof t === 'object' && t !== null && (t as { kind?: string }).kind === 'player';
 const isEntity = (t: unknown): t is Entity => typeof t === 'object' && t !== null && (t as { kind?: string }).kind === 'entity';
 
-type Internal = ProjectileSpec & { crit?: boolean };
+/** A projectile as fired: a charged shot's crit, and the item that fired it (a bow's id). */
+type Internal = ProjectileSpec & { crit?: boolean; weapon?: string };
 
 interface Projectile {
   id: number;
@@ -184,14 +186,17 @@ class EntityImpl implements Entity {
     return this.def.hitbox.height;
   }
 
-  damage(amount: number, opts: DamageOptions = {}) {
-    if (!this.alive || amount <= 0 || this.def.invulnerable) return;
-    amount *= 1 - Math.min(20, Math.max(0, this.armor)) * 0.04;
+  damage(amount: number, opts: DamageOptions = {}): boolean {
+    if (!this.alive || amount <= 0 || this.def.invulnerable) return false;
+    // The game may change or cancel it first.
+    const hit = vetDamage(this.m.s.emit, this, amount, opts);
+    if (!hit) return false;
+    amount = hit.amount * (1 - Math.min(20, Math.max(0, this.armor)) * 0.04);
     this.health = Math.max(0, this.health - amount);
     this.hurt = 1;
     const pos = this.position;
     const from = opts.from ?? (typeof opts.source === 'object' ? opts.source.position : null);
-    const kb = (opts.knockback ?? 1) * (1 - (this.def.knockbackResistance ?? 0));
+    const kb = hit.knockback * (1 - (this.def.knockbackResistance ?? 0));
     if (from && kb > 0) {
       const dx = pos.x - from.x;
       const dz = pos.z - from.z;
@@ -205,6 +210,7 @@ class EntityImpl implements Entity {
     const how = { weapon: opts.weapon, headshot: opts.headshot };
     this.m.s.emit('entityDamage', { entity: this, amount, source: opts.source, ...how });
     if (this.health <= 0) this.die(opts.source, how);
+    return true;
   }
 
   heal(amount: number) {
@@ -619,13 +625,13 @@ export class EntitySim implements EntityApi {
           }
         } else if (kind === 2) {
           const hit = this.s.bySlot(p[o + P.HIT_INDEX]);
-          if (hit?.alive) hit.damage(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5 });
+          if (hit?.alive) hit.damage(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5, weapon: shot.spec.weapon, cause: 'projectile' });
           this.removeProjectile(shot);
           continue;
         } else if (kind === 3) {
           const target = this.byBody(p[o + P.HIT_INDEX]);
           if (target && target.alive) {
-            target.damage(shot.spec.damage, { source: src, from: { x: pos.x - p[o + P.VX] * 0.05, y: pos.y, z: pos.z - p[o + P.VZ] * 0.05 }, knockback: shot.spec.knockback ?? 0.4, crit: shot.spec.crit });
+            target.damage(shot.spec.damage, { source: src, from: { x: pos.x - p[o + P.VX] * 0.05, y: pos.y, z: pos.z - p[o + P.VZ] * 0.05 }, knockback: shot.spec.knockback ?? 0.4, crit: shot.spec.crit, weapon: shot.spec.weapon, cause: 'projectile' });
             this.s.audio.play('hit', { at: pos, pitch: 1.2 });
           }
           this.removeProjectile(shot);

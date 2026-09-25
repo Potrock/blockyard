@@ -10,6 +10,7 @@ import { EntitySim, type EntityFrame, type ProjectileFrame } from './entities';
 import { ItemSim, type PickupFrame } from './items';
 import { BotControlsImpl, PlayerSim, type PlayerFrame } from './player';
 import { castBullet, History, type Hittable } from './hitscan';
+import { resolveGunRules, type GunRules } from './guns';
 import { Presentation, type Sink } from './present';
 import { toLocal, toWorld } from './movers';
 import { PropSim, PropState, type PropFrame } from './props';
@@ -119,6 +120,8 @@ export class Sim {
   time = 0;
   /** Where everyone was, for the last second (shots are checked where the shooter saw them). */
   readonly history = new History();
+  /** The game's gun rules (`guns`): the rewind, hitboxes, reloading, the fire-rate slack. */
+  readonly gunRules: GunRules;
   /** Bots (`game.bots`), in the order they came. */
   private botList: Bot[] = [];
   private nextBot = 1;
@@ -128,6 +131,8 @@ export class Sim {
     this.registry = o.registry;
     this.host = o.world;
     this.content = o.content;
+    this.gunRules = resolveGunRules(o.def.guns);
+    this.history.keep = Math.max(1, this.gunRules.rewind + 0.1);
     this.rng = mulberry32(o.seed ^ 0x9e3779b9);
     const world = o.world.world;
     const emit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => this.emit(k, e);
@@ -436,6 +441,7 @@ export class Sim {
             history: this.history,
             prop: (o, d, max) => this.props.raycast(o, d, max),
             targets: () => this.hittable(),
+            rules: this.gunRules,
           },
           from,
           dir,
@@ -448,6 +454,7 @@ export class Sim {
       name,
       world: this.host.world,
       options: this.def.player ?? {},
+      guns: this.gunRules,
       vehicles: this.def.vehicles ?? {},
       query: (this.query ??= worldQuery(this.host.world, this.registry)),
       present: this.presentation,

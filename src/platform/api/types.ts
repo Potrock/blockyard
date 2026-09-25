@@ -46,6 +46,8 @@ export interface GameDefinition {
   cheats?: boolean;
   world?: WorldOptions;
   player?: PlayerOptions;
+  /** How guns play in this game: rewind, hitboxes, what they do to movement, reloading, aim assist (see `GunOptions`). */
+  guns?: GunOptions;
   /**
    * Runs once after the engine has loaded and before the world streams in. Register entity
    * types, items and event handlers here.
@@ -646,6 +648,13 @@ export interface DamageOptions {
   weapon?: string;
   /** A head hit (guns). */
   headshot?: boolean;
+  /**
+   * What did it, for the `damage` event (see `DamageCause`). The platform says for its own
+   * guns, blades, arrows and falls; without it, a hit from someone is `melee` and anything else `world`.
+   */
+  cause?: DamageCause;
+  /** The part of the target hit, when it's known (a bullet knows). */
+  part?: 'head' | 'body';
 }
 
 export interface PlayerApi {
@@ -841,10 +850,49 @@ export interface HoldSpec {
   rotation?: [number, number, number];
   /** Extra offset in pixels (camera axes: x right, y up, z back). */
   translation?: [number, number, number];
-  /** Multiplies the style's scale (swords: 0.68). */
+  /** Multiplies the style's scale (swords: 0.68; guns: 0.42 of the model's own size). */
   scale?: number;
   /** Animation for attacking or using: built-in (`swing`, `punch`, `jab`, `drink`, `release`, `chop`, `stab`), registered with `viewModel.define`, or inline. */
   use?: string | ViewAnimation;
+  /** The `gun` style's poses for this gun: whatever it gives goes over the defaults (see `GunHold`). */
+  gun?: GunHold;
+}
+
+/**
+ * Where a gun sits in first person (the `gun` hold style), per gun. Camera space: x right, y up,
+ * z back (so ahead is -z), in blocks, written for the right hand and mirrored for the left. Every
+ * field is optional and goes over its default, so `{ ads: 0.36 }` changes only that.
+ */
+export interface GunHold {
+  /**
+   * The firing fist at the hip: [0.235, -0.255, -0.62], low at the right; a compact gun (a
+   * pistol's length or less ahead of the hand) [0.12, -0.19, -0.52], nearer the middle.
+   */
+  fist?: [number, number, number];
+  /** Which way the barrel points at the hip: nearly straight ahead, a touch inward and up ([-0.1, 0.045, -1]). */
+  barrel?: [number, number, number];
+  /** Cant about the barrel at the hip, radians (-0.22). */
+  roll?: number;
+  /** Sprinting: swung down and across the chest (radians: yaw 0.8, pitch -0.5, roll -0.45) and moved (blocks: [-0.08, -0.06, 0.08]). */
+  sprint?: { yaw?: number; pitch?: number; roll?: number; move?: [number, number, number] };
+  /** Sliding: leaning into it (roll, radians: 0.35) and moved (blocks: [-0.04, -0.03, 0.02]). */
+  slide?: { roll?: number; move?: [number, number, number] };
+  /**
+   * How far ahead of the eye the `sight` point sits when aiming down the sights, in blocks. By
+   * the gun's sight: iron sights 0.42, a `dot` or `holo` optic's window 0.3 (nearer, so it frames
+   * more), a scope 0.46.
+   */
+  ads?: number;
+  /**
+   * The firing forearm's direction, from the fist toward the elbow: at the hip ([0.32, -0.74, 0.6])
+   * and aiming ([0.22, -0.64, 0.74]). `forearm2` is the support arm's: [-0.52, -0.72, 0.48] and
+   * [-0.4, -0.72, 0.56]. They needn't be unit length.
+   */
+  forearm?: { hip?: [number, number, number]; ads?: [number, number, number] };
+  forearm2?: { hip?: [number, number, number]; ads?: [number, number, number] };
+  /** A shot's kick back (blocks, 0.075) and muzzle rise (degrees, 7), per unit of recoil. */
+  kick?: number;
+  rise?: number;
 }
 
 /**
@@ -1032,8 +1080,9 @@ export interface GunItem extends ItemBase {
     /**
      * Aim assist for someone on a controller (0 none, 1 strong; default 0.6): the view slows
      * over a player in sight and turns a little with them as they move. Mouse aim is never helped.
+     * A number is the strength; `AimAssist` gives its shape too (over the game's `guns.assist`).
      */
-    assist?: number;
+    assist?: number | AimAssist;
   };
   /** Blocks. Default 150. */
   range?: number;
@@ -1044,6 +1093,69 @@ export interface GunItem extends ItemBase {
   /** The tracer's colour, or false for none. Default a warm yellow. */
   tracer?: string | false;
   knockback?: number;
+}
+
+/**
+ * How guns play in a game (`GameDefinition.guns`). The host and each shooter's own screen both
+ * play by these (a screen predicts its own movement and fires its own shots), so they're data.
+ * Every field is optional; the defaults are what Call of Blocky plays by.
+ */
+export interface GunOptions {
+  /**
+   * The furthest back a shot looks for its target, in seconds (0.35). The host checks each shot
+   * against where people were on the shooter's screen, but no further back than this, so a laggy
+   * screen can't hit someone where they were a second ago.
+   */
+  rewind?: number;
+  /** Players' hitboxes for bullets, standing, crouching and sliding: what's given goes over each stance's default (see `PlayerHitbox`). */
+  hitboxes?: { stand?: Partial<PlayerHitbox>; crouch?: Partial<PlayerHitbox>; slide?: Partial<PlayerHitbox> };
+  /** Aiming down the sights slows the holder to the gun's `aim.move`. Default true. */
+  aimSlows?: boolean;
+  /** Aiming down the sights stops a sprint, and so does holding the trigger. Both default true. */
+  aimStopsSprint?: boolean;
+  fireStopsSprint?: boolean;
+  /** An empty gun reloads by itself. Default true; off, it waits for R. */
+  autoReload?: boolean;
+  /**
+   * How many shots a screen may get ahead of its gun's rate (3, at least 1). Lag bunches shots
+   * up, so the host takes each one the gun could have fired give or take this many: lower is
+   * stricter with a cheat that fires too fast, higher kinder to a poor connection.
+   */
+  rateSlack?: number;
+  /** Aim assist's shape for every gun (see `AimAssist`); a gun's own `aim.assist` goes over it. */
+  assist?: AimAssist;
+}
+
+/**
+ * A player's hitboxes in one stance, in blocks up from their feet: the body from the feet to
+ * `neck`, the head from there to `height`, `width` across the body and `headWidth` across the
+ * head (both square). Standing `{ height: 2, neck: 1.5, width: 0.72, headWidth: 0.56 }`;
+ * crouching 1.7, 1.2, 0.76, 0.6; sliding (leaning back from the hips: lower and wider) 1.4, 0.85,
+ * 0.9, 0.9. They match the figure everyone sees.
+ */
+export interface PlayerHitbox {
+  height: number;
+  neck: number;
+  width: number;
+  headWidth: number;
+}
+
+/**
+ * Aim assist's shape (controllers only). Over a target near the crosshair the stick turns slower,
+ * and while the sticks move the view turns a little with the target as it (or you) moves.
+ */
+export interface AimAssist {
+  /** 0 none, 1 strong. Default 0.6. */
+  strength?: number;
+  /**
+   * Who's near enough the crosshair: within `radius` blocks of its line (1.1, about a body's
+   * width round them), plus `angle` degrees more (about 1.43, so far-off targets get a little extra).
+   */
+  cone?: { radius?: number; angle?: number };
+  /** How much the stick slows over a target at full strength: from the hip (0.45) and aiming down the sights (0.6). It eases off toward the cone's edge. */
+  slow?: { hip?: number; aim?: number };
+  /** How much of a target's movement the view turns with, at full strength: from the hip (0.4) and aiming (0.6). */
+  follow?: { hip?: number; aim?: number };
 }
 
 export interface ConsumableItem extends ItemBase {
@@ -1144,6 +1256,15 @@ export interface GltfSpec {
    * on death. A model with those joints and no `clips` is taken to be one.
    */
   rig?: 'humanoid';
+  /**
+   * A humanoid player's own arms in first person (its forearms and fists on what they hold), for
+   * a model whose proportions want other numbers: `scale` times life size (1.2: a little bigger,
+   * as shooters draw them, so the hands read round a gun); `reach`, how far the firing and the
+   * support arm run back from the fist, in blocks, so they leave the screen's edge ([0.55, 0.72]);
+   * `support`, where the support fist sits from the handguard's near side, in the model's own
+   * blocks along the gun's axes (x out to the side we see, y up, z toward the muzzle; [0.01, -0.012, 0]).
+   */
+  firstPerson?: { scale?: number; reach?: [firing: number, support: number]; support?: [number, number, number] };
 }
 
 export interface ModelPart {
@@ -1220,7 +1341,8 @@ export interface Entity {
   readonly age: number;
   /** Free-form per-entity state for behaviours and games. */
   readonly data: Record<string, unknown>;
-  damage(amount: number, opts?: DamageOptions): void;
+  /** Apply damage. Returns false if it didn't land (dead, invulnerable, or cancelled by a `damage` listener). */
+  damage(amount: number, opts?: DamageOptions): boolean;
   heal(amount: number): void;
   kill(): void;
   /** Remove without a death animation or drops. */
@@ -1511,7 +1633,38 @@ export interface HitDetails {
   headshot?: boolean;
 }
 
+/** What did some damage: a gun's bullet, a melee hit (a blade, a fist, a mob's swing), a projectile (an arrow, a fireball), or the world (a fall, `'world'` damage). */
+export type DamageCause = 'gun' | 'melee' | 'projectile' | 'world';
+
+/**
+ * Damage about to land on a player or a creature (the `damage` event), before armour and before
+ * their health changes. A listener can change `amount` or `knockback`, or `cancel()` it (then it
+ * doesn't land at all: no hurt, no knockback, no `playerDamage` or `entityDamage`, and a gun's
+ * shooter gets no hit marker).
+ */
+export interface DamageEvent extends HitDetails {
+  readonly target: Player | Entity;
+  /** How much, before armour. Change it to deal more or less; 0 or less is the same as cancelling. */
+  amount: number;
+  knockback: number;
+  /** Who dealt it (an entity, a player, the world), if anyone said. */
+  readonly source: DamageOptions['source'];
+  readonly cause: DamageCause;
+  /** The part hit, when it's known (bullets: `head` or `body`). */
+  readonly part?: 'head' | 'body';
+  /** Where it came from, if anywhere. */
+  readonly from?: Vec3;
+  readonly crit: boolean;
+  readonly cancelled: boolean;
+  cancel(): void;
+}
+
 export interface GameEvents {
+  /**
+   * Any damage about to land, from anything (a gun, a blade, an arrow, a fall, your own `damage`
+   * call): change it or cancel it (see `DamageEvent`). Listeners run in the order they were added.
+   */
+  damage: DamageEvent;
   entityDamage: { entity: Entity; amount: number; source: DamageOptions['source'] } & HitDetails;
   entityDeath: { entity: Entity; killer: DamageOptions['source'] } & HitDetails;
   playerDamage: { player: Player; amount: number; source: DamageOptions['source'] } & HitDetails;

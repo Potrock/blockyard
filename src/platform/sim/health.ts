@@ -1,5 +1,38 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { AudioApi, DamageOptions, FxApi, GameEvents, Player, PlayerOptions, Vec3 } from '../api/types';
+import type { AudioApi, DamageEvent, DamageOptions, Entity, FxApi, GameEvents, Player, PlayerOptions, Vec3 } from '../api/types';
+
+type Emit = <K extends keyof GameEvents>(event: K, e: GameEvents[K]) => void;
+
+/**
+ * Damage about to land on `target`: the game's `damage` listeners hear of it first and may change
+ * it or cancel it (see `DamageEvent`). What lands (before armour) and its knockback, or null if
+ * nothing does.
+ */
+export function vetDamage(emit: Emit, target: Player | Entity, amount: number, opts: DamageOptions): { amount: number; knockback: number } | null {
+  const source = opts.source;
+  const actor = typeof source === 'object' ? source : null;
+  let cancelled = false;
+  const e: DamageEvent = {
+    target,
+    amount,
+    knockback: opts.knockback ?? 1,
+    source,
+    cause: opts.cause ?? (actor ? 'melee' : 'world'),
+    part: opts.part,
+    from: opts.from ?? actor?.position,
+    crit: !!opts.crit,
+    weapon: opts.weapon,
+    headshot: opts.headshot,
+    get cancelled() {
+      return cancelled;
+    },
+    cancel() {
+      cancelled = true;
+    },
+  };
+  emit('damage', e);
+  return cancelled || !(e.amount > 0) ? null : { amount: e.amount, knockback: e.knockback };
+}
 
 /**
  * A player's health, damage, knockback, regeneration, fall damage and death. The hearts are
@@ -29,7 +62,7 @@ export class PlayerHealth {
     /** This player's own sound and screen effects. */
     private audio: AudioApi,
     private fx: FxApi,
-    private emit: <K extends keyof GameEvents>(event: K, e: GameEvents[K]) => void,
+    private emit: Emit,
     private playerPos: () => Vec3,
     /** The player this health belongs to (named in the events). */
     private player: () => Player,
@@ -52,13 +85,16 @@ export class PlayerHealth {
 
   damage(amount: number, opts: DamageOptions = {}): boolean {
     if (!this.enabled || this.dead || this.invuln > 0 || amount <= 0) return false;
-    amount *= 1 - Math.min(20, Math.max(0, this.armor)) * 0.04;
+    // The game may change or cancel it first.
+    const hit = vetDamage(this.emit, this.player(), amount, opts);
+    if (!hit) return false;
+    amount = hit.amount * (1 - Math.min(20, Math.max(0, this.armor)) * 0.04);
     this.health = Math.max(0, this.health - amount);
     this.invuln = this.hurtCooldown;
     this.sinceHurt = 0;
     const p = this.playerPos();
     const from = opts.from ?? (typeof opts.source === 'object' ? opts.source.position : null);
-    const kb = opts.knockback ?? 1;
+    const kb = hit.knockback;
     if (from && kb > 0) {
       const dx = p.x - from.x;
       const dz = p.z - from.z;
@@ -114,7 +150,7 @@ export class PlayerHealth {
       this.refresh();
     }
     if (this.fallDamage && onGround && !this.prevGround && this.prevVy < -15) {
-      this.damage(Math.round((-this.prevVy - 13) * 0.8), { source: 'world', knockback: 0 });
+      this.damage(Math.round((-this.prevVy - 13) * 0.8), { source: 'world', knockback: 0, cause: 'world' });
     }
     this.prevGround = onGround;
     this.prevVy = vy;
