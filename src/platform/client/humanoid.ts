@@ -616,17 +616,16 @@ export class HumanoidRig {
     if (info.kind === 'gun' && info.hands === 1) return this.offHand(info, mesh, handQ, bodyQ, P);
     const support = info.grip2 ? mesh.localToWorld(v2.copy(info.grip2)) : null;
     if (support) {
-      if (info.kind === 'gun' && this.reload > 0.001 && info.mag) {
-        // To the magazine and away (a fresh one from the belt), and back.
-        const t = (this.reloadT % P.reload.cycle) / P.reload.cycle;
-        const away = t < 0.25 ? 0 : t < 0.6 ? smooth((t - 0.25) / 0.35) : 1 - smooth((t - 0.6) / 0.4);
-        const mag = mesh.localToWorld(v3.copy(info.mag));
-        const belt = this.j.hips.localToWorld(v4.fromArray(P.reload.belt));
-        mag.lerp(belt, away);
-        support.lerp(mag, this.reload);
-      }
+      if (info.kind === 'gun' && this.reload > 0.001 && info.mag) support.lerp(this.reloading(mesh, info.mag, P, v3), this.reload);
       this.limb('L', support, handQ, v1.set(0.45, -0.9, 0.05).applyQuaternion(bodyQ), false);
     }
+  }
+
+  /** Where a reloading hand is (the world's space): to the magazine and away (a fresh one from the belt), and back, each `cycle`. */
+  private reloading(mesh: THREE.Object3D, mag: THREE.Vector3, P: Poses, out: THREE.Vector3): THREE.Vector3 {
+    const t = (this.reloadT % P.reload.cycle) / P.reload.cycle;
+    const away = t < 0.25 ? 0 : t < 0.6 ? smooth((t - 0.25) / 0.35) : 1 - smooth((t - 0.6) / 0.4);
+    return mesh.localToWorld(out.copy(mag)).lerp(this.j.hips.localToWorld(v4.fromArray(P.reload.belt)), away);
   }
 
   /**
@@ -641,11 +640,7 @@ export class HumanoidRig {
     // Loose: the elbow back and out. To the gun: out and down, like a support hand's.
     const pole = h3.set(0.4, -0.2, -1).normalize();
     if (this.reload > 0.001 && info.mag) {
-      const t = (this.reloadT % P.reload.cycle) / P.reload.cycle;
-      const away = t < 0.25 ? 0 : t < 0.6 ? smooth((t - 0.25) / 0.35) : 1 - smooth((t - 0.6) / 0.4);
-      const mag = mesh.localToWorld(h2.copy(info.mag));
-      mag.lerp(this.j.hips.localToWorld(v4.fromArray(P.reload.belt)), away);
-      at.lerp(mag, this.reload);
+      at.lerp(this.reloading(mesh, info.mag, P, h2), this.reload);
       handQ.slerp(gunQ, this.reload);
       pole.lerp(v4.set(0.45, -0.9, 0.05), this.reload).normalize();
     }

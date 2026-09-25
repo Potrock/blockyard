@@ -136,11 +136,14 @@ then y (a positive turn is to its left), then along the muzzle.
 | `pistol.hip`, `pistol.ads` | [-0.03, -0.15, 0.4], [0, -0.04, 0.4] | A pistol held out in both hands. |
 | `rifle.twist`, `pistol.twist` | -0.18 | The body's twist to the gun (four tenths at the spine, the rest at the chest). |
 | `rifle.cheek`, `pistol.cheek` | 0.12 | The head's tilt to the sights, aiming down them. |
+| `rifle.offHand`, `pistol.offHand` | offset [0.21, -0.56, 0.04], turn [0, 0, 0] | A gun held in one hand (`hold.gun.hands: 1`): where the free hand's fist is, from the middle of the shoulders in the chest's frame (it goes with the body's lean and twist); hanging loose at the side. A reload brings it to the gun. |
 | `pistolUnder` | 0.45 | A gun is held as a pistol if it's shorter than this (metres, as held), unless its item says (`hold: { stance: 'rifle' \| 'pistol' }`). |
 | `kick.back`, `kick.tip`, `kick.decay` | 0.05, 0.14, 22 | Each shot: the gun back and tipped up, dying away at `decay` a second. |
 | `sprint.offset`, `sprint.turn` | [-0.02, -0.32, 0.18], [0.6, 0.75, 0.1] | Sprinting: low across the chest, the muzzle down and to the left (the turn from the body's). |
 | `reload.offset`, `reload.turn` | [-0.04, -0.2, 0.28], [0.3, 0.35, -0.6] | Reloading: tipped over to show the magazine. |
 | `reload.cycle`, `reload.belt` | 1.1, [0.12, -0.02, 0.12] | The support hand to the magazine, to the belt (the hips' space) and back, every `cycle` seconds. |
+| `lever.offset`, `lever.turn`, `lever.time` | [0, -0.035, 0.01], [-0.2, 0, 0], 0.45 | A gun's `lever` worked after each shot: the gun dips and its muzzle rocks up, in and out over `time` seconds, a beat (0.08 s) after the shot. |
+| `hammer.offset`, `hammer.turn`, `hammer.time` | [0, 0.01, 0], [-0.12, 0, 0.3], 0.26 | A `hammer` cocked: tipped up and canted. |
 | `sword.offset`, `sword.turn` | [-0.06, -0.3, 0.3], [-0.95, 0.15, 0] | A sword in both hands: low, the blade up and forward. |
 | `sword.swing.time`, `.windup` | 0.4, 0.3 | A swing's seconds, and the part of it spent lifting the blade. |
 | `sword.swing.raise`, `.chop` | offset [0.04, 0.35, -0.1], turn [-1.1, 0, 0]; offset [0, -0.1, 0.2], turn [1.9, 0, 0.5] | Where the swing lifts it to and chops through (added to the stance). |
@@ -151,6 +154,14 @@ then y (a positive turn is to its left), then along the muzzle.
 | `gait.bob`, `gait.lean` | [0.02, 0.055], [0.04, 0.18] | The hips' bob, and the back's lean (radians). |
 | `gait.armSwing` | [0.45, 0.95] | Empty arms swinging (radians). |
 | `gait.sway`, `gait.width`, `gait.crouch` | 0.018, 0.1, 0.33 | The hips' sway walking, each foot's distance from the middle, the hips' drop to crouch. |
+
+### Per item
+
+An item's `hold.poses` goes over the figure's poses while it's held: the same keys as `HumanoidPoses`, the ones about holding (`rifle`, `pistol`, `kick`, `sprint`, `reload`, `lever`, `hammer`, `sword`), each part by part. So each gun can reload its own way, and at its own pace:
+
+```ts
+hold: { stance: 'pistol', gun: { hands: 1 }, poses: { reload: { turn: [-0.75, 0.35, 0.9], cycle: 0.42 }, pistol: { offHand: { offset: [0.2, -0.48, 0.1] } } } }
+```
 
 ## Clips
 
@@ -189,3 +200,8 @@ arms are cut from the skin into rigid pieces where it rests: each triangle goes 
 that weighs most on its corners (a finger bone's with the hand). The pieces meet where the
 skin bends, so a wrist bent hard can show a seam; in first person the view model keeps the
 wrists fairly straight.
+
+Each arm runs from the fist back to a shoulder off the screen's edge: straight by default, or,
+with `firstPerson.bend` (or a gun's `hold.gun.arm.bend`), bent at the elbow, the two bones reaching
+a shoulder that stays put in the view as the hand kicks and reloads. Their size is the model's
+(`firstPerson.scale`), not the gun's.

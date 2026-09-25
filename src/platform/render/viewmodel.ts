@@ -1104,10 +1104,10 @@ export class ViewModel implements ViewModelApi {
     return this.styleName === 'bow' ? r.itemScale : r.itemScale / (this.hold.scale || 1);
   }
 
-  /** Where the support fist holds, from the firing fist (hand space): round the handguard's near side (its left, the side we see), a little under it. */
+  /** Where the support fist holds, from the firing fist (hand space): round the handguard's near side (its left, the side we see), a little under it (a one-handed gun's: where its hand is). */
   private supportGrip(r: Rest, itemQ: THREE.Quaternion, k: number, out: THREE.Vector3): THREE.Vector3 {
     const fit = this.fit;
-    const side = this.gunPts ? this.halfWidthAt(this.gunPts.grip2.z) * r.itemScale : 0;
+    const side = this.gunPts && this.gunPose.hands === 2 ? this.halfWidthAt(this.gunPts.grip2.z) * r.itemScale : 0;
     return out.set(side + fit.support[0] * k, fit.support[1] * k, fit.support[2] * k).applyQuaternion(itemQ).add(r.grip2);
   }
 
@@ -1173,12 +1173,16 @@ export class ViewModel implements ViewModelApi {
   play(anim: string | ViewAnimation, opts: { power?: number; speed?: number } = {}) {
     const a = typeof anim === 'string' ? this.anims.get(anim) : compile(anim);
     if (!a) throw new Error(`viewModel.play: unknown animation "${anim as string}"`);
-    // Cross-fade from wherever the hand is now.
+    this.start(a, opts.power ?? 1, opts.speed ?? 1);
+  }
+
+  /** Start an animation, cross-faded from wherever the hand is now. */
+  private start(anim: Anim, power: number, speed: number) {
     this.fadeFrom.pos.copy(this.hand.position);
     this.fadeFrom.rot.copy(this.hand.quaternion);
     this.fadeFrom.wrist.copy(this.motion.wrist);
     this.fadeT = this.playing ? 0 : 1;
-    this.playing = { anim: a, t: 0, power: opts.power ?? 1, speed: opts.speed ?? 1 };
+    this.playing = { anim, t: 0, power, speed };
   }
 
   kick(strength = 1) {
@@ -1506,12 +1510,14 @@ export class ViewModel implements ViewModelApi {
       const mag = pts.mag;
       const below = _fb.copy(mag).add(_fc.set(0.02, -0.7, -0.15));
       if (gv.shells > 0) {
-        // Round by round: to the loading port, push, back.
+        // Round by round: to the loading port, push, back. A port underneath (a shotgun's tube) is
+        // fed from below it; one in the side (a revolver's gate), from that side.
         const n = Math.max(1, gv.shells);
         const q = Math.min(0.999, Math.max(0, (p - 0.1) / 0.8)) * n;
         const f = q - Math.floor(q);
         const push = f < 0.5 ? smooth(f / 0.5) : 1 - smooth((f - 0.5) / 0.5);
-        const at = _v.copy(mag).add(_s.set(0, -0.28 + push * 0.22, -0.05));
+        const out = mag.x - pts.grip.x;
+        const at = Math.abs(out) > 1 / 32 ? _v.copy(mag).add(_s.set(Math.sign(out) * (0.26 - push * 0.2), -0.1, -0.05)) : _v.copy(mag).add(_s.set(0, -0.28 + push * 0.22, -0.05));
         hand.lerp(at, smooth(p / 0.1) * smooth((1 - p) / 0.1));
         jolt = f > 0.45 && f < 0.6 ? 1 : 0;
       } else {
@@ -1573,9 +1579,9 @@ export class ViewModel implements ViewModelApi {
       r.grip.add(_fc.set(-0.02 * this.side, -0.05, 0.03).multiplyScalar(k));
     }
     if (lever > 0) {
-      // The lever swung down and back: the gun rocks muzzle up on the support hand (which stays
-      // put), the grip and the firing hand round it dropping.
-      const q = _qa.setFromAxisAngle(_v.set(1, 0, 0).applyQuaternion(r.itemRot), 0.2 * lever);
+      // The lever swung down and back: the gun rocks muzzle up (about its own right, its -x) on
+      // the support hand, which stays put, the grip and the firing hand round it dropping.
+      const q = _qa.setFromAxisAngle(_v.set(-1, 0, 0).applyQuaternion(r.itemRot), 0.2 * lever);
       const shift = _fc.copy(r.grip2).sub(_s.copy(r.grip2).applyQuaternion(q));
       r.grip.add(shift);
       r.grip2.sub(shift);
@@ -1597,11 +1603,7 @@ export class ViewModel implements ViewModelApi {
   private playAction(a: ViewAnimation) {
     let anim = this.actions.get(a);
     if (!anim) this.actions.set(a, (anim = compile(a)));
-    this.fadeFrom.pos.copy(this.hand.position);
-    this.fadeFrom.rot.copy(this.hand.quaternion);
-    this.fadeFrom.wrist.copy(this.motion.wrist);
-    this.fadeT = this.playing ? 0 : 1;
-    this.playing = { anim, t: 0, power: 1, speed: 1 };
+    this.start(anim, 1, 1);
   }
 
   /** After the hand is placed: recoil springs, the muzzle flash, hiding it all behind a scope. */

@@ -1,7 +1,8 @@
 /**
  * Development: a humanoid model (docs/HUMANOID.md) in a row of poses, animated by the platform's
  * own rig code, lit simply. `/tools/rig.html?model=<glb url>&t=<seconds>&view=front|side|34`
- * `&poses=<names>` (`t` freezes time for a screenshot; guns come from Call of Blocky's models).
+ * `&poses=<names>` (`t` freezes time for a screenshot, the same every time; guns come from Call of
+ * Blocky's models; `cycling` is a moment after a shot, while a lever or hammer is worked).
  * `joints=mixamo` (or a JSON joint map) for a skeleton named its own way; `style=<JSON>` for
  * `HumanoidPoses`; the poses ending in a clip's name (`wave`, `cheer`) play the model's clip.
  * Another game's guns: `guns=<folder of GLBs>` and `gun=<id>` (it takes the place of every
@@ -26,6 +27,11 @@ const GUN = q.get('gun');
 const HOLD: Partial<HeldInfo> = q.has('hold') ? JSON.parse(q.get('hold')!) : {};
 const JOINTS: Partial<Record<HumanoidJoint, string>> | undefined = q.get('joints') === 'mixamo' ? HumanoidJoints.mixamo() : q.has('joints') ? JSON.parse(q.get('joints')!) : undefined;
 const STYLE: HumanoidPoses | undefined = q.has('style') ? JSON.parse(q.get('style')!) : undefined;
+// Frozen for a screenshot, the same every time (a fall's direction is random).
+if (FREEZE !== null) {
+  let seed = 1;
+  Math.random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+}
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(1);
