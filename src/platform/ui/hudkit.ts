@@ -261,6 +261,32 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     }
   }
 
+  /**
+   * An icon as an image. A picture of a model that hasn't loaded yet fills in once it has (it's
+   * blank until then, never a broken image).
+   */
+  private icon(spec: string, ref: IconRef): HTMLElement {
+    const src = this.iconFor(ref);
+    const img = h(spec, { alt: '' }) as HTMLImageElement;
+    if (src) {
+      img.src = src;
+      return img;
+    }
+    img.style.visibility = 'hidden';
+    let tries = 0;
+    const retry = window.setInterval(() => {
+      const s = this.iconFor(ref);
+      if (s || ++tries > 60 || !img.isConnected) {
+        window.clearInterval(retry);
+        if (s) {
+          img.src = s;
+          img.style.visibility = '';
+        }
+      }
+    }, 250);
+    return img;
+  }
+
   /** A short pop-up under the crosshair ("+100", "Headshot!"). */
   pop(text: string, opts: { color?: string; big?: boolean; sub?: string } = {}) {
     this.popEl.replaceChildren(h('div.hud-pop-text', { style: opts.color ? { color: opts.color } : {} }, text));
@@ -549,7 +575,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
         typeof p === 'string'
           ? h('span', {}, p)
           : 'icon' in p
-            ? h(`img.feed-icon${typeof p.icon === 'object' && 'gltf' in p.icon && p.icon.view === 'side' ? '.wide' : ''}`, { src: this.iconFor(p.icon), alt: '' })
+            ? this.icon(`img.feed-icon${typeof p.icon === 'object' && 'gltf' in p.icon && p.icon.view === 'side' ? '.wide' : ''}`, p.icon)
             : h('span', { style: p.color ? { color: p.color } : {} }, p.text),
       ),
     );
@@ -593,7 +619,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     const stats = opts.stats?.length
       ? h('div.result-stats', {}, ...opts.stats.map(([k, v]) => h('div.result-stat', {}, h('span', {}, k), h('b', {}, v))))
       : null;
-    const icon = opts.icon ? h('img.result-icon', { src: this.iconFor(opts.icon), alt: '' }) : null;
+    const icon = opts.icon ? this.icon('img.result-icon', opts.icon) : null;
     const el = h(
       `div.screen.result-screen.${opts.tone ?? 'neutral'}`,
       {},
@@ -615,7 +641,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     const card = h('div.menu-card', {}, h('div.menu-head', {}, h('div', {}, title, sub), closeBtn), body);
     const el = h('div.screen.menu-screen', {}, card);
     const entry = (e: MenuEntry) => {
-      const icon = e.icon ? h('img.menu-icon', { src: this.iconFor(e.icon), alt: '' }) : h('span.menu-icon');
+      const icon = e.icon ? this.icon('img.menu-icon', e.icon) : h('span.menu-icon');
       const b = h(
         `button.menu-entry${e.disabled ? '.disabled' : ''}${e.active ? '.active' : ''}`,
         {
