@@ -126,6 +126,35 @@ export default function gltfModels() {
   run(1 / 60);
   check(Math.abs(fig.root.rotation.z - Math.PI / 2 * 0.95) < 1e-6, 'dead: it falls over');
   fig.dispose();
+
+  // Items: the model merged into one mesh (the hitbox left out), turned and scaled as asked;
+  // and a part of it standing alone (a player model's arm).
+  lib.adopt('/models/dancer.glb', gltf);
+  const item = lib.item({ parts: [], gltf: { url: '/models/dancer.glb', rotation: [90, 0, 0], scale: 2 } })!;
+  const boxVerts = new THREE.BoxGeometry(0.3, 0.3, 0.3).toNonIndexed().getAttribute('position').count;
+  check(item.geometry.getAttribute('position').count === boxVerts * 3, `one mesh of its three visible parts: ${item.geometry.getAttribute('position').count / boxVerts} boxes`);
+  item.geometry.computeBoundingBox();
+  const size = item.geometry.boundingBox!.getSize(new THREE.Vector3());
+  // Standing 1.4 tall and 0.3 wide; laid down along z and doubled.
+  check(Math.abs(size.x - 0.6) < 1e-3 && Math.abs(size.y - 0.6) < 1e-3 && Math.abs(size.z - 2.8) < 1e-3, `turned and scaled: ${size.toArray().map((v) => v.toFixed(2))}`);
+  check(lib.item({ parts: [], gltf: { url: '/models/dancer.glb', rotation: [90, 0, 0], scale: 2 } }) === item, 'made once');
+  const limb = lib.limb('/models/dancer.glb', 'body', 0.75)!;
+  limb.geometry.computeBoundingBox();
+  const ls = limb.geometry.boundingBox!.getSize(new THREE.Vector3());
+  const lc = limb.geometry.boundingBox!.getCenter(new THREE.Vector3());
+  check(Math.abs(Math.max(ls.x, ls.y, ls.z) - 0.75) < 1e-3 && lc.length() < 1e-3, `a part alone (the body and head on it), centred, its longest side 0.75: ${ls.toArray().map((v) => v.toFixed(2))}`);
+  check(lib.item({ parts: [], gltf: { url: '/models/missing.glb' } }) === null && lib.pending === 1, 'a file not here yet: nothing (and it is fetched)');
   lib.dispose();
-  console.log('  host sends model addresses, never opens them · props loop their animation · idle, walk in step, run, attack, head, hitbox hidden, death');
+
+  // Players' models go in their frames.
+  const withModel = defineGame({ id: 'gltf-players', title: 'glTF players', world: { terrain: 'flat' }, player: { model: Models.gltf('/models/dancer.glb') } });
+  const h2 = new GameHost(withModel, { engine: readFileSync('engine/pkg/voxel_engine_bg.wasm'), seed: 1, remote: true, radius: 4, budget: Infinity, player: { id: 'p1', name: 'Player' } });
+  const bob = h2.connect('Bob');
+  h2.command(bob.id, { t: 'start' });
+  h2.step(1 / 30);
+  h2.sim.players.find((p) => p.name === 'Bob')!.api.setModel(Models.gltf('/models/other.glb'));
+  const fb = h2.step(1 / 30).get(bob.id)!.frame!.players.find((p) => p.name === 'Bob')!;
+  check(fb.model?.gltf?.url === '/models/other.glb', `a player's own model is in their frame: ${fb.model?.gltf?.url}`);
+  h2.dispose();
+  console.log('  host sends model addresses, never opens them · props loop their animation · idle, walk in step, run, attack, head, hitbox hidden, death · items merged, turned, scaled · a limb alone · players\' models in frames');
 }

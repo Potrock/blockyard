@@ -412,7 +412,24 @@ game.entities.define('guard', {
 - Which way it faces: glTF models face +z, and figures walk that way. Blockbench models face -z (north), so give them `yaw: Math.PI`; turn props with their `quaternion`.
 - A node named `hitbox` (a collision box some exporters add) is never drawn; `hide: ['name', …]` hides others.
 - Each player's screen fetches the files itself, as soon as the game names them, and Play waits until they're here. The host never opens them, so give a prop's `radius` if your game needs one.
-- In development, `?game=gallery` shows a room of glTF props and an animated figure (`src/games/gallery/`).
+
+**Players and items.** Players can be a model too, and items can be held as one:
+
+```ts
+player: { model: Models.gltf(heroUrl, { clips: { idle: 'idle', walk: 'walk', run: 'run', attack: 'attack' }, head: 'head', hand: 'right_arm' }) },
+
+game.items.define('cutlass', {
+  kind: 'melee', name: 'Cutlass', damage: 6,
+  icon: { gltf: cutlassUrl },                                          // a picture of the model
+  hold: { model: HeldModels.gltf(cutlassUrl, { grip: [0, 0, 2] }) },   // held as the model
+});
+```
+
+- Others see each player as the model, walking, running, swinging and holding what's in their hand at the model's `hand` node; `player.setModel(model)` gives one player their own (null: back to the game's). With a `hand` node, the player's own first-person arm is that part of the model.
+- A held model should run along +z to its tip with its handle near the origin, like the built-in ones; `rotation` (degrees about X, Y, Z) and `scale` fix one that doesn't, and `grip` is the point in the fist (in pixels, a sixteenth of a block). It's drawn in first person with the item's hold style (`sword`, `axe`, …), in other players' hands, and lying on the ground.
+- `icon: { gltf: url }` draws the item's icon from the model (a small picture from above and to the side, like an inventory's); an item whose icon is a model and has no `hold.model` is held as that model.
+- `tests/headless/_export-models.ts` writes Blockyard's own box models out as glTF files (a node per part, the skin, and their walk, run and swing as animations). Open one in Blockbench, change it, and load it back.
+- In development, `?game=gallery` shows a room of glTF props, figures, a player model and glTF items (`src/games/gallery/`); `npm run server -- gallery` hosts it for several players.
 
 ## Your own art and sound
 

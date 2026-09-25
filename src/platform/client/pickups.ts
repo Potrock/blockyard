@@ -35,18 +35,18 @@ export interface PickupViewParts {
 /** Draws the simulation's pickups: spinning, bobbing items with a glow on the ground (and a beam if asked). */
 export class PickupView {
   private shown = new Map<number, Shown>();
-  private materials = new Map<string, THREE.RawShaderMaterial>();
+  private materials = new Map<THREE.Texture, THREE.RawShaderMaterial>();
   private beamGeo = new THREE.PlaneGeometry(0.9, 7).translate(0, 3.5, 0);
   private haloGeo = new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2);
   private time = 0;
 
   constructor(private p: PickupViewParts) {}
 
-  private material(atlas: string): THREE.RawShaderMaterial {
-    let m = this.materials.get(atlas);
+  private materialFor(albedo: THREE.Texture, emissive: THREE.Texture): THREE.RawShaderMaterial {
+    let m = this.materials.get(albedo);
     if (!m) {
-      m = this.p.graphics.material(atlas);
-      this.materials.set(atlas, m);
+      m = this.p.graphics.materialFor(albedo, emissive);
+      this.materials.set(albedo, m);
     }
     return m;
   }
@@ -63,10 +63,19 @@ export class PickupView {
       group = cube.object;
       dispose = cube.remove;
     } else {
-      const { geometry, atlas } = this.p.graphics.spriteGeometry(icon);
-      const mesh = new THREE.Mesh(geometry, this.material(atlas));
-      mesh.customDepthMaterial = this.p.graphics.shadowMaterial(atlas);
-      mesh.scale.setScalar(0.62);
+      // Its model or its sprite, as in the hand (a model whose file is still coming: later).
+      const look = this.p.graphics.itemLook(def);
+      if (!look) return null;
+      const mesh = new THREE.Mesh(look.geometry, this.materialFor(look.albedo, look.emissive));
+      mesh.customDepthMaterial = this.p.graphics.gltf.shadow(look.albedo);
+      if (look.model) {
+        // A held model lies along +z: stood up, centred, about a sprite's size.
+        look.geometry.computeBoundingSphere();
+        const r = look.geometry.boundingSphere!;
+        mesh.scale.setScalar(0.45 / Math.max(0.2, r.radius));
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.copy(r.center).multiplyScalar(-mesh.scale.x).applyEuler(mesh.rotation);
+      } else mesh.scale.setScalar(0.62);
       group = new THREE.Group();
       group.add(mesh);
       this.p.scene.add(group);

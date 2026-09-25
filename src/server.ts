@@ -7,7 +7,7 @@
 // (--db path for a single game). --new sets the kept worlds aside and starts fresh.
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { games } from './games';
+import { devGames, games } from './games';
 import { serve } from './platform/host/server';
 import { SqliteStore } from './platform/host/sqlite';
 
@@ -18,7 +18,9 @@ export async function main(args: string[]) {
   };
   const valued = ['--port', '--seed', '--db', '--data'];
   const named = args.filter((a, i) => !a.startsWith('--') && !valued.includes(args[i - 1])).flatMap((a) => a.split(','));
-  const defs = named.length ? named.map((id) => games.find((g) => g.id === id) ?? fail(`no game "${id}" (games: ${games.map((g) => g.id).join(', ')})`)) : games;
+  // Named games may include development previews (`gallery`), in a development server only.
+  const known = [...games, ...(await devGames())];
+  const defs = named.length ? named.map((id) => known.find((g) => g.id === id) ?? fail(`no game "${id}" (games: ${known.map((g) => g.id).join(', ')})`)) : games;
   const port = Number(flag('port') ?? process.env.PORT ?? 8787);
   const seed = flag('seed') === undefined ? undefined : Number(flag('seed')) >>> 0;
   const data = flag('data') ?? process.env.DATA_DIR ?? 'data';

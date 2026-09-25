@@ -184,7 +184,7 @@ export class Combat {
 
 /** A sprite icon, or nothing for an item that looks like a block (it can't fly as an arrow). */
 function spriteOf(icon: IconRef | undefined): SpriteRef | undefined {
-  return typeof icon === 'object' && 'block' in icon ? undefined : icon;
+  return typeof icon === 'object' && ('block' in icon || 'gltf' in icon) ? undefined : icon;
 }
 
 /** Where a ray (unit direction) first enters a box, or null. */

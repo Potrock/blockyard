@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { CameraApi, GameContext, GameEvents, ItemStack, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
+import type { CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
 import { IDLE_INPUT } from '../net/protocol';
 import { Combat } from './combat';
 import type { EntitySim } from './entities';
@@ -72,6 +72,8 @@ export interface PlayerFrame {
   lead: number;
   /** Their figure's skin (`player.setSkin`), or null for the game's. */
   skin: { uv: [number, number]; atlas?: string } | null;
+  /** Their figure's model (`player.setModel`), or null for the game's. */
+  model: ModelSpec | null;
   /** Their name's colour above their figure. */
   color: string | null;
 }
@@ -124,6 +126,7 @@ export class PlayerSim {
   /** Swings and uses so far. */
   swings = 0;
   skin: { uv: [number, number]; atlas?: string } | null = null;
+  model: ModelSpec | null = null;
   color: string | null = null;
   readonly api: Player;
   /** Creative building's block hotbar and placing (games with `player.build`). */
@@ -245,6 +248,7 @@ export class PlayerSim {
     this.vehicle = null;
     this.followVehicle = false;
     this.skin = null;
+    this.model = null;
     this.color = null;
     this.ack = -1;
     this.lead = 0;
@@ -378,6 +382,7 @@ export class PlayerSim {
       move: { ...this.memory },
       lead: this.lead,
       skin: this.skin,
+      model: this.model,
       color: this.color,
     };
   }
@@ -440,6 +445,9 @@ export class PlayerSim {
       setSkin: (skin, atlas) => {
         me.skin = { uv: [skin[0], skin[1]], atlas };
         present.send(me.id, 'view', 'setSkin', [skin, atlas]);
+      },
+      setModel: (model) => {
+        me.model = model;
       },
       get color() {
         return me.color;

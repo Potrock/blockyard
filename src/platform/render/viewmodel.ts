@@ -708,6 +708,8 @@ export class ViewModel implements ViewModelApi {
   private side: 1 | -1 = 1;
   private armSide: 1 | -1 = 1;
   private skin: { uv: [number, number]; atlas: string } | null = { uv: [0, 0], atlas: 'builtin' };
+  /** An arm of another shape than the skin's box (a player model's own arm). */
+  private armLook: { geometry: THREE.BufferGeometry; albedo: THREE.Texture; emissive: THREE.Texture } | null = null;
   private apiVisible = true;
 
   private anims = new Map<string, Anim>(Object.entries(BUILTIN));
@@ -799,6 +801,12 @@ export class ViewModel implements ViewModelApi {
     this.buildArm();
   }
 
+  /** The arm as another shape and texture (a player model's own arm, standing along y), or null for the skin's. */
+  setArm(look: { geometry: THREE.BufferGeometry; albedo: THREE.Texture; emissive: THREE.Texture } | null) {
+    this.armLook = look;
+    this.buildArm();
+  }
+
   define(name: string, anim: ViewAnimation) {
     this.anims.set(name, compile(anim));
   }
@@ -878,15 +886,28 @@ export class ViewModel implements ViewModelApi {
 
   /** Main arm (right, or mirrored for the left hand; classic skin layout) and the other one. */
   private buildArm() {
+    const look = this.armLook;
+    if (look) {
+      // The model's own arm (shared: never ours to free).
+      for (const m of [this.arm, this.arm2]) {
+        if (m.geometry !== look.geometry && !m.geometry.userData.shared) m.geometry.dispose();
+        m.geometry = look.geometry;
+      }
+      look.geometry.userData.shared = true;
+      this.armMaterial.uniforms.uAtlas.value = look.albedo;
+      this.armMaterial.uniforms.uEmissive.value = look.emissive;
+      this.arm.visible = true;
+      return;
+    }
     this.arm.visible = !!this.skin;
     if (!this.skin) return;
     const a = this.graphics.atlas(this.skin.atlas);
     const [u, v] = this.skin.uv;
     const box = (mirror: boolean) =>
       boxGeometry({ name: 'arm', size: [4, 12, 4], uv: [u + 40, v + 16], pivot: [0, 0, 0], offset: [0, 0, 0], mirror }, a.width, a.height);
-    this.arm.geometry.dispose();
+    if (!this.arm.geometry.userData.shared) this.arm.geometry.dispose();
     this.arm.geometry = box(this.armSide < 0);
-    this.arm2.geometry.dispose();
+    if (!this.arm2.geometry.userData.shared) this.arm2.geometry.dispose();
     this.arm2.geometry = box(this.armSide > 0);
     this.armMaterial.uniforms.uAtlas.value = a.albedo;
     this.armMaterial.uniforms.uEmissive.value = a.emissive;

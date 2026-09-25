@@ -166,7 +166,7 @@ export class Runtime {
   private probeFrame = 0;
   private titleSpin = 0;
   /** What's on screen, to redraw only on change. */
-  private shown = { health: '', hotbar: '', creative: '', held: '' };
+  private shown = { health: '', hotbar: '', creative: '', held: '', arm: '' };
   /** Development: treat input as active without pointer lock (headless tests). */
   debugActive = false;
 
@@ -282,6 +282,7 @@ export class Runtime {
     const biome = this.biome;
     this.renderer.uniforms.uVoid.value = def.world?.terrain === 'void' ? 1 : 0;
     this.graphics = new EntityGraphics(this.renderer.uniforms);
+    this.graphics.gltf.renderer = this.renderer.gl;
     // Model files the game names (glTF props and figures): fetched at once, so they're here by play.
     this.content.onModelFile((url) => this.graphics.gltf.load(url));
     this.loadEntityAtlas();
@@ -301,7 +302,7 @@ export class Runtime {
     for (const b of this.registry.blocks) if (b.id !== 0) icons.set(b.id, blockIcon(b, this.textures.albedoData));
     this.blockIcons = icons;
     this.hud = new Hud(this.ui, this.registry, icons);
-    this.gameHud = new GameHud(this.ui, (ref) => (typeof ref === 'object' && 'block' in ref ? this.blockIcons.get(this.blockId(ref.block)) ?? '' : this.graphics.spriteIcon(ref, 96)));
+    this.gameHud = new GameHud(this.ui, (ref) => (typeof ref === 'object' && 'block' in ref ? this.blockIcons.get(this.blockId(ref.block)) ?? '' : this.graphics.icon(ref, 96)));
     this.gameHud.onHighlight = (at, progress) => this.setHighlight(at, progress);
     // Markers and radar blips that follow things: where this screen draws them, every frame.
     this.gameHud.locate = {
@@ -587,6 +588,13 @@ export class Runtime {
    */
   private avatarType(p: PlayerFrame): string {
     const d = this.def.player;
+    // A model (theirs, or the game's for everyone): one figure type per model.
+    const model = p.model ?? d?.model;
+    if (model) {
+      const type = `$player:model:${JSON.stringify(model)}`;
+      if (!this.content.entities.has(type)) this.content.defineEntity(type, { name: 'Player', model, hitbox: { width: 0.6, height: 1.8 }, health: 20, speed: 4.3 });
+      return type;
+    }
     const skin = p.skin ?? (d?.skin ? { uv: d.skin, atlas: d.skinAtlas } : { uv: Skins.player, atlas: undefined });
     const type = `$player:${skin.atlas ?? 'builtin'}:${skin.uv.join(',')}`;
     if (!this.content.entities.has(type)) {
@@ -638,6 +646,7 @@ export class Runtime {
       move: { time: 0, lastJumpTap: -1, lastForwardTap: -1, sprintLatched: false },
       lead: 0,
       skin: null,
+      model: null,
       color: null,
     };
   }
@@ -952,14 +961,30 @@ export class Runtime {
   // The local player's HUD and hand, from the frame
   // ---------------------------------------------------------------------------------------------
 
-  /** The icon an item shows: its sprite, or its block. */
+  /** The icon an item shows: its sprite, its block, or a picture of its model. */
   private itemIcon(d: ItemDefinition, size: number): string {
     const icon = d.icon;
     if (typeof icon === 'object' && 'block' in icon) return this.blockIcons.get(this.blockId(icon.block)) ?? '';
-    return this.graphics.spriteIcon(icon, size);
+    return this.graphics.icon(icon, size);
   }
 
   private showPlayer(me: PlayerFrame) {
+    // A player model with a hand: their first-person arm is that part of it (once its file is here).
+    const model = me.model ?? this.def.player?.model;
+    const hand = model?.gltf?.hand;
+    const arm = model?.gltf && hand ? `${model.gltf.url}|${hand}` : '';
+    if (arm !== this.shown.arm) {
+      if (!arm) {
+        this.held.setArm(null);
+        this.shown.arm = '';
+      } else {
+        const look = this.graphics.gltf.limb(model!.gltf!.url, hand!, 12 / 16);
+        if (look) {
+          this.held.setArm(look);
+          this.shown.arm = arm;
+        }
+      }
+    }
     const creative = me.creative;
     const health = `${me.health}|${me.mortal ? me.maxHealth : 0}`;
     if (health !== this.shown.health) {
@@ -979,7 +1004,8 @@ export class Runtime {
   }
 
   private showHotbar(slots: (ItemStack | null)[], selected: number, hand: PlayerFrame['hand']) {
-    const key = `${slots.map((s) => (s ? `${s.item}x${s.count}` : '')).join(',')}|${selected}`;
+    // (Redrawn as model files arrive: an icon can be a picture of one.)
+    const key = `${slots.map((s) => (s ? `${s.item}x${s.count}` : '')).join(',')}|${selected}|${this.graphics.gltf.version}`;
     if (key !== this.shown.hotbar) {
       const prevSelected = this.shown.hotbar.split('|')[1];
       this.shown.hotbar = key;
@@ -1010,17 +1036,22 @@ export class Runtime {
       this.held.setBlock(this.registry.blocks[this.blockId(def.icon.block)]);
       return;
     }
-    const icon = drawn && def.kind === 'bow' ? def.drawIcon ?? def.icon : def.icon;
-    const model = def.hold?.model;
-    const { geometry, atlas } = model && !drawn ? this.graphics.heldModelGeometry(model) : this.graphics.spriteGeometry(icon);
-    if (def.kind === 'bow' && sameItem) {
-      // Drawing or releasing: swap the frame without the lower-and-raise.
-      this.held.swapItemGeometry(geometry);
+    const look = this.graphics.itemLook(def, drawn);
+    if (!look) {
+      // Its model's file is still coming: nothing in hand yet, and look again next frame.
+      this.shown.held = '';
+      this.held.setEmpty();
       return;
     }
-    const a = this.graphics.atlas(atlas);
+    if (def.kind === 'bow' && sameItem) {
+      // Drawing or releasing: swap the frame without the lower-and-raise.
+      this.held.swapItemGeometry(look.geometry);
+      return;
+    }
     const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : 'item';
-    this.held.setItem(geometry, a.albedo, a.emissive, def.hold ?? {}, style);
+    // Held as a model (boxes or glTF), posed by its grip; else as its sprite.
+    const hold = look.model ? { ...def.hold, model: look.model } : def.hold ?? {};
+    this.held.setItem(look.geometry, look.albedo, look.emissive, hold, style);
   }
 
   /** Columns the host keeps around the player: what this client shows, within reason. */

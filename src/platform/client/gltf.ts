@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import type { GltfSpec, ModelSpec } from '../api/types';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { GltfSpec, HeldModelSpec, ModelSpec } from '../api/types';
 import type { SharedUniforms } from '../render/pipeline';
 import { Shaders } from '../render/shaders';
 import type { AnimState, Figure } from '../render/entities';
@@ -17,6 +18,15 @@ interface File {
   failed: boolean;
 }
 
+/** An item as one mesh: in the hand, on the ground, in its icon. */
+export interface ItemMesh {
+  geometry: THREE.BufferGeometry;
+  albedo: THREE.Texture;
+  emissive: THREE.Texture;
+}
+
+const DEG = Math.PI / 180;
+
 /**
  * glTF and GLB model files (Blockbench and Blender exports): fetched once each and kept, then
  * turned into figures (entities) and props on demand. They're drawn with the platform's own
@@ -28,6 +38,12 @@ export class GltfLibrary {
   private loader = new GLTFLoader();
   private shadows = new Map<THREE.Texture, THREE.RawShaderMaterial>();
   private swatches = new Map<string, THREE.Texture>();
+  private items = new Map<string, ItemMesh>();
+  private icons = new Map<string, string>();
+  /** Counts up as files arrive (what shows models can redraw). */
+  version = 0;
+  /** Draws item icons (set by the client). */
+  renderer: THREE.WebGLRenderer | null = null;
 
   constructor(private shared: SharedUniforms) {}
 
@@ -40,11 +56,18 @@ export class GltfLibrary {
       .loadAsync(url)
       .then((g) => {
         file.gltf = g;
+        this.version++;
       })
       .catch((err: unknown) => {
         file.failed = true;
         console.error(`Couldn't load the model ${url}: ${err instanceof Error ? err.message : String(err)}`);
       });
+  }
+
+  /** A model already in hand under an address (one made in code, a test's): as if fetched. */
+  adopt(url: string, gltf: GLTF) {
+    this.files.set(url, { gltf, failed: false });
+    this.version++;
   }
 
   /** Files still on their way. */
@@ -64,6 +87,151 @@ export class GltfLibrary {
   prop(url: string, opts: { scale?: number }): GltfFigure | null {
     const g = this.get(url);
     return g ? new GltfFigure(g, { url }, opts.scale ?? 1, this) : null;
+  }
+
+  /**
+   * A model as one mesh for holding (its parts merged, in the model's rest pose), turned and
+   * scaled as the spec says; null while the file is still coming. Its first texture is its look.
+   */
+  item(spec: HeldModelSpec): ItemMesh | null {
+    const src = spec.gltf;
+    const g = src && this.get(src.url);
+    if (!g || !src) return null;
+    const key = `${src.url}|${src.rotation?.join(',') ?? ''}|${src.scale ?? 1}`;
+    let hit = this.items.get(key);
+    if (hit) return hit;
+    g.scene.updateMatrixWorld(true);
+    const parts: THREE.BufferGeometry[] = [];
+    let map: THREE.Texture | null = null;
+    let emissive: THREE.Texture | null = null;
+    let color: THREE.Color | null = null;
+    const visit = (o: THREE.Object3D) => {
+      if (o.name.toLowerCase() === 'hitbox') return;
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) {
+        const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial;
+        map ??= mat.map;
+        emissive ??= mat.emissiveMap;
+        color ??= mat.color ?? null;
+        const geo = new THREE.BufferGeometry();
+        const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+        geo.setAttribute('position', src.getAttribute('position').clone());
+        if (src.getAttribute('normal')) geo.setAttribute('normal', src.getAttribute('normal').clone());
+        else geo.computeVertexNormals();
+        const uv = src.getAttribute('uv');
+        geo.setAttribute('uv', uv ? uv.clone() : new THREE.Float32BufferAttribute(new Float32Array(src.getAttribute('position').count * 2), 2));
+        geo.applyMatrix4(mesh.matrixWorld);
+        parts.push(geo);
+      }
+      for (const c of o.children) visit(c);
+    };
+    visit(g.scene);
+    const merged = parts.length ? mergeGeometries(parts) : new THREE.BufferGeometry();
+    for (const p of parts) p.dispose();
+    if (src.rotation) merged.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(src.rotation[0] * DEG, src.rotation[1] * DEG, src.rotation[2] * DEG)));
+    if (src.scale) merged.scale(src.scale, src.scale, src.scale);
+    merged.computeBoundingSphere();
+    hit = { geometry: merged, albedo: map ?? this.swatch(color ?? new THREE.Color(1, 1, 1)), emissive: emissive ?? BLACK };
+    this.items.set(key, hit);
+    return hit;
+  }
+
+  /**
+   * One part of a model (a node and everything on it) as one mesh, standing on its own: centred,
+   * and scaled so its longest side is `length` (a player model's arm, for their first-person view).
+   */
+  limb(url: string, node: string, length: number): ItemMesh | null {
+    const g = this.get(url);
+    if (!g) return null;
+    const key = `limb|${url}|${node}|${length}`;
+    let hit = this.items.get(key);
+    if (hit) return hit;
+    let part: THREE.Object3D | undefined;
+    g.scene.traverse((o) => {
+      if (!part && o.name === node) part = o;
+    });
+    if (!part) return null;
+    // In the part's own space (its place in the model left out).
+    part.updateMatrixWorld(true);
+    const inverse = part.matrixWorld.clone().invert();
+    const parts: THREE.BufferGeometry[] = [];
+    let map: THREE.Texture | null = null;
+    part.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial;
+      map ??= mat.map;
+      const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', src.getAttribute('position').clone());
+      geo.setAttribute('normal', src.getAttribute('normal')?.clone() ?? new THREE.Float32BufferAttribute(new Float32Array(src.getAttribute('position').count * 3), 3));
+      geo.setAttribute('uv', src.getAttribute('uv')?.clone() ?? new THREE.Float32BufferAttribute(new Float32Array(src.getAttribute('position').count * 2), 2));
+      geo.applyMatrix4(inverse.clone().multiply(mesh.matrixWorld));
+      parts.push(geo);
+    });
+    if (!parts.length) return null;
+    const merged = mergeGeometries(parts);
+    for (const p of parts) p.dispose();
+    merged.computeBoundingBox();
+    const box = merged.boundingBox!;
+    const size = box.getSize(new THREE.Vector3());
+    merged.translate(...box.getCenter(new THREE.Vector3()).negate().toArray());
+    merged.scale(length / Math.max(size.x, size.y, size.z), length / Math.max(size.x, size.y, size.z), length / Math.max(size.x, size.y, size.z));
+    merged.computeBoundingSphere();
+    hit = { geometry: merged, albedo: map ?? this.swatch(new THREE.Color(1, 1, 1)), emissive: BLACK };
+    this.items.set(key, hit);
+    return hit;
+  }
+
+  /**
+   * A picture of a model (an item's icon): drawn once, from above and to the side like an
+   * inventory's, as a data URL; empty until its file is here (and on a client that can't draw).
+   */
+  icon(url: string, size: number): string {
+    const key = `${url}|${size}`;
+    const hit = this.icons.get(key);
+    if (hit !== undefined) return hit;
+    const look = this.item({ parts: [], gltf: { url } });
+    const r = this.renderer;
+    if (!look || !r) return '';
+    const scene = new THREE.Scene();
+    const material = new THREE.MeshLambertMaterial({ map: look.albedo, alphaTest: 0.5, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(look.geometry, material);
+    scene.add(mesh, new THREE.AmbientLight(0xffffff, 1.4));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+    sun.position.set(-1, 2, 1.5);
+    scene.add(sun);
+    look.geometry.computeBoundingBox();
+    const box = look.geometry.boundingBox!;
+    const centre = box.getCenter(new THREE.Vector3());
+    const radius = box.getSize(new THREE.Vector3()).length() / 2 || 1;
+    const cam = new THREE.OrthographicCamera(-radius, radius, radius, -radius, 0.01, radius * 20);
+    cam.position.copy(centre).add(new THREE.Vector3(1, 0.8, 1).normalize().multiplyScalar(radius * 6));
+    cam.lookAt(centre);
+    const px = size * 2;
+    const target = new THREE.WebGLRenderTarget(px, px, { colorSpace: THREE.SRGBColorSpace });
+    const was = { target: r.getRenderTarget(), color: r.getClearColor(new THREE.Color()), alpha: r.getClearAlpha(), autoClear: r.autoClear };
+    r.setRenderTarget(target);
+    r.setClearColor(0x000000, 0);
+    r.clear();
+    r.render(scene, cam);
+    const pixels = new Uint8Array(px * px * 4);
+    r.readRenderTargetPixels(target, 0, 0, px, px, pixels);
+    r.setRenderTarget(was.target);
+    r.setClearColor(was.color, was.alpha);
+    r.autoClear = was.autoClear;
+    target.dispose();
+    material.dispose();
+    // Rows come bottom-up.
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = px;
+    const ctx = canvas.getContext('2d')!;
+    const img = ctx.createImageData(px, px);
+    for (let y = 0; y < px; y++) img.data.set(pixels.subarray((px - 1 - y) * px * 4, (px - y) * px * 4), y * px * 4);
+    ctx.putImageData(img, 0, 0);
+    const out = canvas.toDataURL();
+    this.icons.set(key, out);
+    return out;
   }
 
   private get(url: string): GLTF | null {
@@ -128,6 +296,9 @@ export class GltfLibrary {
     }
     for (const m of this.shadows.values()) m.dispose();
     for (const t of this.swatches.values()) t.dispose();
+    for (const i of this.items.values()) i.geometry.dispose();
+    this.items.clear();
+    this.icons.clear();
     this.files.clear();
     this.shadows.clear();
     this.swatches.clear();

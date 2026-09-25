@@ -198,12 +198,14 @@ export class EntityView {
     const def = item ? this.content.items.get(item) : undefined;
     const arm = v.model.pivots.get('armR');
     if (!def || !arm) return;
-    const icon = def.icon;
-    const blockIcon = typeof icon === 'object' && 'block' in icon;
-    const model = def.hold?.model;
-    if (!model && blockIcon) return;
-    const { geometry, atlas } = model ? this.graphics.heldModelGeometry(model) : this.graphics.spriteGeometry(icon as Exclude<typeof icon, { block: string }>);
-    const mesh = new THREE.Mesh(geometry, this.graphics.material(atlas));
+    const look = this.graphics.itemLook(def);
+    if (!look) {
+      // A model whose file is still coming: try again next frame (a block-like item has none).
+      if (def.hold?.model?.gltf || (typeof def.icon === 'object' && 'gltf' in def.icon)) v.held = null;
+      return;
+    }
+    const { geometry, model } = look;
+    const mesh = new THREE.Mesh(geometry, this.graphics.materialFor(look.albedo, look.emissive));
     // In the fist at the end of the hanging arm (the figure faces +z). A held model runs along
     // +z already: tilt it up a little, its grip in the fist. A sprite stands on edge, turned so
     // its handle-to-tip diagonal points forward and up, the handle (lower left) in the fist.

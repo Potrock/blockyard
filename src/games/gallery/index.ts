@@ -1,5 +1,7 @@
-import { Blueprint, defineGame, math, Models, type Entity } from '@platform';
+import { Blueprint, defineGame, HeldModels, math, Models, type Entity } from '@platform';
 import auctioneer from './models/auctioneer_npc.gltf?url';
+import blocky from './models/blocky.gltf?url';
+import blockySword from './models/blocky_sword.gltf?url';
 import barrier from './models/barrier.gltf?url';
 import cards from './models/card_and_token.gltf?url';
 import monitor from './models/casino_monitor.gltf?url';
@@ -49,19 +51,51 @@ const SPOTS = [
   { x: -6, z: -16 },
 ];
 
+/** Blockyard's own player as a glTF model (`tests/headless/_export-models.ts` writes it). */
+const BLOCKY = Models.gltf(blocky, { clips: { idle: 'idle', walk: 'walk', run: 'run', attack: 'attack' }, head: 'head', hand: 'armR' });
+
 /**
  * Model gallery (a development preview, `?game=gallery`): glTF models as props, labelled, and as
  * figures: an auctioneer standing (a prop looping its idle) and one strolling between the tables
- * (an entity).
+ * (an entity), a runner (walking, then running), players as a glTF model (their first-person arm
+ * is its arm), and glTF items: a sword in hand and on the floor, and the cards (held as their
+ * model, their icon a picture of it).
  */
 export default defineGame({
   id: 'gallery',
   title: 'Model gallery',
   tagline: 'glTF models: props and figures',
   world: { terrain: 'void', structures: [casinoFloor()], spawn: { x: 0.5, y: FLOOR, z: 10 }, spawnYaw: 0, time: 0.35, freezeTime: true },
-  player: { fly: true, health: false, hotbar: 'items' },
+  player: { fly: true, health: false, hotbar: 'items', model: BLOCKY },
 
   setup(game) {
+    game.items.define('blocky_sword', { kind: 'melee', name: 'Blocky Sword', icon: { gltf: blockySword }, damage: 6, cooldown: 0.45, reach: 3.5, hold: { model: HeldModels.gltf(blockySword, { grip: [0, 0, 2] }) } });
+    game.items.define('cards', { kind: 'misc', name: 'Cards and Tokens', icon: { gltf: cards }, hold: { model: HeldModels.gltf(cards, { scale: 0.3, grip: [0, -1, 0] }) } });
+    game.entities.define('runner', {
+      name: 'Runner',
+      model: BLOCKY,
+      hitbox: { width: 0.6, height: 1.8 },
+      health: 20,
+      speed: 3,
+      invulnerable: true,
+      // Laps the floor: a lap walking, a lap running.
+      ai: (self: Entity) => {
+        const s = self.data as { spot?: number; laps?: number };
+        const spots = [{ x: -12, z: 8 }, { x: 12, z: 8 }, { x: 12, z: -28 }, { x: -12, z: -28 }];
+        const to = spots[(s.spot ??= 0)];
+        if (Math.hypot(self.position.x - to.x, self.position.z - to.z) < 1.2) {
+          s.spot = (s.spot + 1) % spots.length;
+          if (s.spot === 0) s.laps = (s.laps ?? 0) + 1;
+        }
+        self.setSpeed((s.laps ?? 0) % 2 ? 2.2 : 1);
+        self.moveTo({ x: to.x, y: FLOOR, z: to.z });
+      },
+    });
+    // Everyone gets the sword and the cards, however late they come.
+    game.events.on('playerJoin', ({ player }) => {
+      if (!player.inventory.count('blocky_sword')) player.inventory.give('blocky_sword');
+      if (!player.inventory.count('cards')) player.inventory.give('cards');
+    });
     game.entities.define('auctioneer', {
       name: 'Auctioneer',
       // Blockbench models face -z (north): turned to face +z, the way figures walk.
@@ -98,6 +132,12 @@ export default defineGame({
     standing.quaternion.setFromAxisAngle(UP, Math.PI);
     game.hud.marker('standing', standing, { offset: { x: 0, y: 3.4, z: 0 }, shape: 'dot', size: 4, color: '#8fd0ff', label: 'Auctioneer (a prop, idling)' });
     game.entities.spawn('auctioneer', { x: SPOTS[0].x, y: FLOOR, z: SPOTS[0].z });
+    game.entities.spawn('runner', { x: -12, y: FLOOR, z: 8 });
+    game.items.spawnPickup('blocky_sword', { x: 10, y: FLOOR + 0.5, z: 6 }, { beam: '#ffd36b', despawn: 1e9 });
+    for (const p of game.players) {
+      p.inventory.give('blocky_sword');
+      p.inventory.give('cards');
+    }
     game.hud.objective('glTF models: 12 props and an animated figure');
   },
 });

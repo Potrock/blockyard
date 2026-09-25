@@ -102,6 +102,12 @@ export interface PlayerOptions {
   skin?: [number, number];
   skinAtlas?: string;
   /**
+   * A model for players' figures instead of the skin: `Models.gltf(url, { clips, head, hand })`.
+   * With a `hand` node, their own first-person arm is that part of the model. Per player:
+   * `player.setModel`.
+   */
+  model?: ModelSpec;
+  /**
    * Players can hurt each other: melee hits and shots land on other players (never the shooter).
    * Off by default, so co-op games have no friendly fire.
    */
@@ -502,6 +508,11 @@ export interface PlayerApi {
    * their own first-person arm wears too. Default: the game's `player.skin`.
    */
   setSkin(skin: [number, number], atlas?: string): void;
+  /**
+   * How others see this player: a model (`Models.gltf(...)`) instead of a skin, or null for the
+   * game's (`player.model`, else the skin). With a `hand` node, their first-person arm is that part.
+   */
+  setModel(model: ModelSpec | null): void;
   /** The colour of their name above their figure (team colours); null for white. */
   color: string | null;
 }
@@ -540,6 +551,11 @@ export interface HeldModelSpec {
   /** Where the hands hold it (pixels): the rear / main hand, and the front hand for two-handed styles. */
   grip?: [number, number, number];
   grip2?: [number, number, number];
+  /**
+   * A glTF or GLB model instead of boxes (`HeldModels.gltf`): its file, turned (degrees about X,
+   * then Y, then Z) and scaled so it runs along +z to its tip, like the built-in ones.
+   */
+  gltf?: { url: string; rotation?: [number, number, number]; scale?: number };
 }
 
 /**
@@ -705,7 +721,8 @@ export interface MiscItem extends ItemBase {
 export type ItemDefinition = MeleeItem | BowItem | ConsumableItem | MiscItem;
 
 /** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
-export type IconRef = SpriteRef | { block: string };
+/** A sprite, a block's picture, or a picture of a glTF model (`{ gltf: url }`, drawn once it has loaded). */
+export type IconRef = SpriteRef | { block: string } | { gltf: string };
 
 export interface Pickup {
   readonly id: number;

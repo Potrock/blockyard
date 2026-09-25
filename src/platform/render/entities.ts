@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import type { HeldModelSpec, ModelPart, ModelSpec, SpriteRef } from '../api/types';
+import type { HeldModelSpec, IconRef, ItemDefinition, ModelPart, ModelSpec, SpriteRef } from '../api/types';
 import { Shaders } from './shaders';
 import type { SharedUniforms } from './pipeline';
-import { GltfLibrary } from '../client/gltf';
+import { GltfLibrary, type ItemMesh } from '../client/gltf';
 
 /** The built-in starter sprites (16x16, `builtin` atlas, row at y = 64). Games bring the rest. */
 export const BUILTIN_SPRITES: Record<string, [number, number]> = {
@@ -104,17 +104,56 @@ export class EntityGraphics {
     return a;
   }
 
+  /**
+   * What an item looks like in a hand or on the ground: its model (boxes, or glTF once its file is
+   * here) or its sprite extruded, and the textures to draw it with. Null for an item that looks
+   * like a block, or while its model's file is still coming (ask again: `gltf.version` counts up).
+   */
+  itemLook(def: ItemDefinition, drawn = false): (ItemMesh & { model?: HeldModelSpec }) | null {
+    const icon = drawn && def.kind === 'bow' ? def.drawIcon ?? def.icon : def.icon;
+    const model = def.hold?.model;
+    if (model && !drawn) {
+      if (model.gltf) {
+        const m = this.gltf.item(model);
+        return m && { ...m, model };
+      }
+      const { geometry, atlas } = this.heldModelGeometry(model);
+      const a = this.atlas(atlas);
+      return { geometry, albedo: a.albedo, emissive: a.emissive, model };
+    }
+    if (typeof icon === 'object' && 'block' in icon) return null;
+    // An icon that's a model's picture: it's held as that model.
+    if (typeof icon === 'object' && 'gltf' in icon) {
+      const spec: HeldModelSpec = { parts: [], gltf: { url: icon.gltf } };
+      const m = this.gltf.item(spec);
+      return m && { ...m, model: spec };
+    }
+    const { geometry, atlas } = this.spriteGeometry(icon);
+    const a = this.atlas(atlas);
+    return { geometry, albedo: a.albedo, emissive: a.emissive };
+  }
+
+  /** An icon as a picture (data URL): a sprite, or a model's (empty until its file is here). Blocks are the caller's. */
+  icon(ref: Exclude<IconRef, { block: string }>, size = 48): string {
+    return typeof ref === 'object' && 'gltf' in ref ? this.gltf.icon(ref.gltf, size) : this.spriteIcon(ref, size);
+  }
+
   /** A per-instance lit material. Same shader source, so three.js reuses the compiled program. */
   material(atlasName: string): THREE.RawShaderMaterial {
     const a = this.atlas(atlasName);
+    return this.materialFor(a.albedo, a.emissive);
+  }
+
+  /** The same, for any texture (a glTF item's). */
+  materialFor(albedo: THREE.Texture, emissive: THREE.Texture): THREE.RawShaderMaterial {
     return new THREE.RawShaderMaterial({
       vertexShader: Shaders.entity.vertex,
       fragmentShader: Shaders.entity.fragment,
       glslVersion: THREE.GLSL3,
       uniforms: {
         ...this.shared,
-        uAtlas: { value: a.albedo },
-        uEmissiveMap: { value: a.emissive },
+        uAtlas: { value: albedo },
+        uEmissiveMap: { value: emissive },
         uProbe: { value: new THREE.Vector2(1, 0) },
         uTint: { value: new THREE.Vector4(1, 0, 0, 0) },
         uOpacity: { value: 1 },
