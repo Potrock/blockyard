@@ -107,8 +107,23 @@ pub mod tex {
     pub const YELLOW_BED_HEAD_END: u16 = 95;
     pub const YELLOW_BED_FOOT_END: u16 = 96;
     pub const WALL_TORCH: u16 = 97;
+    pub const ORANGE_CONCRETE: u16 = 98;
+    pub const MAGENTA_CONCRETE: u16 = 99;
+    pub const LIGHT_BLUE_CONCRETE: u16 = 100;
+    pub const YELLOW_CONCRETE: u16 = 101;
+    pub const LIME_CONCRETE: u16 = 102;
+    pub const PINK_CONCRETE: u16 = 103;
+    pub const CYAN_CONCRETE: u16 = 104;
+    pub const PURPLE_CONCRETE: u16 = 105;
+    pub const BLUE_CONCRETE: u16 = 106;
+    pub const BROWN_CONCRETE: u16 = 107;
+    pub const GREEN_CONCRETE: u16 = 108;
+    pub const NEON_RED: u16 = 109;
+    pub const NEON_PINK: u16 = 110;
+    pub const NEON_CYAN: u16 = 111;
+    pub const NEON_YELLOW: u16 = 112;
 
-    pub const COUNT: usize = 98;
+    pub const COUNT: usize = 113;
 
     pub const NAMES: [&str; COUNT] = [
         "stone", "grass_top", "grass_side", "dirt", "cobblestone", "oak_planks", "bedrock", "sand",
@@ -129,6 +144,7 @@ pub mod tex {
         "green_bed_foot_top", "green_bed_foot_side", "green_bed_head_end", "green_bed_foot_end",
         "yellow_bed_foot_top", "yellow_bed_foot_side", "yellow_bed_head_end", "yellow_bed_foot_end",
         "wall_torch",
+        "orange_concrete", "magenta_concrete", "light_blue_concrete", "yellow_concrete", "lime_concrete", "pink_concrete", "cyan_concrete", "purple_concrete", "blue_concrete", "brown_concrete", "green_concrete", "neon_red", "neon_pink", "neon_cyan", "neon_yellow",
     ];
 }
 
@@ -365,7 +381,10 @@ pub const STAIRS_B: u8 = 118;
 /// Logs lying along x, then along z, per `LOGS`.
 pub const LOG_AXIS_B: u8 = 166;
 
-pub const BLOCK_COUNT: usize = 172;
+/// More full blocks: the other concrete colours, then neon (glowing sign blocks), per `EXTRA`.
+pub const EXTRA_B: u8 = 172;
+
+pub const BLOCK_COUNT: usize = 187;
 
 /// Horizontal facings in id order, and the face (+X -X +Y -Y +Z -Z order) each one points out of.
 pub const FACING_NAMES: [&str; 4] = ["north", "east", "south", "west"];
@@ -550,6 +569,30 @@ const BASE: [Block; 70] = [
     bed(3, 0, false),
 ];
 
+/// Blocks after the variants (ids from `EXTRA_B`), so ids kept in saves never move.
+const EXTRA: [Block; 15] = [
+    cube("orange_concrete", "Orange Concrete", T::ORANGE_CONCRETE),
+    cube("magenta_concrete", "Magenta Concrete", T::MAGENTA_CONCRETE),
+    cube("light_blue_concrete", "Light Blue Concrete", T::LIGHT_BLUE_CONCRETE),
+    cube("yellow_concrete", "Yellow Concrete", T::YELLOW_CONCRETE),
+    cube("lime_concrete", "Lime Concrete", T::LIME_CONCRETE),
+    cube("pink_concrete", "Pink Concrete", T::PINK_CONCRETE),
+    cube("cyan_concrete", "Cyan Concrete", T::CYAN_CONCRETE),
+    cube("purple_concrete", "Purple Concrete", T::PURPLE_CONCRETE),
+    cube("blue_concrete", "Blue Concrete", T::BLUE_CONCRETE),
+    cube("brown_concrete", "Brown Concrete", T::BROWN_CONCRETE),
+    cube("green_concrete", "Green Concrete", T::GREEN_CONCRETE),
+    neon("neon_red", "Red Neon", T::NEON_RED),
+    neon("neon_pink", "Pink Neon", T::NEON_PINK),
+    neon("neon_cyan", "Cyan Neon", T::NEON_CYAN),
+    neon("neon_yellow", "Yellow Neon", T::NEON_YELLOW),
+];
+
+/// A glowing sign block (neon tubing seen head on): lights its surroundings.
+const fn neon(name: &'static str, label: &'static str, t: u16) -> Block {
+    Block { emit: 12, ..cube(name, label, t) }
+}
+
 const fn torch() -> Block {
     let t = T::TORCH;
     Block {
@@ -646,6 +689,11 @@ const fn build() -> [Block; BLOCK_COUNT] {
         out[log_id(l as u8, 0) as usize] = Block { state: "axis=x", placeable: false, tex: [top, top, side, side, side, side], uvt: [0, 0, s, s, s, s], ..log };
         out[log_id(l as u8, 1) as usize] = Block { state: "axis=z", placeable: false, tex: [side, side, side, side, top, top], uvt: [s, s, 0, 0, 0, 0], ..log };
         l += 1;
+    }
+    let mut e = 0;
+    while e < EXTRA.len() {
+        out[EXTRA_B as usize + e] = EXTRA[e];
+        e += 1;
     }
     out
 }
@@ -835,7 +883,12 @@ mod tests {
         assert_eq!(BLOCKS[stairs_id(5, 3, true) as usize].state, "facing=west,half=top");
         assert_eq!(stairs_id(5, 3, true) as usize, LOG_AXIS_B as usize - 1);
         assert_eq!(BLOCKS[log_id(2, 1) as usize].name, "spruce_log");
-        assert_eq!(log_id(2, 1) as usize, BLOCK_COUNT - 1);
+        assert_eq!(log_id(2, 1) as usize, EXTRA_B as usize - 1);
+        assert_eq!(EXTRA_B as usize + EXTRA.len(), BLOCK_COUNT);
+        assert_eq!(BLOCKS[EXTRA_B as usize].name, "orange_concrete");
+        assert_eq!(BLOCKS[BLOCK_COUNT - 1].name, "neon_yellow");
+        assert_eq!(tex::NAMES[tex::NEON_YELLOW as usize], "neon_yellow");
+        assert_eq!(EMIT[BLOCK_COUNT - 1], 12);
         // One placeable variant per family.
         let mut families = std::collections::HashMap::new();
         for b in BLOCKS.iter().filter(|b| b.placeable) {

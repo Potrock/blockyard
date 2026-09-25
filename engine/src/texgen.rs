@@ -141,6 +141,21 @@ fn make(id: u16) -> Tx {
         T::YELLOW_BED_FOOT_SIDE => bed_side(YELLOW_BED, 745, false),
         T::YELLOW_BED_FOOT_END => bed_end(YELLOW_BED, 753, false),
         T::WALL_TORCH => wall_torch(),
+        T::ORANGE_CONCRETE => concrete(0xe06101, 1001),
+        T::MAGENTA_CONCRETE => concrete(0xa9309f, 1011),
+        T::LIGHT_BLUE_CONCRETE => concrete(0x2489c7, 1021),
+        T::YELLOW_CONCRETE => concrete(0xf1af15, 1031),
+        T::LIME_CONCRETE => concrete(0x5ea918, 1041),
+        T::PINK_CONCRETE => concrete(0xd5658f, 1051),
+        T::CYAN_CONCRETE => concrete(0x157788, 1061),
+        T::PURPLE_CONCRETE => concrete(0x64209c, 1071),
+        T::BLUE_CONCRETE => concrete(0x2c2e8f, 1081),
+        T::BROWN_CONCRETE => concrete(0x603b1f, 1091),
+        T::GREEN_CONCRETE => concrete(0x495b24, 1101),
+        T::NEON_RED => neon(0xff3b3b, 1111),
+        T::NEON_PINK => neon(0xff4fb4, 1121),
+        T::NEON_CYAN => neon(0x3ff2ff, 1131),
+        T::NEON_YELLOW => neon(0xffe14a, 1141),
         _ => stone(),
     }
 }
@@ -1854,6 +1869,23 @@ fn concrete(base: u32, seed: u32) -> Tx {
         let k = (e[i] - 0.5) * 0.09;
         t.c[i] = if k < 0.0 { mixc(c, mulc(c, 0.6), -k * 2.0) } else { mixc(c, [255.0; 3], k * 0.7) };
         t.h[i] = e[i] * 0.3;
+    }
+    t
+}
+
+/// Neon: a bright glowing face with a darker rim, so letters and shapes built from it read as
+/// solid strokes of light.
+fn neon(base: u32, seed: u32) -> Tx {
+    let mut t = Tx::new(200, 0.4);
+    let c = hexc(base);
+    for i in 0..P {
+        let (x, y) = xy(i);
+        let rim = x == 0 || y == 0 || x == 15 || y == 15;
+        let d = ((x as f32 - 7.5).abs().max((y as f32 - 7.5).abs()) / 7.5).min(1.0);
+        let n = (rnd(x, y, seed) - 0.5) * 0.06;
+        t.c[i] = if rim { mulc(c, 0.55) } else { mixc(c, [255.0; 3], (1.0 - d) * 0.35 + n) };
+        t.em[i] = if rim { 120 } else { (255.0 - d * 45.0) as u8 };
+        t.h[i] = if rim { 0.1 } else { 0.6 };
     }
     t
 }
