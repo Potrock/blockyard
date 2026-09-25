@@ -265,7 +265,7 @@ export function stepAbilities(
     gravity: finite(body.gravity, 1),
     control: Math.max(0, finite(body.control, 1)),
     speed: Math.max(0, finite(body.speed, s.speed)),
-    stance: STANCES.includes(body.stance) ? body.stance : 'stand',
+    stance: STANCES.includes(body.stance) ? body.stance : s.sliding ? 'low' : s.crouching ? 'crouch' : 'stand',
     camera: roll || pitch || dip ? [roll, pitch, dip] : null,
     events: body.events.length ? body.events : IDLE,
   };
