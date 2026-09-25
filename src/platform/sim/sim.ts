@@ -263,6 +263,8 @@ export class Sim {
       // A predicting client's player moved already, input by input (see GameHost.step).
       if (!premoved?.has(p.id)) p.move(dt);
     }
+    // What their movement abilities did (a dash, a wall-jump), heard once everyone has moved.
+    for (const p of this.players) this.guard(() => p.announceAbilities());
     if (running) {
       this.tickTimers(dt);
       this.guard(() => this.def.update?.(this.ctx, dt));

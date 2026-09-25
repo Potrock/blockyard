@@ -171,8 +171,8 @@ export interface PlayerOptions {
 
 /**
  * How players move: speeds in blocks a second, and the extras a game can turn on. Movement runs on
- * each player's own screen as well as the host (prediction), so it's data, not code. Defaults are
- * Minecraft's.
+ * each player's own screen as well as the host (prediction), so it's data, and the moves a game
+ * adds (`abilities`) are pure functions. Defaults are Minecraft's.
  */
 export interface MovementOptions {
   /** Walking (4.3), sprinting (5.6) and crouching (1.3) speeds. */
@@ -201,6 +201,92 @@ export interface MovementOptions {
   slide?: boolean | { speed?: number; time?: number; friction?: number; cooldown?: number };
   /** Jumping into a ledge climbs onto it if its top is up to this far above the feet (blocks; `true` = 1). */
   mantle?: boolean | number;
+  /**
+   * Moves of the game's own, by name: a dash, a double jump, a wall-run, a grapple, a ground pound
+   * (see `MovementAbility`). They run inside every step of a player's movement, in the order
+   * given, on the host and on the player's own screen alike, so they answer at once online.
+   */
+  abilities?: Record<string, MovementAbility>;
+}
+
+/**
+ * A movement ability (`movement.abilities`): code of the game's own inside each step of a walking
+ * player's movement. Like a vehicle's `step`, it runs on the host for everyone and, ahead of the
+ * host, on each player's own screen (client-side prediction), which starts again from the host's
+ * state whenever it arrives and replays the inputs since. So `step` must be pure: it reads its
+ * state, the controls, the body and the world; it changes only its state and the body's step
+ * (`AbilityBody`); and it does the same with the same inputs wherever it runs (no `Math.random`,
+ * no clock but `body.time`, nothing kept outside its state). Anything with consequences (a sound,
+ * a trail, damage) is the game's: `body.trigger` tells the game (the `ability` event), and the
+ * state is there to read (`player.abilities`).
+ */
+export interface MovementAbility<S extends object = any> {
+  /**
+   * Its state when a player starts: plain data (numbers, booleans, strings, short lists), copied
+   * for each player. It goes to their screen with every frame, so keep it small.
+   */
+  state: S;
+  /** One step of `dt` seconds, before the body moves (see `AbilityBody`). */
+  step(state: S, controls: AbilityControls, body: AbilityBody, dt: number, world: VehicleWorld): void;
+}
+
+/**
+ * The controls of one step, as an ability reads them (one frame on the player's screen): held
+ * keys, this frame's presses, mouse buttons. `consume` claims one for the rest of the step, so the
+ * abilities after this one see it idle (a wall-jump's Space isn't also a double jump's).
+ */
+export type AbilityControls = Pick<InputApi, 'isDown' | 'pressed' | 'button' | 'buttonPressed' | 'consume' | 'mouseX' | 'mouseY' | 'wheel'>;
+
+/**
+ * A player's body as an ability's step begins, and what that step does. The platform has read the
+ * controls (`wish`, `jump`); the abilities can change them, change the velocity, and scale this
+ * step's gravity and steering; then the body moves.
+ */
+export interface AbilityBody {
+  /** Feet position and velocity (blocks, blocks a second), as they are now. */
+  readonly position: Vec3;
+  readonly velocity: Vec3;
+  readonly onGround: boolean;
+  readonly inWater: boolean;
+  readonly flying: boolean;
+  /** What the platform's movement is doing this step. */
+  readonly crouching: boolean;
+  readonly sprinting: boolean;
+  readonly sliding: boolean;
+  /** Where they look: `yaw` (0 looks toward -z), `pitch` (up is positive), and as a unit vector. */
+  readonly yaw: number;
+  readonly pitch: number;
+  readonly look: Vec3;
+  /** Seconds of movement so far: a clock that runs the same on the host and on their screen. */
+  readonly time: number;
+  /**
+   * Where the controls push them this step: a direction on the ground (world space, length 0..1),
+   * from the keys or the stick, turned by the view. Change it to steer the step; zero coasts.
+   */
+  wish: { x: number; z: number };
+  /** Jump is held (the body jumps if it's on the ground): `false` swallows it. */
+  jump: boolean;
+  /** Gravity this step, times the game's (1): 0 floats (a dash), 0.1 slides slowly down a wall. */
+  gravity: number;
+  /**
+   * How quickly speed follows `wish` this step, times the game's (1): 0 keeps the velocity as the
+   * ability left it, with no steering or friction (a dash, a grapple's swing).
+   */
+  control: number;
+  /** Multiplies walking, sprinting and crouching speed this step (1). */
+  speed: number;
+  /** Set the velocity (the axes given), or add to it. Upward speed lifts them off the ground. */
+  setVelocity(v: Partial<Vec3>): void;
+  addVelocity(v: Partial<Vec3>): void;
+  /** Put their feet somewhere (a blink): check it's free with `fits` first. */
+  setPosition(p: Vec3): void;
+  /** Whether their body (0.6 x 1.8 x 0.6) would fit with its feet at `p`: no solid block or solid prop in the way. */
+  fits(p: Vec3): boolean;
+  /**
+   * Tell the game this ability did something (`'dash'`, `'jump'`, `'start'`): the host's `ability`
+   * event, heard once, after the step. (Their screen replays steps, so only the host's are heard.)
+   */
+  trigger(name: string): void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -736,6 +822,11 @@ export interface PlayerApi {
   readonly aiming: boolean;
   /** Multiplies their movement speed (a power-up, a heavy load). Default 1. */
   speed: number;
+  /**
+   * Their movement abilities' states (`movement.abilities`), by name, live: read them for the HUD
+   * (a cooldown), or change them (reset a cooldown, unlock a move); their screen follows.
+   */
+  readonly abilities: Record<string, any>;
   /** Ignore damage for this long (spawn protection); 0 ends it. */
   protect(seconds: number): void;
 }
@@ -1679,6 +1770,8 @@ export interface GameEvents {
   /** A block was broken by the player, an entity, an explosion or `world.breakBlock`. */
   blockBreak: { x: number; y: number; z: number; block: string; by: Actor };
   blockPlace: { x: number; y: number; z: number; block: string; by: Actor };
+  /** A movement ability called `body.trigger(name)`: a dash began, a wall-jump (for sounds, effects). */
+  ability: { player: Player; ability: string; name: string };
 }
 
 export interface EventApi {

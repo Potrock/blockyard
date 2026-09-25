@@ -1,9 +1,10 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
+import type { VehicleWorld } from '../api/types';
 import type { PlayerInput } from '../net/protocol';
-import { DEFAULT_TUNE, freshMemory, NO_MODS, stepMovement, type MoveControls, type MoveMemory, type MoveMods, type MoveTune } from '../sim/movement';
+import { copyMemory, DEFAULT_TUNE, freshMemory, NO_MODS, stepMovement, type MoveControls, type MoveMemory, type MoveMods, type MoveTune } from '../sim/movement';
 import type { PlayerFrame } from '../sim/player';
 
-/** A `PlayerInput` read the way movement reads controls. */
+/** A `PlayerInput` read the way movement reads controls (as the host's `SimInput` reads it: idle while inactive). */
 class Controls implements MoveControls {
   constructor(private i: PlayerInput) {}
   get active() {
@@ -13,10 +14,25 @@ class Controls implements MoveControls {
     return this.i.active ? (this.i.move ?? null) : null;
   }
   isDown(code: string) {
-    return this.i.down.includes(code);
+    return this.i.active && this.i.down.includes(code);
   }
   pressed(code: string) {
-    return this.i.pressed.includes(code);
+    return this.i.active && this.i.pressed.includes(code);
+  }
+  button(b: number) {
+    return this.i.active && (this.i.buttons & (1 << b)) !== 0;
+  }
+  buttonPressed(b: number) {
+    return this.i.active && (this.i.clicked & (1 << b)) !== 0;
+  }
+  get mouseX() {
+    return this.i.active ? this.i.mouseX : 0;
+  }
+  get mouseY() {
+    return this.i.active ? this.i.mouseY : 0;
+  }
+  get wheel() {
+    return this.i.active ? this.i.wheel : 0;
   }
 }
 
@@ -73,6 +89,8 @@ export class Predictor {
     private tune: MoveTune = DEFAULT_TUNE,
     /** What their held item and buttons do to their movement for an input (a gun's weight, aiming). */
     private mods: (input: PlayerInput) => MoveMods = () => NO_MODS,
+    /** This client's copy of the world, as the game's movement abilities ask about it (as on the host). */
+    private query: VehicleWorld | null = null,
   ) {
     this.slot = world.player_add(0, 300, 0);
     world.set_frozen(this.slot, true);
@@ -99,7 +117,7 @@ export class Predictor {
     const shown = this.ready && p.ride === this.errorRide ? [p.v[0] + this.error[0], p.v[1] + this.error[1], p.v[2] + this.error[2]] : null;
     const ride = me.ride ? [me.ride.prop, ...me.ride.p] : [0, 0, 0, 0];
     this.world.player_restore(this.slot, new Float64Array([me.x, me.y, me.z, me.vx, me.vy, me.vz, +me.onGround, +me.inWater, +me.eyesInWater, +me.inLava, +me.flying, me.bob, +me.frozen, ...ride]));
-    this.memory = { ...me.move };
+    this.memory = copyMemory(me.move);
     this.allowFlight = me.canFly;
     this.sneak = me.sneaking;
     this.sprint = me.sprinting;
@@ -158,7 +176,8 @@ export class Predictor {
   }
 
   private run(input: PlayerInput, dt: number) {
-    const r = stepMovement(this.world, this.slot, new Controls(input), input.yaw, this.allowFlight, this.memory, dt, this.tune, this.mods(input));
+    // (What abilities trigger here isn't heard: the host's steps are, once each.)
+    const r = stepMovement(this.world, this.slot, new Controls(input), input.yaw, this.allowFlight, this.memory, dt, this.tune, this.mods(input), input.pitch, this.query);
     this.sneak = r.sneak;
     this.slide = r.slide;
     const s = this.world.player_state(this.slot);

@@ -11,7 +11,7 @@ import { SimInput } from './input';
 import { Inventory, type ItemSim } from './items';
 import type { Presentation } from './present';
 import type { CreativeBuild } from './creative';
-import { freshMemory, resolveMovement, stepMovement, type MoveMemory, type MoveTune } from './movement';
+import { abilityStates, copyMemory, freshMemory, resolveMovement, stepMovement, type MoveMemory, type MoveTune } from './movement';
 import type { PropState } from './props';
 import { VehicleSim } from './vehicle';
 
@@ -149,8 +149,10 @@ export class PlayerSim {
   /** The game's camera, for `controller: 'none'`. */
   readonly cam = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 70 };
   private seq = 0;
-  /** Double-tap state for sprinting and flying. */
+  /** Double-tap state for sprinting and flying, the slide, the game's movement abilities. */
   private memory = freshMemory();
+  /** What their movement abilities triggered since the game last heard ([ability, name]). */
+  private abilityEvents: [string, string][] = [];
   /** The last input applied, by the client's count (a predicting client replays what's after). */
   ack = -1;
   /** Seconds their state trails the step (see `PlayerFrame.lead`). */
@@ -320,6 +322,7 @@ export class PlayerSim {
     this.speedMul = 1;
     this.sliding = false;
     this.memory = freshMemory();
+    this.abilityEvents = [];
     this.input.set(IDLE_INPUT);
     this.place(x, y, z, yaw);
   }
@@ -369,11 +372,20 @@ export class PlayerSim {
     }
     const held = this.inventory.held;
     const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul, this.p.guns);
-    const { sneak, sprint, slide } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods);
+    const { sneak, sprint, slide, events } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods, this.pitch, this.p.query);
+    if (events.length) this.abilityEvents.push(...events);
     this.syncState();
     this.sneaking = sneak;
     this.sliding = slide;
     this.sprinting = sprint && Math.hypot(this.state.vx, this.state.vz) > Math.min(4.5, this.tune.params[0] * 1.02);
+  }
+
+  /** The game hears what their movement abilities triggered since the last time (`ability` events). */
+  announceAbilities() {
+    if (!this.abilityEvents.length) return;
+    const events = this.abilityEvents;
+    this.abilityEvents = [];
+    for (const [ability, name] of events) this.p.emit('ability', { player: this.api, ability, name });
   }
 
   /**
@@ -458,7 +470,7 @@ export class PlayerSim {
       canFly: this.allowFlight,
       swings: this.swings,
       ack: this.ack,
-      move: { ...this.memory },
+      move: copyMemory(this.memory),
       lead: this.lead,
       skin: this.skin,
       model: this.model,
@@ -645,6 +657,9 @@ export class PlayerSim {
       },
       set speed(v: number) {
         me.speedMul = Math.max(0, Math.min(5, Number.isFinite(v) ? v : 1));
+      },
+      get abilities() {
+        return abilityStates(me.memory, me.tune);
       },
       protect: (seconds) => this.health.protect(seconds),
     };
