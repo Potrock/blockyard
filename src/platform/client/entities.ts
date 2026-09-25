@@ -3,7 +3,6 @@ import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Content } from '../content';
 import type { AnimState, EntityGraphics, Figure } from '../render/entities';
 import { Shaders } from '../render/shaders';
-import { HELD_SCALE } from './humanoid';
 import type { EntityFrame, ProjectileFrame } from '../sim/entities';
 
 let boltGeo: THREE.BufferGeometry[] | null = null;
@@ -41,6 +40,8 @@ interface Shown {
   /** The item in its hand, and the mesh showing it. */
   held: string | null;
   heldMesh: THREE.Mesh | null;
+  /** The clip it was last told to play (`ClipFrame.seq`; 0: none). */
+  clip: number;
 }
 
 interface Shot {
@@ -68,7 +69,8 @@ export class EntityView {
     private content: Content,
   ) {}
 
-  sync(entities: EntityFrame[], projectiles: ProjectileFrame[], dt: number, running: boolean) {
+  /** `t`: the frame's host time (`SimFrame.t`), which clips are timed by. */
+  sync(entities: EntityFrame[], projectiles: ProjectileFrame[], dt: number, running: boolean, t = 0) {
     this.time += dt;
     const seen = new Set<number>();
     for (const f of entities) {
@@ -92,10 +94,17 @@ export class EntityView {
           speed: def.speed,
           held: null,
           heldMesh: null,
+          clip: 0,
         };
         this.shown.set(f.id, v);
       }
       this.draw(v, f, dt, running);
+      // A clip to play (on a screen that sees it late, part way through), or to stop.
+      const clip = f.clip;
+      if ((clip?.seq ?? 0) !== v.clip) {
+        v.clip = clip?.seq ?? 0;
+        v.model.play?.(clip ? { name: clip.name, loop: clip.loop, fade: clip.fade, layer: clip.layer, speed: clip.speed, elapsed: t - clip.at } : null);
+      }
     }
     for (const [id, v] of this.shown) {
       if (seen.has(id)) continue;
@@ -247,7 +256,7 @@ export class EntityView {
       geometry.computeBoundingBox();
       const box = geometry.boundingBox!;
       const kind = def.kind === 'gun' ? 'gun' : look.points?.grip2 ? 'melee' : 'other';
-      const info = { kind, grip: look.points?.grip?.clone() ?? new THREE.Vector3(), grip2: look.points?.grip2?.clone(), mag: look.points?.mag?.clone(), length: box.max.z - box.min.z, scale: kind === 'other' ? 0.5 : HELD_SCALE } as const;
+      const info = { kind, grip: look.points?.grip?.clone() ?? new THREE.Vector3(), grip2: look.points?.grip2?.clone(), mag: look.points?.mag?.clone(), length: box.max.z - box.min.z, stance: def.hold?.stance } as const;
       if (v.model.hold(mesh, info)) {
         v.heldMesh = mesh;
         return;

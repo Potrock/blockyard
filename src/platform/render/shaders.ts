@@ -20,6 +20,7 @@ import entityVert from './shaders/entity.vert?raw';
 import entityFrag from './shaders/entity.frag?raw';
 import entityShadowVert from './shaders/entity_shadow.vert?raw';
 import entityShadowFrag from './shaders/entity_shadow.frag?raw';
+import skinning from './shaders/skinning.glsl?raw';
 import fxVert from './shaders/fx.vert?raw';
 import propVert from './shaders/prop.vert?raw';
 import propFrag from './shaders/prop.frag?raw';
@@ -47,8 +48,8 @@ export const Shaders = {
   bloomUp: { vertex: join(fullscreenVert), fragment: join(common, bloomUpFrag) },
   godrays: { vertex: join(fullscreenVert), fragment: join(common, godraysFrag) },
   composite: { vertex: join(fullscreenVert), fragment: join(common, compositeFrag) },
-  entity: { vertex: join(common, entityVert), fragment: join(common, lighting, shadowing, entityFrag) },
-  entityShadow: { vertex: join(entityShadowVert), fragment: join(entityShadowFrag) },
+  entity: { vertex: join(common, skinning, entityVert), fragment: join(common, lighting, shadowing, entityFrag) },
+  entityShadow: { vertex: join(skinning, entityShadowVert), fragment: join(entityShadowFrag) },
   fx: { vertex: join(fxVert), fragment: join(common, fxFrag) },
   prop: { vertex: join(common, propVert), fragment: join(common, lighting, shadowing, propFrag) },
   propShadow: { vertex: join(propShadowVert), fragment: join(propShadowFrag) },

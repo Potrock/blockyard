@@ -157,6 +157,7 @@ export class Sim {
       guard: (fn) => this.guard(fn),
       players: () => this.ctx.players,
       prop: (id) => this.props.byId(id),
+      now: () => this.time,
     });
     this.items = new ItemSim({
       ctx: () => this.ctx,
@@ -456,6 +457,7 @@ export class Sim {
       props: this.props,
       ctx: () => this.ctx,
       emit: (k, e) => this.emit(k, e),
+      now: () => this.time,
     });
     if (this.def.player?.build)
       p.creative = new CreativeBuild(
@@ -495,6 +497,7 @@ export class Sim {
       p.vehicle = null;
       p.followVehicle = false;
       p.orbit = null;
+      p.clip = null;
       p.health.configure(this.def.player ?? {});
       p.health.revive();
       p.place(sp.x, sp.y, sp.z, sp.yaw);

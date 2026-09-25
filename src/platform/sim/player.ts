@@ -5,7 +5,7 @@ import { IDLE_INPUT, type PlayerInput } from '../net/protocol';
 import { Combat, type ShotWire } from './combat';
 import { moveMods, type Stance } from './guns';
 import type { BulletHit } from './hitscan';
-import type { EntitySim } from './entities';
+import { clipFrame, type ClipFrame, type EntitySim } from './entities';
 import { PlayerHealth } from './health';
 import { SimInput } from './input';
 import { Inventory, type ItemSim } from './items';
@@ -87,6 +87,8 @@ export interface PlayerFrame {
   model: ModelSpec | null;
   /** Their name's colour above their figure. */
   color: string | null;
+  /** A clip their figure plays (`player.animate`). */
+  clip?: ClipFrame | null;
   /** The solid prop they ride (`player.riding`), and where their feet are on it (its own space). */
   ride: { prop: number; p: [number, number, number] } | null;
   /**
@@ -114,6 +116,8 @@ export interface PlayerSimParts {
   bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player): BulletHit;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
+  /** Host time (`SimFrame.t`). */
+  now(): number;
 }
 
 /**
@@ -158,6 +162,9 @@ export class PlayerSim {
   skin: { uv: [number, number]; atlas?: string } | null = null;
   model: ModelSpec | null = null;
   color: string | null = null;
+  /** A clip their figure plays (`animate`), and how many they've asked for. */
+  clip: ClipFrame | null = null;
+  private clipSeq = 0;
   readonly api: Player;
   /** Creative building's block hotbar and placing (games with `player.build`). */
   creative: CreativeBuild | null = null;
@@ -310,6 +317,7 @@ export class PlayerSim {
     this.skin = null;
     this.model = null;
     this.color = null;
+    this.clip = null;
     this.orbit = null;
     this.ack = -1;
     this.lead = 0;
@@ -460,6 +468,7 @@ export class PlayerSim {
       skin: this.skin,
       model: this.model,
       color: this.color,
+      clip: this.clip,
       ride: s.ride ? { prop: s.ride, p: [s.rideX, s.rideY, s.rideZ] } : null,
       orbit: this.orbit,
     };
@@ -542,6 +551,9 @@ export class PlayerSim {
       },
       setModel: (model) => {
         me.model = model;
+      },
+      animate: (clip, opts) => {
+        me.clip = clip ? clipFrame(++me.clipSeq, clip, opts, me.p.now()) : null;
       },
       get color() {
         return me.color;

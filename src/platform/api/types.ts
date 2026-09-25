@@ -716,6 +716,12 @@ export interface PlayerApi {
    * game's (`player.model`, else the skin). With a `hand` node, their first-person arm is that part.
    */
   setModel(model: ModelSpec | null): void;
+  /**
+   * Play one of their model's animation clips (by name) on their figure, on every screen: an
+   * emote, a victory pose, a reload of its own. It blends over the platform's own animation (the
+   * whole body, or a `layer`); null stops it, fading out. Only on glTF models with the clip.
+   */
+  animate(clip: string | null, opts?: ClipOptions): void;
   /** The colour of their name above their figure (team colours); null for white. */
   color: string | null;
   /** A bot (`game.bots`): driven by the game's code, not a person. */
@@ -843,6 +849,8 @@ export interface HoldSpec {
   translation?: [number, number, number];
   /** Multiplies the style's scale (swords: 0.68). */
   scale?: number;
+  /** How a humanoid figure holds this gun (`HumanoidPoses`). Default: a pistol if it's short (`pistolUnder`), else a rifle. */
+  stance?: 'rifle' | 'pistol';
   /** Animation for attacking or using: built-in (`swing`, `punch`, `jab`, `drink`, `release`, `chop`, `stab`), registered with `viewModel.define`, or inline. */
   use?: string | ViewAnimation;
 }
@@ -1141,9 +1149,124 @@ export interface GltfSpec {
    * `humanoid`: the model is built on the platform's humanoid rig (docs/HUMANOID.md: joints named
    * `hips`, `spine`, `chest`, `head`, `upperArmR` …) and the platform animates it in code: walking,
    * running and strafing, crouching, sliding, jumping, looking, a gun in both hands, a sword, a fall
-   * on death. A model with those joints and no `clips` is taken to be one.
+   * on death. A model with those joints and no `clips` is taken to be one. Its parts may be rigid
+   * (a mesh on each joint) or skinned (one mesh on a skeleton of bones).
    */
   rig?: 'humanoid';
+  /**
+   * A skeleton named its own way (a Mixamo or Blender export) driving the humanoid rig: which of
+   * its nodes (bones or not) is each of the rig's joints, e.g. `HumanoidJoints.mixamo`. Joints
+   * left out go by the rig's own names. It may rest in any pose (a T-pose, bones turned every
+   * which way): the rig works from where its joints are.
+   */
+  joints?: Partial<Record<HumanoidJoint, string>>;
+  /** How a humanoid holds things and moves (`HumanoidPoses`); what's left out is the platform's own. */
+  poses?: HumanoidPoses;
+}
+
+/** The humanoid rig's joints (docs/HUMANOID.md), and the empties at the centre of each fist's hold. */
+export type HumanoidJoint =
+  | 'hips'
+  | 'spine'
+  | 'chest'
+  | 'neck'
+  | 'head'
+  | 'upperArmL'
+  | 'lowerArmL'
+  | 'handL'
+  | 'upperArmR'
+  | 'lowerArmR'
+  | 'handR'
+  | 'upperLegL'
+  | 'lowerLegL'
+  | 'footL'
+  | 'upperLegR'
+  | 'lowerLegR'
+  | 'footR'
+  | 'gripL'
+  | 'gripR';
+
+/**
+ * How a humanoid figure (`rig: 'humanoid'`) holds things and moves: `Models.gltf(url, { rig:
+ * 'humanoid', poses })`, per model (give every model of a game the same object for a game-wide
+ * look). Every value is optional and defaults to the platform's own (docs/HUMANOID.md lists them).
+ * Offsets are metres in the figure's own frame before its scale (x its left, y up, z ahead), held
+ * items' from the middle of its shoulders; turns are radians `[tip, turn, roll]`: about its x (a
+ * positive tip points the muzzle down), then its y (a positive turn is to its left), then along
+ * the muzzle.
+ */
+export interface HumanoidPoses {
+  /** A gun's or sword's size in the hands: world units per unit of its model. Default 0.52. */
+  heldScale?: number;
+  /** A gun at the shoulder, and a pistol held out in both hands. */
+  rifle?: GunStance;
+  pistol?: GunStance;
+  /** A gun without a `hold.stance` is held as a pistol when it's shorter than this (metres, as held). Default 0.45. */
+  pistolUnder?: number;
+  /** Each shot: the gun back (metres) and tipped up (radians), dying away at `decay` a second. Default 0.05, 0.14, 22. */
+  kick?: { back?: number; tip?: number; decay?: number };
+  /** Sprinting with a gun: carried low across the chest, the muzzle down and to the left. */
+  sprint?: HeldPose;
+  /** Reloading: the gun tipped to show its magazine, the support hand to the magazine and to `belt` (the hips' space) and back every `cycle` seconds. */
+  reload?: HeldPose & { cycle?: number; belt?: [number, number, number] };
+  /** A sword in both hands: low, the blade up and forward; a swing (the item's attack) lifts it for `windup` of `time` seconds and chops. */
+  sword?: HeldPose & { swing?: { time?: number; windup?: number; raise?: HeldPose; chop?: HeldPose } };
+  /** The fall on death: seconds to the ground, and how often it's backward (0..1). Default 0.65, 0.65. */
+  death?: { time?: number; backward?: number };
+  gait?: HumanoidGait;
+}
+
+/** Where a held gun is: from the hip, and aiming down the sights; the body's twist to it and the head's tilt to the sights. */
+export interface GunStance {
+  hip?: [number, number, number];
+  ads?: [number, number, number];
+  twist?: number;
+  cheek?: number;
+}
+
+/** A held item's place (from the shoulders' middle) and turn (from the body's), or a change to them. */
+export interface HeldPose {
+  offset?: [number, number, number];
+  turn?: [number, number, number];
+}
+
+/**
+ * Walking and running. Pairs are `[walking, running]`: the figure goes from one to the other as
+ * its speed goes from `run[0]` to `run[1]` (blocks a second).
+ */
+export interface HumanoidGait {
+  /** Default [3.5, 7.5]. */
+  run?: [number, number];
+  /** Ground covered in a stride, metres: default [1.15, 2.4]. */
+  stride?: [number, number];
+  /** How far each foot reaches ahead and behind (default [0.22, 0.52]), and how high it lifts ([0.1, 0.22]). */
+  step?: [number, number];
+  lift?: [number, number];
+  /** The hips' bob (default [0.02, 0.055]) and the back's lean into it (radians, [0.04, 0.18]). */
+  bob?: [number, number];
+  lean?: [number, number];
+  /** Empty hands swinging (radians, default [0.45, 0.95]). */
+  armSwing?: [number, number];
+  /** The hips' sway from side to side walking (default 0.018), each foot's distance from the middle (0.1), how far the hips drop to crouch (0.33). */
+  sway?: number;
+  width?: number;
+  crouch?: number;
+}
+
+/** How a model's animation clip plays on a figure (`player.animate`, `entity.animate`). */
+export interface ClipOptions {
+  /** Keep playing it (until another, or `animate(null)`), or once. Default once. */
+  loop?: boolean;
+  /** Seconds to blend it in, and out when it ends or stops. Default 0.2. */
+  fade?: number;
+  /**
+   * What it moves: `full` (default: over everything the platform animates), `upper` (the spine
+   * and all on it: the legs keep walking), or a list of joints (the rig's names, or the model's
+   * own node names), each with all that hangs from it.
+   */
+  layer?: 'full' | 'upper' | string[];
+  /** Playback speed. Default 1. */
+  speed?: number;
 }
 
 export interface ModelPart {
@@ -1239,8 +1362,12 @@ export interface Entity {
   /** A clear line from its eyes to them (to a player's eyes, an entity's middle, or a point). */
   canSee(target: Player | Entity | Vec3): boolean;
   distanceTo(target: Player | Entity | Vec3): number;
-  /** Play a model animation: `attack` swings arms, `raise` holds them up (wind-ups), `cast`. */
-  animate(name: 'attack' | 'raise' | 'cast' | 'none'): void;
+  /**
+   * Play a model animation: `attack` swings arms, `raise` holds them up (wind-ups), `cast`, and
+   * `none` ends those (and a clip). Any other name plays that clip of a glTF model, on every
+   * screen, as `opts` say (as `player.animate`).
+   */
+  animate(name: 'attack' | 'raise' | 'cast' | 'none' | (string & {}), opts?: ClipOptions): void;
   /** Speed multiplier on top of the type's speed. */
   setSpeed(multiplier: number): void;
   /** Tint the model (flash on wind-up). */

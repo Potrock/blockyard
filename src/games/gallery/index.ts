@@ -1,4 +1,4 @@
-import { Blueprint, defineGame, HeldModels, math, Models, type Entity } from '@platform';
+import { Blueprint, defineGame, HeldModels, HumanoidJoints, math, Models, type Entity } from '@platform';
 import auctioneer from './models/auctioneer_npc.gltf?url';
 import blocky from './models/blocky.gltf?url';
 import blockySword from './models/blocky_sword.gltf?url';
@@ -6,6 +6,9 @@ import barrier from './models/barrier.gltf?url';
 import cards from './models/card_and_token.gltf?url';
 import monitor from './models/casino_monitor.gltf?url';
 import chair from './models/chair.gltf?url';
+import mannequin from './models/mannequin.glb?url';
+import mannequinMixamo from './models/mannequin_mixamo.glb?url';
+import mannequinSkinned from './models/mannequin_skinned.glb?url';
 import barChair from './models/chair_bar_brown.gltf?url';
 import bigWin from './models/game_bigwin.gltf?url';
 import slot from './models/game_slot.gltf?url';
@@ -51,6 +54,17 @@ const SPOTS = [
   { x: -6, z: -16 },
 ];
 
+/**
+ * Figures on the humanoid rig (`scripts/mannequin.mjs` makes them): rigid parts; one skinned
+ * mesh; and the same skin on a Mixamo-style skeleton (resting in a T-pose, its bones named and
+ * turned its own way), which `joints` maps onto the rig. The skinned ones have `wave` and `cheer` clips.
+ */
+const MANNEQUINS: { id: string; label: string; model: ReturnType<typeof Models.gltf> }[] = [
+  { id: 'mannequin', label: 'Rigid mannequin', model: Models.gltf(mannequin, { rig: 'humanoid' }) },
+  { id: 'mannequin_skinned', label: 'Skinned mannequin', model: Models.gltf(mannequinSkinned, { rig: 'humanoid' }) },
+  { id: 'mannequin_mixamo', label: 'Mixamo-style skeleton', model: Models.gltf(mannequinMixamo, { rig: 'humanoid', joints: HumanoidJoints.mixamo() }) },
+];
+
 /** Blockyard's own player as a glTF model (`tests/headless/_export-models.ts` writes it). */
 const BLOCKY = Models.gltf(blocky, { clips: { idle: 'idle', walk: 'walk', run: 'run', attack: 'attack' }, head: 'head', hand: 'armR' });
 
@@ -59,7 +73,9 @@ const BLOCKY = Models.gltf(blocky, { clips: { idle: 'idle', walk: 'walk', run: '
  * figures: an auctioneer standing (a prop looping its idle) and one strolling between the tables
  * (an entity), a runner (walking, then running), players as a glTF model (their first-person arm
  * is its arm), and glTF items: a sword in hand and on the floor, and the cards (held as their
- * model, their icon a picture of it).
+ * model, their icon a picture of it); and humanoids on the platform's rig pacing the front aisle
+ * (rigid, skinned, and a Mixamo-style skeleton), waving as they go (a clip over the upper body),
+ * and one cheering (a clip over the whole body).
  */
 export default defineGame({
   id: 'gallery',
@@ -95,6 +111,37 @@ export default defineGame({
     game.events.on('playerJoin', ({ player }) => {
       if (!player.inventory.count('blocky_sword')) player.inventory.give('blocky_sword');
       if (!player.inventory.count('cards')) player.inventory.give('cards');
+    });
+    for (const m of MANNEQUINS) {
+      game.entities.define(m.id, {
+        name: m.label,
+        model: m.model,
+        hitbox: { width: 0.6, height: 1.85 },
+        health: 20,
+        speed: 1.8,
+        invulnerable: true,
+        // Paces the aisle, waving for a while every few seconds (the skinned ones: the rigid one has no clips).
+        ai: (self: Entity, _game, dt) => {
+          const s = self.data as { home: number; dir?: number; t?: number; waving?: boolean };
+          s.dir ??= 1;
+          if (Math.abs(self.position.x - s.home) > 3) s.dir = self.position.x > s.home ? -1 : 1;
+          self.moveTo({ x: s.home + s.dir * 3.5, y: FLOOR, z: 3.5 });
+          s.t = (s.t ?? 0) + dt;
+          const wave = s.t % 7 > 4;
+          if (wave !== !!s.waving) {
+            s.waving = wave;
+            self.animate(wave ? 'wave' : 'none', { layer: 'upper', loop: true, fade: 0.3 });
+          }
+        },
+      });
+    }
+    game.entities.define('cheerer', {
+      name: 'Cheering mannequin',
+      model: MANNEQUINS[1].model,
+      hitbox: { width: 0.6, height: 1.85 },
+      health: 20,
+      speed: 0,
+      invulnerable: true,
     });
     game.entities.define('auctioneer', {
       name: 'Auctioneer',
@@ -133,6 +180,14 @@ export default defineGame({
     game.hud.marker('standing', standing, { offset: { x: 0, y: 3.4, z: 0 }, shape: 'dot', size: 4, color: '#8fd0ff', label: 'Auctioneer (a prop, idling)' });
     game.entities.spawn('auctioneer', { x: SPOTS[0].x, y: FLOOR, z: SPOTS[0].z });
     game.entities.spawn('runner', { x: -12, y: FLOOR, z: 8 });
+    MANNEQUINS.forEach((m, i) => {
+      const home = (i - 1) * 7.5;
+      const e = game.entities.spawn(m.id, { x: home, y: FLOOR, z: 3.5 }, { data: { home } });
+      game.hud.marker(`mannequin${i}`, e, { offset: { x: 0, y: 2.3, z: 0 }, shape: 'dot', size: 4, color: '#b6f09c', label: m.label });
+    });
+    const cheerer = game.entities.spawn('cheerer', { x: 5, y: FLOOR, z: -24 }, { yaw: 0 });
+    cheerer.animate('cheer', { loop: true });
+    game.hud.marker('cheerer', cheerer, { offset: { x: 0, y: 2.4, z: 0 }, shape: 'dot', size: 4, color: '#b6f09c', label: 'Skinned, cheering (a full-body clip)' });
     game.items.spawnPickup('blocky_sword', { x: 10, y: FLOOR + 0.5, z: 6 }, { beam: '#ffd36b', despawn: 1e9 });
     for (const p of game.players) {
       p.inventory.give('blocky_sword');

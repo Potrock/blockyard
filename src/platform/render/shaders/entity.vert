@@ -16,13 +16,21 @@ out vec2 vUv;
 out vec4 vShadowCoord;
 
 void main() {
-  vec4 viewPos = modelViewMatrix * vec4(position, 1.0);
+#ifdef SKINNED
+  mat4 skin = skinMatrix();
+  vec3 pos = (skin * vec4(position, 1.0)).xyz;
+  vec3 nrm = mat3(skin) * normal;
+#else
+  vec3 pos = position;
+  vec3 nrm = normal;
+#endif
+  vec4 viewPos = modelViewMatrix * vec4(pos, 1.0);
   gl_Position = projectionMatrix * viewPos;
   mat3 viewRot = mat3(viewMatrix);
   vViewPos = viewPos.xyz;
   vRelPos = transpose(viewRot) * viewPos.xyz;
-  vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
-  vNormal = normalize(mat3(modelMatrix) * normal);
+  vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+  vNormal = normalize(mat3(modelMatrix) * nrm);
   vUv = uv;
   vShadowCoord = uShadowFromView * vec4(viewPos.xyz + viewRot * vNormal * uShadowParams.z, 1.0);
 }
