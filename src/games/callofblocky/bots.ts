@@ -1,12 +1,14 @@
 import type { GameContext, Vec3 } from '@platform';
 import { shooterBots, type BotWeapon, type NavGrid, type ShooterBots } from '@platform/kits';
+import { LETHALS } from './weapons';
 
 /**
  * Bot fighters: the platform's shooter bots (`shooterBots`, whose defaults are tuned to how they
  * fight here), told how each of our weapons is fought with. They hold the range their gun likes,
  * rush in with the shotgun and SMG, stay down the scope with the Honey Bunny, and go to the Lucky
  * 45 when the primary runs dry up close. With nobody in sight they go for the briefcase when it's
- * out (the better ones more often), or roam the walking grid.
+ * out (the better ones more often), or roam the walking grid. When someone they were fighting
+ * ducks out of sight, they lob their lethal after them (the better ones cook a frag first).
  */
 const WEAPONS: Record<string, BotWeapon> = {
   rifle: { range: 16 },
@@ -29,6 +31,10 @@ export function makeBots(game: GameContext, nav: NavGrid, hotspots: Vec3[]): Bot
       hotspots,
       weapons: WEAPONS,
       goal: (_bot, mind) => (bots.objective && mind.skill > 0.5 !== Math.random() < 0.3 ? bots.objective : null),
+      throw: (bot, at, mind) => {
+        const item = Object.keys(LETHALS).find((id) => bot.inventory.count(id) > 0);
+        return !!item && bot.throw(item, { at, cook: item === 'frag' ? mind.skill * 1.4 : 0 });
+      },
     }),
     { objective: null as Vec3 | null },
   );
