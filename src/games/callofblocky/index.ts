@@ -328,7 +328,7 @@ function scoreboard(game: GameContext, show = false) {
 }
 
 /** Each person's corner: their kills, their place, the leader; their radar. */
-function personalHud(game: GameContext, f: Fighter) {
+function personalHud(game: GameContext, f: Fighter, dt: number) {
   const p = f.player;
   const table = standings();
   const place = table.indexOf(f) + 1;
@@ -347,10 +347,11 @@ function personalHud(game: GameContext, f: Fighter) {
   }
   // Low on health: a heartbeat.
   if (p.alive && p.health < p.maxHealth * 0.3) {
-    f.heartbeat -= 1 / 30;
+    f.heartbeat -= dt;
     if (f.heartbeat <= 0) {
       f.heartbeat = 0.9;
       p.audio.play('heartbeat', { volume: 0.8 });
+      p.fx.flash('rgba(190, 0, 0, 1)', 0.3, 0.85);
     }
   }
 }
@@ -526,7 +527,7 @@ export default defineGame({
       if (q.y < MAP.bounds.min.y - 4) p.damage(1000, { source: 'world', knockback: 0 });
       if (!p.bot) {
         if (p.input.pressed('KeyL')) loadoutMenu(game, f);
-        personalHud(game, f);
+        personalHud(game, f, dt);
       }
     }
 
