@@ -1,8 +1,8 @@
 import { defineGame, Models, type Bot, type GameContext, type MenuHandle, type Pickup, type Player } from '@platform';
+import { navGrid } from '@platform/kits';
 import { ATLAS, defineArt, OUTFITS, skinOrigin } from './art';
-import { Bots } from './bots';
+import { makeBots, type Bots } from './bots';
 import { MAP, type SpawnPoint } from './map';
-import { NavGrid } from './nav';
 import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, PRIMARIES, WEAPONS, type Primary } from './weapons';
 import { GUNS } from './models';
@@ -68,7 +68,6 @@ let running = false;
 let startedAt = 0;
 let overAt = 0;
 let firstBlood = false;
-let nav: NavGrid | null = null;
 let bots: Bots;
 let boardDirty = true;
 /** The briefcase: on the street (a pickup), and when the next one turns up. */
@@ -174,7 +173,7 @@ function spawn(game: GameContext, f: Fighter) {
   f.diedAt = -1;
   f.spawnedAt = game.clock.now;
   f.rushUntil = 0;
-  if (p.bot) bots.respawned(p);
+  if (p.bot) bots.reset(p);
   else p.audio.play('respawn');
 }
 
@@ -548,14 +547,14 @@ export default defineGame({
     fighters = new Map();
     running = false;
     phase = 'playing';
-    nav = null;
     briefcase = null;
     defineArt(game);
     defineWeapons(game);
     defineBriefcase(game);
     defineSounds(game);
     game.hud.define('dossier', DOSSIER);
-    bots = new Bots(game, () => nav, MAP.hotspots);
+    // The walking grid (built once the map's blocks are here, kept up with holes and breaks) and the bots on it.
+    bots = makeBots(game, navGrid(game, { bounds: MAP.bounds }), MAP.hotspots);
     game.events.on('playerJoin', ({ player }) => {
       const f = fighters.get(player.id) ?? addFighter(game, player);
       if (player.bot) bots.add(player as Bot, 0.3 + game.rng.next() * 0.5);
@@ -574,10 +573,9 @@ export default defineGame({
       if (!player.bot) balanceBots(game);
     });
     game.events.on('playerDeath', ({ player, source, weapon, headshot }) => onDeath(game, player, source, weapon, !!headshot));
-    game.events.on('shot', ({ player, from }) => {
+    game.events.on('shot', ({ player }) => {
       const f = fighters.get(player.id);
       if (f) f.firedAt = game.clock.now;
-      bots.heard(player, from);
     });
     game.commands.register('bots', {
       usage: '<n>',
@@ -621,14 +619,6 @@ export default defineGame({
 
   update(game, dt) {
     const now = game.clock.now;
-    // The walking grid, once the map's blocks are here.
-    if (!nav) {
-      const { min, max } = MAP.bounds;
-      if ([min.x, max.x].every((x) => [min.z, max.z].every((z) => game.world.getBlock(x, MAP.floorY - 1, z) >= 0))) {
-        nav = new NavGrid(game, MAP.bounds);
-        nav.build();
-      }
-    }
     bots.update(dt, phase !== 'playing');
 
     if (phase === 'over') {

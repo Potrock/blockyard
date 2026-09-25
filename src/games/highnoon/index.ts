@@ -1,12 +1,12 @@
 import { defineGame, Models, type Bot, type GameContext, type HumanoidPoses, type Player, type WidgetHandle } from '@platform';
+import { navGrid } from '@platform/kits';
 import { roll } from './abilities';
 import { BLOCKS } from './blocks';
-import { Bots } from './bots';
+import { makeBots, type Bots } from './bots';
 import { CYLINDER, DUEL, OUTFITS, ROUNDBAR, WANTED } from './hud';
 import hudCss from './hud.css?raw';
 import { MAP, type SpawnPoint } from './map';
 import { COWBOYS } from './models';
-import { NavGrid } from './nav';
 import { defineSounds } from './sounds';
 import { defineWeapons, feedIcon, WEAPONS } from './weapons';
 
@@ -88,7 +88,6 @@ let phaseAt = 0;
 let drawAt = -99;
 let revealed = false;
 let lastSecond = -1;
-let nav: NavGrid | null = null;
 let bots: Bots;
 let boardDirty = true;
 
@@ -467,7 +466,6 @@ export default defineGame({
   setup(game) {
     slingers = new Map();
     running = false;
-    nav = null;
     round = 0;
     defineWeapons(game);
     defineSounds(game);
@@ -495,7 +493,8 @@ export default defineGame({
         if (s) Object.assign(s, { picker: null, nags: s.nags + 1 });
       },
     });
-    bots = new Bots(game, () => nav, MAP.hotspots);
+    // The walking grid (built once the town's blocks are here) and the bots on it.
+    bots = makeBots(game, navGrid(game, { bounds: MAP.bounds }), MAP.hotspots);
 
     game.events.on('playerJoin', ({ player }) => {
       if (!slingers.has(player.id)) addSlinger(game, player);
@@ -520,10 +519,6 @@ export default defineGame({
       if (!player.bot) balanceBots(game);
     });
     game.events.on('playerDeath', ({ player, source, weapon, headshot }) => onDeath(game, player, source, weapon, !!headshot));
-    game.events.on('playerDamage', ({ player, source }) => {
-      if (player.bot) bots.hurt(player, isPlayer(source) ? source : null);
-    });
-    game.events.on('shot', ({ player, from }) => bots.heard(player, from));
 
     // House rules: every hit is heard before it lands.
     game.events.on('damage', (hit) => {
@@ -598,13 +593,6 @@ export default defineGame({
 
   update(game, dt) {
     const now = game.clock.now;
-    if (!nav) {
-      const { min, max } = MAP.bounds;
-      if ([min.x, max.x].every((x) => [min.z, max.z].every((z) => game.world.getBlock(x, MAP.floorY - 1, z) >= 0))) {
-        nav = new NavGrid(game, MAP.bounds);
-        nav.build();
-      }
-    }
     bots.update(dt, phase !== 'fight');
     const t = now - phaseAt;
     const humans = [...slingers.values()].filter((s) => !s.player.bot);

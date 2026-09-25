@@ -719,6 +719,17 @@ export interface WorldApi {
    */
   carve(point: Vec3, dir: Vec3, opts?: { radius?: number; depth?: number; by?: Actor }): number;
   /**
+   * How much of the block at (x, y, z) has been carved away (`carve`, a gun's bullets): 0 for a
+   * whole block (and anything that can't be carved), up to 1. A block carved to nothing is air.
+   */
+  carved(x: number, y: number, z: number): number;
+  /**
+   * Whether a player's body (0.6 x 1.8 x 0.6) fits with its feet at `p`: no block, slab, what's
+   * left of a carved block, or solid prop in its way (unloaded chunks count as in the way). Where
+   * a hole goes through a wall, for one.
+   */
+  fits(p: Vec3): boolean;
+  /**
    * Break a block with debris and a sound (and the plant on top), and fire `blockBreak`.
    * Bedrock and liquids don't break. Returns false if nothing was broken. (`setBlock` is the
    * silent version.) Who may break what is up to your game.
@@ -2149,6 +2160,13 @@ export interface GameEvents {
   /** A block was broken by the player, an entity, an explosion or `world.breakBlock`. */
   blockBreak: { x: number; y: number; z: number; block: string; by: Actor };
   blockPlace: { x: number; y: number; z: number; block: string; by: Actor };
+  /**
+   * A block changed, however it happened: set, broken, placed, blown up, carved into (see
+   * `world.carved`), or put back whole by a restart. One per block, after the change; `block` is
+   * what's there now. For keeping something built from the world's blocks up to date (the
+   * `navGrid` kit's walking grid).
+   */
+  blockChange: { x: number; y: number; z: number; block: string };
   /** A movement ability called `body.trigger(name)`: a dash began, a wall-jump (for sounds, effects). */
   ability: { player: Player; ability: string; name: string };
 }
