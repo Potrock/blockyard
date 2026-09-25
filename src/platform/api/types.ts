@@ -228,6 +228,20 @@ export interface PropModel {
   readonly blocks: number;
 }
 
+/** A rotation as a unit quaternion (a `math.Quaternion` is one). */
+export interface Quat {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
+
+/** Where a prop could be: a position and / or rotation (on its parent, if it rides one), the rest as it is. */
+export interface PropPose {
+  position?: Vec3;
+  quaternion?: Quat;
+}
+
 /** A movable object. Mutate `position` / `quaternion` directly each frame. */
 export interface Prop {
   /** Where it is and how it's turned: in the world, or on its parent (`attach`). */
@@ -244,6 +258,23 @@ export interface Prop {
    * Default false.
    */
   solid: boolean;
+  /**
+   * How many of its blocks are inside the world's solid blocks (a block counts when its middle is
+   * in one): where it is, or with it at `at` (to test a move before making it). 0 when it's clear.
+   * Solid props only.
+   */
+  overlap(at?: PropPose): number;
+  /**
+   * Move it toward `to` without going into the world's blocks, the way a walker moves: all the way
+   * if that doesn't put more of it into blocks than there is now, or else as far as it can (the
+   * turn alone, then the move one axis at a time, sliding along whatever is in the way). It can
+   * always back off or turn away from what it's touching. True if it got all the way. Solid
+   * props only; `position` and `quaternion` hold where it got to.
+   */
+  sweep(to: PropPose): boolean;
+  /** A point on it (its own space, like `offset`s and `attach`ed props) in the world, and back. */
+  toWorld(local: Vec3): Vec3;
+  toLocal(world: Vec3): Vec3;
   /** Tint it briefly (hits). */
   flash(color?: string, seconds?: number): void;
   /**

@@ -1,5 +1,5 @@
-import { defineGame, math, vec, type GameContext, type LoopHandle, type Player, type Prop, type PropModel, type Vec3 } from '@platform';
-import { airship, hullPoints, propeller, DECK_SPAWN, HELM, PROPELLER, WHEEL } from './ship';
+import { defineGame, math, vec, type GameContext, type LoopHandle, type Player, type Prop, type PropModel } from '@platform';
+import { airship, propeller, DECK_SPAWN, HELM, PROPELLER, WHEEL } from './ship';
 import { beaconLamp, beaconPad, islands, ISLES, HOME, MOORING, PIER_SPAWN, VOID_Y } from './world';
 
 /*
@@ -35,7 +35,6 @@ interface ShipState {
 }
 
 const structures = islands();
-const hull = hullPoints();
 const Z = new math.Vector3(0, 0, 1);
 
 let shipModel: PropModel;
@@ -54,32 +53,15 @@ let thudAt = -Infinity;
 const shown = new Map<string, string>();
 let objective = '';
 
-/** A point on the ship (in its own space), in the world. */
-function onShip(l: Vec3): Vec3 {
-  const v = new math.Vector3(l.x, l.y, l.z).applyQuaternion(ship.quaternion).add(ship.position);
-  return { x: v.x, y: v.y, z: v.z };
-}
-
 /** The ship's pose from its state: where it is, which way it heads, its bank and pitch, bobbing gently. */
-function pose(st: ShipState, p: InstanceType<typeof math.Vector3>, q: InstanceType<typeof math.Quaternion>) {
+function pose(st: ShipState, p: InstanceType<typeof math.Vector3> = new math.Vector3(), q: InstanceType<typeof math.Quaternion> = new math.Quaternion()) {
   p.set(st.x, st.y + Math.sin(st.t * 0.8) * 0.18, st.z);
   q.setFromEuler(new math.Euler(st.pitch, st.yaw, st.roll, 'YXZ'));
+  return { position: p, quaternion: q };
 }
 
-/** How much of the ship (points round its hull) would be in rock at this state. */
-function inRock(game: GameContext, st: ShipState): number {
-  const p = new math.Vector3();
-  const q = new math.Quaternion();
-  pose(st, p, q);
-  const v = new math.Vector3();
-  let n = 0;
-  for (const h of hull) {
-    v.set(h.x, h.y, h.z).applyQuaternion(q).add(p);
-    const id = game.world.getBlock(v.x, v.y, v.z);
-    if (id > 0 && game.world.blockInfo(id)?.solid) n++;
-  }
-  return n;
-}
+/** How much of the ship would be in rock at this state. */
+const inRock = (st: ShipState) => ship.overlap(pose(st));
 
 /** The helmsman's controls sail it; nobody at the helm, it drifts to a stop and holds its height. */
 function sail(game: GameContext, dt: number) {
@@ -103,11 +85,11 @@ function sail(game: GameContext, dt: number) {
     ['turn', [(st) => ({ ...st, yaw: st.yaw + st.turn * dt, roll: st.roll + (st.turn * Math.min(1, Math.abs(st.speed) / MAX_SPEED) * 0.18 - st.roll) * ease })]],
     ['rise', [(st) => ({ ...st, y: Math.max(LOW, Math.min(HIGH, st.y + st.climb * dt)), pitch: st.pitch + ((st.climb / CLIMB) * 0.035 - st.pitch) * ease, t: st.t + dt })]],
   ];
-  let rock = inRock(game, s);
+  let rock = inRock(s);
   for (const [part, steps] of parts) {
     const moved = steps.some((step) => {
       const next = step(s);
-      const n = inRock(game, next);
+      const n = inRock(next);
       if (n > rock) return false;
       s = next;
       rock = n;
@@ -134,7 +116,7 @@ function sail(game: GameContext, dt: number) {
 
 function takeHelm(game: GameContext, p: Player) {
   helm = p;
-  p.teleport(onShip(HELM), s.yaw, -0.1);
+  p.teleport(ship.toWorld(HELM), s.yaw, -0.1);
   p.freeze(true);
   p.hud.toast('At the helm: W ahead, S astern, A/D turn, Space/Shift climb and sink, E to let go');
   game.hud.feed(`${p.name} has the helm`, { color: '#ffd35a' });
@@ -158,7 +140,7 @@ function helmMarker(game: GameContext) {
 
 /** Back aboard (fell off, or joined late): on the main deck. */
 function aboard(p: Player) {
-  const at = onShip({ x: DECK_SPAWN.x + (Math.random() - 0.5) * 3, y: DECK_SPAWN.y + 0.5, z: DECK_SPAWN.z + (Math.random() - 0.5) * 3 });
+  const at = ship.toWorld({ x: DECK_SPAWN.x + (Math.random() - 0.5) * 3, y: DECK_SPAWN.y + 0.5, z: DECK_SPAWN.z + (Math.random() - 0.5) * 3 });
   p.teleport(at, s.yaw, 0);
 }
 
@@ -277,10 +259,9 @@ export default defineGame({
       run: ([n]) => {
         const isle = ISLES[Number(n) - 1];
         if (!isle) throw new Error('Which island? 1 to 5');
-        const riders = game.players.filter((p) => p.riding === ship);
+        // Everyone aboard goes with it (a solid prop put somewhere far takes its riders along).
         s = { ...s, x: isle.at.x + isle.radius + 9, y: isle.at.y + 1, z: isle.at.z, yaw: 0, speed: 0, turn: 0, climb: 0, roll: 0, pitch: 0 };
         pose(s, ship.position, ship.quaternion);
-        for (const p of riders) aboard(p);
         return `Alongside ${isle.name}`;
       },
     });
@@ -317,7 +298,7 @@ export default defineGame({
     for (const p of game.players) {
       if (p.input.pressed('KeyE')) {
         if (p === helm) leaveHelm(game);
-        else if (!helm && vec.distance(p.eye, onShip(WHEEL)) < 2.6) takeHelm(game, p);
+        else if (!helm && vec.distance(p.eye, ship.toWorld(WHEEL)) < 2.6) takeHelm(game, p);
       }
       if (p.position.y < VOID_Y) {
         if (p === helm) leaveHelm(game);

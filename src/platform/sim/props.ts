@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { BlockRef, Player, Prop, PropApi, PropHit, PropModel, Vec3 } from '../api/types';
+import type { BlockRef, Player, Prop, PropApi, PropHit, PropModel, PropPose, Quat, Vec3 } from '../api/types';
 import type { Blueprint } from '../api/blueprint';
 import type { Content } from '../content';
 import type { Registry } from '../world/registry';
-import { addMover, collider, onParent, setMoverPose, type Collider, type WorldPose } from './movers';
+import { addMover, collider, onParent, setMoverPose, toLocal, toWorld, type Collider, type WorldPose } from './movers';
 
 /** A bolt's look (a glowing streak along -z). */
 export interface BoltSpec {
@@ -24,7 +24,13 @@ export interface PropHooks {
   ack(p: Player): { id: string; seq: number } | null;
   /** It became solid, or stopped being solid (`Prop.solid`). */
   solid(p: PropState, on: boolean): void;
+  /** How many of a solid prop's blocks would be in the world's blocks with it at this pose. */
+  overlap(p: PropState, at: WorldPose): number;
 }
+
+const newPose = (): WorldPose => ({ p: new THREE.Vector3(), q: new THREE.Quaternion(), scale: 1 });
+const vec = (v: THREE.Vector3): Vec3 => ({ x: v.x, y: v.y, z: v.z });
+const quat = (q: THREE.Quaternion): Quat => ({ x: q.x, y: q.y, z: q.z, w: q.w });
 
 /** One prop as the client draws it. */
 export interface PropFrame {
@@ -113,6 +119,53 @@ export class PropState implements Prop {
     this.placed.copy(this.position);
   }
 
+  /** Where it is in the world (through what it rides on); or where it would be at `at`. */
+  worldPose(at: PropPose = {}, out: WorldPose = newPose()): WorldPose {
+    const p = at.position ? out.p.set(at.position.x, at.position.y, at.position.z) : out.p.copy(this.position);
+    const q = at.quaternion ? out.q.set(at.quaternion.x, at.quaternion.y, at.quaternion.z, at.quaternion.w).normalize() : out.q.copy(this.quaternion);
+    if (!this.parent) {
+      out.scale = this.scale;
+      return out;
+    }
+    return onParent(this.parent.worldPose(), p.clone(), q.clone(), this.scale, out);
+  }
+
+  toWorld(local: Vec3): Vec3 {
+    const v = toWorld(this.worldPose(), local);
+    return { x: v.x, y: v.y, z: v.z };
+  }
+
+  toLocal(world: Vec3): Vec3 {
+    return toLocal(this.worldPose(), world);
+  }
+
+  overlap(at?: PropPose): number {
+    if (!this.isSolid) throw new Error('prop.overlap: only solid props can tell (spawn it with { solid: true })');
+    return this.hooks.overlap(this, this.worldPose(at));
+  }
+
+  sweep(to: PropPose): boolean {
+    const target = { position: to.position ?? vec(this.position), quaternion: to.quaternion ?? quat(this.quaternion) };
+    let n = this.overlap();
+    // Where it is now, or at `at`, unless that puts more of it into blocks than now.
+    const go = (at: { position: Vec3; quaternion: Quat }) => {
+      const m = this.overlap(at);
+      if (m > n) return false;
+      this.position.set(at.position.x, at.position.y, at.position.z);
+      this.quaternion.set(at.quaternion.x, at.quaternion.y, at.quaternion.z, at.quaternion.w).normalize();
+      n = m;
+      return true;
+    };
+    if (go(target)) return true;
+    // In the way: the turn alone, then the move an axis at a time (sliding along what stopped it).
+    if (to.quaternion) go({ position: vec(this.position), quaternion: to.quaternion });
+    for (const a of ['x', 'y', 'z'] as const) {
+      if (!to.position || to.position[a] === this.position[a]) continue;
+      go({ position: { ...vec(this.position), [a]: to.position[a] }, quaternion: quat(this.quaternion) });
+    }
+    return false;
+  }
+
   get solid(): boolean {
     return this.isSolid;
   }
@@ -170,10 +223,14 @@ export class PropSim implements PropApi {
     private registry: Registry,
     private resolve: (block: BlockRef) => number,
     private content: Content,
-    hooks: Omit<PropHooks, 'solid'>,
+    hooks: Omit<PropHooks, 'solid' | 'overlap'>,
     private world: VoxelWorld,
   ) {
-    this.hooks = { ...hooks, solid: (p, on) => this.setSolid(p, on) };
+    this.hooks = { ...hooks, solid: (p, on) => this.setSolid(p, on), overlap: (p, at) => this.overlapAt(p, at) };
+  }
+
+  private overlapAt(p: PropState, w: WorldPose): number {
+    return this.world.mover_overlap(p.id, w.p.x, w.p.y, w.p.z, w.q.x, w.q.y, w.q.z, w.q.w, w.scale);
   }
 
   private setSolid(p: PropState, on: boolean) {
@@ -192,25 +249,14 @@ export class PropSim implements PropApi {
     this.fresh.add(p);
   }
 
-  /** Where a prop is in the world (through what it rides on). */
-  pose(p: PropState, out: WorldPose = { p: new THREE.Vector3(), q: new THREE.Quaternion(), scale: 1 }): WorldPose {
-    if (!p.parent) {
-      out.p.copy(p.position);
-      out.q.copy(p.quaternion);
-      out.scale = p.scale;
-      return out;
-    }
-    return onParent(this.pose(p.parent), p.position, p.quaternion, p.scale, out);
-  }
-
   /**
    * Solid props to where the game has put them, and what rides them with them (players and
    * creatures on deck, anyone they ran into). True if there are any.
    */
   carry(dt: number): boolean {
     if (!this.solids.size) return false;
-    const w: WorldPose = { p: new THREE.Vector3(), q: new THREE.Quaternion(), scale: 1 };
-    for (const p of this.solids) setMoverPose(this.world, p.id, this.pose(p, w), this.fresh.has(p));
+    const w = newPose();
+    for (const p of this.solids) setMoverPose(this.world, p.id, p.worldPose({}, w), this.fresh.has(p));
     this.fresh.clear();
     this.world.movers_carry(dt);
     return true;

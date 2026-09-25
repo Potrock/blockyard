@@ -67,6 +67,8 @@ pub struct Mover {
     unit: f64,
     /// Farthest cell corner from the origin, in model units.
     radius: f64,
+    /// Solid cells with an open side (only these can be in a block without one of them being).
+    surface: Vec<[i32; 3]>,
     /// Where it is now, and where it was at the last carry (it has moved since if they differ).
     pub now: Pose,
     pub prev: Pose,
@@ -98,7 +100,29 @@ impl Mover {
                 }
             }
         }
-        Mover { id, size, cells, pivot, unit, radius: r2.sqrt(), now: Pose::IDENTITY, prev: Pose::IDENTITY, was: Pose::IDENTITY, span: 0.0 }
+        let mut m = Mover { id, size, cells, pivot, unit, radius: r2.sqrt(), surface: Vec::new(), now: Pose::IDENTITY, prev: Pose::IDENTITY, was: Pose::IDENTITY, span: 0.0 };
+        const SIDES: [(i32, i32, i32); 6] = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+        for y in 0..size[1] {
+            for z in 0..size[2] {
+                for x in 0..size[0] {
+                    if m.solid(x, y, z) && SIDES.iter().any(|(dx, dy, dz)| !m.solid(x + dx, y + dy, z + dz)) {
+                        m.surface.push([x, y, z]);
+                    }
+                }
+            }
+        }
+        m
+    }
+
+    /// The middles of its outer blocks, in the world with it at `pose`.
+    pub fn surface_middles<'a>(&'a self, pose: &'a Pose) -> impl Iterator<Item = [f64; 3]> + 'a {
+        self.surface.iter().map(move |c| pose.to_world([0, 1, 2].map(|a| (c[a] as f64 + 0.5 - self.pivot[a]) * self.unit)))
+    }
+
+    /// Whether its last carry moved it further than a rider is carried (see `world::JUMP`).
+    pub fn jumped(&self) -> bool {
+        let d = [0, 1, 2].map(|a| self.now.pos[a] - self.prev.pos[a]);
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > crate::world::JUMP * crate::world::JUMP
     }
 
     #[inline]
@@ -581,6 +605,35 @@ mod tests {
             p.step(&w, &walk, 1.0 / 60.0);
         }
         assert!(p.pos[0] > 5.0 && p.ride.id == 9, "stepped up onto the deck: {:?} riding {}", p.pos, p.ride.id);
+    }
+
+    #[test]
+    fn overlap_counts_blocks_in_the_ground() {
+        let mut w = flat_world();
+        w.movers.push(deck(11, 10));
+        let m = w.mover(11).unwrap();
+        let at = |y: f64, tilt: f64| Pose { pos: [0.0, y, 0.0], rot: [(tilt / 2.0).sin(), 0.0, 0.0, (tilt / 2.0).cos()], scale: 1.0 };
+        // Stone is solid up to y = 64; the deck's blocks sit just under its origin.
+        assert_eq!(crate::world::mover_in_blocks(&w, m, &at(70.0, 0.0)), 0, "clear in the air");
+        assert_eq!(crate::world::mover_in_blocks(&w, m, &at(64.0, 0.0)), 100, "sunk into the ground: all of it");
+        let dipped = crate::world::mover_in_blocks(&w, m, &at(65.0, 0.3));
+        assert!(dipped > 0 && dipped < 100, "tilted, one end dips in: {dipped}");
+    }
+
+    #[test]
+    fn riders_go_with_a_mover_moved_far_at_once() {
+        let mut w = flat_world();
+        w.movers.push(deck(12, 6));
+        place(&mut w, 12, [0.0, 100.0, 0.0], 0.0);
+        carry(&mut w, &mut Player::new(0.0, 0.0, 0.0), 0.05);
+        let mut p = Player::new(1.5, 101.0, 0.5);
+        settle(&w, &mut p);
+        // Put 30 blocks away (through where a wall would stop a carry): they arrive with it.
+        place(&mut w, 12, [30.0, 90.0, -20.0], 0.0);
+        carry(&mut w, &mut p, 0.05);
+        assert!((p.pos[0] - 31.5).abs() < 1e-6 && (p.pos[1] - 90.0).abs() < 0.05 && (p.pos[2] + 19.5).abs() < 1e-6, "went with it: {:?}", p.pos);
+        settle(&w, &mut p);
+        assert!(p.on_ground && p.ride.id == 12);
     }
 
     #[test]

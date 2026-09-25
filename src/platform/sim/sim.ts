@@ -163,7 +163,7 @@ export class Sim {
       onProp: (id, at, out) => {
         const prop = this.props.byId(id);
         if (!prop?.solid) return null;
-        const w = toWorld(this.props.pose(prop), at);
+        const w = toWorld(prop.worldPose(), at);
         out.x = w.x;
         out.y = w.y;
         out.z = w.z;
@@ -171,7 +171,7 @@ export class Sim {
       },
       propLocal: (id, at) => {
         const prop = this.props.byId(id);
-        return prop ? toLocal(this.props.pose(prop), at) : null;
+        return prop ? toLocal(prop.worldPose(), at) : null;
       },
       content: o.content,
       present: this.presentation,

@@ -9,3 +9,5 @@ engine/target
 engine/src
 engine/Cargo.*
 *.local
+.claude
+.vercel

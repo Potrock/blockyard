@@ -413,6 +413,16 @@ impl VoxelWorld {
         }
     }
 
+    /// How many of a mover's blocks would be in the world's solid blocks with it at this pose
+    /// (position, rotation, scale): 0 when it's clear.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mover_overlap(&self, id: u32, x: f64, y: f64, z: f64, qx: f64, qy: f64, qz: f64, qw: f64, scale: f64) -> u32 {
+        let Some(m) = self.inner.mover(id) else { return 0 };
+        let l = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
+        let rot = if l > 1e-9 { [qx / l, qy / l, qz / l, qw / l] } else { [0.0, 0.0, 0.0, 1.0] };
+        world::mover_in_blocks(&self.inner, m, &movers::Pose { pos: [x, y, z], rot, scale })
+    }
+
     /// The mover whose cells hold this point, or 0.
     pub fn mover_at(&self, x: f64, y: f64, z: f64) -> u32 {
         self.inner.movers.iter().find(|m| m.contains([x, y, z])).map_or(0, |m| m.id)

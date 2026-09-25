@@ -566,6 +566,22 @@ pub fn target_boxes(b: u8) -> &'static [[u8; 6]] {
     &FULL_BOX
 }
 
+/// Whether a point is inside a solid block (in its collision boxes: half a slab is air). Unloaded
+/// columns count as air here.
+pub fn point_solid(world: &World, p: [f64; 3]) -> bool {
+    let cell = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
+    collision_boxes(world.get_or(cell[0], cell[1], cell[2], AIR)).iter().any(|b| {
+        let (lo, hi) = world_box(cell, b);
+        (0..3).all(|a| p[a] >= lo[a] && p[a] < hi[a])
+    })
+}
+
+/// How many of a mover's blocks would be in the world's solid blocks with it at `pose` (a block
+/// counts when its middle is in one; only its outer blocks can be).
+pub fn mover_in_blocks(world: &World, m: &Mover, pose: &crate::movers::Pose) -> u32 {
+    m.surface_middles(pose).filter(|p| point_solid(world, *p)).count() as u32
+}
+
 /// A box of a cell in world coordinates: (min, max).
 #[inline]
 fn world_box(cell: [i32; 3], b: &[u8; 6]) -> ([f64; 3], [f64; 3]) {
@@ -795,15 +811,20 @@ pub fn carry_box(world: &World, pos: &mut [f64; 3], hw: f64, h: f64, ride: &mut 
             None => ride.id = 0,
             Some(m) => {
                 let to = m.now.to_world(ride.local);
-                for axis in [1, 0, 2] {
-                    move_axis(world, pos, axis, to[axis] - pos[axis], hw, h, m.id);
+                if (0..3).map(|a| (to[a] - pos[a]).powi(2)).sum::<f64>() > JUMP * JUMP {
+                    // Moved a long way at once (put somewhere else): they go straight there with it.
+                    *pos = to;
+                } else {
+                    for axis in [1, 0, 2] {
+                        move_axis(world, pos, axis, to[axis] - pos[axis], hw, h, m.id);
+                    }
                 }
                 ride.local = m.now.to_local(*pos);
             }
         }
     }
     for m in &world.movers {
-        if m.id == ride.id || !m.moved() || !(m.near(&m.now, *pos, h + hw + 1.0) || m.near(&m.prev, *pos, h + hw + 1.0)) {
+        if m.id == ride.id || !m.moved() || m.jumped() || !(m.near(&m.now, *pos, h + hw + 1.0) || m.near(&m.prev, *pos, h + hw + 1.0)) {
             continue;
         }
         if m.overlaps(&m.now, *pos, hw, h) && !m.overlaps(&m.prev, *pos, hw, h) {
@@ -869,6 +890,9 @@ pub const HALF_W: f64 = 0.3;
 pub const HEIGHT: f64 = 1.8;
 pub const EYE: f64 = 1.62;
 const EPS: f64 = 1e-4;
+/// Further than this in one carry (blocks) and a mover was put somewhere, not moved: whoever rides
+/// it goes straight there, and nobody is pushed.
+pub const JUMP: f64 = 8.0;
 /// How high a walker steps up without jumping: onto a slab or a stair, a mover's deck.
 pub const STEP_UP: f64 = 0.6;
 

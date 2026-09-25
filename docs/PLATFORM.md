@@ -377,28 +377,28 @@ export default defineGame({
 
 ## Ships, lifts and moving platforms
 
-A block build spawned `solid` is ground you can stand on that moves. Players and creatures bump into it, stand on it, and ride along wherever the game moves and turns it. When it runs into someone, it pushes them out of the way. Shots and lines of sight stop at it, and pickups dropped on it stay on it. Move it the way you move any prop, through its `position` and `quaternion`; the platform does the rest.
+A block build spawned `solid` is ground you can stand on that moves. Players and creatures bump into it, stand on it, and ride along wherever the game moves and turns it. When it runs into someone, it pushes them out of the way. Shots and lines of sight stop at it, and pickups dropped on it stay on it. Move it through its `position` and `quaternion` like any prop, or with `sweep` to keep it out of the world's blocks; the platform does the rest.
 
 ```ts
-const deck = game.props.spawn(game.props.model(shipPlan, { pivot: { x: 6, y: 1, z: 8 } }), { solid: true });
+const lift = game.props.spawn(game.props.model(liftPlan, { pivot: { x: 1.5, y: 1, z: 1.5 } }), { solid: true, position: { x: 0, y: 64, z: 0 } });
 
 update(game, dt) {
-  s.yaw += s.turn * dt;
-  s.x -= Math.sin(s.yaw) * s.speed * dt;
-  s.z -= Math.cos(s.yaw) * s.speed * dt;
-  deck.position.set(s.x, 80 + Math.sin(game.clock.now) * 0.2, s.z); // bobbing on the swell
-  deck.quaternion.setFromEuler(new math.Euler(0, s.yaw, s.turn * 0.15)); // banking into the turn
+  // Up and down between floors; it stops under a ceiling rather than going through it.
+  const y = 64 + (Math.sin(game.clock.now * 0.5) + 1) * 8;
+  lift.sweep({ position: { x: 0, y, z: 0 } });
 }
 ```
 
-- **Riding.** Whoever stands on it rides it: walking, jumping, standing still or `freeze`d (a helmsman at the wheel, a cutscene). After a jump you land back on the same spot, even as it sails on. Jump or fall off and you keep its speed. `player.riding` and `entity.riding` say which prop someone is on.
+- **Riding.** Whoever stands on it rides it: walking, jumping, standing still or `freeze`d (a helmsman at the wheel, a cutscene). After a jump you land back on the same spot, even as it sails on. Jump or fall off and you keep its speed. `player.riding` and `entity.riding` say which prop someone is on. Put it somewhere far away in one go (8 blocks or more in a tick) and whoever rides it goes along.
 - **Online** it's predicted like walking: your own steps on deck answer at once, and you're drawn on the ship where your screen draws it, so the deck never slides under your feet. Your view turns as the ship turns.
+- **The world's blocks.** Set `position` / `quaternion` and it goes there, blocks or no blocks. `sweep(to)` moves it the way a walker moves: all the way if that doesn't put more of it into blocks than there is now, or else as far as it can (the turn alone, then one axis at a time, sliding along whatever is in the way). It returns true if it got all the way. It can always back off or turn away from what it's touching. For motion of your own (a ship with speed and turn rates to damp when it hits something), `overlap(at?)` says how many of its blocks would be in the world's blocks at a pose: 0 is clear. Skyship moves its airship in three parts that way: sailing, turning and rising (`sail` in `src/games/skyship/index.ts`).
+- **Points on it.** `prop.toWorld(local)` and `toLocal(world)` convert between its own space and the world, through any parent it rides and its scale. That's where a helm, a seat or a spawn point on deck is now.
 - **Shape.** Every solid block of the model collides; plants and liquids don't. Low lips and gentle slopes (a deck rolling a few degrees) are walked up without jumping. It stays solid while hidden (`visible = false`), which gives you an invisible wall. `prop.solid = false` turns it off. Only block models can be solid; glTF models can't.
 - **Parts.** Props attached to it (`attach`) ride with it too. A solid part attached to a solid ship is solid as well: a turret you can stand on, or a drawbridge that swings.
 - **Queries.** `props.raycast(origin, dir, reach)` finds the first solid prop along a ray (a cannonball hitting a hull). `world.lineOfSight` stops at solid props. `world.raycast` still sees only blocks.
-- **Moving it well.** Move it every tick (in `update`) rather than in jumps. A teleport carries riders with it only as far as the world between lets them go, so to jump the ship somewhere far, teleport the riders aboard too. The platform doesn't stop it hitting the world: test a few points of the hull with `world.getBlock` before you move it, the way Skyship does (`aground` in `src/games/skyship/index.ts`).
+- **Not yet:** creatures don't path-find across decks (they walk straight at you there), and vehicles (`player.drive`) don't collide with solid props.
 
-`src/games/skyship/` is the reference: an airship crewed together. Whoever takes the helm (E at the wheel on the cabin roof) steers it while frozen at the wheel. The rest walk the deck, go into the cabin, and jump off onto islands to light beacons, while the ship banks, climbs and bobs under them.
+`src/games/skyship/` is the reference: an airship crewed together, built only on the calls above. Whoever takes the helm (E at the wheel on the cabin roof) steers it while frozen at the wheel. The rest walk the deck, go into the cabin, and jump off onto islands to light beacons, while the ship banks, climbs and bobs under them.
 
 ## Entities
 

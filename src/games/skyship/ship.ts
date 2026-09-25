@@ -142,23 +142,3 @@ export function propeller(): Blueprint {
   }
   return bp;
 }
-
-/**
- * Points round the ship's outside (its own space), to test for rock before it moves: the hull at
- * the deck and the keel, the cabin roof, the envelope's widest ring and its top.
- */
-export function hullPoints(): Vec3[] {
-  const pts: Vec3[] = [];
-  for (let z = BOW; z <= STERN; z += 2)
-    for (const s of [-1, 1]) {
-      const w = half(z) + 0.5;
-      pts.push({ x: 0.5 + s * w, y: 0.5, z: z + 0.5 }, { x: 0.5 + s * Math.max(0.5, w - 3), y: -3.5, z: z + 0.5 });
-    }
-  pts.push({ x: 0.5, y: 0.5, z: BOW - 0.5 }, { x: 0.5, y: 0.5, z: STERN + 1.5 }, { x: 0.5, y: -4.5, z: -10 }, { x: 0.5, y: -4.5, z: 8 }, { x: 0.5, y: 4.5, z: 11 });
-  for (let a = 0; a < 16; a++) {
-    const t = (a / 16) * Math.PI * 2;
-    pts.push({ x: 0.5 + Math.cos(t) * (BAG.rx + 0.5), y: BAG.y, z: BAG.z + Math.sin(t) * (BAG.rz + 0.5) });
-  }
-  pts.push({ x: 0.5, y: BAG.y + BAG.ry + 1, z: BAG.z });
-  return pts;
-}
