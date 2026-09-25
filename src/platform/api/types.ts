@@ -327,6 +327,21 @@ export interface AbilityBody {
   control: number;
   /** Multiplies walking, sprinting and crouching speed this step (1). */
   speed: number;
+  /**
+   * How low the body is this step: `'stand'`, `'crouch'`, or `'low'` (a slide's height). It starts
+   * as the platform's movement has it (crouching, sliding); an ability can change it for this step
+   * (a dodge roll goes `'low'`). It's the body's hitbox for bullets, the height of their eyes (and
+   * their camera), and how their figure looks to others (crouched, or low as in a slide), and it's
+   * predicted on their screen like the rest. It isn't how the body moves: speeds stay the ability's.
+   */
+  stance: AbilityStance;
+  /**
+   * Their camera this step, on their own screen only (predicted, so it moves the moment they do):
+   * `roll` tilts it (radians, positive leans right, as a head tilts), `pitch` tips it (radians, up
+   * is positive; where they aim doesn't move), `dip` lowers it (blocks). All 0 at the start of each
+   * step: set them on every step they should show (a roll's tumble, a landing's dip).
+   */
+  camera: { roll: number; pitch: number; dip: number };
   /** Set the velocity (the axes given), or add to it. Upward speed lifts them off the ground. */
   setVelocity(v: Partial<Vec3>): void;
   addVelocity(v: Partial<Vec3>): void;
@@ -337,8 +352,18 @@ export interface AbilityBody {
   /**
    * Tell the game this ability did something (`'dash'`, `'jump'`, `'start'`): the host's `ability`
    * event, heard once, after the step. (Their screen replays steps, so only the host's are heard.)
+   * With `clip`, their figure plays that clip of their model (as `player.animate` would, with its
+   * options): on their own screen at once, and on everyone else's from the host.
    */
-  trigger(name: string): void;
+  trigger(name: string, opts?: AbilityTriggerOptions): void;
+}
+
+/** How low a body is (`AbilityBody.stance`): standing, crouched, or as low as a slide. */
+export type AbilityStance = 'stand' | 'crouch' | 'low';
+
+/** `AbilityBody.trigger`'s options: a clip for their figure to play, and how (see `ClipOptions`). */
+export interface AbilityTriggerOptions extends ClipOptions {
+  clip?: string;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -693,8 +718,16 @@ export interface WorldApi {
   setBlock(x: number, y: number, z: number, block: BlockRef): boolean;
   blockId(name: string): number;
   blockName(id: number): string;
-  /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing. Null if unknown. */
+  /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing, its shape and collision. Null if unknown. */
   blockInfo(block: BlockRef): BlockInfo | null;
+  /**
+   * How high bodies collide with the block at a position, in blocks above the bottom of its
+   * cell: 0 for air, plants and anything else not solid, 1 for a full block, 0.5 for a bottom
+   * slab, 1.5 for a fence (nobody jumps it). A fence counts as it's joined there, and a carved
+   * block (`world.destructible`) as what's left of it. An unloaded chunk counts as 1. By block,
+   * `blockInfo(block).height` says the same for a whole one.
+   */
+  collisionHeight(x: number, y: number, z: number): number;
   /** First targetable block along a ray (blocks only: `props.raycast` finds solid props). */
   raycast(origin: Vec3, dir: Vec3, maxDistance: number): RayHit | null;
   /** True if nothing solid (a block, a solid prop) blocks the straight line between two points. */
@@ -707,8 +740,22 @@ export interface WorldApi {
    * Blow a ragged sphere out of the world (bedrock and liquids survive) with debris and an
    * explosion. `filter` decides which blocks go (e.g. only ones placed this match); `by` is
    * passed on to the `blockBreak` events. Returns blocks removed.
+   *
+   * In a world with destructible blocks (`world.destructible`) it blows a crater instead: the
+   * destructible blocks lose a ragged sphere of little voxels (a wall is bitten into, a thin one
+   * holed), glass and the like within `radius` break whole, and what isn't destructible (the
+   * ground under the line, `except`) stands. Returns the blocks removed altogether.
+   *
+   * With `damage` it hurts too: players and creatures within `reach` blocks (default twice the
+   * radius) take `damage` (or `[middle, edge]`: falling off from the middle to the edge of the
+   * reach), none behind a wall, and are thrown back by `knockback` (default 1, less further out).
+   * The hits' `cause` is `'explosion'`, from `by`, with `weapon`.
    */
-  explode(center: Vec3, radius: number, opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor }): number;
+  explode(
+    center: Vec3,
+    radius: number,
+    opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor; damage?: number | [middle: number, edge: number]; reach?: number; knockback?: number; weapon?: string },
+  ): number;
   /**
    * Carve little voxels out of destructible blocks (`world.destructible`): a rounded channel
    * from `point` along `dir`, `depth` blocks long (default 0.2) and `radius` round (default 0.1),
@@ -718,6 +765,17 @@ export interface WorldApi {
    * was nothing it could take, so doing it again changes nothing.
    */
   carve(point: Vec3, dir: Vec3, opts?: { radius?: number; depth?: number; by?: Actor }): number;
+  /**
+   * How much of the block at (x, y, z) has been carved away (`carve`, a gun's bullets): 0 for a
+   * whole block (and anything that can't be carved), up to 1. A block carved to nothing is air.
+   */
+  carved(x: number, y: number, z: number): number;
+  /**
+   * Whether a player's body (0.6 x 1.8 x 0.6) fits with its feet at `p`: no block, slab, what's
+   * left of a carved block, or solid prop in its way (unloaded chunks count as in the way). Where
+   * a hole goes through a wall, for one.
+   */
+  fits(p: Vec3): boolean;
   /**
    * Break a block with debris and a sound (and the plant on top), and fire `blockBreak`.
    * Bedrock and liquids don't break. Returns false if nothing was broken. (`setBlock` is the
@@ -732,9 +790,11 @@ export interface WorldApi {
    * Given by name (`'torch'`, `'oak_stairs'`), a block is turned the Minecraft way: `against`
    * (the face aimed at, a `raycast` hit) hangs a torch on the side of a block, puts a slab or
    * stairs in the upper half (aiming at a ceiling or high on a side) and lays a log along the
-   * axis aimed along; stairs and beds face `facing`, else the way `by` is looking. A bed takes
-   * two cells, its head beyond (x, y, z). A slab placed on the same kind of slab makes a full
-   * block. Given with a state (`'oak_stairs[facing=east]'`), it goes as it is.
+   * axis aimed along; stairs and beds face `facing`, else the way `by` is looking. A block of the
+   * game's own that faces (`BlockDefinition.facing`) faces `facing`, else out from the side of
+   * the block aimed at (a sign on a wall), else back at whoever places it. A bed takes two
+   * cells, its head beyond (x, y, z). A slab placed on the same kind of slab makes a full block.
+   * Given with a state (`'oak_stairs[facing=east]'`), it goes as it is.
    */
   placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Actor; against?: RayHit; facing?: Facing }): boolean;
 }
@@ -761,7 +821,30 @@ export interface BlockInfo {
   breakable: boolean;
   /** A game's own block: seconds to mine it by hand, if the game gave it (`BlockDefinition.hardness`). */
   hardness?: number;
+  /** Its shape (`'fence'`, `'stairs'`...): see `BlockShape`. */
+  shape: BlockShape;
+  /**
+   * How high bodies collide with it, in blocks above the bottom of its cell: 0 if it isn't
+   * solid, 1 for a full block, 0.5 for a bottom slab (1 for a top one), 0.5625 for a bed, 1.5 for
+   * a fence. `world.collisionHeight` says it at a position (a fence joined, a block carved).
+   */
+  height: number;
+  /**
+   * The boxes bodies collide with, in blocks within its cell (`[x0, y0, z0, x1, y1, z1]`, 0 to 1,
+   * a fence's to 1.5); none if it isn't solid. A fence or pane is its post alone here: its arms
+   * depend on what's beside it.
+   */
+  boxes: number[][];
+  /** Bodies climb it: ladders, vines (`BlockDefinition.climbable`). */
+  climbable: boolean;
 }
+
+/**
+ * What shape a block is: `air`; `cube`, a full block; `cross`, a plant's two crossed planes;
+ * `liquid`; `slab` and `stairs` (built-in or a game's); `torch` (standing or on a wall); `bed`
+ * (half of one); and a game's own: `fence`, `pane`, `post`, `boxes`.
+ */
+export type BlockShape = 'air' | 'cube' | 'cross' | 'liquid' | 'slab' | 'stairs' | 'torch' | 'bed' | 'fence' | 'pane' | 'post' | 'boxes';
 
 /**
  * A block of the game's own (`GameDefinition.blocks`). A texture (or a built-in block it's
@@ -786,8 +869,39 @@ export interface BlockDefinition {
    * touch, needs ground under it); `slab`: half a block (`name[type=top]` is the upper half);
    * `stairs` (`name[facing=east,half=top]`). Slabs and stairs are placed the way the built-in ones
    * are: in the half aimed at, climbing away from whoever places them.
+   *
+   * Thin things, which let light through: `fence`, a post with rails to the fences and solid
+   * blocks beside it, 1.5 blocks high to bodies so nobody jumps it (Minecraft's); `pane`, a wall
+   * 2/16 thick joining the panes and solid blocks beside it (glass panes, bars); `post`, a pillar
+   * 4/16 across (with `facing: 'axis'`, a beam lying along x or z). For a shape of your own give
+   * `boxes` instead.
    */
-  shape?: 'cube' | 'cross' | 'slab' | 'stairs';
+  shape?: 'cube' | 'cross' | 'slab' | 'stairs' | 'fence' | 'pane' | 'post';
+  /**
+   * A shape of its own: boxes on the block's 16 x 16 x 16 grid, `[x0, y0, z0, x1, y1, z1]` each (0
+   * to 16, up to 16 boxes), written as it faces north if it has a `facing`. Bodies collide with
+   * them (if it's `solid`), you aim at them, and each face shows the part of its texture it
+   * covers. A table: `[[0, 13, 0, 16, 16, 16], [1, 0, 1, 3, 13, 3], [13, 0, 1, 15, 13, 3], [1, 0,
+   * 13, 3, 13, 15], [13, 0, 13, 15, 13, 15]]`; a poster flat on the wall behind it: `[[1, 1, 15, 15,
+   * 15, 16]]`. It lets light through.
+   */
+  boxes?: [number, number, number, number, number, number][];
+  /**
+   * It faces a way, one variant per way (a cube, a `post` or `boxes`): `true` or `'horizontal'`,
+   * the four sides (`name[facing=east]`; furnaces, signs, ladders); `'all'`, up and down too
+   * (`name[facing=up]`); `'axis'`, lying along x, y or z like a log (`name[axis=x]`). Written
+   * (textures and boxes) as it faces north, or stands upright for `'axis'`; its `front` texture
+   * goes where it faces. Placed, it faces out from the side of the block aimed at (a sign on a
+   * wall), or up or down from the top or bottom for `'all'`, else back at whoever places it;
+   * `'axis'` lies along the axis aimed along.
+   */
+  facing?: boolean | 'horizontal' | 'all' | 'axis';
+  /**
+   * Bodies climb it (ladders, vines): standing in it, pushing into what's behind it (or its own
+   * boxes) or holding jump climbs, sneaking holds on, and otherwise they slide down slowly.
+   * Usually not `solid` (a vine) or thin (a ladder's `boxes`).
+   */
+  climbable?: boolean;
   /** A slab: the block two of them make, one placed on the other (default: they don't join). */
   full?: string;
   /**
@@ -844,13 +958,18 @@ export type BlockTexture =
 
 /**
  * A block's textures face by face: `top`, `bottom`, the four `side`s, or one side (`north`,
- * `south`, `east`, `west`); `all` for any face not given.
+ * `south`, `east`, `west`); `all` for any face not given. A block that faces a way
+ * (`BlockDefinition.facing`) is written facing north: its `front` (the north face) and `back`.
  */
 export interface BlockFaces {
   all?: BlockTexture;
   top?: BlockTexture;
   bottom?: BlockTexture;
   side?: BlockTexture;
+  /** The face toward where it faces (as written, north). */
+  front?: BlockTexture;
+  /** The face opposite its front (as written, south). */
+  back?: BlockTexture;
   north?: BlockTexture;
   south?: BlockTexture;
   east?: BlockTexture;
@@ -900,6 +1019,8 @@ export interface DamageOptions {
   cause?: DamageCause;
   /** The part of the target hit, when it's known (a bullet knows). */
   part?: 'head' | 'body';
+  /** Blocks of wall a bullet went through before it hit (wall-banging, a gun's `penetration`). */
+  through?: number;
 }
 
 export interface PlayerApi {
@@ -938,8 +1059,18 @@ export interface PlayerApi {
   /** Restore full health after death. */
   revive(): void;
   impulse(x: number, y: number, z: number): void;
-  /** Freeze movement (cutscenes, countdowns). */
-  freeze(frozen: boolean): void;
+  /**
+   * Freeze movement (cutscenes, countdowns), or let them go (`false`). With `weapons: true` their
+   * weapons are locked too while it lasts: no switching slots, aiming, reloading, firing or using
+   * items, and a shot their screen fires anyway is refused (no rounds spent). The lock ends with
+   * the freeze (`freeze(false)`, or a `revive`). A freeze before they're in play (at `playerJoin`)
+   * holds when they press Play.
+   */
+  freeze(frozen: boolean, opts?: { weapons?: boolean }): void;
+  /** Their body is frozen: `freeze`, dead, driving, or not in play yet. */
+  readonly frozen: boolean;
+  /** Reloading the gun they hold (rounds going in, one at a time or all at once). */
+  readonly reloading: boolean;
   /**
    * Put them in one of the game's `vehicles`, starting from `state` (plain numbers, booleans and
    * lists: it goes to their screen as data). From now on their controls drive it (the vehicle's
@@ -994,6 +1125,14 @@ export interface PlayerApi {
   readonly abilities: Record<string, any>;
   /** Ignore damage for this long (spawn protection); 0 ends it. */
   protect(seconds: number): void;
+  /**
+   * Throw one of their throwables (`kind: 'throwable'`, see `ThrowableItem`) from their eyes, as if
+   * they'd thrown it themselves: along where they look (or `yaw` / `pitch`), or lobbed to land at
+   * `at` (the arc worked out for its speed; the lower one, or none if it can't reach). `cook` is
+   * seconds of its fuse already burnt. It takes one from their inventory; false if they have none,
+   * they're dead, or they threw one less than its `cooldown` ago. Bots throw this way.
+   */
+  throw(item: string, opts?: { at?: Vec3; yaw?: number; pitch?: number; cook?: number }): boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1051,8 +1190,9 @@ export interface BotControls {
  * - `polearm`: two-handed, low at the right with the tip just under the crosshair (pikes, spears).
  * - `gun`: two hands on a gun (guns' default): at the hip, up to the eye to aim down the sights,
  *   down and across the chest to sprint.
+ * - `throw`: a throwable (their default), up by the shoulder ready to throw; it's thrown with `toss`.
  */
-export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm' | 'gun';
+export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm' | 'gun' | 'throw';
 
 /**
  * A 3D held item made of boxes, for things a 16x16 sprite can't do (pikes, staffs, shields).
@@ -1260,6 +1400,10 @@ export interface ItemSounds {
   hit?: SoundName;
   /** Starting to draw a bow. Default `bow_draw`. */
   draw?: SoundName;
+  /**
+   * Throwables use `draw` for pulling the pin (none by default), `use` for the throw (`whoosh`)
+   * and `hit` for each bounce (`arrow_hit`, quiet); a molotov's `hit` is its bottle breaking.
+   */
 }
 
 export interface MeleeItem extends ItemBase {
@@ -1360,6 +1504,64 @@ export interface GunItem extends ItemBase {
    * gun doesn't carve.
    */
   carve?: { radius?: number; depth?: number } | false;
+  /**
+   * Wall-banging: bullets go through walls with up to `depth` blocks of material in them all told
+   * (a block-thick wall head on is 1, at a slant more; what's been shot out of it doesn't count),
+   * losing `damageLoss` of their damage for each block they go through (default 0.4; 1 would
+   * lose it all in a block). Bedrock and blocks that can't be broken stop them. They leave a hole
+   * where they go in and where they come out. Off by default.
+   */
+  penetration?: { depth: number; damageLoss?: number };
+}
+
+/**
+ * Something thrown: a grenade, a molotov. Hold its `key` (or, with it in hand, the fire button) to
+ * pull the pin, let go to throw it where you look, lobbed a little. It flies, bounces and rolls
+ * on the blocks, and goes off when its `fuse` is out (or, with `impact`, when it first hits
+ * something): a `blast` (damage falling off from its middle, a push, a crater in destructible
+ * walls) and/or a `fire` that burns a while.
+ *
+ * The thrower's own screen throws it at once and flies it there; the host flies it the same way
+ * (the flight is worked out step by step from the same blocks, so it lands in the same place) and
+ * decides when and where it goes off. Everyone else sees it fly too, and a live one near them
+ * gets a warning marker. `player.throw` throws one from code (bots).
+ */
+export interface ThrowableItem extends ItemBase {
+  kind: 'throwable';
+  /** Seconds from the pin to the blast (default 3). With `impact`, the longest it flies before it goes off anyway. */
+  fuse?: number;
+  /** The fuse burns while it's held (cooking it; held too long, it goes off in the hand). Default true, unless `impact`. */
+  cook?: boolean;
+  /** It goes off where it first hits a block or someone (a molotov), rather than bouncing until the fuse is out. */
+  impact?: boolean;
+  /** A key that throws it whatever's in hand (hold to cook, let go to throw), e.g. `'KeyG'`. The mouse wheel skips it in the hotbar. */
+  key?: string;
+  /** Blocks a second it leaves the hand at (default 20), lobbed `lift` degrees above where they look (default 7). */
+  speed?: number;
+  lift?: number;
+  /**
+   * How it flies and lands: `gravity` (blocks/s², default 24), `bounce` (0..1 of its speed off a
+   * block it hits head on, default 0.4), `friction` (0..1 of its speed along a surface it hits,
+   * lost; and rolling to a stop, default 0.35), `drag` (0.1), and its `radius` (0.1 blocks).
+   */
+  physics?: { gravity?: number; bounce?: number; friction?: number; drag?: number; radius?: number };
+  /** Seconds between throws (default 0.8). */
+  cooldown?: number;
+  /**
+   * The blast (see `world.explode`): `damage` (or `[middle, edge]`, falling off) to everyone within
+   * `radius` blocks and not behind a wall, the thrower too; `knockback` (default 1); a crater
+   * `carve` blocks round (a destructible world's walls bitten into; in any other, whole blocks
+   * blown out; default 0, none).
+   */
+  blast?: { radius: number; damage: number | [middle: number, edge: number]; knockback?: number; carve?: number };
+  /**
+   * Fire where it goes off (a molotov): flames on the ground `radius` blocks round for `duration`
+   * seconds, burning anyone standing in them for `damage` a second (not behind a wall). `color`
+   * tints the flames.
+   */
+  fire?: { radius: number; duration: number; damage: number; color?: string };
+  /** What it trails as it flies (a lit rag's flame, a fuse's sparks): a colour, or none (default). */
+  trail?: string;
 }
 
 /**
@@ -1435,7 +1637,7 @@ export interface MiscItem extends ItemBase {
   kind: 'misc';
 }
 
-export type ItemDefinition = MeleeItem | BowItem | GunItem | ConsumableItem | MiscItem;
+export type ItemDefinition = MeleeItem | BowItem | GunItem | ThrowableItem | ConsumableItem | MiscItem;
 
 /** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
 /**
@@ -1476,6 +1678,22 @@ export interface ItemApi {
   clearPickups(): void;
   /** Register a custom sprite / skin atlas from any canvas (e.g. drawn with Canvas 2D). */
   atlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels): void;
+  /**
+   * Throwables in the air (or come to rest, waiting to go off), and the fires they started: what
+   * a bot keeps away from. `radius` is how far one reaches (its blast's, or its fire's); `left`,
+   * seconds until it goes off (a fire: until it's out).
+   */
+  readonly thrown: readonly ThrownInfo[];
+  readonly fires: readonly { position: Vec3; radius: number; left: number; by: Player }[];
+}
+
+/** A throwable in the air, as `items.thrown` lists it. */
+export interface ThrownInfo {
+  item: string;
+  position: Vec3;
+  by: Player;
+  radius: number;
+  left: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2037,7 +2255,10 @@ export type BuiltinSound =
   | 'gun_empty'
   | 'gun_cycle'
   | 'hitmarker'
-  | 'kill';
+  | 'kill'
+  | 'bounce'
+  | 'glass'
+  | 'fire';
 
 /** A built-in sound, or one a game added with `audio.define`. */
 export type SoundName = BuiltinSound | (string & {});
@@ -2101,10 +2322,16 @@ export interface EnvApi {
 export interface HitDetails {
   weapon?: string;
   headshot?: boolean;
+  /** Blocks of wall the bullet went through first (wall-banging). */
+  through?: number;
 }
 
-/** What did some damage: a gun's bullet, a melee hit (a blade, a fist, a mob's swing), a projectile (an arrow, a fireball), or the world (a fall, `'world'` damage). */
-export type DamageCause = 'gun' | 'melee' | 'projectile' | 'world';
+/**
+ * What did some damage: a gun's bullet, a melee hit (a blade, a fist, a mob's swing), a projectile
+ * (an arrow, a fireball), an explosion (`world.explode` with `damage`, a grenade), fire (a molotov's
+ * flames), or the world (a fall, `'world'` damage).
+ */
+export type DamageCause = 'gun' | 'melee' | 'projectile' | 'explosion' | 'fire' | 'world';
 
 /**
  * Damage about to land on a player or a creature (the `damage` event), before armour and before
@@ -2144,11 +2371,24 @@ export interface GameEvents {
   pickup: { player: Player; item: string; count: number };
   /** A player joined a game in progress (multiplayer). */
   playerJoin: { player: Player };
+  /**
+   * A person's screen is in play: they pressed Play (after `start`, for the first). On a server
+   * that's right after their `playerJoin`; in single-player, the first click on Play. The place
+   * for what needs their screen (a modal widget, a welcome). Bots have no screen: not for them.
+   */
+  playerReady: { player: Player };
   /** A player left (multiplayer). They're no longer in `players`. */
   playerLeave: { player: Player };
   /** A block was broken by the player, an entity, an explosion or `world.breakBlock`. */
   blockBreak: { x: number; y: number; z: number; block: string; by: Actor };
   blockPlace: { x: number; y: number; z: number; block: string; by: Actor };
+  /**
+   * A block changed, however it happened: set, broken, placed, blown up, carved into (see
+   * `world.carved`), or put back whole by a restart. One per block, after the change; `block` is
+   * what's there now. For keeping something built from the world's blocks up to date (the
+   * `navGrid` kit's walking grid).
+   */
+  blockChange: { x: number; y: number; z: number; block: string };
   /** A movement ability called `body.trigger(name)`: a dash began, a wall-jump (for sounds, effects). */
   ability: { player: Player; ability: string; name: string };
 }
@@ -2158,8 +2398,16 @@ export interface EventApi {
 }
 
 export interface ClockApi {
-  /** Seconds of game time since `start` (pauses with the game). */
+  /**
+   * Seconds of game time since `start`: the match's clock. It pauses with the game, and a
+   * `restart()` puts it back to 0 (with the timers, which it clears).
+   */
   readonly now: number;
+  /**
+   * Seconds of game time since the game first started, which a `restart()` doesn't reset: for
+   * what outlives a match (a cooldown across restarts, when someone joined). Pauses with the game.
+   */
+  readonly total: number;
   after(seconds: number, fn: () => void): () => void;
   every(seconds: number, fn: () => void): () => void;
 }

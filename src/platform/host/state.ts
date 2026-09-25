@@ -66,16 +66,19 @@ export class PresentState {
       return true;
     }
     const json = c.method + JSON.stringify(c.args);
+    // A widget put up whole always goes: the game's side only sends one when it means the screen
+    // to build it afresh (it was down there, or the screen may have lost it).
+    const always = c.method === 'widget';
     if (c.to === null) {
       // After a personal call with this key, the screens differ: send the next one to everyone.
-      const same = this.everyone.get(key)?.json === json && !this.personal.has(key);
+      const same = !always && this.everyone.get(key)?.json === json && !this.personal.has(key);
       this.everyone.set(key, { call: c, json });
       this.personal.delete(key);
       return !same;
     }
     let mine = this.personal.get(key);
     if (!mine) this.personal.set(key, (mine = new Map()));
-    const same = mine.get(c.to)?.json === json;
+    const same = !always && mine.get(c.to)?.json === json;
     mine.set(c.to, { call: c, json });
     return !same;
   }

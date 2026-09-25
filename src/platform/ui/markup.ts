@@ -267,13 +267,20 @@ function keepAttr(tag: string, name: string, value: string): string | null {
 // Template: `{{path}}` in text and attributes, `data-if="cond"`, `data-each="path"`
 // -------------------------------------------------------------------------------------------------
 
-/** A name to look up: `score`, `me.kills`, `rows.0.name`; `.` the list item, `$i` its index from 0, `$n` from 1. */
+/**
+ * A name to look up: `score`, `me.kills`, `rows.0.name`; `.` the list item, `$i` its index from 0,
+ * `$n` from 1. Any other name starting with `$` (`$gun.mag`, `$ability.dash.cool`, `$health`) is
+ * the screen's own state, filled in by the player's screen itself rather than sent by the game.
+ */
 export type Path = string[];
 
 /** A piece of text or an attribute: fixed text, or a value from the data. */
 export type TemplatePart = string | { path: Path };
 
-const PATH = /^(?:\.|\$[in]|[A-Za-z_][\w]*)(?:\.[\w]+)*$/;
+const PATH = /^(?:\.|\$[A-Za-z]\w*|[A-Za-z_][\w]*)(?:\.[\w]+)*$/;
+
+/** Whether a path reads the screen's own state (`$gun.mag`), not the widget's data. */
+export const isLocal = (path: Path) => path[0][0] === '$' && path[0] !== '$i' && path[0] !== '$n';
 
 export function parsePath(s: string): Path | null {
   const t = s.trim();
@@ -336,12 +343,17 @@ export function parseCondition(src: string): Condition | null {
   return left && right ? { not, left, op: m[2] as Condition['op'], right } : null;
 }
 
-/** Where a template looks names up: a list item's fields first, then the lists around it, then the widget's data. */
+/**
+ * Where a template looks names up: a list item's fields first, then the lists around it, then the
+ * widget's data. `$` names (`$gun.mag`) look in `local`, the screen's own state (the outermost
+ * scope's), which the screen keeps up to date itself: its gun, its movement abilities, its health.
+ */
 export interface Scope {
   data: PlainData;
   item?: PlainValue;
   index?: number;
   up?: Scope;
+  local?: PlainData;
 }
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
@@ -353,7 +365,11 @@ export function lookup(path: Path, scope: Scope): PlainValue | undefined {
   if (head === '.') v = scope.item;
   else if (head === '$i') v = scope.index;
   else if (head === '$n') v = scope.index === undefined ? undefined : scope.index + 1;
-  else {
+  else if (head[0] === '$') {
+    let root = scope;
+    while (root.up) root = root.up;
+    v = root.local && own(root.local, head) ? root.local[head] : undefined;
+  } else {
     for (let s: Scope | undefined = scope; s; s = s.up) {
       if (isRecord(s.item) && own(s.item, head)) {
         v = s.item[head];

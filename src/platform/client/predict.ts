@@ -1,7 +1,8 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { VehicleWorld } from '../api/types';
 import type { PlayerInput } from '../net/protocol';
-import { copyMemory, DEFAULT_TUNE, freshMemory, NO_MODS, stepMovement, type MoveControls, type MoveMemory, type MoveMods, type MoveTune } from '../sim/movement';
+import type { AbilityCamera, AbilityClip } from '../sim/abilities';
+import { copyMemory, DEFAULT_TUNE, freshMemory, NO_MODS, stepMovement, type MoveControls, type MoveMemory, type MoveMods, type MoveResult, type MoveTune } from '../sim/movement';
 import type { PlayerFrame } from '../sim/player';
 
 /** A `PlayerInput` read the way movement reads controls (as the host's `SimInput` reads it: idle while inactive). */
@@ -82,6 +83,10 @@ export class Predictor {
   private errorRide = 0;
   /** How far the last server frame moved the prediction (blocks): ~0 when prediction holds. */
   lastCorrection = 0;
+  /** The camera their movement abilities ask for now ([roll, pitch, dip], `AbilityBody.camera`). */
+  tilt: AbilityCamera | null = null;
+  /** Clips their abilities asked their figure to play, on new inputs (not replays), until taken. */
+  private clips: AbilityClip[] = [];
 
   constructor(
     private world: VoxelWorld,
@@ -102,7 +107,12 @@ export class Predictor {
     const d = Math.max(0, Math.min(0.1, dt));
     this.pending.push({ seq, input, dt: d });
     if (this.pending.length > 120) this.pending.shift();
-    if (this.ready) this.run(input, d);
+    if (this.ready) {
+      // (A clip an ability starts plays at once here; replays of this input start nothing again.)
+      const r = this.run(input, d);
+      for (const [, , clip] of r.events) if (clip) this.clips.push(clip);
+      if (this.clips.length > 4) this.clips.shift();
+    }
     const k = Math.exp(-dt * 12);
     for (let i = 0; i < 3; i++) this.error[i] *= k;
   }
@@ -136,6 +146,11 @@ export class Predictor {
     const e = [shown[0] - q.v[0], shown[1] - q.v[1], shown[2] - q.v[2]];
     // A small miss eases in; a jump (teleport, respawn) is taken at once.
     this.error = Math.hypot(e[0], e[1], e[2]) < 2 ? e : [0, 0, 0];
+  }
+
+  /** Their movement abilities' states as predicted now (after the newest input), for the HUD. */
+  get abilities(): MoveMemory['abilities'] | null {
+    return this.ready ? (this.memory.abilities ?? null) : null;
   }
 
   /** The player as this client should show them now; null until the server has spoken. */
@@ -175,12 +190,21 @@ export class Predictor {
     return s[13] ? { ride: s[13], v: [s[14], s[15], s[16]] } : { ride: 0, v: [s[0], s[1], s[2]] };
   }
 
-  private run(input: PlayerInput, dt: number) {
-    // (What abilities trigger here isn't heard: the host's steps are, once each.)
+  /** The clips their abilities started since the last call (for their own figure, at once). */
+  takeClips(): AbilityClip[] {
+    return this.clips.length ? this.clips.splice(0) : NO_CLIPS;
+  }
+
+  private run(input: PlayerInput, dt: number): MoveResult {
+    // (What abilities trigger here isn't heard by the game: the host's steps are, once each.)
     const r = stepMovement(this.world, this.slot, new Controls(input), input.yaw, this.allowFlight, this.memory, dt, this.tune, this.mods(input), input.pitch, this.query);
     this.sneak = r.sneak;
     this.slide = r.slide;
+    this.tilt = r.camera;
     const s = this.world.player_state(this.slot);
     this.sprint = r.sprint && Math.hypot(s[3], s[5]) > Math.min(4.5, this.tune.params[0] * 1.02);
+    return r;
   }
 }
+
+const NO_CLIPS: AbilityClip[] = [];

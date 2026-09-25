@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
-import type { BlockRef } from '../../src/platform/api/types';
+import type { BlockRef, GameDefinition, MovementAbility } from '../../src/platform/api/types';
 import moves from '../../src/games/moves';
+import { roll } from '../../src/games/highnoon/abilities';
 import { Predictor } from '../../src/platform/client/predict';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
 import { worldGenConfig } from '../../src/platform/host/spawn';
@@ -25,6 +26,7 @@ import { check } from './_harness';
 export default function abilities() {
   predicted();
   neutral();
+  body();
 }
 
 function predicted() {
@@ -155,4 +157,90 @@ function neutral() {
   console.log(`  6 s of walking, sprinting and jumping with an ability that does nothing: ${differ} steps differ from none (ended at ${at[0].toFixed(1)}, ${at[1].toFixed(1)}, ${at[2].toFixed(1)})`);
   check(differ === 0, `an ability that does nothing changed walking in ${differ} steps`);
   check((bodies[1].memory.abilities?.idle as { steps: number }).steps === 60 * 6, 'the idle ability stepped every step');
+}
+
+/**
+ * What an ability does to the body beyond moving it: High Noon's dodge roll goes low
+ * (`body.stance`) and tips the roller's camera (`body.camera`), and a wave plays a clip on their
+ * figure (`trigger(name, { clip })`). With 100 ms of latency, the roller's own screen is low, tipped
+ * and waving from the very input (before the host has heard), the host agrees (their hitbox and
+ * figure are low, everyone's screen gets the clip, their frame carries the camera for a screen that
+ * doesn't predict), the clip starts once per wave however often the input is replayed, and the
+ * prediction still holds exactly.
+ */
+function body() {
+  const wave: MovementAbility<{ cool: number }> = {
+    state: { cool: 0 },
+    step(s, c, b, dt) {
+      s.cool = Math.max(0, s.cool - dt);
+      if (c.pressed('KeyE') && s.cool === 0) {
+        s.cool = 1;
+        b.trigger('wave', { clip: 'wave', layer: 'upper' });
+      }
+    },
+  };
+  const def: GameDefinition = {
+    id: 'body-test',
+    title: 'Body',
+    world: { terrain: 'void', ground: { y: 40 }, spawn: { x: 0.5, y: 41, z: 0.5 }, seed: 5 },
+    player: { movement: { crouchKeys: ['KeyC'], abilities: { roll, wave } } },
+  };
+  const host = new GameHost(def, { engine: readFileSync('engine/pkg/voxel_engine_bg.wasm'), seed: 5, remote: true, radius: 2, budget: Infinity });
+  const registry = loadRegistry();
+  const mine = new GeneratedWorld(host.seed, worldGenConfig(def, (b: BlockRef) => (typeof b === 'number' ? b : registry.byName.get(b)!.id)));
+  const ann = host.connect('Ann');
+  host.command(ann.id, { t: 'start' });
+  const me = host.sim.players[0];
+  const predictor = new Predictor(mine.world, resolveMovement(def.player!.movement), () => NO_MODS, worldQuery(mine.world, registry));
+  const late: HostBatch[] = [];
+  const presses: Record<number, string> = { 40: 'KeyQ', 70: 'KeyE', 190: 'KeyQ', 230: 'KeyE' };
+  let worst = 0;
+  let lowAtOnce = false;
+  let tippedAtOnce = false;
+  let hostLow = 0;
+  let hostTilt = 0;
+  let predictedLow = 0;
+  let clips = 0;
+  const hostClips = new Set<number>();
+  let clipName = '';
+  for (let frame = 0; frame < 300; frame++) {
+    mine.update([me.state], 2, Infinity);
+    const press = presses[frame];
+    const input: PlayerInput = { active: true, down: ['KeyD', ...(press ? [press] : [])], pressed: press ? [press] : [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: me.viewSeq };
+    predictor.step(input, 1 / 60, frame + 1);
+    // The press's own frame: low and tipped here already, the host yet to hear of it.
+    if (frame === 40) {
+      lowAtOnce = !!predictor.shown()?.sliding && !me.sliding;
+      tippedAtOnce = (predictor.tilt?.[0] ?? 0) !== 0;
+    }
+    if (predictor.shown()?.sliding) predictedLow++;
+    clips += predictor.takeClips().filter((c) => c.name === 'wave').length;
+    host.command(ann.id, { t: 'input', input, seq: frame + 1, dt: 1 / 60 });
+    if (frame % 2 === 1) {
+      const b = host.step(1 / 30).get(ann.id)!;
+      const f = b.frame!.players.find((q) => q.id === me.id)!;
+      if (f.sliding) hostLow++;
+      if (f.tilt) hostTilt++;
+      if (f.clip) {
+        hostClips.add(f.clip.seq);
+        clipName = f.clip.name;
+      }
+      late.push(b);
+      if (late.length > 3) {
+        predictor.reconcile(quantize(late.shift()!.frame!.players.find((q) => q.id === me.id)!));
+        if (frame > 30) worst = Math.max(worst, predictor.lastCorrection);
+      }
+    }
+  }
+  console.log(
+    `  two rolls and two waves with 100 ms latency: low on their own screen ${predictedLow} frames (from the press: ${lowAtOnce}), on the host ${hostLow} steps; camera tipped at once: ${tippedAtOnce}, in ${hostTilt} host frames; clips started here ${clips}, on the host ${hostClips.size} (${clipName}); worst correction ${worst.toFixed(5)}`,
+  );
+  check(lowAtOnce && tippedAtOnce, `the roll should lower and tip their own screen on the press's frame (low ${lowAtOnce}, tipped ${tippedAtOnce})`);
+  check(hostLow >= 16 && hostLow <= 24, `the host should have them low through both rolls (~20 steps): ${hostLow}`);
+  check(predictedLow >= 34 && predictedLow <= 46, `their screen should show them low through both rolls (~40 frames): ${predictedLow}`);
+  check(hostTilt >= 14, `the host's frames should carry the camera through the rolls: ${hostTilt}`);
+  check(clips === 2, `each wave's clip should start once on their screen, not again on replays: ${clips}`);
+  check(hostClips.size === 2 && clipName === 'wave', `the host should play both waves on their figure: ${[...hostClips]} ${clipName}`);
+  check(worst < 0.01, `rolling and waving shouldn't upset prediction: worst correction ${worst}`);
+  check(!me.sliding && !me.sneaking && !predictor.tilt, 'standing again, the camera level, after the rolls');
 }

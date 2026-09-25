@@ -43,6 +43,18 @@ export class SimInput implements InputApi {
     return this.state.active && this.state.shots ? this.state.shots : null;
   }
 
+  /** Throws the player's screen made with these controls (throwables), or null for none sent. */
+  get throws(): PlayerInput['throws'] | null {
+    return this.state.throws ?? null;
+  }
+
+  /** These controls with a mouse button let go (a gun waits while a throwable's cooked). */
+  without(b: number): SimInput {
+    const o = new SimInput();
+    o.set({ ...this.state, buttons: this.state.buttons & ~(1 << b), clicked: this.state.clicked & ~(1 << b), shots: undefined });
+    return o;
+  }
+
   /** The host time the player's screen was showing (others' positions), for lag-compensated hits. */
   get seen(): number | null {
     return this.state.seen ?? null;

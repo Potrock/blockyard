@@ -23,6 +23,7 @@ export function vetDamage(emit: Emit, target: Player | Entity, amount: number, o
     crit: !!opts.crit,
     weapon: opts.weapon,
     headshot: opts.headshot,
+    through: opts.through,
     get cancelled() {
       return cancelled;
     },
@@ -105,7 +106,7 @@ export class PlayerHealth {
     this.onHurt(from);
     this.fx.flash('rgba(180, 10, 10, 1)', Math.min(0.5, 0.15 + amount * 0.04), 0.45);
     this.fx.shake(0.06 + amount * 0.012, 0.3);
-    const how = { weapon: opts.weapon, headshot: opts.headshot };
+    const how = { weapon: opts.weapon, headshot: opts.headshot, ...(opts.through && { through: opts.through }) };
     this.emit('playerDamage', { player: this.player(), amount, source: opts.source, ...how });
     if (this.health <= 0) {
       this.dead = true;

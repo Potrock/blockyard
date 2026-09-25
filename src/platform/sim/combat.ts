@@ -4,7 +4,8 @@ import type { EntitySim } from './entities';
 import type { Inventory, ItemSim } from './items';
 import type { SimInput } from './input';
 import { addBloom, canReload, damageAt, DEFAULT_GUN_RULES, gun, lookDir, pelletDirs, RAISE, rayBox, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunRules, type GunState, type Stance } from './guns';
-import type { BulletHit } from './hitscan';
+import type { BulletHit, Penetration } from './hitscan';
+import { fuseSteps, isThrowable, lobView, throwable, throwVelocity, type Throwable } from './throwables';
 
 /** What combat needs of the player it belongs to. */
 export interface Fighter {
@@ -26,12 +27,21 @@ export interface Fighter {
   readonly fx: FxApi;
   readonly hud: HudApi;
   hitMarker(kind: boolean | 'kill'): void;
-  /** Guns: a bullet's path (see `castBullet`), checked where targets were at host time `seen`. */
-  bullet(from: Vec3, dir: Vec3, range: number, seen: number | null): BulletHit;
+  /** Guns: a bullet's path (see `castBullet`), checked where targets were at host time `seen`; through walls with `pen`. */
+  bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, pen: Penetration | null): BulletHit;
   /** Guns: carve where a bullet hit a block (null when the world's blocks don't carve). */
   readonly carve: ((point: Vec3, dir: Vec3, opts: { radius: number; depth: number }) => void) | null;
   /** Guns: what everyone else sees and hears of a shot (the shooter's own screen showed it already). */
   shotSeen(shot: ShotWire, sound: string, at: Vec3): void;
+  /**
+   * Throwables: into the air (see `ThrowSim.launch`), named `key` on every screen, `mine` when
+   * their own screen flies it already; and what everyone else sees and hears of the throw.
+   */
+  launch(item: string, t: Throwable, from: Vec3, v: Vec3, fuse: number, key: string, mine: boolean): void;
+  /** Throwables: their screen threw one the host won't take (it vanishes there). */
+  refuse(key: string): void;
+  /** Host time (seconds). */
+  now(): number;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
 }
 
@@ -43,6 +53,11 @@ export interface ShotWire {
   ends: [number, number, number, number][];
   normals: ([number, number, number] | null)[];
   blocks: number[];
+  /**
+   * Per bullet, the walls it went through (wall-banging), if any did: each [in x, y, z, its face
+   * x, y, z, out x, y, z, that face x, y, z, the block].
+   */
+  walls?: number[][][];
 }
 
 /** What a melee attack needs (the bare fist is one, with no item behind it). */
@@ -59,6 +74,14 @@ export class Combat {
   shots = 0;
   /** The held item last tick (switching raises the new one and stops a reload). */
   private heldItem: string | null = null;
+  /** Throwables: the last throw their screen made that the host has taken (or turned down), and the host's own count. */
+  thrown = 0;
+  private madeHere = 0;
+  /** When they last threw (host time), for its `cooldown`. */
+  private lastThrow = -99;
+  /** A throwable being cooked with no screen to do it (a bot holding its key): which, and for how long; the keys held last tick. */
+  private cooking: { item: string; cooked: number; key: string | null } | null = null;
+  private keysWere = new Set<string>();
 
   constructor(
     private world: VoxelWorld,
@@ -79,6 +102,13 @@ export class Combat {
     this.drawing = false;
     this.charge = 0;
     this.heldItem = null;
+    this.cooking = null;
+    this.lastThrow = -99;
+  }
+
+  /** Cooking a throwable (a bot, holding its key): for the view and the gun, which waits. */
+  get isCooking(): boolean {
+    return this.cooking !== null;
   }
 
   get isDrawing(): boolean {
@@ -99,8 +129,9 @@ export class Combat {
     return state && { id: stack.item, gun: gun(def), state };
   }
 
-  update(dt: number, input: SimInput) {
-    const active = input.active;
+  /** `locked`: a weapons-locked freeze (`freeze(true, { weapons: true })`): the controls reach no weapon. */
+  update(dt: number, input: SimInput, locked = false) {
+    const active = input.active && !locked;
     this.cooldown = Math.max(0, this.cooldown - dt);
     const inv = this.me.inventory;
     if (active) {
@@ -121,10 +152,12 @@ export class Combat {
       if (now) now.cooldown = Math.max(now.cooldown, RAISE);
       this.heldItem = held;
     }
+    this.throwables(dt, input, def?.kind === 'throwable' ? stack!.item : null, locked);
     if (def?.kind === 'gun' && stack) {
       this.drawing = false;
       this.charge = 0;
-      this.gun(dt, input, stack.item, def);
+      // (Not while a throwable's being cooked.)
+      this.gun(dt, this.cooking ? input.without(0) : input, stack.item, def, active, locked);
       return;
     }
     if (!active) {
@@ -134,6 +167,10 @@ export class Combat {
     }
     if (def?.kind === 'bow') {
       this.bow(dt, input, def, stack!.item);
+    } else if (def?.kind === 'throwable') {
+      // Thrown with the fire button (see `throwables`), not swung.
+      this.drawing = false;
+      this.charge = 0;
     } else {
       this.drawing = false;
       this.charge = 0;
@@ -161,11 +198,10 @@ export class Combat {
    * (`PlayerInput.shots`): the host takes them as long as the gun could have fired them. Bots
    * (and anyone without a screen) fire here from the trigger.
    */
-  private gun(dt: number, input: SimInput, id: string, def: GunItem) {
+  private gun(dt: number, input: SimInput, id: string, def: GunItem, active: boolean, locked: boolean) {
     const st = this.me.inventory.gunState(id);
     if (!st) return;
     const g = gun(def);
-    const active = input.active;
     const trigger = active && input.button(0);
     st.aim = stepAim(g, st.aim, active && input.button(2), dt);
     st.cooldown = Math.max(0, st.cooldown - dt);
@@ -173,7 +209,8 @@ export class Combat {
     st.tokens = Math.min(this.rules.rateSlack, st.tokens + dt / g.interval);
     stepReload(g, st, dt, trigger);
     if (active && input.pressed('KeyR') && canReload(g, st)) this.reload(g, st);
-    const shots = input.shots;
+    // Locked, the shots a screen fired anyway are refused: no rounds go.
+    const shots = locked ? undefined : input.shots;
     if (shots) {
       for (const [serial, yaw, pitch, spread] of shots) {
         if (st.mag <= 0 || st.tokens < 0.75 || serial <= st.serial) continue;
@@ -198,7 +235,7 @@ export class Combat {
       }
     }
     // Empty: reload by itself.
-    if (this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st);
+    if (!locked && this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st);
   }
 
   private reload(g: Gun, st: GunState) {
@@ -218,21 +255,33 @@ export class Combat {
     this.shots++;
     const eye = this.me.eye;
     const dirs = pelletDirs(g, yaw, pitch, spread, serial);
-    const damage = new Map<Player | Entity, { amount: number; head: boolean; at: Vec3 }>();
+    const damage = new Map<Player | Entity, { amount: number; head: boolean; at: Vec3; through: number }>();
     const wire: ShotWire = { by: this.me.api.id, item: id, ends: [], normals: [], blocks: [] };
-    for (const dir of dirs) {
-      const hit = this.me.bullet(eye, dir, g.range, seen);
+    dirs.forEach((dir, i) => {
+      const hit = this.me.bullet(eye, dir, g.range, seen, g.penetration);
       wire.ends.push([hit.point.x, hit.point.y, hit.point.z, hit.target ? 2 : hit.block >= 0 ? 1 : 0]);
       wire.normals.push(hit.normal ? [hit.normal.x, hit.normal.y, hit.normal.z] : null);
       wire.blocks.push(hit.block);
-      // A block it hit loses a little of itself (the host's word: everyone's world takes it).
-      if (!hit.target && hit.block >= 0 && g.carve && this.me.carve) this.me.carve(hit.point, dir, g.carve);
-      if (!hit.target) continue;
-      const d = damage.get(hit.target) ?? { amount: 0, head: false, at: hit.point };
-      d.amount += damageAt(g, hit.dist, hit.head);
+      if (hit.walls.length) {
+        wire.walls ??= dirs.map(() => []);
+        wire.walls[i] = hit.walls.map((p) => [p.entry.x, p.entry.y, p.entry.z, p.normal.x, p.normal.y, p.normal.z, p.exit.x, p.exit.y, p.exit.z, p.out.x, p.out.y, p.out.z, p.block]);
+      }
+      // A block it hit loses a little of itself (the host's word: everyone's world takes it); a
+      // wall it went through, a hole where it went in and where it came out.
+      if (g.carve && this.me.carve) {
+        for (const p of hit.walls) {
+          this.me.carve(p.entry, dir, g.carve);
+          this.me.carve(p.exit, { x: -dir.x, y: -dir.y, z: -dir.z }, g.carve);
+        }
+        if (!hit.target && hit.block >= 0) this.me.carve(hit.point, dir, g.carve);
+      }
+      if (!hit.target) return;
+      const d = damage.get(hit.target) ?? { amount: 0, head: false, at: hit.point, through: 0 };
+      d.amount += damageAt(g, hit.dist, hit.head, hit.through);
       d.head ||= hit.head;
+      d.through = Math.max(d.through, hit.through);
       damage.set(hit.target, d);
-    }
+    });
     const look = lookDir(yaw, pitch);
     this.me.emit('shot', { player: this.me.api, weapon: id, from: eye, dir: look });
     this.me.shotSeen(wire, g.def.sounds?.use ?? 'gunshot', eye);
@@ -240,7 +289,7 @@ export class Combat {
     for (const [target, d] of damage) {
       if (!target.alive) continue;
       const was = target.health;
-      const opts = { source: this.me.api, knockback: g.def.knockback ?? 0, crit: d.head, weapon: id, headshot: d.head, from: eye, cause: 'gun' as const, part: d.head ? ('head' as const) : ('body' as const) };
+      const opts = { source: this.me.api, knockback: g.def.knockback ?? 0, crit: d.head, weapon: id, headshot: d.head, from: eye, cause: 'gun' as const, part: d.head ? ('head' as const) : ('body' as const), ...(d.through > 0 && { through: Math.round(d.through * 100) / 100 }) };
       // A hit that didn't land (protected, or a `damage` listener cancelled it) gets no marker.
       if (!target.damage(d.amount, opts)) continue;
       // Numbers for the shooter alone (a creature shows its own to everyone): what it took off them.
@@ -252,6 +301,115 @@ export class Combat {
       this.me.hitMarker(marker);
       this.me.audio.play(marker === 'kill' ? 'kill' : 'hitmarker', { pitch: marker === true ? 1.25 : 1 });
     }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Throwables
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Throwables. A person's screen cooks and throws its own (at once, flying it there) and sends
+   * each throw with its controls (`PlayerInput.throws`): the host takes it if they have one and
+   * aren't throwing faster than its `cooldown`, and flies it from where their screen threw it.
+   * With no screen (bots), holding a throwable's `key` (or, with it in hand, the fire button)
+   * cooks it here, and letting go throws it.
+   */
+  private throwables(dt: number, input: SimInput, inHand: string | null, locked: boolean) {
+    const sent = input.throws;
+    if (sent) {
+      for (const [serial, item, x, y, z, vx, vy, vz, cook] of sent) this.take(serial, item, { x, y, z }, { x: vx, y: vy, z: vz }, cook, locked);
+      return;
+    }
+    if (!input.active || locked) {
+      this.cooking = null;
+      this.keysWere.clear();
+      return;
+    }
+    const inv = this.me.inventory;
+    const down = new Set<string>();
+    if (this.cooking) {
+      const c = this.cooking;
+      c.cooked += dt;
+      const def = this.items.get(c.item);
+      const held = c.key ? input.isDown(c.key) : input.button(0);
+      if (!isThrowable(def) || inv.count(c.item) < 1) this.cooking = null;
+      else {
+        const t = throwable(def);
+        // Held too long: it goes off in the hand.
+        if (!held || (t.cook && c.cooked >= t.fuse)) {
+          this.cooking = null;
+          this.throwNow(c.item, t, this.me.yaw, this.me.pitch, c.cooked);
+        }
+      }
+    } else {
+      for (const s of inv.slots) {
+        const def = s ? this.items.get(s.item) : undefined;
+        if (!isThrowable(def) || !def.key) continue;
+        if (input.isDown(def.key)) down.add(def.key);
+        if (input.isDown(def.key) && !this.keysWere.has(def.key) && this.ready(throwable(def))) {
+          this.cooking = { item: s!.item, cooked: 0, key: def.key };
+          break;
+        }
+      }
+      const def = inHand ? this.items.get(inHand) : undefined;
+      if (!this.cooking && inHand && isThrowable(def) && input.buttonPressed(0) && this.ready(throwable(def))) this.cooking = { item: inHand, cooked: 0, key: null };
+      if (this.cooking) {
+        const d = this.items.get(this.cooking.item);
+        if (d?.sounds?.draw) this.me.audio.play(d.sounds.draw);
+      }
+    }
+    this.keysWere = down;
+  }
+
+  /** Long enough since the last throw. */
+  private ready(t: Throwable): boolean {
+    return this.me.now() - this.lastThrow >= t.cooldown;
+  }
+
+  /** A throw their screen made: taken, or turned away. */
+  /** Locked (a weapons-locked freeze), every throw is turned away. */
+  private take(serial: number, item: string, from: Vec3, v: Vec3, cook: number, locked: boolean) {
+    if (serial <= this.thrown) return;
+    this.thrown = serial;
+    const key = `${this.me.api.id}:${serial}`;
+    const def = this.items.get(item);
+    // A little slack on the cooldown: their screen's clock isn't ours.
+    if (locked || !isThrowable(def) || this.me.inventory.count(item) < 1 || this.me.now() - this.lastThrow < throwable(def).cooldown * 0.6) return this.me.refuse(key);
+    const t = throwable(def);
+    // From their eyes, give or take where their screen had them; no faster than it's thrown.
+    const eye = this.me.eye;
+    const start = Math.hypot(from.x - eye.x, from.y - eye.y, from.z - eye.z) < 2.5 ? from : eye;
+    const speed = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    const vel = !(speed > 0) ? throwVelocity(t, this.me.yaw, this.me.pitch) : speed > t.speed * 1.05 ? { x: (v.x / speed) * t.speed, y: (v.y / speed) * t.speed, z: (v.z / speed) * t.speed } : v;
+    this.me.inventory.take(item, 1);
+    this.lastThrow = this.me.now();
+    this.me.launch(item, t, start, vel, fuseSteps(t, cook), key, true);
+  }
+
+  /** A throw made here (a bot letting go of its key, `player.throw`): from their eyes along a view (as hard as `speed`). */
+  private throwNow(item: string, t: Throwable, yaw: number, pitch: number, cooked: number, speed = t.speed) {
+    if (!this.me.inventory.take(item, 1)) return false;
+    this.lastThrow = this.me.now();
+    this.me.launch(item, t, this.me.eye, throwVelocity(t, yaw, pitch, speed), fuseSteps(t, cooked), `${this.me.api.id}:h${++this.madeHere}`, false);
+    return true;
+  }
+
+  /** `player.throw`: one of theirs, now, along their view (or one given, or lobbed to land at a point). */
+  throwFromCode(item: string, opts: { at?: Vec3; yaw?: number; pitch?: number; cook?: number } = {}): boolean {
+    const def = this.items.get(item);
+    if (!isThrowable(def) || !this.me.api.alive || this.me.inventory.count(item) < 1) return false;
+    const t = throwable(def);
+    if (!this.ready(t)) return false;
+    let yaw = opts.yaw ?? this.me.yaw;
+    let pitch = opts.pitch ?? this.me.pitch;
+    let speed = t.speed;
+    if (opts.at) {
+      const lob = lobView(t, this.me.eye, opts.at);
+      if (!lob) return false;
+      ({ yaw, pitch, speed } = lob);
+    }
+    if (this.cooking?.item === item) this.cooking = null;
+    return this.throwNow(item, t, yaw, pitch, opts.cook ?? 0, speed);
   }
 
   // ---------------------------------------------------------------------------------------------
