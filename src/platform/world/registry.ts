@@ -157,8 +157,8 @@ export function destructibleIds(registry: Registry, o: DestructibleOptions): Uin
 /** A block's shape as `blockInfo` says it (a torch on a wall is a torch). */
 export function blockShape(d: BlockDef): BlockShape {
   if (d.shape !== 'model') return d.shape;
-  if (d.model === 'wall_torch' || d.model === '') return 'torch';
-  return d.model;
+  if (d.model === 'wall_torch') return 'torch';
+  return d.model || 'boxes';
 }
 
 /**

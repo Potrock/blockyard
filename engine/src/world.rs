@@ -297,7 +297,7 @@ impl World {
                         }
                     };
                     out[(dy * sz + dz) * sx + dx] = SOLID[b as usize] | over_fence;
-                    over_fence = shapes.tall as u8 & shapes.rises[b as usize];
+                    over_fence = shapes.rises[b as usize];
                 }
             }
         }
@@ -762,7 +762,8 @@ impl World {
                 if SHAPE[b as usize] != SHAPE_MODEL && damaged.is_none() {
                     return Some(t);
                 }
-                // A slab, a bed, a block with holes in it: only its boxes stop the ray.
+                // A slab, a bed, a block with holes in it: only its boxes stop the ray (a fence:
+                // the post and rails you see, not its taller collision).
                 if let Some((tb, _)) = ray_boxes(o, d, p, damaged.map_or_else(|| self.target_at(p[0], p[1], p[2], b), |d| &d.boxes)) {
                     if tb <= max_dist {
                         return Some(tb);
