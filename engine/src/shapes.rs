@@ -75,6 +75,8 @@ pub struct Shapes {
     pub anchor: [u8; 256],
     /// By block id, for fences and panes: a model per way it's joined (see `JOIN_EAST_WEST`).
     joined: Vec<Vec<Model>>,
+    /// By block id: 1 when it's solid and its collision rises into the cell above (a fence).
+    pub rises: [u8; 256],
     /// Some block's collision rises above its cell (a fence): bodies look a cell lower for it.
     pub tall: bool,
 }
@@ -319,9 +321,12 @@ fn model_of(b: &Block) -> Option<Model> {
     model_joined(b, 0)
 }
 
+/// A model as it's made: the boxes drawn, aimed at, collided with (if not those), lit flat.
+type Made = (Vec<Proto>, Vec<[u8; 6]>, Option<Vec<[u8; 6]>>, bool);
+
 /// Block `b`'s model, joined on the sides in `mask` if it's a fence or a pane.
 fn model_joined(b: &Block, mask: usize) -> Option<Model> {
-    let (parts, bounds, collide, flat_light): (Vec<Proto>, Vec<[u8; 6]>, Option<Vec<[u8; 6]>>, bool) = match b.model {
+    let (parts, bounds, collide, flat_light): Made = match b.model {
         ModelKind::None => return None,
         ModelKind::Torch => {
             let stick = Proto::new([7, 0, 7], [9, 10, 9], b.tex[0]).face(3, b.tex[3]);
@@ -456,7 +461,7 @@ pub(crate) fn build(blocks: &[Block], count: usize) -> Shapes {
     let mut joins = [0u8; 256];
     let mut anchor = [0u8; 256];
     let mut joined = Vec::with_capacity(256);
-    let mut tall = false;
+    let mut rises = [0u8; 256];
     for id in 0..256usize {
         let b = &blocks[id];
         let m = if id < count { model_of(b) } else { None };
@@ -483,10 +488,11 @@ pub(crate) fn build(blocks: &[Block], count: usize) -> Shapes {
         };
         joins[id] = kind;
         joined.push(if kind == 0 { Vec::new() } else { (0..16).filter_map(|mask| model_joined(b, mask)).collect() });
-        tall |= b.solid && m.as_ref().is_some_and(|m| m.collide.iter().any(|c| c[4] > 16));
+        rises[id] = (b.solid && m.as_ref().is_some_and(|m| m.collide.iter().any(|c| c[4] > 16))) as u8;
         models.push(m);
     }
-    Shapes { models, cover, joins, anchor, joined, tall }
+    let tall = rises.contains(&1);
+    Shapes { models, cover, joins, anchor, joined, rises, tall }
 }
 
 #[cfg(test)]
@@ -813,6 +819,10 @@ pub(crate) mod tests {
         assert!(w.raycast([3.2, 1.0 + 10.5 / 16.0, 2.0], [0.0, 0.0, 1.0], 6.0).is_none(), "between the rails");
         assert!(w.raycast_solid([3.2, 1.0 + 10.5 / 16.0, 2.0], [0.0, 0.0, 1.0], 6.0).is_none(), "sight between the rails");
         assert!(w.raycast_solid([4.5, 2.2, 2.0], [0.0, 0.0, 1.0], 6.0).is_none(), "sight over it");
+        // Creatures' pathfinding sees the cell over it as closed too.
+        let mut cells = [0u8; 3];
+        w.solid_box(4, 1, 4, 1, 3, 1, &mut cells);
+        assert_eq!(cells, [1, 1, 0]);
         // Break the stone: the last one stands free on that side.
         w.set(7, 1, 4, AIR);
         assert_eq!(parts(&w, 6), 3);

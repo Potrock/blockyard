@@ -161,7 +161,7 @@ Only solid, opaque, full blocks carve: not glass, leaves, slabs, stairs, torches
 
 ### Blocks of your own
 
-A game adds blocks in its definition and uses them by name, like the built-in ones: in blueprints and `world.structures`, `setBlock`, `placeBlock`, `breakBlock`, `blockInfo`, and the creative block picker. They're defined here rather than in `setup` (like `vehicles`) because every player's screen generates its terrain, structures included, and draws it; so each screen has them from the start, on a server too, and saves keep them by name. Sandbox has four:
+A game adds blocks in its definition and uses them by name, like the built-in ones: in blueprints and `world.structures`, `setBlock`, `placeBlock`, `breakBlock`, `blockInfo`, and the creative block picker. They're defined here rather than in `setup` (like `vehicles`) because every player's screen generates its terrain, structures included, and draws it; so each screen has them from the start, on a server too, and saves keep them by name. Sandbox has four plain ones (and shapes, below):
 
 ```ts
 import crate from './blocks/crate.png?url';
@@ -188,13 +188,16 @@ A texture is one of:
 - pixel art: `{ pixels: ['#.#.', '#.#.', '####', '#.#.'], palette: { '#': '#3b3f44' } }`, rows of characters each looked up in the palette (`.` or a character it hasn't got is clear), scaled to 16 x 16;
 - painted by code: `{ paint: (x, y) => (x === y ? '#fff' : null) }`, a colour per pixel (null: clear), row 0 at the top.
 
-Give one texture for every face, or face by face: `{ top, bottom, side }`, or one side (`north`, `south`, `east`, `west`), with `all` for any face not named. Every texture gets a normal map from its brightness (or its noise), so custom blocks catch the light like the built-in ones.
+Give one texture for every face, or face by face: `{ top, bottom, side }`, or one side (`north`, `south`, `east`, `west`), with `all` for any face not named; a block that faces a way also has a `front` and a `back` (below). Every texture gets a normal map from its brightness (or its noise), so custom blocks catch the light like the built-in ones.
 
 | Option | Default | |
 | --- | --- | --- |
 | `label` | the name in words | its name in the picker and `blockInfo` (`neon_sign` is "Neon Sign") |
 | `like` | | start from a built-in full block or plant, `{ like: 'stone', breakable: false }`: its textures, light and the rest, which anything given changes. `{ like: 'neon_red' }` is that block exactly, textures and all |
-| `shape` | `'cube'` | `'cross'` (two crossed planes, like flowers: walked through, broken at a touch, needs ground under it), `'slab'` (`name[type=top]` is the upper half), `'stairs'` (`name[facing=east,half=top]`); slabs and stairs are placed the way the built-in ones are |
+| `shape` | `'cube'` | `'cross'` (two crossed planes, like flowers: walked through, broken at a touch, needs ground under it), `'slab'` (`name[type=top]` is the upper half), `'stairs'` (`name[facing=east,half=top]`); slabs and stairs are placed the way the built-in ones are. Thin shapes: `'fence'`, `'pane'`, `'post'` (see *Shapes of your own*) |
+| `boxes` | | a shape of its own, boxes on the block's 16 x 16 x 16 grid (see *Shapes of your own*) |
+| `facing` | | it faces a way: `true` (four sides), `'all'` (up and down too) or `'axis'` (x, y or z, like a log); a cube, a `post` or `boxes` |
+| `climbable` | `false` | bodies climb it: a ladder, a vine |
 | `full` | none | a slab's full block, made by placing one slab on another |
 | `transparency` | `'opaque'` | `'cutout'`: light and sight go through the clear pixels (grates, leaves); `'transparent'`: like glass (faces between two of it aren't drawn). A pixel is there or not: half-clear colours show solid |
 | `solid` | `true` (a `cross`, false) | bodies collide with it |
@@ -207,7 +210,36 @@ Give one texture for every face, or face by face: `{ top, bottom, side }`, or on
 | `replaceable` | `false` (a `cross`, true) | placing a block into its cell replaces it |
 | `sounds` | the platform's | `{ break, place }`: sounds (built-in or `audio.define`d) when it's broken and placed |
 
-A game has room for 68 block variants of its own (a slab is two, stairs are eight), with ids after the built-in ones (187 to 254), in the order they're defined: `world.blockId('crate')` tells you one. Names are lower case, digits and `_`, and not a built-in block's. Ids needn't stay put: a save records the names of the ids it used, so a save outlives definitions that are reordered, added to or taken from (a block no longer defined becomes air), and a server's welcome tells each joining player its ids, so a player whose copy of the game is older still agrees with it (a block their copy hasn't got shows as a magenta "missing" block). Hotbars kept on a server keep them by name too.
+#### Shapes of your own
+
+A game's block can be thin, face a way, and be climbed, like the fences, windows, signs and ladders of Minecraft. The gallery (`?game=gallery`) has a yard of them east of its casino floor, and Sandbox has a fence, a glass pane, a beam, a ladder and a table in its picker:
+
+```ts
+blocks: {
+  picket_fence: { texture: 'oak_planks', shape: 'fence' },
+  glass_pane: { texture: 'glass', shape: 'pane', transparency: 'cutout' },
+  beam: { texture: { top: 'oak_log_top', bottom: 'oak_log_top', side: 'oak_log' }, shape: 'post', facing: 'axis' },
+  ladder: { texture: LADDER, boxes: [[0, 0, 14, 16, 16, 16]], facing: true, climbable: true, transparency: 'cutout' },
+  poster: { texture: { front: POSTER, all: 'oak_planks' }, boxes: [[1, 2, 15, 15, 14, 16]], facing: true, solid: false },
+  stove: { texture: { front: STOVE, top: 'stone', all: 'cobblestone' }, facing: true },
+  table: { texture: 'oak_planks', boxes: [[0, 13, 0, 16, 16, 16], [1, 0, 1, 3, 13, 3], [13, 0, 1, 15, 13, 3], [1, 0, 13, 3, 13, 15], [13, 0, 13, 15, 13, 15]] },
+}
+```
+
+- **`fence`**: a post 4/16 across, with two rails to each fence and solid block beside it (full blocks, not leaves; the full side of stairs). To bodies it's 1.5 blocks high, like Minecraft's, so nobody jumps it (creatures path round it); you aim at (and rays, sight and bullets stop at) the post and rails you see, and pass between the rails.
+- **`pane`**: a wall 2/16 thick from a post in the middle to each pane and solid block beside it (glass panes, iron bars). Alone it's a thin post.
+- **`post`**: a pillar 4/16 across. With `facing: 'axis'` it lies along x or z too: a beam.
+- **`boxes`**: your own, up to 16 boxes `[x0, y0, z0, x1, y1, z1]` on the 1/16 grid (0 to 16), written as it faces north if it faces. Bodies collide with them (if it's `solid`), you aim at them, and each face shows the part of its texture it covers, so a thin poster's front shows the whole picture and its edges a strip.
+
+Fences and panes join where they stand, from what's beside them, so placing or breaking a block next to one changes it without changing its id (one variant each). The thin shapes let light through; none of them carves (`world.destructible` carves full blocks only).
+
+**Facing.** `facing: true` makes four variants (`'sign[facing=east]'`), `'all'` six (`facing=up` and `down` too), `'axis'` three (`'beam[axis=x]'`, like logs). The block is written, textures and boxes, as it faces north (upright for `'axis'`): `front` is its north face and `back` its south, and turning it takes them round (a stove's front, a poster's picture, a chair's back). Named with a state, it goes as it is: in structures, `setBlock` and `placeBlock`. Placed by its plain name (`placeBlock`, the building kit, Sandbox), it faces `facing` if given; else out from the side of the block aimed at (a ladder or sign against a wall faces away from it); else, aimed at a floor or ceiling, up or down if it has those, or back toward whoever placed it. An `'axis'` block lies along the axis aimed along.
+
+**Climbing.** A `climbable` block (a ladder, a vine) where a body's feet are: pushing into something (the wall behind it, or the ladder's own boxes) or holding jump climbs at 2.6 blocks a second, sneaking holds on, and otherwise they slide down no faster than 2.4 (so a fall down a ladder never hurts); off the ground, sideways speed is held to 3 so they don't fly off it. It's part of the engine's player step, which a client predicting its own player runs too, so climbing online holds as well as walking. A climbable `cross` (a vine) hangs without ground under it. Creatures don't climb.
+
+**What bots can read.** `blockInfo(block).shape` is `'air'`, `'cube'`, `'cross'`, `'liquid'`, `'slab'`, `'stairs'`, `'torch'`, `'bed'`, `'fence'`, `'pane'`, `'post'` or `'boxes'`; `height` is how high bodies collide with it (0 if it isn't solid, 0.5 a bottom slab, 1 a top slab, stairs or a full block, 9/16 a bed, 1.5 a fence); `boxes` those boxes, in blocks (a fence or pane's post alone: its arms depend on what's beside it); and `climbable`. `world.collisionHeight(x, y, z)` says it at a position: a fence as it's joined, a carved block as what's left of it (an unloaded chunk counts as 1). A walker steps up 0.6 without jumping and jumps about 1.25.
+
+A game has room for 68 block variants of its own (a slab is two, stairs are eight, a facing block four or six), with ids after the built-in ones (187 to 254), in the order they're defined: `world.blockId('crate')` tells you one. Names are lower case, digits and `_`, and not a built-in block's. Ids needn't stay put: a save records the names of the ids it used, so a save outlives definitions that are reordered, added to or taken from (a block no longer defined becomes air), and a server's welcome tells each joining player its ids, so a player whose copy of the game is older still agrees with it (a block their copy hasn't got shows as a magenta "missing" block). Hotbars kept on a server keep them by name too.
 
 Under the hood `world/blocks.ts` turns the definitions into the engine's block variants (`engine.set_game_blocks`, in every engine instance: the host's, the page's, each terrain worker's) and into texture layers after the built-in ones, which `render/blocktextures.ts` paints on each screen (fetching the images). The built-in blocks keep their ids, so no existing world or save changes.
 
@@ -499,7 +531,7 @@ Without `breakTime`, mining takes a Minecraft-like time by material (`defaultBre
 - **`input.consume(button | key)`** claims an input for the rest of the frame. Your game's `update` runs before the built-in systems, so a click you handle and consume doesn't also swing the sword or eat the apple.
 - **`entities.raycast(origin, dir, reach)`** finds the mob under the crosshair (stopping at blocks); `world.raycast` finds the block.
 - **`hud.highlight(block, { progress })`** outlines a block on a player's screen, with Minecraft's break cracks at `progress` 0..1. **`hud.progress(0..1)`** is a ring round the crosshair.
-- **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone; `placeBlock` turns torches, slabs, stairs, beds and logs the way the player's aim and look say (see *Block shapes and states*). They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant or replaceable.
+- **`world.breakBlock` / `placeBlock`** break and place with debris, sounds and the `blockBreak` / `blockPlace` events (`{ x, y, z, block, by }`), and won't place a block inside anyone; `placeBlock` turns torches, slabs, stairs, beds, logs and a game's facing blocks the way the player's aim and look say (see *Block shapes and states* and *Shapes of your own*). They don't know your rules: that's the kit's job, or yours. **`world.blockInfo(block)`** says whether a block is solid, a liquid, a plant, replaceable or climbable, its `shape` and how high bodies collide with it (`height`, `boxes`); **`world.collisionHeight(x, y, z)`** says that at a position.
 - **`world.explode(center, radius, { filter, by })`**: `filter` decides which blocks an explosion takes (Bed Wars: only wool and wood placed this match).
 
 ## First-person view model

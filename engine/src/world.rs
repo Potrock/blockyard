@@ -271,13 +271,16 @@ impl World {
     }
 
     /// Copy the SOLID flag of every block in a box into `out` (x fastest, then z, then y).
-    /// Unloaded columns count as solid. One hash lookup per column keeps this fast.
+    /// Unloaded columns count as solid, and so does the cell over a fence (it's 1.5 high: nobody
+    /// jumps it). One hash lookup per column keeps this fast.
     pub fn solid_box(&self, x0: i32, y0: i32, z0: i32, sx: usize, sy: usize, sz: usize, out: &mut [u8]) {
+        let shapes = shapes();
         for dz in 0..sz {
             for dx in 0..sx {
                 let x = x0 + dx as i32;
                 let z = z0 + dz as i32;
                 let col = self.cols.get(&key(x >> 4, z >> 4));
+                let mut over_fence = 0;
                 for dy in 0..sy {
                     let y = y0 + dy as i32;
                     let b = if y < 0 {
@@ -293,7 +296,8 @@ impl World {
                             },
                         }
                     };
-                    out[(dy * sz + dz) * sx + dx] = SOLID[b as usize];
+                    out[(dy * sz + dz) * sx + dx] = SOLID[b as usize] | over_fence;
+                    over_fence = shapes.tall as u8 & shapes.rises[b as usize];
                 }
             }
         }

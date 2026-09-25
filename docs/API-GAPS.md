@@ -30,7 +30,8 @@ hurt. They're saved to do after the destructible micro-voxels.
    and adapted its bot brain (about 600 lines). *Fix:* `navgrid` and `shooterBot` kits.
 6. **Blocks.** Game blocks can't face a direction or be thin: no signs that face one way, no
    railings, posts, panes or ladders. *Fix:* a facing state with a `front` texture; `fence`,
-   `pane`, `post` and custom box shapes; a `climbable` flag.
+   `pane`, `post` and custom box shapes; a `climbable` flag. *Done:* `facing`, `front`/`back`,
+   `shape: 'fence' | 'pane' | 'post'`, `boxes`, `climbable` (PLATFORM.md, *Shapes of your own*).
 7. **Gun actions.** `action` is only `'pump' | 'bolt'`: there's no lever action and no hammer cock
    for a single-action revolver. *Fix:* `action` as a view animation, or add `'lever'`.
 8. **Biomes.** A natural world's biome can't be chosen: High Noon scanned 120 seeds for a desert.
@@ -41,7 +42,8 @@ hurt. They're saved to do after the destructible micro-voxels.
 10. **Poses per item.** Humanoid poses are set per model, not per gun: `reload.cycle` and the
     reload pose are shared by every gun. *Fix:* allow a `GunStance`/`HeldPose` on each item.
 11. **Block shape.** `blockInfo` has no shape, so bot pathing finds steps by the `_slab`/`_stairs`
-    suffix and misses game blocks. *Fix:* `blockInfo().shape` and a collision height.
+    suffix and misses game blocks. *Fix:* `blockInfo().shape` and a collision height. *Done:*
+    `blockInfo().shape`, `height`, `boxes`, `climbable`, and `world.collisionHeight(x, y, z)`.
 12. **Weapon lock and state.** During a freeze, players can still switch slots and fire (damage
     is cancelled, but ammo is spent), and there's no `player.frozen` or `player.reloading`.
     *Fix:* a weapons-locked freeze and read-only getters.
