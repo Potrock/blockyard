@@ -27,8 +27,8 @@ function yard(): Blueprint {
   return bp;
 }
 
-/** A Call of Blocky gun held dead steady (no spread): every shot on the same spot. */
-const steady = (id: string): GunItem => ({ ...(WEAPONS[id] as GunItem), spread: { hip: 0, aim: 0, move: 0, air: 0, bloom: 0 } });
+/** A Call of Blocky gun held dead steady (no spread): every shot on the same spot; and not through walls (carving alone). */
+const steady = (id: string): GunItem => ({ ...(WEAPONS[id] as GunItem), spread: { hip: 0, aim: 0, move: 0, air: 0, bloom: 0 }, penetration: undefined });
 
 const range = defineGame({
   id: 'carving',
@@ -144,8 +144,10 @@ export default async function damage() {
     check(same(world, mine.world), `${id}: the copies agree after the restart`);
   }
   const [held, rifle, smg, pistol, sniper] = report.map((r) => Number(r.split(' ')[1]));
-  check(held === 8, `a rifle held dead steady: eight (${report})`);
-  check(rifle >= 6 && rifle <= 10 && pistol >= 6 && pistol <= 10, `rifle and pistol: 6 to 10 shots to hole a wall (${report})`);
+  check(held === 8, `a rifle held dead steady (not wall-banging): eight (${report})`);
+  // The rifle and the pistol wall-bang (the pistol once the wall's thin enough): each bullet that
+  // goes through holes the far side too, so the two pits meet sooner.
+  check(rifle >= 3 && rifle <= 10 && pistol >= 3 && pistol <= 10 && rifle < held, `rifle and pistol: 3 to 10 shots to hole a wall, the rifle sooner through it (${report})`);
   check(smg > rifle && smg <= 16, `the SMG takes a few more (${report})`);
   check(sniper <= 2, `the sniper two (${report})`);
 

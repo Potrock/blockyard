@@ -73,6 +73,9 @@ export class Effects implements FxApi {
   private decalMat = new THREE.MeshBasicMaterial({ color: 0x0b0b0d, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   private glowGeo = new THREE.PlaneGeometry(1, 1);
 
+  /** Heard of each explosion shown (rubble thrown by it). */
+  onBlast: ((at: Vec3, size: number) => void) | null = null;
+
   constructor(
     private particles: Particles,
     private hud: GameHud,
@@ -83,12 +86,13 @@ export class Effects implements FxApi {
 
   explosion(at: Vec3, opts: { size?: number; color?: string } = {}) {
     const k = Math.max(0.2, opts.size ?? 1);
+    this.onBlast?.(at, k);
     const fire = linearColor(opts.color ?? '#ff9a3c');
     const p = this.particles;
     // White-hot core, a fireball, rising smoke and flying sparks.
     p.burstColor(at.x, at.y, at.z, [1, 0.95, 0.8], { count: Math.round(10 * k), speed: 2.5 * k, size: 0.5 * k, glow: 2, life: 0.25, drag: 4, gravity: 0, spread: 0.4 * k, up: 0, collide: false });
     p.burstColor(at.x, at.y, at.z, fire, { count: Math.round(28 * k), speed: 6 * k, size: 0.35 * k, glow: 1.4, life: 0.55, drag: 3.5, gravity: -1, spread: 0.8 * k, up: 0.5, collide: false });
-    p.burstColor(at.x, at.y, at.z, [0.05, 0.045, 0.04], { count: Math.round(18 * k), speed: 2.6 * k, size: 0.55 * k, glow: 0, life: 1.8, drag: 1.8, gravity: -1.5, spread: 1.2 * k, up: 1, collide: false });
+    p.burstColor(at.x, at.y, at.z, [0.13, 0.12, 0.11], { count: Math.round(18 * k), speed: 2.6 * k, size: 0.5 * k, glow: 0, life: 1.8, drag: 1.8, gravity: -1.5, spread: 1.2 * k, up: 1, collide: false });
     p.burstColor(at.x, at.y, at.z, [1, 0.7, 0.3], { count: Math.round(14 * k), speed: 14 * k, size: 0.07, glow: 1.5, life: 1.1, drag: 0.6, gravity: 12, spread: 0.5, up: 2, collide: true });
     if (k >= 2) this.shockwave(at, 2.5 * k, opts.color ?? '#ffb347');
     const cam = this.cameraPos?.();

@@ -183,6 +183,8 @@ const STYLES: Record<HoldStyle, StyleDef> = {
   polearm: { rotation: [0, 0, 0], scale: 0.85, grip: [8, 8], translation: [0, 0, 0], use: 'jab' },
   // Two hands on a gun: at the hip, up to the eye, across the chest (see `gunRest`).
   gun: { rotation: [0, 0, 0], scale: 0.42, grip: [8, 8], translation: [0, 0, 0], use: 'fire' },
+  // A throwable up by the shoulder, ready to go (a sprite: raised and turned toward you).
+  throw: { rotation: [-15, -60, 20], scale: 0.5, grip: [8, 11], translation: [-1.5, 3, 1.5], use: 'toss' },
 };
 
 /**
@@ -563,6 +565,9 @@ const MODEL_GRIPS: Partial<Record<HoldStyle, ModelGrip>> = {
   axe: { fist: [0.38, -0.5, -0.78], axis: [-0.2, 0.85, -0.48], face: [-0.94, 0, 0.33], forearm: [0.4, -0.7, 0.6], hand: 0.8, scale: 0.55 },
   // Upright in the fist, leaning back a little, label side to you.
   item: { fist: [0.34, -0.42, -0.7], axis: [-0.1, 0.99, 0.06], face: [-0.4, 0, 0.92], forearm: [0.35, -0.75, 0.55], hand: 0.8, scale: 0.5 },
+  // Wound up to throw: the fist up at the right, level with the eyes and a little back, the
+  // throwable standing in it, the forearm down toward the elbow below.
+  throw: { fist: [0.36, -0.12, -0.52], axis: [-0.15, 0.97, 0.18], face: [-0.5, 0, 0.87], forearm: [0.2, -0.9, 0.4], hand: 0.8, scale: 0.42 },
 };
 
 /** Holding a 3D model in one hand (see `MODEL_GRIPS`). */
@@ -854,6 +859,17 @@ const BUILTIN: Record<string, Anim> = {
     duration: 0.3,
     keys: [{ t: 0 }, { t: 0.3, wrist: [-1.1, 0, 0], move: [-0.12, 0.08, -0.3], ease: 'out' }, { t: 1, ease: 'inOut' }],
   }),
+  // A throw from the `throw` pose: a last cock back, then the arm whips forward and across and
+  // follows through down out of sight (the throwable's gone from the hand by then).
+  toss: compile({
+    duration: 0.34,
+    keys: [
+      { t: 0 },
+      { t: 0.14, hand: [-0.35, 0.1, 0.1], move: [0.03, 0.05, 0.08], ease: 'out' },
+      { t: 0.38, hand: [1.1, 0.25, -0.2], move: [-0.2, -0.02, -0.42], ease: 'in' },
+      { t: 1, hand: [1.5, 0.3, -0.3], move: [-0.22, -0.75, -0.25], ease: 'out' },
+    ],
+  }),
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -923,6 +939,8 @@ export class ViewModel implements ViewModelApi {
 
   private held: Held = { kind: 'empty' };
   private pending: Held | null = null;
+  /** An animation to play once the item coming up is in hand (a throw made as it rose). */
+  private queued: string | null = null;
   private style: StyleDef | null = null;
   private styleName: HoldStyle | null = null;
   private hold: HoldSpec = {};
@@ -1149,6 +1167,12 @@ export class ViewModel implements ViewModelApi {
     else if (this.held.kind === 'block') anim = 'swing';
     else anim = 'punch';
     this.play(anim, { power });
+  }
+
+  /** Throw what's in hand (the `toss`), as soon as it's in hand if it's still coming up. */
+  toss() {
+    if (this.pending) this.queued = 'toss';
+    else this.play('toss');
   }
 
   /** A plain swing (attacking with something that isn't a weapon). */
@@ -1563,6 +1587,8 @@ export class ViewModel implements ViewModelApi {
     if (this.pending && this.height < 0.1) {
       this.apply(this.pending);
       this.pending = null;
+      if (this.queued) this.play(this.queued);
+      this.queued = null;
     }
     this.downT = THREE.MathUtils.clamp(this.downT + (input.down ? dt : -dt) / 0.4, 0, 1);
     const down = this.downT * this.downT * (3 - 2 * this.downT);

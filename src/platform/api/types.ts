@@ -740,8 +740,22 @@ export interface WorldApi {
    * Blow a ragged sphere out of the world (bedrock and liquids survive) with debris and an
    * explosion. `filter` decides which blocks go (e.g. only ones placed this match); `by` is
    * passed on to the `blockBreak` events. Returns blocks removed.
+   *
+   * In a world with destructible blocks (`world.destructible`) it blows a crater instead: the
+   * destructible blocks lose a ragged sphere of little voxels (a wall is bitten into, a thin one
+   * holed), glass and the like within `radius` break whole, and what isn't destructible (the
+   * ground under the line, `except`) stands. Returns the blocks removed altogether.
+   *
+   * With `damage` it hurts too: players and creatures within `reach` blocks (default twice the
+   * radius) take `damage` (or `[middle, edge]`: falling off from the middle to the edge of the
+   * reach), none behind a wall, and are thrown back by `knockback` (default 1, less further out).
+   * The hits' `cause` is `'explosion'`, from `by`, with `weapon`.
    */
-  explode(center: Vec3, radius: number, opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor }): number;
+  explode(
+    center: Vec3,
+    radius: number,
+    opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor; damage?: number | [middle: number, edge: number]; reach?: number; knockback?: number; weapon?: string },
+  ): number;
   /**
    * Carve little voxels out of destructible blocks (`world.destructible`): a rounded channel
    * from `point` along `dir`, `depth` blocks long (default 0.2) and `radius` round (default 0.1),
@@ -1005,6 +1019,8 @@ export interface DamageOptions {
   cause?: DamageCause;
   /** The part of the target hit, when it's known (a bullet knows). */
   part?: 'head' | 'body';
+  /** Blocks of wall a bullet went through before it hit (wall-banging, a gun's `penetration`). */
+  through?: number;
 }
 
 export interface PlayerApi {
@@ -1109,6 +1125,14 @@ export interface PlayerApi {
   readonly abilities: Record<string, any>;
   /** Ignore damage for this long (spawn protection); 0 ends it. */
   protect(seconds: number): void;
+  /**
+   * Throw one of their throwables (`kind: 'throwable'`, see `ThrowableItem`) from their eyes, as if
+   * they'd thrown it themselves: along where they look (or `yaw` / `pitch`), or lobbed to land at
+   * `at` (the arc worked out for its speed; the lower one, or none if it can't reach). `cook` is
+   * seconds of its fuse already burnt. It takes one from their inventory; false if they have none,
+   * they're dead, or they threw one less than its `cooldown` ago. Bots throw this way.
+   */
+  throw(item: string, opts?: { at?: Vec3; yaw?: number; pitch?: number; cook?: number }): boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1166,8 +1190,9 @@ export interface BotControls {
  * - `polearm`: two-handed, low at the right with the tip just under the crosshair (pikes, spears).
  * - `gun`: two hands on a gun (guns' default): at the hip, up to the eye to aim down the sights,
  *   down and across the chest to sprint.
+ * - `throw`: a throwable (their default), up by the shoulder ready to throw; it's thrown with `toss`.
  */
-export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm' | 'gun';
+export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm' | 'gun' | 'throw';
 
 /**
  * A 3D held item made of boxes, for things a 16x16 sprite can't do (pikes, staffs, shields).
@@ -1375,6 +1400,10 @@ export interface ItemSounds {
   hit?: SoundName;
   /** Starting to draw a bow. Default `bow_draw`. */
   draw?: SoundName;
+  /**
+   * Throwables use `draw` for pulling the pin (none by default), `use` for the throw (`whoosh`)
+   * and `hit` for each bounce (`arrow_hit`, quiet); a molotov's `hit` is its bottle breaking.
+   */
 }
 
 export interface MeleeItem extends ItemBase {
@@ -1475,6 +1504,64 @@ export interface GunItem extends ItemBase {
    * gun doesn't carve.
    */
   carve?: { radius?: number; depth?: number } | false;
+  /**
+   * Wall-banging: bullets go through walls with up to `depth` blocks of material in them all told
+   * (a block-thick wall head on is 1, at a slant more; what's been shot out of it doesn't count),
+   * losing `damageLoss` of their damage for each block they go through (default 0.4; 1 would
+   * lose it all in a block). Bedrock and blocks that can't be broken stop them. They leave a hole
+   * where they go in and where they come out. Off by default.
+   */
+  penetration?: { depth: number; damageLoss?: number };
+}
+
+/**
+ * Something thrown: a grenade, a molotov. Hold its `key` (or, with it in hand, the fire button) to
+ * pull the pin, let go to throw it where you look, lobbed a little. It flies, bounces and rolls
+ * on the blocks, and goes off when its `fuse` is out (or, with `impact`, when it first hits
+ * something): a `blast` (damage falling off from its middle, a push, a crater in destructible
+ * walls) and/or a `fire` that burns a while.
+ *
+ * The thrower's own screen throws it at once and flies it there; the host flies it the same way
+ * (the flight is worked out step by step from the same blocks, so it lands in the same place) and
+ * decides when and where it goes off. Everyone else sees it fly too, and a live one near them
+ * gets a warning marker. `player.throw` throws one from code (bots).
+ */
+export interface ThrowableItem extends ItemBase {
+  kind: 'throwable';
+  /** Seconds from the pin to the blast (default 3). With `impact`, the longest it flies before it goes off anyway. */
+  fuse?: number;
+  /** The fuse burns while it's held (cooking it; held too long, it goes off in the hand). Default true, unless `impact`. */
+  cook?: boolean;
+  /** It goes off where it first hits a block or someone (a molotov), rather than bouncing until the fuse is out. */
+  impact?: boolean;
+  /** A key that throws it whatever's in hand (hold to cook, let go to throw), e.g. `'KeyG'`. The mouse wheel skips it in the hotbar. */
+  key?: string;
+  /** Blocks a second it leaves the hand at (default 20), lobbed `lift` degrees above where they look (default 7). */
+  speed?: number;
+  lift?: number;
+  /**
+   * How it flies and lands: `gravity` (blocks/s², default 24), `bounce` (0..1 of its speed off a
+   * block it hits head on, default 0.4), `friction` (0..1 of its speed along a surface it hits,
+   * lost; and rolling to a stop, default 0.35), `drag` (0.1), and its `radius` (0.1 blocks).
+   */
+  physics?: { gravity?: number; bounce?: number; friction?: number; drag?: number; radius?: number };
+  /** Seconds between throws (default 0.8). */
+  cooldown?: number;
+  /**
+   * The blast (see `world.explode`): `damage` (or `[middle, edge]`, falling off) to everyone within
+   * `radius` blocks and not behind a wall, the thrower too; `knockback` (default 1); a crater
+   * `carve` blocks round (a destructible world's walls bitten into; in any other, whole blocks
+   * blown out; default 0, none).
+   */
+  blast?: { radius: number; damage: number | [middle: number, edge: number]; knockback?: number; carve?: number };
+  /**
+   * Fire where it goes off (a molotov): flames on the ground `radius` blocks round for `duration`
+   * seconds, burning anyone standing in them for `damage` a second (not behind a wall). `color`
+   * tints the flames.
+   */
+  fire?: { radius: number; duration: number; damage: number; color?: string };
+  /** What it trails as it flies (a lit rag's flame, a fuse's sparks): a colour, or none (default). */
+  trail?: string;
 }
 
 /**
@@ -1550,7 +1637,7 @@ export interface MiscItem extends ItemBase {
   kind: 'misc';
 }
 
-export type ItemDefinition = MeleeItem | BowItem | GunItem | ConsumableItem | MiscItem;
+export type ItemDefinition = MeleeItem | BowItem | GunItem | ThrowableItem | ConsumableItem | MiscItem;
 
 /** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
 /**
@@ -1591,6 +1678,22 @@ export interface ItemApi {
   clearPickups(): void;
   /** Register a custom sprite / skin atlas from any canvas (e.g. drawn with Canvas 2D). */
   atlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels): void;
+  /**
+   * Throwables in the air (or come to rest, waiting to go off), and the fires they started: what
+   * a bot keeps away from. `radius` is how far one reaches (its blast's, or its fire's); `left`,
+   * seconds until it goes off (a fire: until it's out).
+   */
+  readonly thrown: readonly ThrownInfo[];
+  readonly fires: readonly { position: Vec3; radius: number; left: number; by: Player }[];
+}
+
+/** A throwable in the air, as `items.thrown` lists it. */
+export interface ThrownInfo {
+  item: string;
+  position: Vec3;
+  by: Player;
+  radius: number;
+  left: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2152,7 +2255,10 @@ export type BuiltinSound =
   | 'gun_empty'
   | 'gun_cycle'
   | 'hitmarker'
-  | 'kill';
+  | 'kill'
+  | 'bounce'
+  | 'glass'
+  | 'fire';
 
 /** A built-in sound, or one a game added with `audio.define`. */
 export type SoundName = BuiltinSound | (string & {});
@@ -2216,10 +2322,16 @@ export interface EnvApi {
 export interface HitDetails {
   weapon?: string;
   headshot?: boolean;
+  /** Blocks of wall the bullet went through first (wall-banging). */
+  through?: number;
 }
 
-/** What did some damage: a gun's bullet, a melee hit (a blade, a fist, a mob's swing), a projectile (an arrow, a fireball), or the world (a fall, `'world'` damage). */
-export type DamageCause = 'gun' | 'melee' | 'projectile' | 'world';
+/**
+ * What did some damage: a gun's bullet, a melee hit (a blade, a fist, a mob's swing), a projectile
+ * (an arrow, a fireball), an explosion (`world.explode` with `damage`, a grenade), fire (a molotov's
+ * flames), or the world (a fall, `'world'` damage).
+ */
+export type DamageCause = 'gun' | 'melee' | 'projectile' | 'explosion' | 'fire' | 'world';
 
 /**
  * Damage about to land on a player or a creature (the `damage` event), before armour and before

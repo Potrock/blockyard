@@ -98,6 +98,12 @@ export interface PlayerInput {
    * shot the gun could have fired and decides what it hit.
    */
   shots?: [number, number, number, number][];
+  /**
+   * Throwables: the throws this client made with these controls, each [serial, item, x, y, z,
+   * vx, vy, vz, seconds cooked]: from where, how fast. It flies them at once; the host takes each
+   * one they could have thrown and flies it the same way, and decides when and where it goes off.
+   */
+  throws?: [number, string, number, number, number, number, number, number, number][];
   /** The host time (`SimFrame.t`) of what this client was showing when it made these controls: shots hit where targets were then. */
   seen?: number;
 }

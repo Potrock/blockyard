@@ -7,9 +7,12 @@ import { MemoryStore } from './host/store';
 import { FrameBuffer } from './client/interp';
 import { Predictor } from './client/predict';
 import { GunController, type FiredShot } from './client/guns';
+import { FlightView, ThrowController } from './client/throwables';
+import { flightWorld, fuseSteps, isThrowable, throwable } from './sim/throwables';
+import { Rubble, damageTaken } from './render/rubble';
 import { freshMemory, resolveMovement, type MoveTune } from './sim/movement';
 import { assistOf, gun as gunOf, isGun, moveMods, playerBoxes, rayBox, resolveGunRules, DEG, type Assist, type Gun, type GunRules } from './sim/guns';
-import { rayHit } from './sim/worldquery';
+import { bulletPath, type WallPass } from './sim/hitscan';
 import type { ShotWire } from './sim/combat';
 import { ClientMovers, propPose } from './client/movers';
 import { heading, toWorld } from './sim/movers';
@@ -45,13 +48,13 @@ import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
 import type { Sim, SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
-import { newRoomCode, ROOM_CODE, type HostBatch, type SaveState, type TimedBatch } from './net/protocol';
+import { newRoomCode, ROOM_CODE, type HostBatch, type PlayerInput, type SaveState, type TimedBatch } from './net/protocol';
 import { clipFrame, type ClipFrame, type EntityFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
-import type { BlockRef, GameContext, GameDefinition, GunItem, ItemDefinition, ItemStack, PadAction, PadButton, Vec3 } from './api/types';
+import type { BlockRef, GameContext, GameDefinition, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, Vec3 } from './api/types';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -206,6 +209,16 @@ export class Runtime {
   private gunRules: GunRules;
   /** Shots fired and not yet sent (a tick was still on its way to a worker). */
   private shotQueue: [number, number, number, number][] = [];
+  /** Throwables: cooked and thrown on this screen at once; the throws not yet sent. */
+  private throwsCtl!: ThrowController;
+  private throwQueue: NonNullable<PlayerInput['throws']> = [];
+  /** Throwables in the air (ours, and everyone's), and the fires they start. */
+  private flights!: FlightView;
+  /** Chips and chunks knocked out of blocks, settling as little cubes. */
+  private rubble!: Rubble;
+  /** Damage this batch brought (rubble is thrown once the batch's explosions are known), and those explosions. */
+  private damageSeen: Uint8Array[] = [];
+  private blasts: { at: Vec3; size: number; age: number }[] = [];
   /** This frame's shots, drawn once the hand is placed (their tracers leave its muzzle). */
   private ownShots: FiredShot[] = [];
   /** The host time of the frame last drawn (shots hit where others were then). */
@@ -398,6 +411,8 @@ export class Runtime {
       return id !== 255 && (this.registry.blocks[id]?.solid ?? false);
     });
     this.renderer.opaqueScene.add(this.particles.points);
+    this.rubble = new Rubble((x, y, z) => world.point_solid(x, y, z), this.renderer.uniforms.uSunDir);
+    this.renderer.opaqueScene.add(this.rubble.mesh);
 
     const icons = new Map<number, string>();
     for (const b of this.registry.blocks) {
@@ -451,6 +466,9 @@ export class Runtime {
     if (!this.walker) this.hud.setHotbarVisible(false);
     this.debug = new DebugOverlay(this.ui);
     this.fx = new Effects(this.particles, this.gameHud, this.renderer.fxScene, this.sfx, () => this.camera.position);
+    this.fx.onBlast = (at, size) => this.blasts.push({ at: { x: at.x, y: at.y, z: at.z }, size, age: 0 });
+    this.throwsCtl = new ThrowController(this.content.items);
+    this.flights = new FlightView({ content: this.content, graphics: this.graphics, scene: this.renderer.entityScene, fx: this.fx, sfx: this.sfx, hud: this.gameHud, world: flightWorld(world, this.registry) });
 
     this.propView = new PropView({
       shared: this.renderer.uniforms,
@@ -639,8 +657,18 @@ export class Runtime {
       if (!def) return;
       const face = def.tex[0];
       this.particles.burst(x, y, z, this.textures.albedoData.subarray(face * 1024, face * 1024 + 1024), def.tint ? DEFAULT_TINT : null);
+      this.rubbleFromBlock(x, y, z, id);
     } else if (method === 'shot') {
       this.othersShot(args[0] as ShotWire);
+    } else if (method === 'thrown') {
+      // Someone else's throw (ours flies already): flown here from the host's word.
+      const [key, item, , x, y, z, vx, vy, vz, fuse] = args as [string, string, string, number, number, number, number, number, number, number];
+      this.flights.add(key, item, { x, y, z }, { x: vx, y: vy, z: vz }, fuse);
+    } else if (method === 'thrownEnd') {
+      this.flights.end(args[0] as string, args[1] as [number, number, number] | null);
+    } else if (method === 'fire') {
+      const [id, x, y, z, radius, duration, color] = args as [number, number, number, number, number, number, string];
+      this.flights.fire(id, { x, y, z }, radius, duration, color);
     } else if (method === 'reset') {
       // A restart: everything the game put on screen goes.
       this.guns.reset();
@@ -651,6 +679,9 @@ export class Runtime {
       this.gameHud.clear();
       this.highlight.set(null);
       this.fx.clear();
+      this.flights.clear();
+      this.throwsCtl.reset();
+      this.rubble.clear();
     }
   }
 
@@ -694,6 +725,7 @@ export class Runtime {
           break;
         case 'damage':
           this.chunks.applyDamage(e.data);
+          if (this.worldReady) this.damageSeen.push(e.data);
           break;
         case 'revert':
           this.chunks.revertEdits();
@@ -721,8 +753,10 @@ export class Runtime {
           break;
       }
     }
-    // The batch's shots show together.
+    // The batch's shots show together, and the rubble they knocked out flies.
     this.chunks.flushDamage();
+    for (const d of this.damageSeen) this.rubbleFromDamage(d);
+    this.damageSeen = [];
     if (b.frame) {
       this.frameData = b.frame;
       this.ticking = false;
@@ -811,6 +845,7 @@ export class Runtime {
       skin: null,
       model: null,
       color: null,
+      throws: 0,
       ride: null,
       orbit: null,
     };
@@ -1326,8 +1361,10 @@ export class Runtime {
         prevSelected !== undefined && prevSelected !== String(selected),
       );
     }
-    // The held item: its 3D model, its sprite extruded, a block, or the bow's draw frame.
-    const stack = slots[selected];
+    // The held item: its 3D model, its sprite extruded, a block, or the bow's draw frame; a
+    // throwable being thrown with its key, over whatever's in hand.
+    const quick = this.throwsCtl.inHand;
+    const stack = quick ? { item: quick, count: 1 } : slots[selected];
     const def = stack ? this.content.items.get(stack.item) : undefined;
     const drawn = def?.kind === 'bow' && hand.drawing && hand.charge > 0.25;
     const heldKey = `${stack?.item ?? ''}|${drawn}`;
@@ -1355,7 +1392,7 @@ export class Runtime {
       this.held.swapItemGeometry(look.geometry);
       return;
     }
-    const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : def.kind === 'gun' ? 'gun' : 'item';
+    const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : def.kind === 'gun' ? 'gun' : def.kind === 'throwable' ? 'throw' : 'item';
     // Held as a model (boxes or glTF), posed by its grip; else as its sprite.
     const hold = look.model ? { ...def.hold, model: look.model } : def.hold ?? {};
     this.held.setItem(look.geometry, look.albedo, look.emissive, hold, style, look.points, look.surface);
@@ -1462,8 +1499,9 @@ export class Runtime {
     }
     // The held gun fires on this screen at once; its shots go with the next controls sent.
     const latest = this.walker && this.itemMode ? this.mine(this.frameData) : undefined;
-    // (A weapons-locked freeze: the gun doesn't answer here either, so nothing is fired to be refused.)
+    // (A weapons-locked freeze: the gun and throwables don't answer here either, so nothing is fired to be refused.)
     this.ownShots = latest ? this.gunFrame(dt, active && !latest.locked, latest) : [];
+    if (latest) this.throwFrame(dt, active && !latest.locked, latest);
     for (const shot of this.ownShots) this.shotQueue.push([shot.serial, shot.yaw, shot.pitch, shot.spread]);
     // A server keeps its own clock: it gets the controls every frame. Otherwise one tick at a time:
     // while one is on its way, frame time (and input) adds up for the next. In this page the
@@ -1557,6 +1595,7 @@ export class Runtime {
     if (me.health < this.lastHealth && this.lastHealth > 0 && this.input.device === 'pad' && this.settings.vibration) rumble(0.55, 0.3, 170);
     this.lastHealth = me.health;
     this.pickupView.sync(f.pickups, dt);
+    this.flights.update(dt, this.server ? started : running, this.camera);
     // Our own vehicle's model where prediction has it, not where the (older) frame does.
     const own = this.vehicles.active && this.vehicles.prop !== null ? new Map([[this.vehicles.prop, this.vehicles.pose()]]) : undefined;
     this.propView.sync(f.props, dt, { clock: f.clock, me: this.playerId, inputTime: (seq) => this.inputTimes.get(seq) ?? null, now: now / 1000, camera: this.camera.position }, own);
@@ -1586,11 +1625,15 @@ export class Runtime {
     this.light.copy(this.probe);
     this.particles.setLight(this.light);
     this.particles.update(dt);
+    this.rubble.setLight(this.light);
+    this.rubble.update(dt);
+    for (let i = this.blasts.length - 1; i >= 0; i--) if ((this.blasts[i].age += dt) > 0.3) this.blasts.splice(i, 1);
     this.fx.update(dt);
     this.held.setLight(this.probe);
     if (this.walker) this.updateHand(dt, me);
     this.drawOwnShots();
     this.gunHud(me);
+    this.throwHud(me);
     if (this.gameHud.wantsLocal) this.gameHud.setLocal(this.localState(me));
     this.gameHud.holdScoreboard(this.mode === 'playing' && this.input.isDown('Tab'));
     // Camera effects: shake and the death tilt (which rights itself after a moment, for someone
@@ -1696,10 +1739,12 @@ export class Runtime {
   }
 
   /** Shots fired since the last controls sent go with these ones, and what this screen is showing. */
-  private withShots<T extends { shots?: [number, number, number, number][]; seen?: number }>(input: T): T {
+  private withShots<T extends { shots?: [number, number, number, number][]; throws?: PlayerInput['throws']; seen?: number }>(input: T): T {
     if (this.walker && this.itemMode) {
       input.shots = this.shotQueue;
       this.shotQueue = [];
+      input.throws = this.throwQueue;
+      this.throwQueue = [];
     }
     input.seen = this.shownT;
     return input;
@@ -1713,10 +1758,12 @@ export class Runtime {
     if (!this.guns.state) return [];
     const p = this.predictor?.shown() ?? me;
     const body = { moving: Math.hypot(p.vx, p.vz) / Math.max(1, this.tune.params[0]), air: !p.onGround, crouch: p.sneaking, sprinting: p.sprinting, dead: me.dead };
+    // (Not while a throwable's being cooked: the hand's on it.)
+    const cooking = this.throwsCtl.cooking !== null || this.throwsCtl.tossed !== null;
     const c = {
       active,
-      trigger: this.input.button(0),
-      triggerPressed: this.input.clickedThisFrame(0),
+      trigger: this.input.button(0) && !cooking,
+      triggerPressed: this.input.clickedThisFrame(0) && !cooking,
       aim: this.input.button(2),
       reload: this.input.keyThisFrame('KeyR'),
     };
@@ -1757,36 +1804,34 @@ export class Runtime {
     const others = (this.frameData?.players ?? []).filter((p) => p.id !== this.playerId && !p.dead);
     for (const shot of this.ownShots) {
       shot.dirs.forEach((d, i) => {
-        const end = this.bulletEnd(eye, d, g.range, others);
-        if (def.tracer !== false && (i === 0 || i % 3 === 0)) this.fx.tracer(from, end.point, def.tracer ?? '#ffd27a');
+        const end = this.bulletEnd(eye, d, g.range, others, g.penetration);
+        const tracer = def.tracer === false ? null : (def.tracer ?? '#ffd27a');
+        const traced = tracer !== null && (i === 0 || i % 3 === 0);
+        if (traced) this.fx.tracer(from, end.point, tracer);
+        // Through a wall: a hole going in, and out the far side (chips flying, a tracer on from there).
+        for (const p of end.walls) this.wallBang(def, p.entry, p.normal, p.exit, p.out, p.block, traced ? end.point : null);
         if (end.block >= 0) this.fx.impact(end.point, end.normal, this.blockColor(end.block), false, !this.carves(def, end.block, end.point, end.normal));
       });
     }
     this.ownShots = [];
   }
 
-  /** Where a bullet from this screen lands: a block (through foliage), or someone drawn in the way. */
-  private bulletEnd(o: Vec3, d: Vec3, range: number, others: PlayerFrame[]): { point: Vec3; normal: Vec3 | null; block: number } {
-    let end = range;
-    let normal: Vec3 | null = null;
-    let block = -1;
-    let from = o;
-    let travelled = 0;
-    for (let i = 0; i < 12; i++) {
-      const h = rayHit(this.chunks.world, from, d, range - travelled);
-      if (!h) break;
-      const b = this.registry.blocks[h.block];
-      const along = (h.point.x - o.x) * d.x + (h.point.y - o.y) * d.y + (h.point.z - o.z) * d.z;
-      if (b && (b.small || b.name.endsWith('_leaves'))) {
-        travelled = along + 0.02;
-        from = { x: o.x + d.x * travelled, y: o.y + d.y * travelled, z: o.z + d.z * travelled };
-        continue;
-      }
-      end = along;
-      normal = h.normal;
-      block = h.block;
-      break;
-    }
+  /** A bullet through a wall: the hole where it went in and where it came out, and its tracer on from there to `end`. */
+  private wallBang(def: GunItem, entry: Vec3, normal: Vec3, exit: Vec3, out: Vec3, block: number, end: Vec3 | null) {
+    const color = this.blockColor(block);
+    this.fx.impact(entry, normal, color, false, !this.carves(def, block, entry, normal));
+    this.fx.impact(exit, out, color, false, !this.carves(def, block, exit, out));
+    // A spray of chips out of the far side.
+    this.particles.burstColor(exit.x + out.x * 0.05, exit.y + out.y * 0.05, exit.z + out.z * 0.05, color, { count: 8, speed: 4, size: 0.07, gravity: 18, life: 0.6, spread: 0.15, up: 0.6 });
+    if (end) this.fx.tracer(exit, end, def.tracer || '#ffd27a');
+  }
+
+  /**
+   * Where a bullet from this screen lands: a block (through foliage, and walls it goes through,
+   * as the host's does), or someone drawn in the way.
+   */
+  private bulletEnd(o: Vec3, d: Vec3, range: number, others: PlayerFrame[], pen: Gun['penetration']): { point: Vec3; normal: Vec3 | null; block: number; walls: WallPass[] } {
+    let { end, normal, block, walls } = bulletPath(this.chunks.world, this.registry, o, d, range, pen);
     for (const p of others) {
       const b = playerBoxes(p, p.sliding ? 2 : p.sneaking ? 1 : 0, this.gunRules);
       const t = Math.min(rayBox(o, d, b.body[0], b.body[1]) ?? Infinity, rayBox(o, d, b.head[0], b.head[1]) ?? Infinity);
@@ -1796,7 +1841,8 @@ export class Runtime {
         block = -1;
       }
     }
-    return { point: { x: o.x + d.x * end, y: o.y + d.y * end, z: o.z + d.z * end }, normal, block };
+    walls = walls.filter((p) => p.at < end);
+    return { point: { x: o.x + d.x * end, y: o.y + d.y * end, z: o.z + d.z * end }, normal, block, walls };
   }
 
   /** Someone else's shot: tracers from their gun's muzzle (as their figure's drawn), a flash, chips where it hit. */
@@ -1815,7 +1861,11 @@ export class Runtime {
     const cam = this.camera.position;
     w.ends.forEach(([x, y, z, kind], i) => {
       const at = { x, y, z };
-      if (color && (i === 0 || i % 3 === 0)) this.fx.tracer(from, at, color);
+      const traced = !!color && (i === 0 || i % 3 === 0);
+      if (traced) this.fx.tracer(from, at, color);
+      // Walls it went through: holes both sides, a tracer on from the far one.
+      if (def?.kind === 'gun')
+        for (const p of w.walls?.[i] ?? []) this.wallBang(def, { x: p[0], y: p[1], z: p[2] }, { x: p[3], y: p[4], z: p[5] }, { x: p[6], y: p[7], z: p[8] }, { x: p[9], y: p[10], z: p[11] }, p[12], traced ? at : null);
       // Not on our own body (we'd see the puff from inside it): the HUD says we were hit.
       if (Math.hypot(x - cam.x, y - cam.y, z - cam.z) < 2.2) return;
       if (kind === 1 && w.blocks[i] >= 0) {
@@ -1851,6 +1901,100 @@ export class Runtime {
     c = [(r / 256) * tint[0], (g / 256) * tint[1], (b / 256) * tint[2]];
     this.blockColors.set(id, c);
     return c;
+  }
+
+  /**
+   * This frame's throwables (see `ThrowController`): cooking one, throwing it. A throw flies here
+   * at once, from our eyes, and goes to the host with the next controls; the hand tosses it.
+   */
+  private throwFrame(dt: number, active: boolean, me: PlayerFrame) {
+    const slots = me.hotbar?.slots ?? [];
+    const held = me.hotbar ? (slots[me.hotbar.selected]?.item ?? null) : null;
+    const p = this.predictor?.shown() ?? me;
+    const eye = { x: p.x, y: p.y + (p.sneaking && !p.flying ? 1.27 : 1.62), z: p.z };
+    const made = this.throwsCtl.update(dt, { active: active && !me.dead && !me.vehicle, isDown: (c) => this.input.isDown(c), fire: this.input.button(0) }, slots, held, me.throws ?? 0, eye, this.view.yaw, this.view.pitch, (n) => this.sfx.play(n, { volume: 0.8 }));
+    if (!made) return;
+    const def = this.content.items.get(made.item);
+    if (!isThrowable(def)) return;
+    this.throwQueue.push([made.serial, made.item, made.from.x, made.from.y, made.from.z, made.v.x, made.v.y, made.v.z, made.cooked]);
+    // From the hand (where it's drawn from), on the path the host will fly it on.
+    const hand = this.camera.localToWorld(new THREE.Vector3(0.28, -0.12, -0.5)).sub(this.fx.shakeOffset);
+    this.flights.add(`${this.playerId}:${made.serial}`, made.item, made.from, made.v, fuseSteps(throwable(def), made.cooked), hand);
+    this.held.toss();
+  }
+
+  /** Throwables on the HUD: how many of each they carry (less throws the host hasn't heard of), its key, one being cooked; and the fuse burning round the crosshair. */
+  private throwHud(me: PlayerFrame) {
+    const slots = me.hotbar?.slots ?? [];
+    const quick = me.dead || me.vehicle ? [] : this.throwsCtl.quick(slots);
+    const cooking = this.throwsCtl.cooking;
+    this.gameHud.throwables(
+      quick.map((item) => {
+        const def = this.content.items.get(item)!;
+        const key = isThrowable(def) && def.key ? def.key.replace(/^Key|^Digit/, '') : '';
+        return { icon: def.icon as IconRef, count: this.throwsCtl.count(slots, item, me.throws ?? 0), key, cooking: cooking?.item === item };
+      }),
+    );
+    // The fuse, burning down round the crosshair while it's held.
+    const burning = cooking && cooking.t.cook && cooking.t.fuse > 0 ? 1 - cooking.held / cooking.t.fuse : null;
+    if (burning !== null || this.fuseShown) this.gameHud.progress(burning === null ? null : Math.max(0, burning), { color: burning !== null && burning < 0.35 ? '#ff3b30' : '#ffd36b' });
+    this.fuseShown = burning !== null;
+  }
+  private fuseShown = false;
+
+  /**
+   * Rubble from damage (a batch's carves: bullets' pits, a blast's crater): a few chips out of
+   * each block, more the more went, flung away from an explosion just shown, with a puff of dust.
+   */
+  private rubbleFromDamage(data: Uint8Array) {
+    const cells = damageTaken(data, 5);
+    // A big change at once (a player joining late catching up) throws nothing.
+    if (cells.length > 400) return;
+    for (const c of cells) {
+      const id = this.chunks.world.get_block(c.x, c.y, c.z);
+      const def = this.registry.blocks[id];
+      if (!def) continue;
+      const px = this.textures.albedoData.subarray(def.tex[0] * 1024, def.tex[0] * 1024 + 1024);
+      const tint = def.tint ? DEFAULT_TINT : null;
+      const n = Math.min(c.at.length, 1 + Math.floor(c.taken / 260));
+      const blast = this.blasts.find((b) => Math.hypot(b.at.x - c.x - 0.5, b.at.y - c.y - 0.5, b.at.z - c.z - 0.5) < 3 + b.size * 2);
+      for (let i = 0; i < n; i++) {
+        const [x, y, z] = c.at[i];
+        let v: Vec3;
+        if (blast) {
+          // Away from the blast, and up.
+          const dx = x - blast.at.x;
+          const dy = y - blast.at.y;
+          const dz = z - blast.at.z;
+          const l = Math.hypot(dx, dy, dz) || 1;
+          const k = (4 + Math.random() * 5) * Math.min(1.6, blast.size);
+          v = { x: (dx / l) * k, y: (dy / l) * k * 0.6 + 2 + Math.random() * 3, z: (dz / l) * k };
+        } else v = { x: (Math.random() - 0.5) * 2.4, y: Math.random() * 1.5, z: (Math.random() - 0.5) * 2.4 };
+        const size = c.taken > 600 ? 0.06 + Math.random() * 0.12 : 0.035 + Math.random() * 0.05;
+        this.rubble.add(x, y, z, size, v, px, tint);
+      }
+      // Dust.
+      const [x, y, z] = c.at[0] ?? [c.x + 0.5, c.y + 0.5, c.z + 0.5];
+      const col = this.blockColor(id);
+      const dust: [number, number, number] = [col[0] * 0.6 + 0.2, col[1] * 0.6 + 0.19, col[2] * 0.6 + 0.18];
+      this.particles.burstColor(x, y, z, dust, { count: blast ? 3 : 1, speed: blast ? 1.6 : 0.5, size: blast ? 0.3 : 0.14, gravity: -0.4, life: blast ? 1.8 : 0.9, drag: 2.2, spread: 0.3, up: 0.3, collide: false });
+    }
+  }
+
+  /** Rubble from a block broken whole: a handful of chunks tumbling out of where it was. */
+  private rubbleFromBlock(x: number, y: number, z: number, id: number) {
+    const def = this.registry.blocks[id];
+    if (!def || def.small) return;
+    const px = this.textures.albedoData.subarray(def.tex[0] * 1024, def.tex[0] * 1024 + 1024);
+    const blast = this.blasts.find((b) => Math.hypot(b.at.x - x - 0.5, b.at.y - y - 0.5, b.at.z - z - 0.5) < 3 + b.size * 2);
+    for (let i = 0; i < 6; i++) {
+      const at = { x: x + 0.2 + Math.random() * 0.6, y: y + 0.2 + Math.random() * 0.6, z: z + 0.2 + Math.random() * 0.6 };
+      const dx = blast ? at.x - blast.at.x : Math.random() - 0.5;
+      const dz = blast ? at.z - blast.at.z : Math.random() - 0.5;
+      const l = Math.hypot(dx, dz) || 1;
+      const k = blast ? 3 + Math.random() * 4 : 1 + Math.random() * 1.5;
+      this.rubble.add(at.x, at.y, at.z, 0.08 + Math.random() * 0.14, { x: (dx / l) * k, y: 1.5 + Math.random() * 3, z: (dz / l) * k }, px, def.tint ? DEFAULT_TINT : null);
+    }
   }
 
   /** The gun's HUD: rounds, the crosshair opening with the spread, the scope. */

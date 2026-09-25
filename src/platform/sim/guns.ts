@@ -44,6 +44,8 @@ export interface Gun {
   mobility: number;
   /** What each bullet carves out of a destructible block it hits (null: nothing). */
   carve: { radius: number; depth: number } | null;
+  /** Wall-banging (`penetration`): how much material a bullet goes through, and what it loses a block (null: none). */
+  penetration: { depth: number; loss: number } | null;
 }
 
 /** A bullet's carve unless the gun says (`GunItem.carve`): about seven on one spot hole a block. */
@@ -70,6 +72,7 @@ export function gun(def: GunItem): Gun {
     reserve: def.reserve ?? def.magazine * 3,
     mobility: def.mobility ?? 1,
     carve: def.carve === false ? null : { radius: Math.max(0, def.carve?.radius ?? DEFAULT_CARVE.radius), depth: Math.max(0, def.carve?.depth ?? DEFAULT_CARVE.depth) },
+    penetration: def.penetration && def.penetration.depth > 0 ? { depth: Math.min(8, def.penetration.depth), loss: Math.min(1, Math.max(0, def.penetration.damageLoss ?? 0.4)) } : null,
   };
   cache.set(def, g);
   return g;
@@ -254,10 +257,12 @@ export function pelletDirs(g: Gun, yaw: number, pitch: number, spread: number, s
 }
 
 /** A bullet's damage at a distance, and on the head. */
-export function damageAt(g: Gun, dist: number, head: boolean): number {
+export function damageAt(g: Gun, dist: number, head: boolean, through = 0): number {
   const [a, b] = g.falloff;
   const k = b > a ? Math.min(1, Math.max(0, (dist - a) / (b - a))) : dist >= b ? 1 : 0;
-  return (g.near + (g.far - g.near) * k) * (head ? g.headshot : 1);
+  // Through a wall, less for each block of it.
+  const wall = through > 0 && g.penetration ? Math.max(0, 1 - g.penetration.loss * through) : 1;
+  return (g.near + (g.far - g.near) * k) * (head ? g.headshot : 1) * wall;
 }
 
 /** A reload makes sense: not already reloading, room in the magazine, rounds to spare. */

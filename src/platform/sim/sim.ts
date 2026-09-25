@@ -1,5 +1,5 @@
 import * as engine from '@engine/voxel_engine.js';
-import type { Actor, Anchor, BlockRef, Bot, BotApi, Entity, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3, VehicleWorld } from '../api/types';
+import type { Actor, Anchor, BlockRef, Bot, BotApi, DamageCause, DestructibleOptions, Entity, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3, VehicleWorld, WorldApi } from '../api/types';
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
@@ -16,6 +16,7 @@ import { toLocal, toWorld } from './movers';
 import { PropSim, PropState, type PropFrame } from './props';
 import { rayHit, surfaceY, worldQuery } from './worldquery';
 import { watchBlocks, type WorldHost } from './world';
+import { ThrowSim } from './throwing';
 
 function mulberry32(seed: number): Rng {
   let a = seed >>> 0;
@@ -33,6 +34,27 @@ function mulberry32(seed: number): Rng {
     pick: (items) => items[Math.floor(next() * items.length)],
     chance: (p) => next() < p,
   };
+}
+
+type ExplodeOptions = NonNullable<Parameters<WorldApi['explode']>[2]>;
+
+/**
+ * Which blocks a blast takes in a world with destructible blocks (`world.destructible`): those
+ * higher than its `above`, breakable, not liquid, of the families it names (or any, for `'all'`)
+ * and not `except`ed. Of those, the ones that carve lose a crater; the rest (glass, slabs,
+ * torches) break whole. Null for a world without destructible blocks.
+ */
+function blastRule(registry: Registry, o: DestructibleOptions | undefined): { ids: Uint8Array; above: number } | null {
+  if (!o) return null;
+  const ids = new Uint8Array(256);
+  const named = o.blocks === undefined || o.blocks === 'all' ? null : new Set(o.blocks);
+  const except = new Set(o.except ?? []);
+  for (const b of registry.blocks) {
+    if (!b || !b.breakable || b.shape === 'liquid' || b.shape === 'air' || except.has(b.name)) continue;
+    if (named && !named.has(b.name)) continue;
+    ids[b.id] = 1;
+  }
+  return { ids, above: o.above ?? -1 };
 }
 
 interface Timer {
@@ -122,10 +144,14 @@ export class Sim {
   time = 0;
   /** Where everyone was, for the last second (shots are checked where the shooter saw them). */
   readonly history = new History();
+  /** Throwables in the air, and the fires they started. */
+  readonly throws: ThrowSim;
   /** The game's gun rules (`guns`): the rewind, hitboxes, reloading, the fire-rate slack. */
   readonly gunRules: GunRules;
   /** Bots (`game.bots`), in the order they came. */
   private botList: Bot[] = [];
+  /** Which blocks a blast takes in a world with destructible blocks (null: whole blocks, as always). */
+  private blastable: { ids: Uint8Array; above: number } | null;
   private nextBot = 1;
 
   constructor(private o: SimOptions) {
@@ -139,6 +165,7 @@ export class Sim {
     );
     this.content = o.content;
     this.gunRules = resolveGunRules(o.def.guns);
+    this.blastable = blastRule(o.registry, o.def.world?.destructible);
     this.history.keep = Math.max(1, this.gunRules.rewind + 0.1);
     this.rng = mulberry32(o.seed ^ 0x9e3779b9);
     const world = o.world.world;
@@ -200,6 +227,8 @@ export class Sim {
       },
       content: o.content,
       present: this.presentation,
+      thrown: () => this.throws.flying,
+      fires: () => this.throws.burning,
     });
     this.props = new PropSim(
       this.registry,
@@ -214,6 +243,20 @@ export class Sim {
       },
       world,
     );
+    this.throws = new ThrowSim({
+      world,
+      registry: this.registry,
+      present: this.presentation,
+      fx: this.presentation.fx(null),
+      audio: this.presentation.audio(null),
+      targets: () => [
+        ...this.players.filter((p) => !p.vacant && !p.health.dead).map((p) => ({ target: p.api as Player | Entity, feet: p.position, height: p.sneaking ? 1.5 : 1.8, width: 0.6 })),
+        ...this.entities.all().map((e) => ({ target: e, feet: e.position, ...this.entities.hitbox(e) })),
+      ],
+      hurt: (at, reach, near, far, knockback, by, weapon) => this.hurtAround(at, reach, near, far, knockback, by, weapon),
+      blow: (at, radius, by) => this.blowBlocks(at, radius, { by }),
+      guard: (fn) => this.guard(fn),
+    });
     this.local = this.newPlayer(o.player?.id ?? 'local', o.player?.name ?? 'Player');
     this.players.push(this.local);
     this.roster.push(this.local.api);
@@ -284,6 +327,7 @@ export class Sim {
     // Where the game moved its solid props, what stands on them goes too (before creatures step).
     if (this.props.carry(dt)) for (const p of this.players) p.syncState();
     this.entities.update(dt, running);
+    if (running) this.throws.update(dt);
     this.items.update(dt, running);
     for (const p of this.players) {
       p.updateHands(dt, running);
@@ -451,7 +495,7 @@ export class Sim {
   private newPlayer(id: string, name: string): PlayerSim {
     const world = this.host.world;
     const p = new PlayerSim({
-      bullet: (from, dir, range, seen, shooter) =>
+      bullet: (from, dir, range, seen, shooter, pen) =>
         castBullet(
           {
             world,
@@ -467,9 +511,11 @@ export class Sim {
           this.time,
           seen,
           shooter,
+          pen,
         ),
       // Guns carve where their bullets land, if the world's blocks can be carved.
       carve: this.def.world?.destructible ? (point, dir, opts, by) => this.carve(point, dir, { ...opts, by }) : null,
+      throws: this.throws,
       id,
       name,
       world: this.host.world,
@@ -506,6 +552,7 @@ export class Sim {
   restart() {
     this.entities.clear();
     this.props.clear();
+    this.throws.clear();
     // Put the world back the way it was generated (craters, broken blocks), unless the game
     // saves the world (Sandbox keeps your builds).
     if (!this.def.world?.persist) this.host.revert();
@@ -569,8 +616,30 @@ export class Sim {
     this.presentation.send(null, 'client', 'debris', [x, y, z, id]);
   }
 
-  /** Carve a ragged sphere (bedrock and liquids survive), scatter debris, set off an explosion. */
-  explode(c: Vec3, radius: number, opts: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor } = {}): number {
+  /**
+   * `world.explode`: hurt whoever's in reach (with `damage`), blow out the blocks (a crater in a
+   * destructible world's walls, whole blocks in any other), and set off the explosion.
+   */
+  explode(c: Vec3, radius: number, opts: ExplodeOptions = {}): number {
+    const r = Math.max(0.5, radius);
+    // Those in reach are hurt first: the wall they're behind shields them, whatever the blast
+    // then does to it.
+    if (opts.damage !== undefined) {
+      const [near, far] = typeof opts.damage === 'number' ? [opts.damage, opts.damage] : opts.damage;
+      this.hurtAround(c, opts.reach ?? r * 2, near, far, opts.knockback ?? 1, opts.by ?? 'world', opts.weapon);
+    }
+    // (The explosion first: each screen throws what it blows out away from it.)
+    if (opts.effect !== false) this.ctx.fx.explosion(c, { size: Math.max(1, r / 2) });
+    return this.blowBlocks(c, r, opts);
+  }
+
+  /**
+   * Blocks a blast takes: in a world with destructible blocks, a crater (`blowCrater`); in any
+   * other, a ragged sphere of whole blocks (bedrock and liquids survive), with debris. Returns the
+   * blocks removed altogether.
+   */
+  blowBlocks(c: Vec3, radius: number, opts: { filter?: (at: Vec3, block: string) => boolean; by?: Actor } = {}): number {
+    if (this.blastable) return this.blowCrater(c, radius, opts);
     const world = this.host.world;
     const r = Math.max(0.5, radius);
     const ri = Math.ceil(r + 1);
@@ -596,8 +665,23 @@ export class Sim {
           removed.push([x, y, z, id]);
         }
     let n = this.host.editMany(cells);
-    // Torches on the walls that went, plants on the ground that went, the rest of broken beds.
-    const gone = new Set(cells.map(([x, y, z]) => `${x},${y},${z}`));
+    n += this.loosen(removed, opts.by ?? 'world');
+    // Debris from a sample of what was destroyed.
+    for (let i = 0; i < Math.min(12, removed.length); i++) {
+      const [x, y, z, id] = removed[Math.floor(Math.random() * removed.length)];
+      this.debris(x, y, z, id);
+    }
+    return n;
+  }
+
+  /**
+   * What went with `removed` (blocks just broken: where, and what they were): torches on the
+   * walls that went, plants on the ground that went, the rest of broken beds. They go too, and
+   * each fires `blockBreak` (the removed blocks first). Returns how many more went.
+   */
+  private loosen(removed: [number, number, number, number][], by: Actor): number {
+    const world = this.host.world;
+    const gone = new Set(removed.map(([x, y, z]) => `${x},${y},${z}`));
     const loose: [number, number, number, number][] = [];
     for (const [x, y, z, id] of removed)
       for (const [dx, dy, dz] of dependents(this.registry, x, y, z, id, (a, b, c) => world.get_block(a, b, c))) {
@@ -606,16 +690,82 @@ export class Sim {
         gone.add(k);
         loose.push([dx, dy, dz, world.get_block(dx, dy, dz)]);
       }
-    if (loose.length) n += this.host.editMany(loose.map(([x, y, z]) => [x, y, z, 0]));
+    const n = loose.length ? this.host.editMany(loose.map(([x, y, z]) => [x, y, z, 0])) : 0;
     removed.push(...loose);
-    for (const [x, y, z, id] of removed) this.emit('blockBreak', { x, y, z, block: this.registry.blocks[id].name, by: opts.by ?? 'world' });
-    // Debris from a sample of what was destroyed.
+    for (const [x, y, z, id] of removed) this.emit('blockBreak', { x, y, z, block: this.registry.blocks[id].name, by });
+    return n;
+  }
+
+  /**
+   * A blast in a world with destructible blocks: the destructible blocks in reach lose a ragged
+   * sphere of little voxels (`VoxelWorld.blast`; the same crater for the same blast on every
+   * copy of the world, and the clients take it as damage), blocks the game made destructible
+   * that can't be carved (glass, leaves, slabs, torches) break whole within `radius`, and the
+   * rest (under the line, `except`) stand.
+   */
+  private blowCrater(c: Vec3, radius: number, opts: { filter?: (at: Vec3, block: string) => boolean; by?: Actor }): number {
+    const world = this.host.world;
+    const rule = this.blastable!;
+    const r = Math.max(0.3, radius);
+    const ROUGH = 0.3;
+    const ri = Math.ceil(r * (1 + ROUGH)) + 1;
+    const cx = Math.floor(c.x);
+    const cy = Math.floor(c.y);
+    const cz = Math.floor(c.z);
+    const carve: number[] = [];
+    const whole: [number, number, number, number][] = [];
+    for (let dy = -ri; dy <= ri; dy++)
+      for (let dz = -ri; dz <= ri; dz++)
+        for (let dx = -ri; dx <= ri; dx++) {
+          const x = cx + dx;
+          const y = cy + dy;
+          const z = cz + dz;
+          if (y <= rule.above) continue;
+          const id = world.get_block(x, y, z);
+          if (id === 0 || id === 255 || !rule.ids[id]) continue;
+          const def = this.registry.blocks[id];
+          if (opts.filter && !opts.filter({ x, y, z }, def.name)) continue;
+          if (world.carvable(x, y, z)) carve.push(x, y, z);
+          else if (Math.hypot(x + 0.5 - c.x, y + 0.5 - c.y, z + 0.5 - c.z) <= r) whole.push([x, y, z, id]);
+        }
+    // The same blast, the same crater: seeded by where it is.
+    const seed = (Math.imul(Math.floor(c.x * 16), 73856093) ^ Math.imul(Math.floor(c.y * 16), 19349663) ^ Math.imul(Math.floor(c.z * 16), 83492791)) >>> 0;
+    const { emptied } = this.host.blast([c.x, c.y, c.z], r, ROUGH, seed, Int32Array.from(carve));
+    let n = emptied.length + (whole.length ? this.host.editMany(whole.map(([x, y, z]) => [x, y, z, 0])) : 0);
+    const removed = [...emptied, ...whole];
+    n += this.loosen(removed, opts.by ?? 'world');
     for (let i = 0; i < Math.min(12, removed.length); i++) {
       const [x, y, z, id] = removed[Math.floor(Math.random() * removed.length)];
       this.debris(x, y, z, id);
     }
-    if (opts.effect !== false) this.ctx.fx.explosion(c, { size: Math.max(1, r / 2) });
     return n;
+  }
+
+  /**
+   * Hurt players and creatures round a blast: `near` at its middle falling to `far` at `reach`
+   * blocks (measured to the nearest point of each body), none past it or behind a wall (a line
+   * from the blast to their feet, middle or eyes has to be clear), pushed away by `knockback`
+   * (less further out). The hits are `explosion`s from `by`.
+   */
+  hurtAround(c: Vec3, reach: number, near: number, far: number, knockback: number, by: Actor, weapon?: string, cause: DamageCause = 'explosion') {
+    const world = this.host.world;
+    const hit = (target: Player | Entity, feet: Vec3, height: number) => {
+      // The nearest point of their body (a vertical line from feet to head) to the blast.
+      const y = Math.max(feet.y + 0.1, Math.min(feet.y + height - 0.1, c.y));
+      const d = Math.hypot(feet.x - c.x, y - c.y, feet.z - c.z);
+      if (d >= reach) return;
+      const seen = [0.25, height * 0.55, height - 0.2].some((h) => world.line_clear(c.x, c.y, c.z, feet.x, feet.y + h, feet.z));
+      if (!seen) return;
+      const k = d / reach;
+      const amount = near + (far - near) * k;
+      if (amount <= 0) return;
+      target.damage(amount, { source: by, from: c, knockback: knockback * (1 - k), weapon, cause });
+    };
+    for (const p of this.players) {
+      if (p.vacant || p.health.dead) continue;
+      hit(p.api, p.position, p.sneaking ? 1.5 : 1.8);
+    }
+    for (const e of this.entities.near(c, reach + 3)) hit(e, e.position, this.entities.hitbox(e).height);
   }
 
   /**

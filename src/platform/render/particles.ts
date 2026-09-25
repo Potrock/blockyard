@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const MAX = 2048;
+const MAX = 4096;
 
 const vert = /* glsl */ `
 precision highp float;
