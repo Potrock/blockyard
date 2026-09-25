@@ -43,6 +43,8 @@ const HOLD_RANGE: Record<string, number> = { rifle: 16, smg: 8, shotgun: 4, snip
 
 export class Bots {
   private brains = new Map<string, Brain>();
+  /** Something everyone's after (the briefcase): bots head for it when there's no one to shoot. */
+  objective: Vec3 | null = null;
 
   constructor(
     private game: GameContext,
@@ -258,7 +260,8 @@ export class Bots {
       b.repath -= dt;
       if (nav && (!b.path || b.step >= b.path.length || b.repath <= 0)) {
         let goal: Vec3 | null = null;
-        if (b.heard && now - b.heard.t < 4) goal = b.heard.at;
+        if (this.objective && b.skill > 0.5 !== Math.random() < 0.3) goal = this.objective;
+        else if (b.heard && now - b.heard.t < 4) goal = b.heard.at;
         else if (b.lastSeen && now - b.lastSeenT < 6) goal = b.lastSeen;
         else if (!b.goal || b.wander <= 0 || (b.path && b.step >= b.path.length)) {
           const r = Math.random();

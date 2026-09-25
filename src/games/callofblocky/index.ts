@@ -1,10 +1,11 @@
-import { defineGame, type Bot, type GameContext, type MenuHandle, type Player } from '@platform';
+import { defineGame, type Bot, type GameContext, type MenuHandle, type Pickup, type Player } from '@platform';
 import { ATLAS, defineArt, OUTFITS, skinOrigin } from './art';
 import { Bots } from './bots';
 import { MAP, type SpawnPoint } from './map';
 import { NavGrid } from './nav';
 import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, PRIMARIES, WEAPONS, type Primary } from './weapons';
+import { GUNS } from './models';
 
 /**
  * Call of Blocky: a fast free-for-all on Jackrabbit Lane, a Nuketown-style cul-de-sac painted
@@ -60,6 +61,9 @@ let firstBlood = false;
 let nav: NavGrid | null = null;
 let bots: Bots;
 let boardDirty = true;
+/** The briefcase: on the street (a pickup), and when the next one turns up. */
+let briefcase: Pickup | null = null;
+let nextBriefcase = 0;
 let boardAt = 0;
 let lastSecond = -1;
 
@@ -307,6 +311,72 @@ function endMatch(game: GameContext, winner: Player | null) {
 }
 
 // -------------------------------------------------------------------------------------------------
+// The briefcase: every so often it turns up on the street, glowing. Whoever grabs it gets points
+// and a radar sweep. Nobody knows what's inside.
+// -------------------------------------------------------------------------------------------------
+
+const BRIEFCASE_EVERY = 50;
+const BRIEFCASE_POINTS = 300;
+
+function defineBriefcase(game: GameContext) {
+  const model = GUNS.find((g) => g.id === 'briefcase')?.url;
+  game.items.define('briefcase', {
+    kind: 'misc',
+    name: 'The Briefcase',
+    icon: model ? { gltf: model } : { block: 'yellow_concrete' },
+    onPickup: (g, _n, player) => {
+      const f = fighters.get(player.id);
+      if (!f || !player.alive) return false;
+      f.score += BRIEFCASE_POINTS;
+      f.uavUntil = Math.max(f.uavUntil, g.clock.now + 20);
+      boardDirty = true;
+      briefcase = null;
+      bots.objective = null;
+      g.hud.marker('briefcase', null);
+      g.hud.feed([{ text: player.name, color: COLORS.gold }, ' has the briefcase']);
+      player.hud.pop('THE BRIEFCASE', { big: true, color: COLORS.gold, sub: `+${BRIEFCASE_POINTS} · UAV online` });
+      g.audio.play('streak', { at: player.position });
+      g.fx.burst({ x: player.position.x, y: player.position.y + 1.2, z: player.position.z }, { color: '#ffcc00', count: 40, speed: 5, glow: 2, life: 0.8, gravity: 2 });
+      nextBriefcase = g.clock.now + BRIEFCASE_EVERY;
+      return true;
+    },
+  });
+}
+
+/** Put the briefcase somewhere worth fighting over, away from everyone. */
+function dropBriefcase(game: GameContext) {
+  const spots = MAP.hotspots.length ? MAP.hotspots : MAP.spawns;
+  let best = spots[0];
+  let score = -Infinity;
+  for (const s of spots) {
+    const near = Math.min(60, ...game.players.filter((p) => p.alive).map((p) => Math.hypot(p.position.x - s.x, p.position.z - s.z)));
+    const v = Math.min(near, 18) + game.rng.next() * 8;
+    if (v > score) {
+      score = v;
+      best = s;
+    }
+  }
+  const at = { x: best.x, y: best.y + 1, z: best.z };
+  briefcase = game.items.spawnPickup('briefcase', at, { beam: '#ffcc00', despawn: 40 });
+  bots.objective = { x: best.x, y: best.y, z: best.z };
+  game.hud.marker('briefcase', at, { shape: 'diamond', color: COLORS.gold, label: 'THE BRIEFCASE', edge: true, pulse: true, size: 22 });
+  game.hud.banner('THE BRIEFCASE', 'Somebody left it on the street. Grab it.', { color: COLORS.gold, duration: 2.5 });
+  game.audio.play('lock');
+}
+
+function updateBriefcase(game: GameContext) {
+  const now = game.clock.now;
+  if (briefcase && !briefcase.alive) {
+    // Nobody took it in time.
+    briefcase = null;
+    bots.objective = null;
+    game.hud.marker('briefcase', null);
+    nextBriefcase = now + BRIEFCASE_EVERY;
+  }
+  if (!briefcase && now >= nextBriefcase) dropBriefcase(game);
+}
+
+// -------------------------------------------------------------------------------------------------
 // HUD
 // -------------------------------------------------------------------------------------------------
 
@@ -429,6 +499,7 @@ export default defineGame({
   setup(game) {
     defineArt(game);
     defineWeapons(game);
+    defineBriefcase(game);
     defineSounds(game);
     bots = new Bots(game, () => nav, MAP.hotspots);
     game.events.on('playerJoin', ({ player }) => {
@@ -479,6 +550,9 @@ export default defineGame({
     firstBlood = false;
     lastSecond = -1;
     boardDirty = true;
+    briefcase = null;
+    bots.objective = null;
+    nextBriefcase = game.clock.now + 35;
     for (const f of fighters.values()) {
       Object.assign(f, { kills: 0, deaths: 0, score: 0, streak: 0, best: 0, headshots: 0, diedAt: -1, uavUntil: 0, rushUntil: 0, firedAt: -99, radar: '', multi: 0 });
     }
@@ -531,6 +605,7 @@ export default defineGame({
       }
     }
 
+    updateBriefcase(game);
     // The clock.
     const left = TIME_LIMIT - (now - startedAt);
     if (left <= 0) {
