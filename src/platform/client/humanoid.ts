@@ -128,6 +128,8 @@ export interface HeldInfo {
   poses?: ItemPoses;
   /** A gun's action (`GunItem.action`): a `lever` or `hammer` is worked after each shot. */
   action?: string;
+  /** A throwable (`kind: 'throwable'`): its attack is a throw, overarm, not a swing. */
+  throws?: boolean;
 }
 
 /**
@@ -651,14 +653,20 @@ export class HumanoidRig {
   private swingArms(s: AnimState, ph: number, moving: number, run: number, air: number) {
     const j = this.j;
     const swing = Math.sin(ph) * moving * pace(this.poses.gait.armSwing, run);
-    const attack = s.attackT < 0.35 ? Math.sin((s.attackT / 0.35) * Math.PI) : 0;
+    const throws = this.held?.info.throws === true;
+    const attack = !throws && s.attackT < 0.35 ? Math.sin((s.attackT / 0.35) * Math.PI) : 0;
+    // A throw (in half a second): the arm cocked back over the shoulder, the other out ahead,
+    // then whipped over and down across the body, and back.
+    const t = throws ? s.attackT / 0.5 : 1;
+    const cock = t < 0.24 ? smooth(t / 0.24) : t < 0.6 ? 1 - smooth((t - 0.24) / 0.36) : 0;
+    const whip = t < 0.24 || t >= 1 ? 0 : t < 0.6 ? smooth((t - 0.24) / 0.36) : 1 - smooth((t - 0.6) / 0.4);
     const raised = s.raised ? 1 : s.casting ? 0.6 : 0;
     const bend = 0.25 + 0.9 * run;
-    rot(q1, -swing - 1.6 * attack - 2.4 * raised - 0.5 * air, 0, -0.08 - 0.3 * air);
+    rot(q1, -swing - 1.6 * attack - 2.4 * raised - 0.5 * air - 2.6 * cock - 1.2 * whip, 0.3 * whip, -0.08 - 0.3 * air - 0.25 * cock);
     j.upperArmR.quaternion.multiply(q1);
-    rot(q1, -bend - 0.6 * attack, 0, 0);
+    rot(q1, -bend - 0.6 * attack - 1.5 * cock, 0, 0);
     j.lowerArmR.quaternion.multiply(q1);
-    rot(q1, swing - 2.4 * raised - 0.5 * air, 0, 0.08 + 0.3 * air);
+    rot(q1, swing - 2.4 * raised - 0.5 * air - 1.1 * cock + 0.3 * whip, 0, 0.08 + 0.3 * air);
     j.upperArmL.quaternion.multiply(q1);
     rot(q1, -bend, 0, 0);
     j.lowerArmL.quaternion.multiply(q1);

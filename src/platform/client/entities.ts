@@ -272,6 +272,7 @@ export class EntityView {
         hands: gun ? gunHands(def.hold) : undefined,
         poses: def.hold?.poses,
         action: def.kind === 'gun' && typeof def.action === 'string' ? def.action : undefined,
+        throws: def.kind === 'throwable',
       };
       if (v.model.hold(mesh, info)) {
         v.heldMesh = mesh;

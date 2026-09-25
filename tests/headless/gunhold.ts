@@ -82,7 +82,8 @@ function posed(gltf: GLTF, info: Partial<HeldInfo>, seconds: number, state: Part
  * figure); one hand or two (the view model's support hand out of sight but to reload, a figure's
  * free hand in its stance's `offHand`); first-person arms fitted per gun and bent at the elbow to
  * reach a shoulder that stays put; a gun's action (a lever, a hammer, one of the game's own)
- * worked after each shot; and two items sharing a model each keeping its own hold.
+ * worked after each shot; two items sharing a model each keeping its own hold; and a figure's
+ * throw.
  */
 export default async function gunhold() {
   // Poses per item: what the item gives over the figure's, part by part.
@@ -213,6 +214,15 @@ export default async function gunhold() {
   const worked = (a?: string, shotT = 0.3) => posed(model, { action: a }, 0.2, { shotT }).gunQ;
   check(worked('lever').angleTo(worked('lever', 9)) > 0.1 && worked('hammer').angleTo(worked('hammer', 9)) > 0.1, 'a lever and a hammer worked a beat after the shot');
   check(worked(undefined).angleTo(worked(undefined, 9)) < 1e-6 && worked('pump').angleTo(worked('pump', 9)) < 1e-6, 'no action, or a pump: the figure\'s gun as it was');
+
+  // A throwable is thrown overarm: cocked back over the shoulder, then whipped forward.
+  const thrown = (throws: boolean, attackT: number) => posed(model, { kind: 'other', throws, grip2: undefined }, 0.2, { attackT });
+  const cocked = thrown(true, 0.12);
+  const whipped = thrown(true, 0.3);
+  const swung = thrown(false, 0.12);
+  check(cocked.at('handR').y > cocked.at('head').y && cocked.at('handR').z < cocked.at('head').z + 0.05, `cocked: the hand up behind the head (${v3(cocked.at('handR').toArray())})`);
+  check(whipped.at('handR').z > cocked.at('handR').z + 0.3, 'whipped: the hand out ahead');
+  check(swung.at('handR').y < swung.at('head').y && thrown(true, 9).at('handR').distanceTo(thrown(false, 9).at('handR')) < 1e-6, 'anything else swings as before, and at rest a throwable hangs the same');
 
   console.log('  item poses over the figure\'s · points from a spec over a file\'s · two items on one model held their own ways · one hand (hidden, in to reload) · lever, hammer, the game\'s own action · arms fitted per gun, bent to a shoulder that stays put · a figure\'s free hand, its reload cycle, its action');
 }

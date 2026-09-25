@@ -191,6 +191,28 @@ player.animate(null);                                      // fade it out (an en
 - Figures that aren't on the rig (`clips: { idle, walk, … }`) play clips the same way, over their
   idle and walk.
 
+### Authoring clips for a rigid rig
+
+A figure built to this spec rests with every joint unturned (identity rotation, the arms hanging),
+so a clip's rotation for a joint is simply that joint's turn from standing straight, in its
+parent's space: the key sets the node's whole rotation (it isn't added to the rig's pose). Write
+turns as the poses do, `[tip, turn, roll]` in radians, and make each key's quaternion in the
+rig's order, YXZ: the turn about y, then the tip about x, then the roll about z
+(`q = qY(turn) · qX(tip) · qZ(roll)`; three.js: `new Quaternion().setFromEuler(new Euler(tip,
+turn, roll, 'YXZ'))`). On this rig:
+
+- a negative tip on `upperArmR`/`upperArmL` raises the arm forward (-1.6 level, about -2.9
+  straight up); a negative tip on `lowerArm` bends the elbow, bringing the forearm up;
+- a roll on an upper arm lifts it out to the side: negative for the right arm, positive for the
+  left (-2.9 on `upperArmR` is the right arm straight up past the head);
+- a positive tip on `head` nods it down, a negative tip on `spine` or `chest` leans back;
+- `hips` can also have a position track (metres, its rest translation plus a rise or a dip);
+  joints the clip leaves out keep the rig's own pose.
+
+High Noon's `src/games/highnoon/tools/build.mjs` writes its `tip_hat`, `victory` and `standoff`
+clips this way (`CLIPS`: keys of turns per joint). A skeleton resting another way (Mixamo's) needs
+clips in its own bones' rotations; `scripts/mannequin.mjs` turns rig-terms clips into those.
+
 ## First-person arms
 
 A player whose model is a humanoid sees its own arms in first person: its upper arms, forearms

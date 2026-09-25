@@ -8,7 +8,8 @@
  *
  * Any item and any clip:
  * - `item=<glb url>` puts that model in the hand wherever a pose holds a gun (High Noon's
- *   revolver: `item=/src/games/highnoon/models/revolver.glb`); `kind=melee` holds it as a blade.
+ *   revolver: `item=/src/games/highnoon/models/revolver.glb`); `kind=melee` holds it as a blade,
+ *   `kind=throw` in the fist as a throwable (the `throw` poses).
  * - `hold=<JSON>`: how the item holds a gun, as its `hold` and `hold.gun` say (`hands`, `stance`,
  *   `action`, `poses`): `hold={"hands":1,"action":"hammer","poses":{"reload":{"cycle":0.42}}}`.
  * - `clips=<names>` (or `clips=all`: every clip in the model) adds a figure playing each clip,
@@ -39,7 +40,7 @@ if (FREEZE !== null) {
 }
 /** An item of any game's to hold instead of Call of Blocky's guns, and how it's held. */
 const ITEM = q.get('item');
-const KIND = q.get('kind') === 'melee' ? 'melee' : null;
+const KIND = q.get('kind') === 'melee' ? 'melee' : q.get('kind') === 'throw' ? 'other' : null;
 /** The held model for a pose's gun: the item given, else Call of Blocky's. */
 const gunUrl = (id: string) => ITEM ?? `${GUNS}${id}.glb`;
 
@@ -72,6 +73,9 @@ const POSES: Pose[] = [
   { name: 'aim (ADS)', gun: 'rifle', state: () => ({ ads: 1 }) },
   { name: 'firing', gun: 'rifle', state: (t) => ({ shotT: t % 0.1 }) },
   { name: 'cycling', gun: 'rifle', state: () => ({ shotT: 0.3 }) },
+  { name: 'throw', gun: 'rifle', state: (t) => ({ attackT: t % 0.8, aim: 0 }) },
+  { name: 'throw cocked', gun: 'rifle', state: () => ({ attackT: 0.12, aim: 0 }) },
+  { name: 'throw whipped', gun: 'rifle', state: () => ({ attackT: 0.3, aim: 0 }) },
   { name: 'walk', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 4 }) },
   { name: 'run', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 6 }) },
   { name: 'strafe left', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 5, moveX: 1, moveZ: 0 }) },
@@ -142,7 +146,7 @@ async function main() {
       const point = (n: string) => g.getObjectByName(n)?.position.clone();
       const box = new THREE.Box3().setFromObject(g);
       const kind = KIND ?? (pose.gun === 'katana' && !ITEM ? 'melee' : 'gun');
-      const info: HeldInfo = { kind, grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z, ...(kind === 'gun' ? HOLD : {}) };
+      const info: HeldInfo = { kind, grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z, throws: q.get('kind') === 'throw', ...(kind === 'gun' ? HOLD : {}) };
       rig.hold(g, info);
     }
     const label = document.createElement('span');
