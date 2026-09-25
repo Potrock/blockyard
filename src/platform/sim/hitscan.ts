@@ -1,7 +1,7 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Entity, Player, Vec3 } from '../api/types';
 import type { Registry } from '../world/registry';
-import { playerBoxes, rayBox, type Stance } from './guns';
+import { playerBoxes, rayBox, type GunRules, type Stance } from './guns';
 import { rayHit } from './worldquery';
 
 /** Where a player or creature was at one moment. */
@@ -19,9 +19,6 @@ interface Snapshot {
   entities: Map<number, Pose>;
 }
 
-/** The longest a shot reaches back in time (a laggy shooter doesn't get to hit where someone was a second ago). */
-export const MAX_REWIND = 0.35;
-
 /**
  * Where everyone was, tick by tick, for the last second: a shot is checked against where its
  * targets were on the shooter's screen (which draws others a little in the past), not where the
@@ -29,10 +26,12 @@ export const MAX_REWIND = 0.35;
  */
 export class History {
   private snaps: Snapshot[] = [];
+  /** Seconds kept: a second, or longer for a game whose shots reach further back (`guns.rewind`). */
+  keep = 1;
 
   record(t: number, players: Map<string, Pose>, entities: Map<number, Pose>) {
     this.snaps.push({ t, players, entities });
-    while (this.snaps.length > 2 && this.snaps[1].t < t - 1) this.snaps.shift();
+    while (this.snaps.length > 2 && this.snaps[1].t < t - this.keep) this.snaps.shift();
   }
 
   clear() {
@@ -92,13 +91,15 @@ export interface HitscanWorld {
   prop(o: Vec3, d: Vec3, max: number): { distance: number; point: Vec3 } | null;
   /** Everyone a shot could hit. */
   targets(): Hittable[];
+  /** The game's gun rules: how far back a shot looks (`rewind`), players' hitboxes. */
+  rules: GunRules;
 }
 
 /**
  * One bullet from `from` along the unit vector `dir`: the first player, creature, block or solid
  * prop it meets within `range`. Targets are where they were at host time `seen` (the moment the
- * shooter's screen was showing), no more than `MAX_REWIND` ago; `ignore` is the shooter. Plants,
- * torches and leaves don't stop bullets.
+ * shooter's screen was showing), no more than the game's `guns.rewind` ago; `ignore` is the
+ * shooter. Plants, torches and leaves don't stop bullets.
  */
 export function castBullet(w: HitscanWorld, from: Vec3, dir: Vec3, range: number, now: number, seen: number | null, ignore: Player | Entity | null): BulletHit {
   // The world first: blocks (through foliage), then solid props nearer than that.
@@ -129,7 +130,7 @@ export function castBullet(w: HitscanWorld, from: Vec3, dir: Vec3, range: number
     normal = { x: -dir.x, y: -dir.y, z: -dir.z };
   }
   // Then whoever's in the way, where they were when the shooter saw them.
-  const at = seen === null ? null : Math.max(now - MAX_REWIND, Math.min(now, seen));
+  const at = seen === null ? null : Math.max(now - w.rules.rewind, Math.min(now, seen));
   let best: Player | Entity | null = null;
   let head = false;
   for (const h of w.targets()) {
@@ -152,7 +153,7 @@ export function castBullet(w: HitscanWorld, from: Vec3, dir: Vec3, range: number
       tBody = rayBox(from, dir, { x: p.x - hw, y: p.y, z: p.z - hw }, { x: p.x + hw, y: p.y + split, z: p.z + hw });
       tHead = h.box.head ? rayBox(from, dir, { x: p.x - hw * 0.85, y: p.y + split, z: p.z - hw * 0.85 }, { x: p.x + hw * 0.85, y: p.y + top, z: p.z + hw * 0.85 }) : null;
     } else {
-      const b = playerBoxes(p, p.stance);
+      const b = playerBoxes(p, p.stance, w.rules);
       tBody = rayBox(from, dir, b.body[0], b.body[1]);
       tHead = rayBox(from, dir, b.head[0], b.head[1]);
     }

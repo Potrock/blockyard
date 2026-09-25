@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { BlockDef } from '../world/registry';
 import { DEFAULT_TINT } from '../world/registry';
-import type { HeldModelSpec, HoldSpec, HoldStyle, ViewAnimation, ViewKey, ViewModelApi } from '../api/types';
+import type { GltfSpec, GunHold, HeldModelSpec, HoldSpec, HoldStyle, ViewAnimation, ViewKey, ViewModelApi } from '../api/types';
 import { boxGeometry, type EntityGraphics } from './entities';
 import { itemFaces } from './blockmodel';
 import { HELD_SCALE } from '../client/humanoid';
@@ -189,28 +189,73 @@ const STYLES: Record<HoldStyle, StyleDef> = {
  * A gun's poses (camera space, right hand): at the hip (the fist low at the right, the barrel
  * converging on the crosshair far ahead, canted a little), compact guns (pistols) nearer the
  * middle, sprinting (swung down and across the chest) and aiming down the sights (the sight on
- * the eye line, `ads` blocks ahead). Forearms run from each fist toward its elbow.
+ * the eye line, `ads` blocks ahead). Forearms run from each fist toward its elbow. A gun's own
+ * `hold.gun` goes over these (see `GunHold`).
  */
-const GUN = {
-  fist: [0.235, -0.255, -0.62] as V3,
-  compactFist: [0.12, -0.19, -0.52] as V3,
+interface GunPose {
+  fist: V3;
   /** Which way the barrel points at the hip: nearly straight ahead, a touch inward. */
-  hipDir: [-0.1, 0.045, -1] as V3,
-  roll: -0.22,
-  sprint: { yaw: 0.8, pitch: -0.5, roll: -0.45, move: [-0.08, -0.06, 0.08] as V3 },
-  slide: { roll: 0.35, move: [-0.04, -0.03, 0.02] as V3 },
-  /** How far ahead of the eye the sight sits when aiming: iron sights, an optic's window (nearer, so it frames more), a scope. */
-  ads: 0.42,
-  opticAds: 0.3,
-  scopeAds: 0.46,
-  forearm: [0.32, -0.74, 0.6] as V3,
-  forearm2: [-0.52, -0.72, 0.48] as V3,
-  adsForearm: [0.22, -0.64, 0.74] as V3,
-  adsForearm2: [-0.4, -0.72, 0.56] as V3,
+  barrel: V3;
+  roll: number;
+  sprint: { yaw: number; pitch: number; roll: number; move: V3 };
+  slide: { roll: number; move: V3 };
+  /** How far ahead of the eye the sight sits when aiming; null: by the sight (`GUN_ADS`). */
+  ads: number | null;
+  forearm: { hip: V3; ads: V3 };
+  forearm2: { hip: V3; ads: V3 };
   /** Blocks of camera-space kick back and degrees of rise per unit of recoil. */
+  kick: number;
+  rise: number;
+}
+
+const GUN: GunPose = {
+  fist: [0.235, -0.255, -0.62],
+  barrel: [-0.1, 0.045, -1],
+  roll: -0.22,
+  sprint: { yaw: 0.8, pitch: -0.5, roll: -0.45, move: [-0.08, -0.06, 0.08] },
+  slide: { roll: 0.35, move: [-0.04, -0.03, 0.02] },
+  ads: null,
+  forearm: { hip: [0.32, -0.74, 0.6], ads: [0.22, -0.64, 0.74] },
+  forearm2: { hip: [-0.52, -0.72, 0.48], ads: [-0.4, -0.72, 0.56] },
   kick: 0.075,
   rise: 7,
 };
+const COMPACT_FIST: V3 = [0.12, -0.19, -0.52];
+/** How far ahead of the eye the sight sits when aiming: iron sights, an optic's window (nearer, so it frames more), a scope. */
+const GUN_ADS = { iron: 0.42, optic: 0.3, scope: 0.46 };
+
+/** A gun's poses: its own `hold.gun` over the defaults (a compact gun's fist nearer the middle). */
+function gunPose(o: GunHold | undefined, compact: boolean): GunPose {
+  const d = GUN;
+  return {
+    fist: o?.fist ?? (compact ? COMPACT_FIST : d.fist),
+    barrel: o?.barrel ?? d.barrel,
+    roll: o?.roll ?? d.roll,
+    sprint: { yaw: o?.sprint?.yaw ?? d.sprint.yaw, pitch: o?.sprint?.pitch ?? d.sprint.pitch, roll: o?.sprint?.roll ?? d.sprint.roll, move: o?.sprint?.move ?? d.sprint.move },
+    slide: { roll: o?.slide?.roll ?? d.slide.roll, move: o?.slide?.move ?? d.slide.move },
+    ads: o?.ads ?? null,
+    forearm: { hip: o?.forearm?.hip ?? d.forearm.hip, ads: o?.forearm?.ads ?? d.forearm.ads },
+    forearm2: { hip: o?.forearm2?.hip ?? d.forearm2.hip, ads: o?.forearm2?.ads ?? d.forearm2.ads },
+    kick: o?.kick ?? d.kick,
+    rise: o?.rise ?? d.rise,
+  };
+}
+
+/**
+ * A humanoid player's own arms in first person (its model's `firstPerson`): a little bigger than
+ * life, as shooters draw them (the hands read around the gun); each arm drawn out so the whole of
+ * it runs this far from the fist, off the screen's edge; the support fist on the handguard's near
+ * side (its left, the side we see), a little under it, in the model's own blocks.
+ */
+interface ArmFit {
+  scale: number;
+  reach: [number, number];
+  support: V3;
+}
+
+const ARM_FIT: ArmFit = { scale: 1.2, reach: [0.55, 0.72], support: [0.01, -0.012, 0] };
+
+const armFit = (o: GltfSpec['firstPerson']): ArmFit => ({ scale: o?.scale ?? ARM_FIT.scale, reach: o?.reach ?? ARM_FIT.reach, support: o?.support ?? ARM_FIT.support });
 
 /** What the runtime tells the view model about the gun in hand, each frame. */
 export interface GunView {
@@ -448,15 +493,15 @@ const isCompact = (pts: GunPoints) => pts.muzzle.z - pts.grip.z < 11 / 16;
  * Two hands on a gun, blending its poses: at the hip, swung across the chest to sprint, leaning
  * into a slide, and up to the eye with the sight on the eye line to aim down the sights.
  */
-function gunRest(pts: GunPoints, hold: HoldSpec, side: number, drop: number, gv: GunView, out: Rest) {
+function gunRest(pts: GunPoints, pose: GunPose, hold: HoldSpec, side: number, drop: number, gv: GunView, out: Rest) {
   const S = STYLES.gun.scale * (hold.scale ?? 1);
-  const f0 = isCompact(pts) ? GUN.compactFist : GUN.fist;
+  const f0 = pose.fist;
   // At the hip.
   const fistH = _fa.set(side * f0[0], f0[1], f0[2]);
-  const axis = _fb.set(side * GUN.hipDir[0], GUN.hipDir[1], GUN.hipDir[2]).normalize();
-  const qH = aimBasis(axis, side * GUN.roll, _qa);
+  const axis = _fb.set(side * pose.barrel[0], pose.barrel[1], pose.barrel[2]).normalize();
+  const qH = aimBasis(axis, side * pose.roll, _qa);
   // Sprinting: swung down and across.
-  const sp = GUN.sprint;
+  const sp = pose.sprint;
   const qS = _qb.setFromEuler(new THREE.Euler(sp.pitch, side * sp.yaw, side * sp.roll, 'YXZ')).multiply(qH);
   // Aiming down the sights: dead ahead, the sight on the eye line.
   const qA = aimBasis(_fc.set(0, 0, -1), 0, _qc);
@@ -464,15 +509,15 @@ function gunRest(pts: GunPoints, hold: HoldSpec, side: number, drop: number, gv:
   const a = gv.aim * gv.aim * (3 - 2 * gv.aim);
   out.itemRot.copy(qH).slerp(qS, k);
   const sl = gv.slide * (1 - gv.aim);
-  if (sl > 0) out.itemRot.premultiply(new THREE.Quaternion().setFromAxisAngle(Z, side * GUN.slide.roll * sl));
+  if (sl > 0) out.itemRot.premultiply(new THREE.Quaternion().setFromAxisAngle(Z, side * pose.slide.roll * sl));
   out.itemRot.slerp(qA, a);
   const sightCam = new THREE.Vector3().subVectors(pts.sight, pts.grip).multiplyScalar(S).applyQuaternion(qA);
-  const dist = gv.sight === 'scope' ? GUN.scopeAds : gv.sight === 'dot' || gv.sight === 'holo' ? GUN.opticAds : GUN.ads;
+  const dist = pose.ads ?? (gv.sight === 'scope' ? GUN_ADS.scope : gv.sight === 'dot' || gv.sight === 'holo' ? GUN_ADS.optic : GUN_ADS.iron);
   const fistA = new THREE.Vector3(0, 0, -dist).sub(sightCam);
   out.grip
     .copy(fistH)
     .add(_v.set(side * sp.move[0], sp.move[1], sp.move[2]).multiplyScalar(k))
-    .add(_v.set(side * GUN.slide.move[0], GUN.slide.move[1], GUN.slide.move[2]).multiplyScalar(sl))
+    .add(_v.set(side * pose.slide.move[0], pose.slide.move[1], pose.slide.move[2]).multiplyScalar(sl))
     .lerp(fistA, a);
   out.grip.y -= drop;
   out.itemScale = S;
@@ -480,14 +525,16 @@ function gunRest(pts: GunPoints, hold: HoldSpec, side: number, drop: number, gv:
   out.itemOffset.set(0, 0, 0);
   out.axis.set(0, 0, 1).applyQuaternion(out.itemRot);
   // Forearms: the firing hand's from the grip, the other's from the handguard (or the pistol's grip).
-  const fr = _v.set(side * GUN.forearm[0], GUN.forearm[1], GUN.forearm[2]).lerp(_s.set(side * GUN.adsForearm[0], GUN.adsForearm[1], GUN.adsForearm[2]), a).normalize();
+  const [fh, fa] = [pose.forearm.hip, pose.forearm.ads];
+  const fr = _v.set(side * fh[0], fh[1], fh[2]).lerp(_s.set(side * fa[0], fa[1], fa[2]), a).normalize();
   forearmDir(fr.clone(), out.axis, out.armRot);
   out.armScale = S;
   out.armStretch = 1;
   out.armOffset.copy(fr).multiplyScalar(((4.5 + 1.8) / 16) * S);
   out.twoHanded = true;
   out.grip2.subVectors(pts.grip2, pts.grip).multiplyScalar(S).applyQuaternion(out.itemRot);
-  const fl = _v.set(side * GUN.forearm2[0], GUN.forearm2[1], GUN.forearm2[2]).lerp(_s.set(side * GUN.adsForearm2[0], GUN.adsForearm2[1], GUN.adsForearm2[2]), a).normalize();
+  const [f2h, f2a] = [pose.forearm2.hip, pose.forearm2.ads];
+  const fl = _v.set(side * f2h[0], f2h[1], f2h[2]).lerp(_s.set(side * f2a[0], f2a[1], f2a[2]), a).normalize();
   forearmDir(fl.clone(), out.axis, out.arm2Rot);
   out.arm2Offset.copy(out.grip2).addScaledVector(fl, ((4.5 + 1.8) / 16) * S);
 }
@@ -915,6 +962,10 @@ export class ViewModel implements ViewModelApi {
   // --- guns ---
   /** The held gun's points (its own space, blocks). */
   private gunPts: GunPoints | null = null;
+  /** The held gun's poses (its `hold.gun` over the defaults). */
+  private gunPose: GunPose = GUN;
+  /** A humanoid player's own arms: how big, how far they reach, where the support fist sits. */
+  private armFit: ArmFit = ARM_FIT;
   /** The hands on a gun (palms and fingers, in the gun's own space, so they move with it). */
   /** A humanoid player's own forearms and fists (their model's), in place of the skin's arms. */
   private humanoid: Record<'R' | 'L', { arm: HumanoidArm; upper: THREE.Group; forearm: THREE.Group; fist: THREE.Group }> | null = null;
@@ -1010,8 +1061,9 @@ export class ViewModel implements ViewModelApi {
     this.buildArm();
   }
 
-  /** A humanoid player's arms (their model's forearms and fists), or null for the skin's. */
-  setHumanoidArms(arms: HumanoidArms | null) {
+  /** A humanoid player's arms (their model's forearms and fists, fitted by its `firstPerson`), or null for the skin's. */
+  setHumanoidArms(arms: HumanoidArms | null, fit?: GltfSpec['firstPerson']) {
+    this.armFit = armFit(fit);
     if (this.humanoid) {
       for (const side of Object.values(this.humanoid)) {
         for (const g of [side.upper, side.forearm, side.fist]) {
@@ -1358,6 +1410,7 @@ export class ViewModel implements ViewModelApi {
         mag: px(m?.mag) ?? h.points?.mag?.clone() ?? new THREE.Vector3(grip.x, box.min.y + 1 / 16, grip.z + 3 / 16),
       };
       this.flash.position.copy(this.gunPts.muzzle);
+      this.gunPose = gunPose(h.hold.gun, isCompact(this.gunPts));
     }
     this.flash.visible = false;
     this.cycleT = -1;
@@ -1473,9 +1526,9 @@ export class ViewModel implements ViewModelApi {
     rc.r += rc.vr * dt;
     rc.vroll += (-rc.roll * 300 - rc.vroll * 22) * dt;
     rc.roll += rc.vroll * dt;
-    this.hand.position.z += rc.z * GUN.kick;
+    this.hand.position.z += rc.z * this.gunPose.kick;
     this.hand.position.y += rc.r * 0.01;
-    this.hand.quaternion.premultiply(_qa.setFromEuler(new THREE.Euler(rc.r * GUN.rise * DEG, 0, rc.roll * DEG * 4)));
+    this.hand.quaternion.premultiply(_qa.setFromEuler(new THREE.Euler(rc.r * this.gunPose.rise * DEG, 0, rc.roll * DEG * 4)));
     this.flashT = Math.max(0, this.flashT - dt);
     this.flash.visible = this.flashT > 0;
     if (this.flash.visible) this.flash.scale.setScalar((0.34 + Math.random() * 0.12) / Math.max(0.1, this.rest.itemScale));
@@ -1527,7 +1580,7 @@ export class ViewModel implements ViewModelApi {
       }
     } else if (this.styleName === 'gun' && this.gunPts && input.gun) {
       this.lastGun = input.gun;
-      gunRest(this.gunPts, this.hold, l, this.drop, input.gun, r);
+      gunRest(this.gunPts, this.gunPose, this.hold, l, this.drop, input.gun, r);
       this.gunMotion(dt, input.gun, r);
     } else if (this.styleName === 'polearm' && this.style) {
       polearmRest(this.style, this.hold.model, l, this.drop, r);
@@ -1575,18 +1628,19 @@ export class ViewModel implements ViewModelApi {
       // Their own fists on the grips (the item's turn), forearms back toward the elbows.
       const itemQ = this.held.kind !== 'empty' ? this.tmpQ.copy(m.wrist).multiply(r.itemRot) : this.tmpQ.copy(r.armRot);
       // A little bigger than life, as shooters draw them (the hands read around the gun).
-      const k = ((this.held.kind === 'sprite' ? r.itemScale : STYLES.gun.scale) / HELD_SCALE) * 1.2;
+      const fit = this.armFit;
+      const k = ((this.held.kind === 'sprite' ? r.itemScale : STYLES.gun.scale) / HELD_SCALE) * fit.scale;
       // The firing arm out to the right of the stock, not behind it.
       const out = _fb.copy(r.armOffset).normalize().add(_fc.set(0.25, 0.05, 0)).normalize().clone();
-      this.placeHumanoidArm('R', _fa.set(0, 0, 0).clone(), itemQ, out, k, 0.55);
+      this.placeHumanoidArm('R', _fa.set(0, 0, 0).clone(), itemQ, out, k, fit.reach[0]);
       const two = r.twoHanded;
       const L = this.humanoid.L;
       L.fist.visible = L.forearm.visible = L.upper.visible = two;
       if (two) {
         // The support fist wraps the handguard's near side (its left, the side we see), a little under it.
         const side = this.gunPts ? this.halfWidthAt(this.gunPts.grip2.z) * r.itemScale : 0;
-        const at = _fc.set(side + 0.01 * k, -0.012 * k, 0).applyQuaternion(itemQ).add(r.grip2);
-        this.placeHumanoidArm('L', at.clone(), itemQ, _fb.subVectors(r.arm2Offset, r.grip2).clone(), k, 0.72);
+        const at = _fc.set(side + fit.support[0] * k, fit.support[1] * k, fit.support[2] * k).applyQuaternion(itemQ).add(r.grip2);
+        this.placeHumanoidArm('L', at.clone(), itemQ, _fb.subVectors(r.arm2Offset, r.grip2).clone(), k, fit.reach[1]);
       }
     }
     if (r.twoHanded) {

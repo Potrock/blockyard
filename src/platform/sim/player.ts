@@ -3,7 +3,7 @@ import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Bot, BotControls, CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, OrbitOptions, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
 import { IDLE_INPUT, type PlayerInput } from '../net/protocol';
 import { Combat, type ShotWire } from './combat';
-import { moveMods, type Stance } from './guns';
+import { moveMods, type GunRules, type Stance } from './guns';
 import type { BulletHit } from './hitscan';
 import type { EntitySim } from './entities';
 import { PlayerHealth } from './health';
@@ -102,6 +102,8 @@ export interface PlayerSimParts {
   name: string;
   world: VoxelWorld;
   options: PlayerOptions;
+  /** The game's gun rules (`guns`). */
+  guns: GunRules;
   /** The game's vehicles, and the world as they see it. */
   vehicles: Record<string, VehicleDefinition>;
   query: VehicleWorld;
@@ -254,6 +256,7 @@ export class PlayerSim {
       present.fx(null),
       p.ctx,
       o.pvp ?? false,
+      p.guns,
     );
     this.api = this.makeApi();
   }
@@ -365,7 +368,7 @@ export class PlayerSim {
       this.pitch = inp.pitch;
     }
     const held = this.inventory.held;
-    const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul);
+    const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul, this.p.guns);
     const { sneak, sprint, slide } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods);
     this.syncState();
     this.sneaking = sneak;

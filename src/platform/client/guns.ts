@@ -1,5 +1,5 @@
 import type { GunItem, ItemDefinition, Vec3 } from '../api/types';
-import { addBloom, canReload, freshGun, gun, pelletDirs, RAISE, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunState } from '../sim/guns';
+import { addBloom, canReload, DEFAULT_GUN_RULES, freshGun, gun, pelletDirs, RAISE, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunRules, type GunState } from '../sim/guns';
 import type { PlayerFrame } from '../sim/player';
 
 /** The controls a gun reads this frame (the page's own input, as the snapshot will send it). */
@@ -54,6 +54,9 @@ export class GunController {
   /** Reload length and a shotgun's rounds going in, for the animation. */
   reloadTotal = 1;
   shellsToLoad = 0;
+
+  /** The game's gun rules (`guns`), as the host plays them. */
+  constructor(private rules: GunRules = DEFAULT_GUN_RULES) {}
 
   /** The gun in hand changed (or none): take the host's state for it, else what we had, else a full one. */
   hold(item: string | null, def: ItemDefinition | undefined, host: PlayerFrame['hand']['gun'] | undefined) {
@@ -154,7 +157,7 @@ export class GunController {
       if (!def.auto) break;
     }
     // Empty: reload by itself.
-    if (st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st, sound);
+    if (this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st, sound);
     // Between bursts, the view settles back down some of the way.
     if (this.sinceShot > g.interval * 1.5 && this.debt > 0) {
       const r = Math.min(this.debt, this.debt * dt * 9 + 0.0005);

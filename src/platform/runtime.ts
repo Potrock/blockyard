@@ -8,7 +8,7 @@ import { FrameBuffer } from './client/interp';
 import { Predictor } from './client/predict';
 import { GunController, type FiredShot } from './client/guns';
 import { freshMemory, resolveMovement, type MoveTune } from './sim/movement';
-import { gun as gunOf, isGun, moveMods, playerBoxes, rayBox, DEG } from './sim/guns';
+import { assistOf, gun as gunOf, isGun, moveMods, playerBoxes, rayBox, resolveGunRules, DEG, type Assist, type Gun, type GunRules } from './sim/guns';
 import { rayHit } from './sim/worldquery';
 import type { ShotWire } from './sim/combat';
 import { ClientMovers, propPose } from './client/movers';
@@ -185,7 +185,9 @@ export class Runtime {
   /** On a server, in a room of a player's own: its code. */
   private room: string | null = null;
   /** The held gun on this screen: it fires at once, and its shots go to the host with the controls. */
-  private guns = new GunController();
+  private guns: GunController;
+  /** The game's gun rules (`guns`), as the host plays them: movement, reloading, hitboxes. */
+  private gunRules: GunRules;
   /** Shots fired and not yet sent (a tick was still on its way to a worker). */
   private shotQueue: [number, number, number, number][] = [];
   /** This frame's shots, drawn once the hand is placed (their tracers leave its muzzle). */
@@ -204,6 +206,8 @@ export class Runtime {
   private targets: { id: string; x: number; y: number; z: number }[] = [];
   /** Aim assist: who it's on, and which way they were last frame (it turns with them). */
   private assistOn: { id: string; yaw: number; pitch: number } | null = null;
+  /** The held gun's aim assist shape (its own over the game's). */
+  private assist: { gun: Gun; shape: Assist } | null = null;
   /** How long the right stick has been pushed all the way sideways (turning round speeds up). */
   private fullTilt = 0;
   /** Our health last frame (the controller rumbles when it drops). */
@@ -229,6 +233,8 @@ export class Runtime {
     this.input = new Input(canvas, this.life.signal);
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
     this.tune = resolveMovement(def.player?.movement);
+    this.gunRules = resolveGunRules(def.guns);
+    this.guns = new GunController(this.gunRules);
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
     const padKeys = { jump: 'Space', crouch: this.tune.crouchKeys[0] ?? 'ShiftLeft', sprint: this.tune.sprintKeys[0] ?? 'ControlLeft' };
     this.input.padBindings = padBindings(def.gamepad);
@@ -476,7 +482,7 @@ export class Runtime {
       this.server.onClose = () => this.disconnected();
       if (this.walker) {
         // Movement as the server moves them: the game's tuning, and what they hold (a heavy gun, aiming).
-        this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1));
+        this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1, this.gunRules));
         this.movers = new ClientMovers(this.chunks.world, this.content, this.registry, (b) => this.blockId(b));
       }
     } else {
@@ -1139,14 +1145,17 @@ export class Runtime {
   /**
    * Aim assist (a controller, holding a gun, the setting on): over a player in sight near the
    * crosshair the stick turns slower, and while the sticks are moving the view turns a little
-   * with them as they (or we) move. The strength is the gun's `aim.assist`. `yaw` and `pitch`:
-   * how far to turn the view with the target this frame (radians).
+   * with them as they (or we) move. Its strength and shape are the gun's `aim.assist` over the
+   * game's `guns.assist`. `yaw` and `pitch`: how far to turn the view with the target this frame
+   * (radians).
    */
   private aimAssist(): { slow: number; yaw: number; pitch: number } {
     const none = { slow: 1, yaw: 0, pitch: 0 };
     const g = this.guns.g;
-    const strength = g && this.settings.aimAssist && this.walker && !this.view.thirdPerson ? g.aim.assist : 0;
-    if (strength <= 0) {
+    if (g && this.assist?.gun !== g) this.assist = { gun: g, shape: assistOf(g, this.gunRules) };
+    const a = this.assist?.shape;
+    const strength = g && a && this.settings.aimAssist && this.walker && !this.view.thirdPerson ? a.strength : 0;
+    if (strength <= 0 || !a) {
       this.assistOn = null;
       return none;
     }
@@ -1165,7 +1174,7 @@ export class Runtime {
       if (d < 0.8 || d > g!.range) continue;
       const off = Math.acos(Math.max(-1, Math.min(1, (dx * fx + dy * fy + dz * fz) / d)));
       // About a block round them, a little more far off.
-      const cone = Math.atan2(1.1, d) + 0.025;
+      const cone = Math.atan2(a.radius, d) + a.angle;
       if (off > cone || off / cone >= bestOff) continue;
       if (!this.chunks.world.line_clear(c.x, c.y, c.z, t.x, t.y, t.z)) continue;
       bestOff = off / cone;
@@ -1175,14 +1184,14 @@ export class Runtime {
     this.assistOn = best;
     if (!best) return none;
     const aiming = (this.guns.state?.aim ?? 0) > 0.5;
-    const slow = 1 - strength * (aiming ? 0.6 : 0.45) * (1 - 0.4 * bestOff);
+    const slow = 1 - strength * (aiming ? a.slow.aim : a.slow.hip) * (1 - 0.4 * bestOff);
     if (!was || was.id !== best.id || !(this.input.padTilt > 0.05 || this.input.padMoving)) return { slow, yaw: 0, pitch: 0 };
     let turn = best.yaw - was.yaw;
     turn -= Math.round(turn / (2 * Math.PI)) * 2 * Math.PI;
     const tilt = best.pitch - was.pitch;
     // A jump (a respawn, a teleport) isn't followed.
     if (Math.abs(turn) > 0.15 || Math.abs(tilt) > 0.15) return { slow, yaw: 0, pitch: 0 };
-    const k = strength * (aiming ? 0.6 : 0.4);
+    const k = strength * (aiming ? a.follow.aim : a.follow.hip);
     return { slow, yaw: turn * k, pitch: tilt * k };
   }
 
@@ -1220,13 +1229,15 @@ export class Runtime {
         }
       }
     }
-    // A humanoid model: their first-person arms are its forearms and fists (once its file is here).
+    // A humanoid model: their first-person arms are its forearms and fists (once its file is here), fitted by its `firstPerson`.
     const body = model?.gltf && (model.gltf.rig === 'humanoid' || !model.gltf.clips) ? model.gltf.url : '';
-    if (body !== this.shown.humanoid) {
+    const fit = body ? model!.gltf!.firstPerson : undefined;
+    const bodyKey = fit ? `${body}|${JSON.stringify(fit)}` : body;
+    if (bodyKey !== this.shown.humanoid) {
       const arms = body ? this.graphics.gltf.humanoidArms(body) : null;
       if (!body || arms) {
-        this.held.setHumanoidArms(arms);
-        this.shown.humanoid = body;
+        this.held.setHumanoidArms(arms, fit);
+        this.shown.humanoid = bodyKey;
       }
     }
     const creative = me.creative;
@@ -1692,7 +1703,7 @@ export class Runtime {
       break;
     }
     for (const p of others) {
-      const b = playerBoxes(p, p.sliding ? 2 : p.sneaking ? 1 : 0);
+      const b = playerBoxes(p, p.sliding ? 2 : p.sneaking ? 1 : 0, this.gunRules);
       const t = Math.min(rayBox(o, d, b.body[0], b.body[1]) ?? Infinity, rayBox(o, d, b.head[0], b.head[1]) ?? Infinity);
       if (t < end) {
         end = t;
