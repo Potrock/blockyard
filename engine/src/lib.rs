@@ -9,6 +9,7 @@ pub mod entities;
 pub mod entitytex;
 pub mod gen;
 pub mod mesher;
+pub mod movers;
 pub mod noise;
 pub mod noisetex;
 pub mod texgen;
@@ -151,6 +152,14 @@ impl VoxelWorld {
         self.players.get_mut(i as usize).and_then(|p| p.as_mut())
     }
 
+    fn settle(world: &mut world::World, dt: f64) {
+        for m in world.movers.iter_mut() {
+            m.was = m.prev;
+            m.span = dt;
+            m.prev = m.now;
+        }
+    }
+
     /// The players the entities react to: everyone not frozen (spectating, dead, in a menu).
     fn targets(&self) -> Vec<entities::Target> {
         self.players
@@ -285,11 +294,12 @@ impl VoxelWorld {
         }
     }
 
-    /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob, frozen]
+    /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob, frozen,
+    /// ride, ride_x, ride_y, ride_z] (the mover they ride, 0 for none, and where they are on it)
     pub fn player_state(&self, i: u32) -> Vec<f64> {
         let Some(p) = self.player(i) else {
             // Nobody there: nowhere, frozen.
-            let mut v = vec![0.0; 13];
+            let mut v = vec![0.0; 17];
             v[12] = 1.0;
             return v;
         };
@@ -307,6 +317,10 @@ impl VoxelWorld {
             p.flying as u8 as f64,
             p.bob,
             p.frozen as u8 as f64,
+            p.ride.id as f64,
+            p.ride.local[0],
+            p.ride.local[1],
+            p.ride.local[2],
         ]
     }
 
@@ -326,6 +340,91 @@ impl VoxelWorld {
         p.flying = s[10] > 0.5;
         p.bob = s[11];
         p.frozen = s.get(12).is_some_and(|f| *f > 0.5);
+        p.ride = if s.len() >= 17 { world::Ride { id: s[13] as u32, local: [s[14], s[15], s[16]] } } else { world::Ride::default() };
+    }
+
+    // ---- Movers: moving block colliders (see `movers.rs`) ----
+
+    /// Add (or replace) a mover: `cells` holds 1 for each solid cell of an `sx` x `sy` x `sz` grid
+    /// (index `(y * sz + z) * sx + x`); the model's origin is at grid point (`px`, `py`, `pz`) and
+    /// a cell is `unit` model units across.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mover_add(&mut self, id: u32, sx: i32, sy: i32, sz: i32, cells: &[u8], px: f64, py: f64, pz: f64, unit: f64) {
+        if id == 0 || sx <= 0 || sy <= 0 || sz <= 0 || cells.len() < (sx * sy * sz) as usize {
+            return;
+        }
+        self.mover_remove(id);
+        let m = movers::Mover::new(id, [sx, sy, sz], cells[..(sx * sy * sz) as usize].to_vec(), [px, py, pz], unit);
+        self.inner.movers.push(m);
+    }
+
+    pub fn mover_remove(&mut self, id: u32) {
+        self.inner.movers.retain(|m| m.id != id);
+    }
+
+    pub fn mover_count(&self) -> u32 {
+        self.inner.movers.len() as u32
+    }
+
+    /// Where a mover is now: position, rotation (unit quaternion) and scale. `snap` places it
+    /// without motion (new, teleported): nothing riding it is carried and nobody is pushed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mover_pose(&mut self, id: u32, x: f64, y: f64, z: f64, qx: f64, qy: f64, qz: f64, qw: f64, scale: f64, snap: bool) {
+        let Some(m) = self.inner.mover_mut(id) else { return };
+        let l = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
+        let rot = if l > 1e-9 { [qx / l, qy / l, qz / l, qw / l] } else { [0.0, 0.0, 0.0, 1.0] };
+        m.now = movers::Pose { pos: [x, y, z], rot, scale };
+        if snap {
+            m.prev = m.now;
+            m.was = m.now;
+        }
+    }
+
+    /// The movers have moved (`mover_pose`) over `dt` seconds: carry what rides them, push what
+    /// they ran into, and start measuring their motion afresh.
+    pub fn movers_carry(&mut self, dt: f64) {
+        if self.inner.movers.is_empty() {
+            return;
+        }
+        let VoxelWorld { inner, players, entities } = self;
+        for p in players.iter_mut().flatten() {
+            p.carry(inner);
+        }
+        entities.carry(inner);
+        Self::settle(inner, dt);
+    }
+
+    /// `movers_carry` without the carrying (a client's copy of the world, which only predicts).
+    pub fn movers_settle(&mut self, dt: f64) {
+        Self::settle(&mut self.inner, dt);
+    }
+
+    /// [mover id or 0, distance] for the first mover along a ray within `max_dist`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mover_raycast(&self, ox: f64, oy: f64, oz: f64, dx: f64, dy: f64, dz: f64, max_dist: f64) -> Vec<f64> {
+        let l = (dx * dx + dy * dy + dz * dz).sqrt();
+        if l < 1e-12 {
+            return vec![0.0, 0.0];
+        }
+        match self.inner.raycast_movers([ox, oy, oz], [dx / l, dy / l, dz / l], max_dist) {
+            Some((id, t)) => vec![id as f64, t],
+            None => vec![0.0, 0.0],
+        }
+    }
+
+    /// The mover whose cells hold this point, or 0.
+    pub fn mover_at(&self, x: f64, y: f64, z: f64) -> u32 {
+        self.inner.movers.iter().find(|m| m.contains([x, y, z])).map_or(0, |m| m.id)
+    }
+
+    /// [ride, x, y, z] for an entity body: the mover it rides (0 for none) and where it is on it.
+    pub fn body_ride(&self, i: u32) -> Vec<f64> {
+        let b = &self.entities.bodies;
+        let o = i as usize * entities::body::STRIDE;
+        if o + entities::body::STRIDE > b.len() {
+            return vec![0.0; 4];
+        }
+        vec![b[o + entities::body::RIDE], b[o + entities::body::RIDE_X], b[o + entities::body::RIDE_Y], b[o + entities::body::RIDE_Z]]
     }
 
     /// [sky, block] light estimate (0..1) at a block position.

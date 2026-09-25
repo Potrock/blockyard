@@ -7,6 +7,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use crate::blocks::*;
 use crate::gen::HEADER_BYTES;
 use crate::mesher::REGION_HEADER;
+use crate::movers::Mover;
 
 /// The original block of an edit mirrored before its column loaded (filled in when it loads).
 const UNKNOWN: u8 = 255;
@@ -72,6 +73,8 @@ pub struct World {
     edits: FxMap<u64, FxMap<u32, u8>>,
     /// What each edited cell held before its first edit this session (for `revert_edits`).
     originals: FxMap<u64, FxMap<u32, u8>>,
+    /// Moving colliders (see `movers`).
+    pub movers: Vec<Mover>,
 }
 
 impl Default for World {
@@ -82,7 +85,26 @@ impl Default for World {
 
 impl World {
     pub fn new() -> Self {
-        World { cols: FxMap::default(), edits: FxMap::default(), originals: FxMap::default() }
+        World { cols: FxMap::default(), edits: FxMap::default(), originals: FxMap::default(), movers: Vec::new() }
+    }
+
+    pub fn mover(&self, id: u32) -> Option<&Mover> {
+        self.movers.iter().find(|m| m.id == id)
+    }
+
+    pub fn mover_mut(&mut self, id: u32) -> Option<&mut Mover> {
+        self.movers.iter_mut().find(|m| m.id == id)
+    }
+
+    /// The first mover along a ray (unit `d`) within `max`: its id and the distance.
+    pub fn raycast_movers(&self, o: [f64; 3], d: [f64; 3], max: f64) -> Option<(u32, f64)> {
+        let mut best: Option<(u32, f64)> = None;
+        for m in &self.movers {
+            if let Some(t) = m.ray(o, d, best.map_or(max, |b| b.1)) {
+                best = Some((m.id, t));
+            }
+        }
+        best
     }
 
     pub fn has_column(&self, cx: i32, cz: i32) -> bool {
@@ -393,9 +415,23 @@ impl World {
         (sky.max(0) as f32 / 15.0, blk.max(0) as f32 / 15.0)
     }
 
-    /// Distance along a ray to the first solid (collidable) block, or None within `max_dist`.
-    /// Unloaded columns count as solid.
+    /// Distance along a ray to the first solid (collidable) block or mover, or None within
+    /// `max_dist`. Unloaded columns count as solid.
     pub fn raycast_solid(&self, o: [f64; 3], d: [f64; 3], max_dist: f64) -> Option<f64> {
+        let blocks = self.raycast_voxels(o, d, max_dist);
+        if self.movers.is_empty() {
+            return blocks;
+        }
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if len < 1e-12 {
+            return blocks;
+        }
+        let moving = self.raycast_movers(o, [d[0] / len, d[1] / len, d[2] / len], blocks.unwrap_or(max_dist)).map(|(_, t)| t);
+        moving.or(blocks)
+    }
+
+    /// `raycast_solid` for blocks only.
+    pub fn raycast_voxels(&self, o: [f64; 3], d: [f64; 3], max_dist: f64) -> Option<f64> {
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         if len < 1e-12 {
             return None;
@@ -497,7 +533,7 @@ fn solid_at(world: &World, x: i32, y: i32, z: i32) -> bool {
 }
 
 /// Whether an axis-aligned box (feet at `p`, half width `hw`, height `h`) overlaps solid blocks.
-pub fn aabb_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
+pub fn voxel_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
     let x0 = (p[0] - hw + EPS).floor() as i32;
     let x1 = (p[0] + hw - EPS).floor() as i32;
     let y0 = (p[1] + EPS).floor() as i32;
@@ -516,15 +552,30 @@ pub fn aabb_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
     false
 }
 
-/// Move a box along one axis, snapping flush against the first solid block. Returns true if
-/// the move was blocked.
-pub fn aabb_move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, hw: f64, h: f64) -> bool {
+/// Whether a box overlaps solid blocks or a mover; which (0 for blocks, else the mover's id).
+pub fn touching(world: &World, p: [f64; 3], hw: f64, h: f64) -> Option<u32> {
+    for m in &world.movers {
+        if m.near(&m.now, p, h + hw + 1.0) && m.overlaps(&m.now, p, hw, h) {
+            return Some(m.id);
+        }
+    }
+    voxel_collides(world, p, hw, h).then_some(0)
+}
+
+/// Whether an axis-aligned box overlaps solid blocks or a mover.
+pub fn aabb_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
+    touching(world, p, hw, h).is_some()
+}
+
+/// Move a box along one axis through blocks only, snapping flush against the first solid one.
+/// Returns true if the move was blocked.
+fn voxel_move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, hw: f64, h: f64) -> bool {
     if delta == 0.0 {
         return false;
     }
     let mut p = *pos;
     p[axis] += delta;
-    if !aabb_collides(world, p, hw, h) {
+    if !voxel_collides(world, p, hw, h) {
         *pos = p;
         return false;
     }
@@ -539,10 +590,175 @@ pub fn aabb_move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64
         let edge = (pos[axis] + lo + delta).floor() + 1.0;
         p[axis] = edge - lo + EPS * 2.0;
     }
-    if ((delta > 0.0 && p[axis] >= pos[axis]) || (delta < 0.0 && p[axis] <= pos[axis])) && !aabb_collides(world, p, hw, h) {
+    if ((delta > 0.0 && p[axis] >= pos[axis]) || (delta < 0.0 && p[axis] <= pos[axis])) && !voxel_collides(world, p, hw, h) {
         *pos = p;
     }
     true
+}
+
+/// Move a box along one axis, stopping at the first solid block or mover (except `skip`).
+/// Returns what stopped it: 0 for blocks, else the mover's id; None if it moved freely.
+pub fn move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, hw: f64, h: f64, skip: u32) -> Option<u32> {
+    if delta == 0.0 {
+        return None;
+    }
+    let mut to = *pos;
+    let mut hit = voxel_move_axis(world, &mut to, axis, delta, hw, h).then_some(0);
+    let dist = to[axis] - pos[axis];
+    if dist != 0.0 && !world.movers.is_empty() {
+        let mut d = [0.0; 3];
+        d[axis] = dist;
+        let mut t: f64 = 1.0;
+        let mut who = 0;
+        for m in &world.movers {
+            if m.id == skip || !m.near(&m.now, *pos, dist.abs() + h + hw + 1.0) {
+                continue;
+            }
+            let tm = m.sweep(*pos, hw, h, d);
+            if tm < t {
+                t = tm;
+                who = m.id;
+            }
+        }
+        if t < 1.0 {
+            // Stop just short of it (never backwards).
+            let mut moved = dist * t - dist.signum() * EPS * 2.0;
+            if moved * dist < 0.0 {
+                moved = 0.0;
+            }
+            to = *pos;
+            to[axis] += moved;
+            hit = Some(who);
+        }
+    }
+    *pos = to;
+    hit
+}
+
+/// Move a box along one axis, snapping flush against the first solid block or mover. Returns
+/// true if the move was blocked.
+pub fn aabb_move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, hw: f64, h: f64) -> bool {
+    move_axis(world, pos, axis, delta, hw, h, 0).is_some()
+}
+
+/// A walking box blocked sideways by a mover steps up onto it if it's low (a tilted deck, a
+/// lip): up, across, back down. Returns what stopped it, like `move_axis`.
+pub fn walk_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, hw: f64, h: f64, grounded: bool) -> Option<u32> {
+    let start = *pos;
+    let hit = move_axis(world, pos, axis, delta, hw, h, 0);
+    if !grounded || !matches!(hit, Some(id) if id != 0) {
+        return hit;
+    }
+    let mut p = start;
+    let mut up = p;
+    move_axis(world, &mut up, 1, STEP_UP, hw, h, 0);
+    let rise = up[1] - p[1];
+    if rise <= EPS {
+        return hit;
+    }
+    p = up;
+    let across = move_axis(world, &mut p, axis, delta, hw, h, 0);
+    if (p[axis] - start[axis]).abs() <= (pos[axis] - start[axis]).abs() + EPS {
+        return hit;
+    }
+    move_axis(world, &mut p, 1, -rise, hw, h, 0);
+    *pos = p;
+    across
+}
+
+/// Lift a box out of any mover it's resting a little inside (rounding, a carry).
+pub fn settle_box(world: &World, pos: &mut [f64; 3], hw: f64, h: f64) {
+    if world.movers.is_empty() {
+        return;
+    }
+    for _ in 0..3 {
+        let mut best: Option<([f64; 3], f64)> = None;
+        for m in &world.movers {
+            if !m.near(&m.now, *pos, h + hw + 1.0) {
+                continue;
+            }
+            if let Some((v, d)) = m.shallow(*pos, hw, h) {
+                if best.is_none_or(|(_, bd)| d > bd) {
+                    best = Some((v, d));
+                }
+            }
+        }
+        let Some((v, _)) = best else { return };
+        for axis in [1, 0, 2] {
+            voxel_move_axis(world, pos, axis, v[axis], hw, h);
+        }
+    }
+}
+
+/// A body's link to the mover it rides: the mover's id (0 for none) and where the body is on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Ride {
+    pub id: u32,
+    /// Feet position in the mover's own space.
+    pub local: [f64; 3],
+}
+
+/// Carry a body with the mover it rides (to where it now is on it), and out of the way of any
+/// that moved into it; walls and other movers stop it on the way.
+pub fn carry_box(world: &World, pos: &mut [f64; 3], hw: f64, h: f64, ride: &mut Ride) {
+    if ride.id != 0 {
+        match world.mover(ride.id) {
+            None => ride.id = 0,
+            Some(m) => {
+                let to = m.now.to_world(ride.local);
+                for axis in [1, 0, 2] {
+                    move_axis(world, pos, axis, to[axis] - pos[axis], hw, h, m.id);
+                }
+                ride.local = m.now.to_local(*pos);
+            }
+        }
+    }
+    for m in &world.movers {
+        if m.id == ride.id || !m.moved() || !(m.near(&m.now, *pos, h + hw + 1.0) || m.near(&m.prev, *pos, h + hw + 1.0)) {
+            continue;
+        }
+        if m.overlaps(&m.now, *pos, hw, h) && !m.overlaps(&m.prev, *pos, hw, h) {
+            // It ran into them: they go where it would have taken them.
+            let to = m.now.to_world(m.prev.to_local(*pos));
+            for axis in [1, 0, 2] {
+                move_axis(world, pos, axis, to[axis] - pos[axis], hw, h, m.id);
+            }
+        }
+    }
+}
+
+/// After a step: what a body stands on decides what it rides. On a mover it rides that one; on
+/// blocks, nothing; in the air it keeps riding while it's near (a jump on deck lands on deck),
+/// and leaving takes the mover's motion with it. Returns a velocity change.
+pub fn update_ride(world: &World, pos: [f64; 3], ground: Option<u32>, free: bool, ride: &mut Ride) -> [f64; 3] {
+    let mut kick = [0.0; 3];
+    match ground {
+        Some(id) => ride.id = id,
+        None if ride.id != 0 => match world.mover(ride.id) {
+            Some(m) if !free && m.near(&m.now, pos, 4.0) => {}
+            Some(m) => {
+                if !free {
+                    kick = m.velocity_at(pos);
+                }
+                ride.id = 0;
+            }
+            None => ride.id = 0,
+        },
+        None => {}
+    }
+    if let Some(m) = world.mover(ride.id) {
+        ride.local = m.now.to_local(pos);
+    } else {
+        ride.id = 0;
+    }
+    kick
+}
+
+/// What's under a box resting at `p` (probing `depth` down): 0 for blocks, a mover's id.
+pub fn ground_under(world: &World, p: [f64; 3], hw: f64, h: f64, depth: f64) -> Option<u32> {
+    let mut probe = p;
+    probe[1] -= depth;
+    touching(world, probe, hw, h)
 }
 
 /// Player physics state (AABB 0.6 x 1.8 x 0.6, feet position).
@@ -556,12 +772,16 @@ pub struct Player {
     pub flying: bool,
     pub frozen: bool,
     pub bob: f64,
+    /// The mover they're riding, if any.
+    pub ride: Ride,
 }
 
 pub const HALF_W: f64 = 0.3;
 pub const HEIGHT: f64 = 1.8;
 pub const EYE: f64 = 1.62;
 const EPS: f64 = 1e-4;
+/// How high a walker steps up onto a mover without jumping.
+const STEP_UP: f64 = 0.4;
 
 pub struct MoveInput {
     /// Desired horizontal direction in world space (length <= 1).
@@ -584,16 +804,12 @@ impl Player {
             flying: false,
             frozen: false,
             bob: 0.0,
+            ride: Ride::default(),
         }
     }
 
     fn collides(world: &World, p: [f64; 3]) -> bool {
         aabb_collides(world, p, HALF_W, HEIGHT)
-    }
-
-    /// Move along one axis, stopping at the first solid block. Returns true if blocked.
-    fn move_axis(&mut self, world: &World, axis: usize, delta: f64) -> bool {
-        aabb_move_axis(world, &mut self.pos, axis, delta, HALF_W, HEIGHT)
     }
 
     /// Add an instantaneous velocity change (knockback, launch pads...).
@@ -621,9 +837,24 @@ impl Player {
         self.eyes_in_water = eyes == WATER_B && surface_ok;
     }
 
+    /// Carried by the mover they ride, pushed by one that ran into them (see `carry_box`).
+    pub fn carry(&mut self, world: &World) {
+        carry_box(world, &mut self.pos, HALF_W, HEIGHT, &mut self.ride);
+    }
+
     pub fn step(&mut self, world: &World, input: &MoveInput, dt: f64) {
+        // Frozen or not, a rider goes where their mover went.
+        if self.ride.id != 0 {
+            self.carry(world);
+        }
         if self.frozen {
             self.vel = [0.0; 3];
+            // Frozen on a mover (put there: a helmsman, a cutscene), they ride it all the same.
+            if self.ride.id == 0 {
+                if let Some(m) = ground_under(world, self.pos, HALF_W, HEIGHT, 0.1).and_then(|id| world.mover(id)) {
+                    self.ride = Ride { id: m.id, local: m.now.to_local(self.pos) };
+                }
+            }
             return;
         }
         let dt = dt.min(0.1);
@@ -635,6 +866,7 @@ impl Player {
     }
 
     fn substep(&mut self, world: &World, input: &MoveInput, dt: f64) {
+        settle_box(world, &mut self.pos, HALF_W, HEIGHT);
         self.liquid_state(world);
         let wish = [input.wish_x, input.wish_z];
         let (target_speed, accel) = if self.flying {
@@ -686,25 +918,26 @@ impl Player {
         let guard = input.sneak && self.on_ground && !self.flying;
 
         let dy = self.vel[1] * dt;
-        let blocked_y = self.move_axis(world, 1, dy);
-        if blocked_y {
+        let mut ground = None;
+        if let Some(by) = move_axis(world, &mut self.pos, 1, dy, HALF_W, HEIGHT, 0) {
             if self.vel[1] < 0.0 {
                 self.on_ground = true;
+                ground = Some(by);
             }
             self.vel[1] = 0.0;
         } else {
             self.on_ground = false;
             // Resting exactly on a surface: probe slightly below.
-            let mut probe = self.pos;
-            probe[1] -= 0.02;
-            if self.vel[1] <= 0.0 && Self::collides(world, probe) {
-                self.on_ground = true;
+            if self.vel[1] <= 0.0 {
+                ground = ground_under(world, self.pos, HALF_W, HEIGHT, 0.02);
+                self.on_ground = ground.is_some();
             }
         }
         if self.flying && self.on_ground {
             self.flying = false;
         }
 
+        let grounded = self.on_ground && !self.flying;
         for axis in [0usize, 2] {
             let d = self.vel[axis] * dt;
             if guard {
@@ -716,13 +949,18 @@ impl Player {
                     continue;
                 }
             }
-            if self.move_axis(world, axis, d) {
+            if walk_axis(world, &mut self.pos, axis, d, HALF_W, HEIGHT, grounded).is_some() {
                 // Climb out of water onto a ledge.
                 if self.in_water && input.jump {
                     self.vel[1] = self.vel[1].max(5.0);
                 }
                 self.vel[axis] = 0.0;
             }
+        }
+
+        let kick = update_ride(world, self.pos, ground, self.flying || self.in_water, &mut self.ride);
+        for a in 0..3 {
+            self.vel[a] += kick[a];
         }
 
         let speed = (self.vel[0] * self.vel[0] + self.vel[2] * self.vel[2]).sqrt();

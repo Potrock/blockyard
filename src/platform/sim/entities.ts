@@ -11,6 +11,7 @@ import type {
   HudApi,
   Player,
   ProjectileSpec,
+  Prop,
   SpriteRef,
   Vec3,
 } from '../api/types';
@@ -22,7 +23,7 @@ const B = {
   X: 0, Y: 1, Z: 2, VX: 3, VY: 4, VZ: 5, HALF_W: 6, HEIGHT: 7, SPEED: 8, ACCEL: 9, JUMP_VEL: 10, GRAVITY: 11,
   WISH_X: 12, WISH_Z: 13, MODE: 14, WANT_JUMP: 15, FLAGS: 16, IMP_X: 17, IMP_Y: 18, IMP_Z: 19,
   TX: 20, TY: 21, TZ: 22, TARGET_KIND: 23, ON_GROUND: 24, IN_WATER: 25, LOS: 26, PATH_DIST: 27, DIST: 28,
-  HEADING: 29, BLOCKED: 30, LANDED_SPEED: 31, PLAYER: 32,
+  HEADING: 29, BLOCKED: 30, LANDED_SPEED: 31, PLAYER: 32, RIDE: 33,
 } as const;
 const P = { X: 0, Y: 1, Z: 2, VX: 3, VY: 4, VZ: 5, GRAVITY: 6, DRAG: 7, RADIUS: 8, FLAGS: 9, OWNER: 10, AGE: 11, HIT_KIND: 12, HIT_INDEX: 13 } as const;
 const FLAG_ACTIVE = 1;
@@ -53,6 +54,8 @@ export interface EntityServices {
   pvp: boolean;
   /** Run game code (AI) so a throw is reported rather than stopping every entity. */
   guard(fn: () => void): void;
+  /** Props by id (what entities ride). */
+  prop(id: number): Prop | null;
 }
 
 /** One entity as the client needs to draw it. */
@@ -159,6 +162,11 @@ class EntityImpl implements Entity {
 
   get onGround(): boolean {
     return this.m.bodies[this.o + B.ON_GROUND] > 0.5;
+  }
+
+  get riding(): Prop | null {
+    const id = this.m.bodies[this.o + B.RIDE];
+    return id ? this.m.s.prop(id) : null;
   }
 
   get height(): number {

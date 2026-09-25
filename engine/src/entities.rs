@@ -5,11 +5,11 @@
 //! client maps them as `Float64Array`s over wasm memory): no per-entity calls across the boundary.
 
 use crate::blocks::*;
-use crate::world::{aabb_collides, aabb_move_axis, World};
+use crate::world::{aabb_collides, aabb_move_axis, carry_box, ground_under, move_axis, settle_box, update_ride, walk_axis, Ride, World};
 
 /// Body buffer layout (f64 fields per body).
 pub mod body {
-    pub const STRIDE: usize = 34;
+    pub const STRIDE: usize = 38;
     // Inputs (host writes).
     pub const X: usize = 0;
     pub const Y: usize = 1;
@@ -51,6 +51,11 @@ pub mod body {
     pub const LANDED_SPEED: usize = 31;
     /// The player DIST and LOS are measured to (the target, or the nearest): their slot, or -1.
     pub const PLAYER: usize = 32;
+    /// The mover it rides (0 for none), and where its feet are on it (see `world::Ride`).
+    pub const RIDE: usize = 33;
+    pub const RIDE_X: usize = 34;
+    pub const RIDE_Y: usize = 35;
+    pub const RIDE_Z: usize = 36;
 }
 
 pub const FLAG_ACTIVE: u32 = 1;
@@ -508,6 +513,16 @@ impl Entities {
                 b[body::WISH_Z] = 0.0;
             }
             b[body::BLOCKED] = 0.0;
+            if b[body::RIDE] != 0.0 {
+                // Where its mover went.
+                let mut pos = [b[body::X], b[body::Y], b[body::Z]];
+                let mut ride = Self::ride_of(b);
+                carry_box(world, &mut pos, b[body::HALF_W], b[body::HEIGHT], &mut ride);
+                Self::set_ride(b, ride);
+                b[body::X] = pos[0];
+                b[body::Y] = pos[1];
+                b[body::Z] = pos[2];
+            }
             for _ in 0..steps {
                 Self::integrate(world, b, h, mode, want_jump);
             }
@@ -520,10 +535,39 @@ impl Entities {
         self.separate(world, players);
     }
 
+    fn ride_of(b: &[f64]) -> Ride {
+        Ride { id: b[body::RIDE] as u32, local: [b[body::RIDE_X], b[body::RIDE_Y], b[body::RIDE_Z]] }
+    }
+
+    fn set_ride(b: &mut [f64], r: Ride) {
+        b[body::RIDE] = r.id as f64;
+        b[body::RIDE_X] = r.local[0];
+        b[body::RIDE_Y] = r.local[1];
+        b[body::RIDE_Z] = r.local[2];
+    }
+
+    /// Carry every body with the mover it rides, and out of the way of any that ran into it.
+    pub fn carry(&mut self, world: &World) {
+        for i in 0..self.body_capacity() {
+            let b = &mut self.bodies[i * body::STRIDE..(i + 1) * body::STRIDE];
+            if (b[body::FLAGS] as u32) & FLAG_ACTIVE == 0 {
+                continue;
+            }
+            let mut pos = [b[body::X], b[body::Y], b[body::Z]];
+            let mut ride = Self::ride_of(b);
+            carry_box(world, &mut pos, b[body::HALF_W], b[body::HEIGHT], &mut ride);
+            Self::set_ride(b, ride);
+            b[body::X] = pos[0];
+            b[body::Y] = pos[1];
+            b[body::Z] = pos[2];
+        }
+    }
+
     fn integrate(world: &World, b: &mut [f64], dt: f64, mode: i32, want_jump: bool) {
         let hw = b[body::HALF_W];
         let hh = b[body::HEIGHT];
         let mut pos = [b[body::X], b[body::Y], b[body::Z]];
+        settle_box(world, &mut pos, hw, hh);
         let on_ground = b[body::ON_GROUND] > 0.5;
 
         // Liquids.
@@ -564,26 +608,28 @@ impl Entities {
         }
 
         let vy = b[body::VY];
-        if aabb_move_axis(world, &mut pos, 1, vy * dt, hw, hh) {
+        let mut ground = None;
+        if let Some(by) = move_axis(world, &mut pos, 1, vy * dt, hw, hh, 0) {
             if vy < 0.0 {
                 if !on_ground {
                     b[body::LANDED_SPEED] = b[body::LANDED_SPEED].max(-vy);
                 }
                 b[body::ON_GROUND] = 1.0;
+                ground = Some(by);
             }
             b[body::VY] = 0.0;
         } else {
-            let mut probe = pos;
-            probe[1] -= 0.03;
-            b[body::ON_GROUND] = (vy <= 0.0 && aabb_collides(world, probe, hw, hh)) as u8 as f64;
+            ground = if vy <= 0.0 { ground_under(world, pos, hw, hh, 0.03) } else { None };
+            b[body::ON_GROUND] = ground.is_some() as u8 as f64;
         }
+        let grounded = b[body::ON_GROUND] > 0.5 && mode != 2;
         for axis in [0usize, 2] {
             let vi = if axis == 0 { body::VX } else { body::VZ };
             let before = pos;
-            if aabb_move_axis(world, &mut pos, axis, b[vi] * dt, hw, hh) {
+            if walk_axis(world, &mut pos, axis, b[vi] * dt, hw, hh, grounded).is_some() {
                 b[body::BLOCKED] = 1.0;
                 // Auto-step: hop up a 1-block ledge when walking into it.
-                if b[body::ON_GROUND] > 0.5 && mode != 2 {
+                if grounded {
                     let mut up = before;
                     up[1] += 1.05;
                     up[axis] += b[vi].signum() * 0.3;
@@ -594,6 +640,12 @@ impl Entities {
                 b[vi] = 0.0;
             }
         }
+        let mut ride = Self::ride_of(b);
+        let kick = update_ride(world, pos, ground, mode == 2 || in_water, &mut ride);
+        Self::set_ride(b, ride);
+        b[body::VX] += kick[0];
+        b[body::VY] += kick[1];
+        b[body::VZ] += kick[2];
         b[body::X] = pos[0];
         b[body::Y] = pos[1];
         b[body::Z] = pos[2];

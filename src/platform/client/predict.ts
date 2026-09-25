@@ -33,6 +33,8 @@ export interface Predicted {
   bob: number;
   sneaking: boolean;
   sprinting: boolean;
+  /** On a solid prop: which, and where their feet are on it (show them where it's drawn). */
+  ride: { prop: number; p: [number, number, number] } | null;
 }
 
 /**
@@ -51,8 +53,12 @@ export class Predictor {
   private allowFlight = false;
   private sneak = false;
   private sprint = false;
-  /** Shown minus predicted, fading: corrections ease in instead of snapping. */
+  /**
+   * Shown minus predicted, fading: corrections ease in instead of snapping. Riding a prop, it's
+   * on the prop (`errorRide`), since the prop moves on between the server's frames.
+   */
   private error = [0, 0, 0];
+  private errorRide = 0;
   /** How far the last server frame moved the prediction (blocks): ~0 when prediction holds. */
   lastCorrection = 0;
 
@@ -71,12 +77,16 @@ export class Predictor {
     for (let i = 0; i < 3; i++) this.error[i] *= k;
   }
 
-  /** The server's newest word on this player: start from it and replay what it hasn't applied. */
+  /**
+   * The server's newest word on this player: start from it and replay what it hasn't applied.
+   * (A predicting client's solid props are where the same frame has them: `ClientMovers.sync`.)
+   */
   reconcile(me: PlayerFrame) {
     // Where the player is shown now, to keep showing them there while the difference fades.
     const p = this.raw();
-    const shown = this.ready ? [p[0] + this.error[0], p[1] + this.error[1], p[2] + this.error[2]] : null;
-    this.world.player_restore(this.slot, new Float64Array([me.x, me.y, me.z, me.vx, me.vy, me.vz, +me.onGround, +me.inWater, +me.eyesInWater, +me.inLava, +me.flying, me.bob, +me.frozen]));
+    const shown = this.ready && p.ride === this.errorRide ? [p.v[0] + this.error[0], p.v[1] + this.error[1], p.v[2] + this.error[2]] : null;
+    const ride = me.ride ? [me.ride.prop, ...me.ride.p] : [0, 0, 0, 0];
+    this.world.player_restore(this.slot, new Float64Array([me.x, me.y, me.z, me.vx, me.vy, me.vz, +me.onGround, +me.inWater, +me.eyesInWater, +me.inLava, +me.flying, me.bob, +me.frozen, ...ride]));
     this.memory = { ...me.move };
     this.allowFlight = me.canFly;
     this.sneak = me.sneaking;
@@ -84,10 +94,15 @@ export class Predictor {
     while (this.pending.length && this.pending[0].seq <= me.ack) this.pending.shift();
     for (const m of this.pending) this.run(m.input, m.dt);
     this.ready = true;
-    if (!shown) return;
     const q = this.raw();
-    this.lastCorrection = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
-    const e = [shown[0] - q[0], shown[1] - q[1], shown[2] - q[2]];
+    this.errorRide = q.ride;
+    // Stepping on or off a prop (on this side or the server's): taken at once.
+    if (!shown || p.ride !== q.ride) {
+      this.error = [0, 0, 0];
+      return;
+    }
+    this.lastCorrection = Math.hypot(p.v[0] - q.v[0], p.v[1] - q.v[1], p.v[2] - q.v[2]);
+    const e = [shown[0] - q.v[0], shown[1] - q.v[1], shown[2] - q.v[2]];
     // A small miss eases in; a jump (teleport, respawn) is taken at once.
     this.error = Math.hypot(e[0], e[1], e[2]) < 2 ? e : [0, 0, 0];
   }
@@ -96,10 +111,17 @@ export class Predictor {
   shown(): Predicted | null {
     if (!this.ready) return null;
     const s = this.world.player_state(this.slot);
+    const ride = s[13] || 0;
+    if (ride !== this.errorRide) {
+      this.error = [0, 0, 0];
+      this.errorRide = ride;
+    }
+    const e = this.error;
+    const world = ride ? [0, 0, 0] : e;
     return {
-      x: s[0] + this.error[0],
-      y: s[1] + this.error[1],
-      z: s[2] + this.error[2],
+      x: s[0] + world[0],
+      y: s[1] + world[1],
+      z: s[2] + world[2],
       vx: s[3],
       vy: s[4],
       vz: s[5],
@@ -111,12 +133,14 @@ export class Predictor {
       bob: s[11],
       sneaking: this.sneak,
       sprinting: this.sprint,
+      ride: ride ? { prop: ride, p: [s[14] + e[0], s[15] + e[1], s[16] + e[2]] } : null,
     };
   }
 
-  private raw(): [number, number, number] {
+  /** Where the body is: on the prop it rides, or in the world. */
+  private raw(): { ride: number; v: [number, number, number] } {
     const s = this.world.player_state(this.slot);
-    return [s[0], s[1], s[2]];
+    return s[13] ? { ride: s[13], v: [s[14], s[15], s[16]] } : { ride: 0, v: [s[0], s[1], s[2]] };
   }
 
   private run(input: PlayerInput, dt: number) {

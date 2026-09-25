@@ -14,6 +14,8 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 
 ![Bed Wars: the sky-island map, and the view from the red base with a full hotbar](docs/bedwars.png)
 
+![Skyship: the airship moored off Home Isle](docs/skyship.png)
+
 ![First-person view: diamond sword mid-slash, battle axe, two-handed pike, health potion](docs/viewmodel.png)
 
 ## Games
@@ -22,6 +24,7 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 | --- | --- | --- |
 | **Arena** | `?game=arena` | Six waves of zombies, skeleton archers, spiders and brutes in a colosseum, then the Warden boss. Weapons drop on the dais between waves: bow, stone/iron/diamond swords, a two-handed pike, battle axe and potions. Online it's co-op: more fighters bring more monsters, each gets their own reward, and anyone who falls sits the wave out. About 640 lines, including the colosseum and the boss AI. |
 | **Starfighter** | `?game=starfighter` | A Star Fox-style dogfighter with block-built X-wing, TIE fighter and TIE interceptor. Fight two waves of TIEs over the sea, then take on a 200-block Star Destroyer built into the world: knock out its two shield generators and blow up the bridge. Mouse to fly, W/S boost and brake, Q/E barrel roll (deflects lasers), right-click proton torpedoes. Online it's a squadron: an X-wing each (Red Five, Red Two…), more TIEs for more pilots, and anyone shot down is back in a new ship after 12 seconds. The X-wing is a vehicle (`player.drive`), so it flies at once on your own screen however far away the server is. |
+| **Skyship** | `?game=skyship` | Crew an airship across the sky islands and light the five beacons. The airship is a solid prop that sails, turns, banks and bobs, and everyone walks its decks while it does: up to the roof, into the cabin, off onto an island and back aboard. Whoever takes the helm (E at the wheel) steers with W/S, A/D and Space/Shift. Online, the whole party is the crew. |
 | **Bed Wars** | `?game=bedwars` | Hypixel-style Bed Wars on sky islands, against bots or up to three friends (`npm run server -- bedwars`): each player gets their own team, bots play the rest, and someone joining mid-match takes over a bot's team. Collect iron and gold from your generator (diamonds and emeralds on the outer and middle islands), buy blocks, swords, armour, tools, fireballs and team upgrades from the shopkeeper, bridge across the void and break the other beds. You respawn only while your bed stands. The bots fortify, shop, bridge, dig through defences and fight each other as well as you. |
 | **Sandbox** | `?game=sandbox` | Creative building in an endless world. Edits are saved per seed. 17 lines. |
 | **Heart Hunt** | `?game=heart-hunt` | A gentle hunt for ten hidden hearts, and the tutorial game (about 70 lines; see docs/PLATFORM.md). |
