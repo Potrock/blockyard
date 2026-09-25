@@ -17,6 +17,7 @@ const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
  */
 export default function widgets() {
   hosting();
+  menus();
   markup();
   css();
   building();
@@ -367,4 +368,53 @@ function building() {
   } finally {
     g.document = had;
   }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Menus and screens: only their own player presses their buttons
+// -------------------------------------------------------------------------------------------------
+
+function menus() {
+  const picked: string[] = [];
+  const closed: string[] = [];
+  const def: GameDefinition = {
+    id: 'menus-test',
+    title: 'Menus',
+    world: { terrain: 'flat', flatHeight: 8, seed: 5 },
+    setup(game) {
+      game.events.on('playerJoin', ({ player }) => {
+        player.hud.menu({
+          title: 'Pick',
+          sections: [{ entries: [{ label: 'One', onSelect: () => picked.push(player.name) }] }],
+          onClose: () => closed.push(player.name),
+        });
+      });
+    },
+  };
+  const host = new GameHost(def, { engine: wasm, seed: 5, remote: true, radius: 2, budget: Infinity, player: { id: 'p1', name: 'Ann' } });
+  const ann = host.connect('Ann');
+  const bob = host.connect('Bob');
+  host.command(ann.id, { t: 'start', name: 'Ann' });
+  host.command(bob.id, { t: 'start', name: 'Bob' });
+  let menu: { id: number; cb: number } | null = null;
+  for (let i = 0; i < 5 && !menu; i++) {
+    const batch = host.step(1 / 30).get(ann.id)!;
+    for (const e of batch.events) {
+      if (e.t !== 'call' || e.call.method !== 'menu') continue;
+      const [id, o] = e.call.args as [number, { sections: { entries: { onSelect: { $cb: number } }[] }[] }];
+      menu = { id, cb: o.sections[0].entries[0].onSelect.$cb };
+    }
+  }
+  check(menu, "Ann's menu reached her screen");
+  const send = (who: string, msg: object) => {
+    host.command(who, { t: 'message', msg: msg as never });
+    host.step(1 / 30);
+  };
+  // Bob can see Ann's menu's numbers (they're small integers); pressing or closing it does nothing.
+  send(bob.id, { t: 'callback', player: bob.id, id: menu.cb });
+  send(bob.id, { t: 'menuClosed', player: bob.id, menu: menu.id });
+  check(picked.length === 0 && closed.length === 0, `another player can't press or close Ann's menu: picked ${picked}, closed ${closed}`);
+  send(ann.id, { t: 'callback', player: ann.id, id: menu.cb });
+  send(ann.id, { t: 'menuClosed', player: ann.id, menu: menu.id });
+  check(picked.join() === 'Ann' && closed.join() === 'Ann', `Ann's own press and close work: picked ${picked}, closed ${closed}`);
 }

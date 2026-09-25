@@ -31,7 +31,8 @@ class MenuProxy implements MenuHandle {
   constructor(
     readonly id: number,
     private hub: Presentation,
-    private to: string | null,
+    /** Whose screen it's on (null: everyone's). */
+    readonly to: string | null,
     private opts: MenuOptions,
   ) {}
 
@@ -40,7 +41,7 @@ class MenuProxy implements MenuHandle {
     this.opts = { ...this.opts, ...o };
     this.hub.release(this.cbs);
     this.cbs = [];
-    this.hub.send(this.to, 'hud', 'menuUpdate', [this.id, this.hub.encodeMenu(o, this.cbs)]);
+    this.hub.send(this.to, 'hud', 'menuUpdate', [this.id, this.hub.encodeMenu(o, this.cbs, this.to)]);
   }
 
   close() {
@@ -124,7 +125,8 @@ class WidgetProxy implements WidgetHandle {
 export class Presentation {
   private nextCb = 1;
   private nextId = 1;
-  private callbacks = new Map<number, () => void>();
+  /** Buttons on screens and menus: what each does, and whose screen it's on (null: everyone's), so only they can press it. */
+  private callbacks = new Map<number, { fn: () => void; to: string | null }>();
   readonly menus = new Map<number, MenuProxy>();
   private widgetKinds = new Map<string, WidgetKind>();
   /** What each widget shows where (its handles read it). */
@@ -151,9 +153,9 @@ export class Presentation {
     this.sink(skip ? { to, target, method, args, skip } : { to, target, method, args });
   }
 
-  callback(fn: () => void, into: number[]): CallbackRef {
+  callback(fn: () => void, into: number[], to: string | null): CallbackRef {
     const id = this.nextCb++;
-    this.callbacks.set(id, fn);
+    this.callbacks.set(id, { fn, to });
     into.push(id);
     return { $cb: id };
   }
@@ -162,7 +164,7 @@ export class Presentation {
     for (const id of ids) this.callbacks.delete(id);
   }
 
-  encodeMenu(o: Partial<MenuOptions>, cbs: number[]): Record<string, unknown> {
+  encodeMenu(o: Partial<MenuOptions>, cbs: number[], to: string | null): Record<string, unknown> {
     const { onClose: _onClose, sections, ...rest } = o;
     const out: Record<string, unknown> = { ...rest };
     if (sections) {
@@ -170,7 +172,7 @@ export class Presentation {
         ...s,
         entries: s.entries.map((e: MenuEntry) => {
           const { onSelect, ...plain } = e;
-          return onSelect ? { ...plain, onSelect: this.callback(onSelect, cbs) } : plain;
+          return onSelect ? { ...plain, onSelect: this.callback(onSelect, cbs, to) } : plain;
         }),
       }));
     }
@@ -179,8 +181,16 @@ export class Presentation {
 
   /** Something a player did on their client. */
   receive(m: ClientMessage) {
-    if (m.t === 'callback') this.callbacks.get(m.id)?.();
-    else if (m.t === 'menuClosed') this.menus.get(m.menu)?.closed();
+    // Only a button on their own screen (or everyone's), only a menu of theirs: the sender is who the
+    // connection says, so one player can't press another's button or close their menu by its number.
+    const mine = (to: string | null) => to === null || to === m.player;
+    if (m.t === 'callback') {
+      const cb = this.callbacks.get(m.id);
+      if (cb && mine(cb.to)) cb.fn();
+    } else if (m.t === 'menuClosed') {
+      const menu = this.menus.get(m.menu);
+      if (menu && mine(menu.to)) menu.closed();
+    }
     else if (m.t === 'widgetAction') {
       // Only a button they can see: the widget's up on their screen, and its markup has it.
       const kind = this.widgetKinds.get(m.widget);
@@ -318,7 +328,7 @@ export class Presentation {
       screen: (opts: ScreenOptions) => {
         const id = this.nextId++;
         const cbs: number[] = [];
-        const buttons = opts.buttons.map(({ onClick, ...b }) => ({ ...b, onClick: this.callback(onClick, cbs) }));
+        const buttons = opts.buttons.map(({ onClick, ...b }) => ({ ...b, onClick: this.callback(onClick, cbs, to) }));
         send('screen', id, { ...opts, buttons });
         return () => {
           this.release(cbs);
@@ -328,7 +338,7 @@ export class Presentation {
       menu: (opts: MenuOptions) => {
         const m = new MenuProxy(this.nextId++, this, to, opts);
         this.menus.set(m.id, m);
-        send('menu', m.id, this.encodeMenu(opts, m.cbs));
+        send('menu', m.id, this.encodeMenu(opts, m.cbs, to));
         return m;
       },
       define: (name: string, widget: WidgetDefinition) => this.defineWidget(name, widget),
