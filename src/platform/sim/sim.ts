@@ -3,7 +3,7 @@ import type { Actor, Anchor, BlockRef, Bot, BotApi, Entity, GameContext, GameDef
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
-import { blockIdOf, type Registry } from '../world/registry';
+import { blockIdOf, blockShape, collisionBoxes, type Registry } from '../world/registry';
 import { dependents, FACING_DIR, placement, type PlaceHow } from '../world/placement';
 import { CreativeBuild } from './creative';
 import { EntitySim, type EntityFrame, type ProjectileFrame } from './entities';
@@ -678,7 +678,8 @@ export class Sim {
       const cur = world.get_block(cx, cy, cz);
       if (cur === 255 || !(plan.join || (reg.blocks[cur]?.replaceable ?? false))) return false;
       if (d.solid && this.occupied(cx, cy, cz, cid)) return false;
-      if (d.shape === 'cross' && !reg.blocks[world.get_block(cx, cy - 1, cz)]?.solid) return false;
+      // A plant needs ground under it; a vine (climbable) hangs where it's put.
+      if (d.shape === 'cross' && !d.climbable && !reg.blocks[world.get_block(cx, cy - 1, cz)]?.solid) return false;
     }
     for (const [cx, cy, cz, cid] of plan.cells) {
       if (!this.host.edit(cx, cy, cz, cid)) return false;
@@ -740,7 +741,7 @@ export class Sim {
         placeBlock: (x, y, z, block, opts) => {
           const f = opts?.facing && FACING_DIR[opts.facing];
           const look = f ? { x: f[0], y: 0, z: f[1] } : undefined;
-          return sim.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world', { against: opts?.against, look });
+          return sim.placeBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), block, opts?.by ?? 'world', { against: opts?.against, look, facing: opts?.facing });
         },
         blockInfo: (block) => {
           let d;
@@ -749,10 +750,28 @@ export class Sim {
           } catch {
             return null;
           }
-          return d
-            ? { id: d.id, name: d.name, label: d.label, state: d.state, variant: d.key, solid: d.solid, liquid: d.shape === 'liquid', plant: d.small, replaceable: d.replaceable, light: d.emit, breakable: d.breakable, ...(d.hardness !== undefined && { hardness: d.hardness }) }
-            : null;
+          if (!d) return null;
+          const boxes = collisionBoxes(d);
+          return {
+            id: d.id,
+            name: d.name,
+            label: d.label,
+            state: d.state,
+            variant: d.key,
+            solid: d.solid,
+            liquid: d.shape === 'liquid',
+            plant: d.small,
+            replaceable: d.replaceable,
+            light: d.emit,
+            breakable: d.breakable,
+            ...(d.hardness !== undefined && { hardness: d.hardness }),
+            shape: blockShape(d),
+            height: Math.max(0, ...boxes.map((b) => b[4])),
+            boxes,
+            climbable: !!d.climbable,
+          };
         },
+        collisionHeight: (x, y, z) => world.collision_top(Math.floor(x), Math.floor(y), Math.floor(z)),
         seaLevel: engine.sea_level(),
       },
       players,

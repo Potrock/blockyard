@@ -236,7 +236,29 @@ impl World {
                 return &d.boxes;
             }
         }
-        target_boxes(b)
+        match self.model_at(x, y, z, b) {
+            Some(m) => &m.collide,
+            None => &FULL_BOX,
+        }
+    }
+
+    /// The model block `b` has at (x, y, z): a fence or pane joined to what's beside it there.
+    #[inline]
+    fn model_at(&self, x: i32, y: i32, z: i32, b: u8) -> Option<&'static crate::shapes::Model> {
+        if SHAPE[b as usize] != SHAPE_MODEL {
+            return None;
+        }
+        shapes().model_at(b, || [self.get(x, y, z - 1), self.get(x + 1, y, z), self.get(x, y, z + 1), self.get(x - 1, y, z)])
+    }
+
+    /// The boxes you aim at in the block `b` at (x, y, z) (see `target_boxes`), a fence as it's
+    /// joined there.
+    #[inline]
+    pub fn target_at(&self, x: i32, y: i32, z: i32, b: u8) -> &'static [[u8; 6]] {
+        match self.model_at(x, y, z, b) {
+            Some(m) => &m.bounds,
+            None => &FULL_BOX,
+        }
     }
 
     /// `damage_at` for a block that can be damaged (a cube: anything else there is stale).
@@ -737,7 +759,7 @@ impl World {
                     return Some(t);
                 }
                 // A slab, a bed, a block with holes in it: only its boxes stop the ray.
-                if let Some((tb, _)) = ray_boxes(o, d, p, damaged.map_or(collision_boxes(b), |d| &d.boxes)) {
+                if let Some((tb, _)) = ray_boxes(o, d, p, damaged.map_or_else(|| self.target_at(p[0], p[1], p[2], b), |d| &d.boxes)) {
                     if tb <= max_dist {
                         return Some(tb);
                     }
@@ -795,7 +817,7 @@ impl World {
                 if SHAPE[b as usize] != SHAPE_MODEL && damaged.is_none() {
                     return Some((p, normal, b, t));
                 }
-                if let Some((tb, n)) = ray_boxes(o, d, p, damaged.map_or(target_boxes(b), |d| &d.boxes)) {
+                if let Some((tb, n)) = ray_boxes(o, d, p, damaged.map_or_else(|| self.target_at(p[0], p[1], p[2], b), |d| &d.boxes)) {
                     if tb <= max_dist {
                         return Some((p, n, b, tb));
                     }
@@ -830,13 +852,19 @@ fn damaged_sections(m: &FxMap<u32, Box<Damage>>) -> u16 {
 }
 
 /// The boxes a block collides with, in 1/16 of a block within its cell (none if it isn't
-/// solid): the whole cell, or a model's own (a slab's half, a bed 9/16 high).
+/// solid): the whole cell, or a model's own (a slab's half, a bed 9/16 high; a fence standing
+/// alone, 24/16).
 #[inline]
 pub fn collision_boxes(b: u8) -> &'static [[u8; 6]] {
     if SOLID[b as usize] == 0 {
         return &[];
     }
-    target_boxes(b)
+    if SHAPE[b as usize] == SHAPE_MODEL {
+        if let Some(m) = &shapes().models[b as usize] {
+            return &m.collide;
+        }
+    }
+    &FULL_BOX
 }
 
 /// The boxes you aim at in a block: the whole cell, or a model's own (a torch's stick).
@@ -854,10 +882,21 @@ pub fn target_boxes(b: u8) -> &'static [[u8; 6]] {
 /// a hole shot in a block). Unloaded columns count as air here.
 pub fn point_solid(world: &World, p: [f64; 3]) -> bool {
     let cell = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
-    world.collision_at(cell[0], cell[1], cell[2], AIR).iter().any(|b| {
-        let (lo, hi) = world_box(cell, b);
-        (0..3).all(|a| p[a] >= lo[a] && p[a] < hi[a])
-    })
+    let inside = |cell: [i32; 3]| {
+        world.collision_at(cell[0], cell[1], cell[2], AIR).iter().any(|b| {
+            let (lo, hi) = world_box(cell, b);
+            (0..3).all(|a| p[a] >= lo[a] && p[a] < hi[a])
+        })
+    };
+    // A fence below reaches up into this cell.
+    inside(cell) || (shapes().tall && inside([cell[0], cell[1] - 1, cell[2]]))
+}
+
+/// How far down to look for blocks a box might touch: a cell further when some block's collision
+/// rises above its own cell (a fence).
+#[inline]
+fn reach_below() -> i32 {
+    shapes().tall as i32
 }
 
 /// How many of a mover's blocks would be in the world's solid blocks with it at `pose` (a block
@@ -913,7 +952,7 @@ pub fn ray_boxes(o: [f64; 3], d: [f64; 3], cell: [i32; 3], boxes: &[[u8; 6]]) ->
 pub fn voxel_collides(world: &World, p: [f64; 3], hw: f64, h: f64) -> bool {
     let lo = [p[0] - hw + EPS, p[1] + EPS, p[2] - hw + EPS];
     let hi = [p[0] + hw - EPS, p[1] + h - EPS, p[2] + hw - EPS];
-    for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
+    for y in lo[1].floor() as i32 - reach_below()..=hi[1].floor() as i32 {
         for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
             for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
                 for b in world.collision_at(x, y, z, STONE) {
@@ -962,7 +1001,7 @@ fn voxel_move_axis(world: &World, pos: &mut [f64; 3], axis: usize, delta: f64, h
         lo[axis] += delta;
     }
     let mut d = delta;
-    for y in (lo[1] - TOUCH).floor() as i32..=(hi[1] + TOUCH).floor() as i32 {
+    for y in (lo[1] - TOUCH).floor() as i32 - reach_below()..=(hi[1] + TOUCH).floor() as i32 {
         for z in (lo[2] - TOUCH).floor() as i32..=(hi[2] + TOUCH).floor() as i32 {
             for x in (lo[0] - TOUCH).floor() as i32..=(hi[0] + TOUCH).floor() as i32 {
                 for b in world.collision_at(x, y, z, STONE) {
@@ -1186,6 +1225,13 @@ const EPS: f64 = 1e-4;
 pub const JUMP: f64 = 8.0;
 /// How high a walker steps up without jumping: onto a slab or a stair, a mover's deck.
 pub const STEP_UP: f64 = 0.6;
+/// Climbing a ladder or vine (blocks a second): up, the fastest down, and the fastest sideways
+/// off the ground (Minecraft's are about 2.4, 3 and 3).
+pub const CLIMB_UP: f64 = 2.6;
+pub const CLIMB_DOWN: f64 = 2.4;
+pub const CLIMB_SIDE: f64 = 3.0;
+/// How far ahead a climber feels for something to push against.
+const CLIMB_PROBE: f64 = 0.05;
 
 pub struct MoveInput {
     /// Desired horizontal direction in world space (length <= 1).
@@ -1367,6 +1413,8 @@ impl Player {
             }
         }
 
+        self.climb(world, input, wish);
+
         // Sneaking on the ground: don't walk off edges.
         let guard = input.sneak && self.on_ground && !self.flying && t.edge_guard && !input.slide;
 
@@ -1424,6 +1472,41 @@ impl Player {
         let speed = (self.vel[0] * self.vel[0] + self.vel[2] * self.vel[2]).sqrt();
         if self.on_ground && !self.flying {
             self.bob += speed * dt;
+        }
+    }
+
+    /// On a ladder or a vine (a climbable block where their feet are), Minecraft's way: pushing
+    /// into something (the wall behind it, a ladder's rungs) or holding jump climbs, sneaking holds
+    /// on, and otherwise they slide down slowly; off the ground, sideways speed is held down so
+    /// they don't fly off it. It reads only the blocks and this step's input, so a client
+    /// predicting its own player climbs exactly as the host does.
+    fn climb(&mut self, world: &World, input: &MoveInput, wish: [f64; 2]) {
+        if self.flying || self.in_water || self.in_lava {
+            return;
+        }
+        let feet = world.get(self.pos[0].floor() as i32, self.pos[1].floor() as i32, self.pos[2].floor() as i32);
+        if CLIMBABLE[feet as usize] == 0 {
+            return;
+        }
+        let w = (wish[0] * wish[0] + wish[1] * wish[1]).sqrt();
+        let pushing = w > 0.1 && {
+            let mut p = self.pos;
+            p[0] += wish[0] / w * CLIMB_PROBE;
+            p[2] += wish[1] / w * CLIMB_PROBE;
+            Self::collides(world, p)
+        };
+        if pushing || input.jump {
+            self.vel[1] = CLIMB_UP;
+            self.on_ground = false;
+        } else if input.sneak {
+            self.vel[1] = 0.0;
+        } else {
+            self.vel[1] = self.vel[1].max(-CLIMB_DOWN);
+        }
+        if !self.on_ground {
+            for a in [0, 2] {
+                self.vel[a] = self.vel[a].clamp(-CLIMB_SIDE, CLIMB_SIDE);
+            }
         }
     }
 

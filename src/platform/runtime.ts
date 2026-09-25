@@ -25,7 +25,7 @@ import { BlockHighlight } from './render/highlight';
 import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
-import { gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from './world/blocks';
+import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from './world/blocks';
 import { blockIdOf, DEFAULT_TINT, destructibleIds, loadRegistry, variant, type Registry } from './world/registry';
 import { Input } from './player/input';
 import { padBindings, padHints, rumble } from './player/gamepad';
@@ -400,7 +400,9 @@ export class Runtime {
       if (b.id === 0) continue;
       // A bed's icon shows it whole: the head too.
       const head = b.model === 'bed' ? variant(this.registry, b, { part: 'head' }) ?? undefined : undefined;
-      icons.set(b.id, blockIcon(b, this.textures.albedoData, head));
+      // A game's block that faces a way shows its front (the icon's left is the south face).
+      const shown = b.id >= firstGameBlock() && b.state.facing ? (variant(this.registry, b, { facing: 'south' }) ?? b) : b;
+      icons.set(b.id, blockIcon(shown, this.textures.albedoData, head));
     }
     this.blockIcons = icons;
     this.hud = new Hud(this.ui, this.registry, icons);
@@ -657,9 +659,15 @@ export class Runtime {
   /** `hud.highlight`: outline a block, with break cracks at `progress`. */
   private setHighlight(at: Vec3 | null, progress?: number) {
     if (!at) return this.highlight.set(null);
-    const id = this.chunks.world.get_block(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z));
-    const def = this.registry.blocks[id];
-    this.highlight.set(at, def?.shape === 'cross' ? 'cross' : (def?.boxes ?? null), progress);
+    const [x, y, z] = [Math.floor(at.x), Math.floor(at.y), Math.floor(at.z)];
+    const def = this.registry.blocks[this.chunks.world.get_block(x, y, z)];
+    // A fence or pane as it's joined there.
+    let boxes = def?.boxes;
+    if (def?.joins) {
+      const flat = this.chunks.world.target_boxes(x, y, z);
+      boxes = Array.from({ length: flat.length / 6 }, (_, i) => [...flat.subarray(i * 6, i * 6 + 6)]);
+    }
+    this.highlight.set(at, def?.shape === 'cross' ? 'cross' : (boxes ?? null), progress);
   }
 
   /** Reset game state and call `start` again. */

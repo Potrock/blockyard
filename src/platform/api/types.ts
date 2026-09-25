@@ -693,8 +693,16 @@ export interface WorldApi {
   setBlock(x: number, y: number, z: number, block: BlockRef): boolean;
   blockId(name: string): number;
   blockName(id: number): string;
-  /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing. Null if unknown. */
+  /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing, its shape and collision. Null if unknown. */
   blockInfo(block: BlockRef): BlockInfo | null;
+  /**
+   * How high bodies collide with the block at a position, in blocks above the bottom of its
+   * cell: 0 for air, plants and anything else not solid, 1 for a full block, 0.5 for a bottom
+   * slab, 1.5 for a fence (nobody jumps it). A fence counts as it's joined there, and a carved
+   * block (`world.destructible`) as what's left of it. An unloaded chunk counts as 1. By block,
+   * `blockInfo(block).height` says the same for a whole one.
+   */
+  collisionHeight(x: number, y: number, z: number): number;
   /** First targetable block along a ray (blocks only: `props.raycast` finds solid props). */
   raycast(origin: Vec3, dir: Vec3, maxDistance: number): RayHit | null;
   /** True if nothing solid (a block, a solid prop) blocks the straight line between two points. */
@@ -732,9 +740,11 @@ export interface WorldApi {
    * Given by name (`'torch'`, `'oak_stairs'`), a block is turned the Minecraft way: `against`
    * (the face aimed at, a `raycast` hit) hangs a torch on the side of a block, puts a slab or
    * stairs in the upper half (aiming at a ceiling or high on a side) and lays a log along the
-   * axis aimed along; stairs and beds face `facing`, else the way `by` is looking. A bed takes
-   * two cells, its head beyond (x, y, z). A slab placed on the same kind of slab makes a full
-   * block. Given with a state (`'oak_stairs[facing=east]'`), it goes as it is.
+   * axis aimed along; stairs and beds face `facing`, else the way `by` is looking. A block of the
+   * game's own that faces (`BlockDefinition.facing`) faces `facing`, else out from the side of
+   * the block aimed at (a sign on a wall), else back at whoever places it. A bed takes two
+   * cells, its head beyond (x, y, z). A slab placed on the same kind of slab makes a full block.
+   * Given with a state (`'oak_stairs[facing=east]'`), it goes as it is.
    */
   placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Actor; against?: RayHit; facing?: Facing }): boolean;
 }
@@ -761,7 +771,30 @@ export interface BlockInfo {
   breakable: boolean;
   /** A game's own block: seconds to mine it by hand, if the game gave it (`BlockDefinition.hardness`). */
   hardness?: number;
+  /** Its shape (`'fence'`, `'stairs'`...): see `BlockShape`. */
+  shape: BlockShape;
+  /**
+   * How high bodies collide with it, in blocks above the bottom of its cell: 0 if it isn't
+   * solid, 1 for a full block, 0.5 for a bottom slab (1 for a top one), 0.5625 for a bed, 1.5 for
+   * a fence. `world.collisionHeight` says it at a position (a fence joined, a block carved).
+   */
+  height: number;
+  /**
+   * The boxes bodies collide with, in blocks within its cell (`[x0, y0, z0, x1, y1, z1]`, 0 to 1,
+   * a fence's to 1.5); none if it isn't solid. A fence or pane is its post alone here: its arms
+   * depend on what's beside it.
+   */
+  boxes: number[][];
+  /** Bodies climb it: ladders, vines (`BlockDefinition.climbable`). */
+  climbable: boolean;
 }
+
+/**
+ * What shape a block is: `air`; `cube`, a full block; `cross`, a plant's two crossed planes;
+ * `liquid`; `slab` and `stairs` (built-in or a game's); `torch` (standing or on a wall); `bed`
+ * (half of one); and a game's own: `fence`, `pane`, `post`, `boxes`.
+ */
+export type BlockShape = 'air' | 'cube' | 'cross' | 'liquid' | 'slab' | 'stairs' | 'torch' | 'bed' | 'fence' | 'pane' | 'post' | 'boxes';
 
 /**
  * A block of the game's own (`GameDefinition.blocks`). A texture (or a built-in block it's
@@ -786,8 +819,39 @@ export interface BlockDefinition {
    * touch, needs ground under it); `slab`: half a block (`name[type=top]` is the upper half);
    * `stairs` (`name[facing=east,half=top]`). Slabs and stairs are placed the way the built-in ones
    * are: in the half aimed at, climbing away from whoever places them.
+   *
+   * Thin things, which let light through: `fence`, a post with rails to the fences and solid
+   * blocks beside it, 1.5 blocks high to bodies so nobody jumps it (Minecraft's); `pane`, a wall
+   * 2/16 thick joining the panes and solid blocks beside it (glass panes, bars); `post`, a pillar
+   * 4/16 across (with `facing: 'axis'`, a beam lying along x or z). For a shape of your own give
+   * `boxes` instead.
    */
-  shape?: 'cube' | 'cross' | 'slab' | 'stairs';
+  shape?: 'cube' | 'cross' | 'slab' | 'stairs' | 'fence' | 'pane' | 'post';
+  /**
+   * A shape of its own: boxes on the block's 16 x 16 x 16 grid, `[x0, y0, z0, x1, y1, z1]` each (0
+   * to 16, up to 16 boxes), written as it faces north if it has a `facing`. Bodies collide with
+   * them (if it's `solid`), you aim at them, and each face shows the part of its texture it
+   * covers. A table: `[[0, 13, 0, 16, 16, 16], [1, 0, 1, 3, 13, 3], [13, 0, 1, 15, 13, 3], [1, 0,
+   * 13, 3, 13, 15], [13, 0, 13, 15, 13, 15]]`; a poster flat on the wall behind it: `[[1, 1, 15, 15,
+   * 15, 16]]`. It lets light through.
+   */
+  boxes?: [number, number, number, number, number, number][];
+  /**
+   * It faces a way, one variant per way (a cube, a `post` or `boxes`): `true` or `'horizontal'`,
+   * the four sides (`name[facing=east]`; furnaces, signs, ladders); `'all'`, up and down too
+   * (`name[facing=up]`); `'axis'`, lying along x, y or z like a log (`name[axis=x]`). Written
+   * (textures and boxes) as it faces north, or stands upright for `'axis'`; its `front` texture
+   * goes where it faces. Placed, it faces out from the side of the block aimed at (a sign on a
+   * wall), or up or down from the top or bottom for `'all'`, else back at whoever places it;
+   * `'axis'` lies along the axis aimed along.
+   */
+  facing?: boolean | 'horizontal' | 'all' | 'axis';
+  /**
+   * Bodies climb it (ladders, vines): standing in it, pushing into what's behind it (or its own
+   * boxes) or holding jump climbs, sneaking holds on, and otherwise they slide down slowly.
+   * Usually not `solid` (a vine) or thin (a ladder's `boxes`).
+   */
+  climbable?: boolean;
   /** A slab: the block two of them make, one placed on the other (default: they don't join). */
   full?: string;
   /**
@@ -844,13 +908,18 @@ export type BlockTexture =
 
 /**
  * A block's textures face by face: `top`, `bottom`, the four `side`s, or one side (`north`,
- * `south`, `east`, `west`); `all` for any face not given.
+ * `south`, `east`, `west`); `all` for any face not given. A block that faces a way
+ * (`BlockDefinition.facing`) is written facing north: its `front` (the north face) and `back`.
  */
 export interface BlockFaces {
   all?: BlockTexture;
   top?: BlockTexture;
   bottom?: BlockTexture;
   side?: BlockTexture;
+  /** The face toward where it faces (as written, north). */
+  front?: BlockTexture;
+  /** The face opposite its front (as written, south). */
+  back?: BlockTexture;
   north?: BlockTexture;
   south?: BlockTexture;
   east?: BlockTexture;

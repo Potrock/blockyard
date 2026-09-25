@@ -618,6 +618,24 @@ impl VoxelWorld {
         entities::line_clear(&self.inner, [ax, ay, az], [bx, by, bz])
     }
 
+    /// How high the collision of the block at (x, y, z) reaches above the bottom of its cell, in
+    /// blocks: 0 if nothing there is solid, 1 for a full block, 0.5 for a bottom slab, 1.5 for a
+    /// fence; a fence as it's joined there, a carved block as what's left of it. Unloaded columns
+    /// count as solid.
+    pub fn collision_top(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.inner.collision_at(x, y, z, blocks::STONE).iter().map(|b| b[4]).max().unwrap_or(0) as f64 / 16.0
+    }
+
+    /// The boxes you aim at in the block at (x, y, z), 6 numbers each (1/16 of a block within its
+    /// cell): a fence or pane as it's joined there. Empty for air.
+    pub fn target_boxes(&self, x: i32, y: i32, z: i32) -> Vec<u8> {
+        let b = self.inner.get(x, y, z);
+        if b == blocks::AIR {
+            return Vec::new();
+        }
+        self.inner.target_at(x, y, z, b).concat()
+    }
+
     /// Whether block `id` at (x, y, z) would overlap any player's body (only its solid boxes:
     /// a bottom slab leaves room above it). By id, not what's there: the block would be new, and
     /// whole.

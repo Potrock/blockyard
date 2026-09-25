@@ -1,8 +1,8 @@
 import { engine } from '../engine/wasm';
-import type { BlockRef, DestructibleOptions, SoundName } from '../api/types';
+import type { BlockRef, BlockShape, DestructibleOptions, SoundName } from '../api/types';
 import { firstGameBlock, type GameBlocks } from './blocks';
 
-export type BlockModel = '' | 'torch' | 'wall_torch' | 'slab' | 'stairs' | 'bed';
+export type BlockModel = '' | 'torch' | 'wall_torch' | 'slab' | 'stairs' | 'bed' | 'fence' | 'pane' | 'post' | 'boxes';
 
 export interface BlockDef {
   id: number;
@@ -38,10 +38,19 @@ export interface BlockDef {
   double: number;
   /** Sides solid enough to hang a torch on or stand one on: a bit per face (+X -X +Y -Y +Z -Z). */
   sturdy: number;
-  /** Models: the boxes you aim at and (if solid) collide with, [x0, y0, z0, x1, y1, z1] in 1/16. */
+  /**
+   * Models: the boxes you aim at and (if solid) collide with, [x0, y0, z0, x1, y1, z1] in 1/16. A
+   * fence or pane's are its post alone (the engine's `target_boxes` has them as it stands).
+   */
   boxes?: number[][];
-  /** Models: the boxes drawn: 6 corners, a texture per face (-1: not drawn), a transform per face. */
+  /** Models that collide with more than you aim at (a fence, 24/16 high): what bodies collide with. */
+  collide?: number[][];
+  /** Models: the boxes drawn: 6 corners, a texture per face (-1: not drawn), a transform per face. A fence or pane is drawn joined east and west. */
   parts?: number[][];
+  /** A fence or pane: joined to what's beside it where it stands. */
+  joins?: boolean;
+  /** Bodies climb it (a game's ladders and vines). */
+  climbable?: boolean;
 }
 
 export interface Registry {
@@ -143,6 +152,24 @@ export function destructibleIds(registry: Registry, o: DestructibleOptions): Uin
   } else for (const name of o.blocks) for (const b of family(name)) if (carves(b)) ids[b.id] = 1;
   for (const name of o.except ?? []) for (const b of family(name)) ids[b.id] = 0;
   return ids;
+}
+
+/** A block's shape as `blockInfo` says it (a torch on a wall is a torch). */
+export function blockShape(d: BlockDef): BlockShape {
+  if (d.shape !== 'model') return d.shape;
+  if (d.model === 'wall_torch' || d.model === '') return 'torch';
+  return d.model;
+}
+
+/**
+ * The boxes bodies collide with in a block, in blocks within its cell (`[x0, y0, z0, x1, y1,
+ * z1]`); none if it isn't solid. A fence or pane is its post alone (its arms depend on what's
+ * beside it).
+ */
+export function collisionBoxes(d: BlockDef): number[][] {
+  if (!d.solid) return [];
+  const boxes = d.collide ?? d.boxes ?? [[0, 0, 0, 16, 16, 16]];
+  return boxes.map((b) => b.map((v) => v / 16));
 }
 
 /** Default biome tint used for icons and particles (sRGB 0..1). */

@@ -551,7 +551,9 @@ impl Mesher {
                             }
                         }
                         SHAPE_MODEL => {
-                            if let Some(m) = &shapes.models[b as usize] {
+                            // A fence or pane as it's joined to what's beside it here.
+                            let around = || [self.blocks[i - SZ], self.blocks[i + 1], self.blocks[i + SZ], self.blocks[i - 1]];
+                            if let Some(m) = shapes.model_at(b, around) {
                                 if self.mesh_model(m, def, i, lx, y, lz) {
                                     sunlit = true;
                                 }
@@ -1255,6 +1257,29 @@ mod tests {
         m.mesh(&w.extract_region(-1, -1));
         let again: Vec<u64> = cols.iter().map(|&(cx, cz)| fingerprint(&m.mesh(&w.extract_region(cx, cz)))).collect();
         assert_eq!(again, ZOO_PRINTS, "damage elsewhere changed these meshes");
+    }
+
+    #[test]
+    fn game_shapes_leave_built_in_meshes_alone() {
+        // A game's fences, panes, posts, ladders and turned blocks in use: the built-in blocks'
+        // meshes are exactly as they were.
+        crate::blocks::set_game_blocks(crate::shapes::tests::GAME).unwrap();
+        let (w, cols) = zoo();
+        let mut m = Mesher::new();
+        let prints: Vec<u64> = cols.iter().map(|&(cx, cz)| fingerprint(&m.mesh(&w.extract_region(cx, cz)))).collect();
+        assert_eq!(prints, ZOO_PRINTS, "built-in meshes changed with game shapes in use");
+        // A fence alone is its post (the floor hides its underside); joined east and west it has
+        // two rails each way too, their ends against the post not drawn.
+        let fence = crate::shapes::tests::FENCE;
+        let alone = m.mesh(&floor_with(fence, false));
+        assert_eq!(alone[1], 1 + 5, "the floor and the post");
+        let mut row = floor_with(fence, false);
+        let at = REGION_HEADER + 4 * 4096 + (16 + 8) * 16;
+        row[at + 7] = fence;
+        row[at + 9] = fence;
+        let joined = m.mesh(&row);
+        assert_eq!(joined[1], 1 + 3 * 5 + 2 * 2 * 5 + 4 * 5, "three posts, the ends' rails and the middle's");
+        crate::blocks::set_game_blocks("[]").unwrap();
     }
 
     /// A 3 x 3 of columns, stone up to y = 0 and air above, destructible above the floor.
