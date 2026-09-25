@@ -71,11 +71,7 @@ interface Gunslinger {
   /** In this round (dead or joined late: out until the next). */
   standing: boolean;
   diedAt: number;
-  cylinder: WidgetHandle | null;
   picker: WidgetHandle | null;
-  /** They've chosen their look; how many times they've closed the picker without choosing. */
-  picked: boolean;
-  nags: number;
 }
 
 type Phase = 'standoff' | 'fight' | 'roundover' | 'matchover';
@@ -109,17 +105,15 @@ function addSlinger(game: GameContext, p: Player): Gunslinger {
   const taken = new Set([...slingers.values()].map((s) => s.outfit));
   const free = COWBOYS.map((_, i) => i).filter((i) => !taken.has(i));
   const outfit = free.length ? free[Math.floor(game.rng.next() * free.length)] : game.rng.int(0, COWBOYS.length - 1);
-  const s: Gunslinger = { player: p, outfit, wins: 0, kills: 0, deaths: 0, headshots: 0, bounty: 0, purse: 0, standing: false, diedAt: -1, cylinder: null, picker: null, picked: false, nags: 0 };
+  const s: Gunslinger = { player: p, outfit, wins: 0, kills: 0, deaths: 0, headshots: 0, bounty: 0, purse: 0, standing: false, diedAt: -1, picker: null };
   p.setModel(cowboyModel(outfit));
   slingers.set(p.id, s);
   boardDirty = true;
   return s;
 }
 
+/** The outfit picker on their screen (a modal: it frees the mouse; Esc closes it). */
 function showPicker(s: Gunslinger) {
-  // Taken down first, so it goes out whole: a start clears the screens, but the host's memory of
-  // the widget (and the handle's `shown`) outlives that, so the same data again would send nothing.
-  s.picker?.remove();
   s.picker = s.player.hud.widget('outfits', {
     outfits: COWBOYS.map((c, i) => ({ id: c.id, name: c.name, on: i === s.outfit ? 'on' : '', ...c.look })),
   });
@@ -191,15 +185,13 @@ function startRound(game: GameContext) {
     p.health = p.maxHealth;
     p.teleport({ x: sp.x, y: sp.y + 0.05, z: sp.z }, sp.yaw, 0);
     arm(p, true);
-    p.freeze(true);
+    // Rooted to the mark, hands off the guns: no drawing, no shooting, no loading till the bell.
+    p.freeze(true, { weapons: true });
     // Hands over holsters, knees soft (a clip over the rig, on every screen).
     p.animate('standoff', { loop: true, fade: 0.3 });
     s.standing = true;
     s.diedAt = -1;
     if (p.bot) bots.reset(p);
-    // Choose your look, at a standoff until they have (a picker put up as they join, before they've
-    // pressed Play, never reaches their screen; see showPicker).
-    else if (!s.picked && s.nags < 2) showPicker(s);
   });
   for (const s of all) game.hud.marker(`reveal-${s.player.id}`, null);
   bots.hunt = [];
@@ -218,12 +210,10 @@ function draw(game: GameContext) {
     p.inventory.select(0);
   }
   game.audio.play('draw');
-  // Each person's own copy of the duel card (the standoff's clock was theirs: once a player has
-  // their own copy of a widget, everyone's no longer reaches them).
-  const people = [...slingers.values()].filter((s) => !s.player.bot).map((s) => s.player);
-  for (const p of people) p.hud.widget('duel', { phase: 'draw', round, target: TARGET, title: 'DRAW!', sub: '', tally: [] });
+  // Everyone's duel card (it reaches each person's own copy too: the standoff's clock was theirs).
+  game.hud.widget('duel', { phase: 'draw', round, target: TARGET, title: 'DRAW!', sub: '', tally: [] });
   game.clock.after(0.9, () => {
-    if (phase === 'fight') for (const p of people) p.hud.widget('duel', { phase: null });
+    if (phase === 'fight') game.hud.widget('duel', { phase: null });
   });
 }
 
@@ -348,26 +338,20 @@ function scoreboard(game: GameContext, show = false) {
   });
 }
 
+/**
+ * The cylinder's layout: the Peacemaker's six chambers (each with how many rounds loaded it takes
+ * to fill that one: the drum turns a chamber a shot) and the Yellowboy's tube. What's in them is
+ * the gun on each player's own screen (`$gun`), so this is all the game sends, once.
+ */
+const CHAMBERS = {
+  drum: Array.from({ length: WEAPONS.revolver.magazine }, (_, i) => ({ k: WEAPONS.revolver.magazine - i })),
+  tube: Array.from({ length: WEAPONS.rifle.magazine }, () => 1),
+};
+
 /** Each person's own widgets: their gun's rounds and the Most Wanted's poster (with their own price). */
 function personalHud(s: Gunslinger) {
   const p = s.player;
-  const held = p.inventory.held?.item;
-  const def = held ? WEAPONS[held] : undefined;
-  const ammo = held ? p.inventory.ammo(held) : null;
-  if (def && ammo && p.alive) {
-    const spent = def.magazine - ammo.magazine;
-    s.cylinder = p.hud.widget('cylinder', {
-      revolver: held === 'revolver',
-      rifle: held === 'rifle',
-      name: def.name,
-      turn: held === 'revolver' ? spent : 0,
-      chambers: Array.from({ length: def.magazine }, (_, i) => (held === 'revolver' ? (i < spent ? 'empty' : 'full') : i < ammo.magazine ? 'full' : 'empty')),
-      reserve: ammo.reserve,
-      empty: ammo.magazine === 0 && ammo.reserve > 0,
-      // (Whether they're reloading isn't something the game can read.)
-      reloading: false,
-    });
-  } else if (s.cylinder?.shown) s.cylinder.remove();
+  p.hud.widget('cylinder', CHAMBERS);
   const w = mostWanted();
   const look = w ? COWBOYS[w.outfit % COWBOYS.length].look : null;
   p.hud.widget('wanted', {
@@ -481,7 +465,6 @@ export default defineGame({
           const i = COWBOYS.findIndex((c) => c.id === value);
           if (!s || i < 0) return;
           s.outfit = i;
-          s.picked = true;
           player.setModel(cowboyModel(i));
           s.picker?.remove();
           s.picker = null;
@@ -490,7 +473,7 @@ export default defineGame({
       },
       onClose: (player) => {
         const s = slingers.get(player.id);
-        if (s) Object.assign(s, { picker: null, nags: s.nags + 1 });
+        if (s) s.picker = null;
       },
     });
     // The walking grid (built once the town's blocks are here) and the bots on it.
@@ -502,15 +485,20 @@ export default defineGame({
       else {
         balanceBots(game);
         game.hud.feed([{ text: player.name, color: COLORS.brass }, ' rode into Dry Gulch']);
-        // Arriving mid-round: watch until the next.
+        // Arriving mid-round: watch until the next (a freeze now holds when they press Play).
         if (running && phase !== 'standoff') {
           const alive = [...slingers.values()].find((o) => o.standing && o.player.alive);
-          player.freeze(true);
+          player.freeze(true, { weapons: true });
           arm(player, true);
           if (alive) player.camera.orbit(alive.player, { distance: 6, min: 3, max: 12 });
           player.hud.toast('You ride in at the next high noon');
         }
       }
+    });
+    // Their screen is in play: choose your look (a modal; O brings it back).
+    game.events.on('playerReady', ({ player }) => {
+      const s = slingers.get(player.id);
+      if (s) showPicker(s);
     });
     game.events.on('playerLeave', ({ player }) => {
       slingers.delete(player.id);
@@ -585,7 +573,7 @@ export default defineGame({
     round = 0;
     lastSecond = -1;
     boardDirty = true;
-    for (const s of slingers.values()) Object.assign(s, { wins: 0, kills: 0, deaths: 0, headshots: 0, bounty: 0, purse: 0, standing: false, diedAt: -1, cylinder: null });
+    for (const s of slingers.values()) Object.assign(s, { wins: 0, kills: 0, deaths: 0, headshots: 0, bounty: 0, purse: 0, standing: false, diedAt: -1 });
     for (const p of game.players) if (!slingers.has(p.id)) addSlinger(game, p);
     balanceBots(game);
     startRound(game);

@@ -2,6 +2,7 @@ import type { WidgetAnchor } from '../api/types';
 import {
   cleanStyle,
   fill,
+  isLocal,
   lookup,
   parseCondition,
   parseMarkup,
@@ -34,6 +35,8 @@ export interface CompiledWidget {
   css: string;
   at: WidgetAnchor;
   modal: boolean;
+  /** It binds the screen's own state (`{{$gun.mag}}`): it's refreshed when that changes. */
+  local: boolean;
 }
 
 /** Most copies one `data-each` makes. */
@@ -45,13 +48,28 @@ const BOOLEAN = new Set(['hidden', 'disabled', 'reversed']);
 /** A definition from the host, checked here again (a screen trusts nothing a server sends); null if it's no widget. */
 export function compileWidget(name: string, wire: WidgetWire): CompiledWidget | null {
   if (!WIDGET_NAME.test(name) || typeof wire?.html !== 'string') return null;
+  const nodes = parseMarkup(wire.html).nodes.map(compile);
   return {
     name,
-    nodes: parseMarkup(wire.html).nodes.map(compile),
+    nodes,
     css: typeof wire.css === 'string' ? scopeCss(wire.css, { widget: name }) : '',
     at: wire.at && WIDGET_ANCHORS.includes(wire.at) ? wire.at : 'top-left',
     modal: wire.modal === true,
+    local: nodes.some(bindsLocal),
   };
+}
+
+/** Whether any binding in it reads the screen's own state (`$gun`, `$ability`, `$health`…). */
+function bindsLocal(n: Tpl): boolean {
+  const parts = (ps: TemplatePart[]) => ps.some((p) => typeof p !== 'string' && isLocal(p.path));
+  if ('text' in n) return parts(n.text);
+  const operand = (o: Condition['left'] | undefined) => !!o && 'path' in o && isLocal(o.path);
+  return (
+    n.attrs.some(([, v]) => parts(v)) ||
+    (n.cond !== null && (operand(n.cond.left) || operand(n.cond.right))) ||
+    (n.each !== null && isLocal(n.each)) ||
+    n.children.some(bindsLocal)
+  );
 }
 
 function compile(n: MarkupNode): Tpl {
@@ -88,10 +106,12 @@ export class WidgetView {
     /** What it shows (merge changes in, then `update`). */
     readonly data: PlainData,
     private onAction: (action: string, value: string) => void,
+    /** The screen's own state its `$` names read (`$gun.mag`): kept up to date by the screen, in place. */
+    local: PlainData = {},
   ) {
     this.root = document.createElement('div');
     this.root.className = `gw ${widgetClass(def.name)}`;
-    const scope: Scope = { data };
+    const scope: Scope = { data, local };
     for (const n of def.nodes) this.build(n, this.root, scope, this.updaters);
     this.update();
   }

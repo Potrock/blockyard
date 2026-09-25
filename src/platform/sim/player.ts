@@ -12,6 +12,7 @@ import { Inventory, type ItemSim } from './items';
 import type { Presentation } from './present';
 import type { CreativeBuild } from './creative';
 import { abilityStates, copyMemory, freshMemory, resolveMovement, stepMovement, type MoveMemory, type MoveTune } from './movement';
+import type { AbilityCamera, AbilityEvent } from './abilities';
 import type { PropState } from './props';
 import { VehicleSim } from './vehicle';
 
@@ -70,6 +71,13 @@ export interface PlayerFrame {
   creative: { hotbar: number[]; selected: number } | null;
   /** Physics is off (before play, dead, a game-driven camera). */
   frozen: boolean;
+  /** Their weapons are locked (`freeze(true, { weapons: true })`): their screen fires nothing. */
+  locked: boolean;
+  /**
+   * Their camera's tilt from a movement ability this step ([roll, pitch, dip], `AbilityBody.camera`),
+   * for their own screen when it doesn't predict (a predicting one works it out itself).
+   */
+  tilt?: [number, number, number];
   canFly: boolean;
   /** Swings and uses so far (a change swings the arm of their figure on other screens). */
   swings: number;
@@ -157,8 +165,14 @@ export class PlayerSim {
   private seq = 0;
   /** Double-tap state for sprinting and flying, the slide, the game's movement abilities. */
   private memory = freshMemory();
-  /** What their movement abilities triggered since the game last heard ([ability, name]). */
-  private abilityEvents: [string, string][] = [];
+  /** What their movement abilities triggered since the game last heard. */
+  private abilityEvents: AbilityEvent[] = [];
+  /** The camera their movement abilities asked for on the last step (see `PlayerFrame.tilt`). */
+  private tilt: AbilityCamera | null = null;
+  /** The game froze them (`freeze(true)`): it holds when they press Play. */
+  held = false;
+  /** The game's freeze locks their weapons too (`freeze(true, { weapons: true })`). */
+  private lockWeapons = false;
   /** The last input applied, by the client's count (a predicting client replays what's after). */
   ack = -1;
   /** Seconds their state trails the step (see `PlayerFrame.lead`). */
@@ -334,6 +348,7 @@ export class PlayerSim {
     this.sliding = false;
     this.memory = freshMemory();
     this.abilityEvents = [];
+    this.tilt = null;
     this.input.set(IDLE_INPUT);
     this.place(x, y, z, yaw);
   }
@@ -383,8 +398,13 @@ export class PlayerSim {
     }
     const held = this.inventory.held;
     const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul, this.p.guns);
-    const { sneak, sprint, slide, events } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods, this.pitch, this.p.query);
-    if (events.length) this.abilityEvents.push(...events);
+    const { sneak, sprint, slide, events, camera } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods, this.pitch, this.p.query);
+    if (events.length) {
+      this.abilityEvents.push(...events);
+      // A clip an ability asked for plays on their figure (their own screen played it already).
+      for (const [, , clip] of events) if (clip) this.clip = clipFrame(++this.clipSeq, clip.name, clip.opts, this.p.now());
+    }
+    this.tilt = camera;
     this.syncState();
     this.sneaking = sneak;
     this.sliding = slide;
@@ -430,11 +450,25 @@ export class PlayerSim {
 
   /** The built-in weapons and hotbar (after the game has had its say on the controls). */
   updateHands(dt: number, running: boolean) {
-    if (this.itemMode) this.combat.update(running ? dt : 0, this.input);
+    if (this.itemMode) this.combat.update(running ? dt : 0, this.input, this.weaponsLocked);
+  }
+
+  /** A weapons-locked freeze holds (it ends with the freeze: `freeze(false)`, a revive). */
+  get weaponsLocked(): boolean {
+    return this.lockWeapons && this.p.world.player_state(this.slot)[12] > 0.5;
+  }
+
+  /** `freeze`: their body, and with `weapons` their weapons too. */
+  freeze(frozen: boolean, weapons = false) {
+    this.p.world.set_frozen(this.slot, frozen);
+    this.held = frozen;
+    this.lockWeapons = frozen && weapons;
   }
 
   reset() {
     this.combat.reset();
+    this.held = false;
+    this.lockWeapons = false;
   }
 
   frame(): PlayerFrame {
@@ -478,6 +512,8 @@ export class PlayerSim {
       vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
       frozen: s.frozen,
+      locked: this.weaponsLocked,
+      ...(this.tilt && { tilt: this.tilt }),
       canFly: this.allowFlight,
       swings: this.swings,
       ack: this.ack,
@@ -636,7 +672,13 @@ export class PlayerSim {
       heal: (amount) => this.health.heal(amount),
       revive: () => this.health.revive(),
       impulse: (x, y, z) => world.player_impulse(this.slot, x, y, z),
-      freeze: (f) => world.set_frozen(this.slot, f),
+      freeze: (f, opts) => this.freeze(!!f, !!opts?.weapons),
+      get frozen() {
+        return world.player_state(me.slot)[12] > 0.5;
+      },
+      get reloading() {
+        return (me.combat.heldGun()?.state.reload ?? -1) >= 0;
+      },
       drive: <S extends object>(name: string, state: S, opts: { prop?: Prop } = {}) => {
         const def = this.p.vehicles[name];
         if (!def) throw new Error(`player.drive: no vehicle "${name}" (add it to the game's \`vehicles\`)`);

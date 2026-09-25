@@ -115,7 +115,9 @@ export class Sim {
   started = false;
   private listeners = new Map<string, Set<(e: unknown) => void>>();
   private timers: Timer[] = [];
+  /** The match's clock (`clock.now`: back to 0 on a restart), and all the game's time (`clock.total`). */
   private clockNow = 0;
+  private clockTotal = 0;
   /** Seconds of ticks so far (running or not): the host time frames carry. */
   time = 0;
   /** Where everyone was, for the last second (shots are checked where the shooter saw them). */
@@ -409,12 +411,18 @@ export class Sim {
     this.leave(bot.id);
   }
 
-  /** A player's client started playing (clicked Play): their body wakes up, and the game starts. */
+  /**
+   * A player's client started playing (clicked Play): their body wakes up (unless they're dead, or
+   * the game froze them as they joined), the game starts, and the game hears `playerReady`.
+   */
   play(p: PlayerSim) {
-    this.host.world.set_frozen(p.slot, p.health.dead);
+    this.host.world.set_frozen(p.slot, p.health.dead || p.held);
     // Their client's camera turned on the title screen: face where they were placed.
     p.setView(p.yaw, p.pitch);
     this.start();
+    // Their screen is in play now: the modal widgets up on it go again (see `resendModals`).
+    this.presentation.resendModals(p.id);
+    this.emit('playerReady', { player: p.api });
   }
 
   /** `game.store`: values copied through JSON, so nothing the game holds on to changes them. */
@@ -502,6 +510,7 @@ export class Sim {
     // saves the world (Sandbox keeps your builds).
     if (!this.def.world?.persist) this.host.revert();
     this.items.clearPickups();
+    // The match's clock starts again, its timers gone with it; `clock.total` runs on.
     this.timers = [];
     this.clockNow = 0;
     this.history.clear();
@@ -538,6 +547,7 @@ export class Sim {
 
   private tickTimers(dt: number) {
     this.clockNow += dt;
+    this.clockTotal += dt;
     for (let i = 0; i < this.timers.length; i++) {
       const t = this.timers[i];
       if (t.dead) continue;
@@ -822,6 +832,9 @@ export class Sim {
       clock: {
         get now() {
           return sim.clockNow;
+        },
+        get total() {
+          return sim.clockTotal;
         },
         after: (seconds, fn) => sim.addTimer(seconds, 0, fn),
         every: (seconds, fn) => sim.addTimer(seconds, seconds, fn),

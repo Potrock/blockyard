@@ -360,6 +360,10 @@ export class GameHost {
       this.state.forget(local.id);
       this.sim.presentation.forget(local.id);
     }
+    // Their client learns who it is before anything the game does as they join (`playerJoin`
+    // putting a widget up on their screen, a toast): a screen drops calls for a player it
+    // doesn't know it is yet.
+    const at = this.events.length;
     const player = this.sim.join(name);
     const was = this.keeps ? this.store.player(name) : null;
     if (was) {
@@ -369,7 +373,7 @@ export class GameHost {
       if (was.hotbar && player.creative) player.creative.hotbar.splice(0, was.hotbar.length, ...was.hotbar.map((b) => this.hotbarId(b)));
     }
     client.player = player;
-    this.events.push({ t: 'joined', player: player.id, client: id });
+    this.events.splice(at, 0, { t: 'joined', player: player.id, client: id });
   }
 
   /** Events so far that concern only this client (its `joined`), taken out of the queue. */

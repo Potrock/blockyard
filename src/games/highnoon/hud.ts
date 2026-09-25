@@ -7,38 +7,45 @@ import type { WidgetDefinition } from '@platform';
  *
  * - `cylinder`: the held gun's rounds, bottom right: the Peacemaker's cylinder turning a chamber a
  *   shot (brass where there's a round, black where it's spent), or the Yellowboy's tube as a row
- *   of cartridges. (It replaces the platform's ammo counter, hidden in hud.css.)
+ *   of cartridges. It reads the gun on the player's own screen (`$gun`), so it keeps up with the
+ *   trigger online. (It replaces the platform's ammo counter, hidden in hud.css.)
  * - `wanted`: the Most Wanted's poster, top right: whoever carries the biggest bounty, their
  *   price, and yours under it.
  * - `duel`: the middle of the screen at a round's start and end: the standoff's clock counting to
  *   DRAW, then who won the round and the tally.
  * - `roundbar`: the round, who's still standing (a pip each) and the clock, top middle.
- * - `outfits`: a modal: choose your gunslinger (O). Its buttons call the game's `pick` action.
+ * - `outfits`: a modal: choose your gunslinger (as they come into town, and O). Its buttons call
+ *   the game's `pick` action.
  */
 
+/** How the gun's rounds read: its name, what's in the belt, and whether it's loading or needs R (shared by both guns). */
+const GUN_INFO = `
+      <div class="info">
+        <span class="name">{{$gun.name}}</span>
+        <span class="spare">{{$gun.reserve}} in the belt</span>
+        <span class="warn" data-if="$gun.reloading">loading…</span>
+        <span data-if="$gun.mag == 0"><span data-if="!$gun.reloading"><span class="warn empty" data-if="$gun.reserve > 0">press R to load</span></span></span>
+      </div>`;
+
+/**
+ * The held gun's rounds, bound to the gun on each player's own screen (`$gun`): it turns the frame
+ * a shot goes off and fills as rounds go in, with no round trip. The game sends only the chambers
+ * to lay out (`drum`: each with `k`, how many rounds it takes for that chamber to be loaded; `tube`:
+ * one per cartridge), once.
+ */
 export const CYLINDER: WidgetDefinition = {
   at: 'bottom-right',
   html: `
-    <div class="gun" data-if="revolver">
-      <div class="drum" style="--turn: {{turn}}">
-        <i data-each="chambers" class="ch {{.}}" style="--i: {{$i}}"></i>
+    <div class="gun" data-if="$gun.item == 'revolver'">
+      <div class="drum" style="--size: {{$gun.size}}; --mag: {{$gun.mag}}">
+        <i data-each="drum" class="ch" style="--i: {{$i}}"><b data-if="k <= $gun.mag"></b></i>
         <b class="axle"></b>
       </div>
-      <div class="info">
-        <span class="name">{{name}}</span>
-        <span class="spare">{{reserve}} in the belt</span>
-        <span class="warn" data-if="reloading">loading…</span>
-        <span class="warn empty" data-if="empty">press R to load</span>
-      </div>
+      ${GUN_INFO}
     </div>
-    <div class="gun tube" data-if="rifle">
-      <div class="rounds"><i data-each="chambers" class="rd {{.}}"></i></div>
-      <div class="info">
-        <span class="name">{{name}}</span>
-        <span class="spare">{{reserve}} in the belt</span>
-        <span class="warn" data-if="reloading">loading…</span>
-        <span class="warn empty" data-if="empty">press R to load</span>
-      </div>
+    <div class="gun tube" data-if="$gun.item == 'rifle'">
+      <div class="rounds"><i data-each="tube" class="rd"><b data-if="$i < $gun.mag"></b></i></div>
+      ${GUN_INFO}
     </div>`,
   css: `
     :scope { margin: 0 6px 6px 0; }
@@ -47,21 +54,20 @@ export const CYLINDER: WidgetDefinition = {
       position: relative; width: 96px; height: 96px; border-radius: 50%;
       background: radial-gradient(circle at 38% 32%, #8b8f96, #3b3e44 58%, #1c1d21 72%);
       box-shadow: 0 0 0 3px var(--hud-ink, #2b1a0e), 4px 5px 0 3px rgba(0, 0, 0, 0.35);
-      transform: rotate(calc(var(--turn) * 60deg));
+      transform: rotate(calc((var(--size) - var(--mag)) * 60deg));
       transition: transform 140ms cubic-bezier(0.3, 1.6, 0.5, 1);
     }
     .ch {
       position: absolute; left: 50%; top: 50%; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%;
       transform: rotate(calc(var(--i) * -60deg)) translateY(-29px);
+      background: radial-gradient(circle, #050505 0 58%, #2a2b30 59%);
       box-shadow: inset 0 0 0 2px #121214;
     }
-    .ch.full { background: radial-gradient(circle at 45% 40%, #f6dc8c 0 22%, #c8902e 23% 52%, #7a5418 53% 70%, #121214 71%); }
-    .ch.empty { background: radial-gradient(circle, #050505 0 58%, #2a2b30 59%); }
+    .ch b { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 45% 40%, #f6dc8c 0 22%, #c8902e 23% 52%, #7a5418 53% 70%, #121214 71%); }
     .axle { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px; border-radius: 50%; background: #1a1b1f; box-shadow: inset 0 0 0 3px #5c6068; }
     .rounds { display: flex; gap: 4px; align-items: flex-end; padding: 8px 10px; background: var(--hud-paper, #eadab4); border: 3px solid var(--hud-ink, #2b1a0e); border-radius: 3px; }
-    .rd { width: 10px; height: 34px; border-radius: 5px 5px 1px 1px; }
-    .rd.full { background: linear-gradient(#e7c56b 0 38%, #b07c26 38% 100%); box-shadow: inset -2px 0 0 rgba(0,0,0,0.25); }
-    .rd.empty { background: rgba(43, 26, 14, 0.18); box-shadow: inset 0 0 0 1px rgba(43, 26, 14, 0.4); }
+    .rd { position: relative; width: 10px; height: 34px; border-radius: 5px 5px 1px 1px; background: rgba(43, 26, 14, 0.18); box-shadow: inset 0 0 0 1px rgba(43, 26, 14, 0.4); }
+    .rd b { position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(#e7c56b 0 38%, #b07c26 38% 100%); box-shadow: inset -2px 0 0 rgba(0,0,0,0.25); }
     .info { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-shadow: 2px 2px 0 var(--hud-ink, #2b1a0e); color: #f4e6c4; }
     .name { font: 22px var(--pixel); letter-spacing: 0.04em; }
     .spare { font: 700 13px var(--sans); opacity: 0.9; }

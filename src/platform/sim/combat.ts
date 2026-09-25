@@ -99,8 +99,9 @@ export class Combat {
     return state && { id: stack.item, gun: gun(def), state };
   }
 
-  update(dt: number, input: SimInput) {
-    const active = input.active;
+  /** `locked`: a weapons-locked freeze (`freeze(true, { weapons: true })`): the controls reach no weapon. */
+  update(dt: number, input: SimInput, locked = false) {
+    const active = input.active && !locked;
     this.cooldown = Math.max(0, this.cooldown - dt);
     const inv = this.me.inventory;
     if (active) {
@@ -124,7 +125,7 @@ export class Combat {
     if (def?.kind === 'gun' && stack) {
       this.drawing = false;
       this.charge = 0;
-      this.gun(dt, input, stack.item, def);
+      this.gun(dt, input, stack.item, def, active, locked);
       return;
     }
     if (!active) {
@@ -161,11 +162,10 @@ export class Combat {
    * (`PlayerInput.shots`): the host takes them as long as the gun could have fired them. Bots
    * (and anyone without a screen) fire here from the trigger.
    */
-  private gun(dt: number, input: SimInput, id: string, def: GunItem) {
+  private gun(dt: number, input: SimInput, id: string, def: GunItem, active: boolean, locked: boolean) {
     const st = this.me.inventory.gunState(id);
     if (!st) return;
     const g = gun(def);
-    const active = input.active;
     const trigger = active && input.button(0);
     st.aim = stepAim(g, st.aim, active && input.button(2), dt);
     st.cooldown = Math.max(0, st.cooldown - dt);
@@ -173,7 +173,8 @@ export class Combat {
     st.tokens = Math.min(this.rules.rateSlack, st.tokens + dt / g.interval);
     stepReload(g, st, dt, trigger);
     if (active && input.pressed('KeyR') && canReload(g, st)) this.reload(g, st);
-    const shots = input.shots;
+    // Locked, the shots a screen fired anyway are refused: no rounds go.
+    const shots = locked ? undefined : input.shots;
     if (shots) {
       for (const [serial, yaw, pitch, spread] of shots) {
         if (st.mag <= 0 || st.tokens < 0.75 || serial <= st.serial) continue;
@@ -198,7 +199,7 @@ export class Combat {
       }
     }
     // Empty: reload by itself.
-    if (this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st);
+    if (!locked && this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st);
   }
 
   private reload(g: Gun, st: GunState) {

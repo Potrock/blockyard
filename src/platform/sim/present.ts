@@ -217,6 +217,19 @@ export class Presentation {
     this.widgetScreens.clear();
   }
 
+  /**
+   * A player's screen went into play (they pressed Play): the modal widgets up on it go again,
+   * whole. A modal is a screen of its own that takes the mouse, so it's sent once more when the
+   * player's screen is surely there to take it (it rebuilds one that's up in place).
+   */
+  resendModals(player: string) {
+    for (const [name, kind] of this.widgetKinds) {
+      if (!kind.def.modal) continue;
+      const d = this.widgetScreens.get(name)?.of(player);
+      if (d) this.send(player, 'hud', 'widget', [name, structuredClone(d)]);
+    }
+  }
+
   /** A player left for good: what their screen showed goes. */
   forget(player: string) {
     for (const s of this.widgetScreens.values()) s.mine.delete(player);
@@ -251,6 +264,11 @@ export class Presentation {
   /**
    * A widget's data changes on these screens (everyone's, or one player's). Not up there yet: it
    * goes up with this data. Up: only what differs goes, as a patch each screen merges in.
+   *
+   * Everyone's and a player's own: everyone's call reaches every screen. It changes the fields it
+   * names on every screen, a player's own copy included, and it goes back up (whole) on a screen
+   * where the player took it down (their own `remove`, a modal they closed). A player's own call
+   * changes their screen alone: their copy starts from everyone's, and is theirs from then on.
    */
   setWidget(to: string | null, name: string, input: WidgetData) {
     if (!this.widgetKinds.has(name)) throw new Error(`hud.widget: there's no widget "${name}" (hud.define it first)`);
@@ -272,14 +290,22 @@ export class Presentation {
         const p = diffData(d, data);
         if (p) patch = mergeData(patch ?? {}, p);
       }
-      if (!patch) return;
-      for (const d of screens) mergeData(d, patch);
-      this.send(null, 'hud', 'widgetSet', [name, patch]);
+      if (patch) {
+        for (const d of screens) mergeData(d, patch);
+        this.send(null, 'hud', 'widgetSet', [name, patch]);
+      }
+      // Down on a player's screen (they took it down, or closed it): back up there, as everyone has it.
+      for (const [player, d] of [...s.mine]) {
+        if (d !== null) continue;
+        s.mine.delete(player);
+        this.send(player, 'hud', 'widget', [name, structuredClone(s.all)]);
+      }
       return;
     }
     const cur = s.of(to);
     if (cur === null) {
-      const d = mergeData({}, data);
+      // Up on their screen: everyone's (if it's up for everyone) with theirs merged in.
+      const d = mergeData(s.all ? structuredClone(s.all) : {}, data);
       s.mine.set(to, d);
       this.send(to, 'hud', 'widget', [name, structuredClone(d)]);
       return;

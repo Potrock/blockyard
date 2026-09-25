@@ -327,6 +327,21 @@ export interface AbilityBody {
   control: number;
   /** Multiplies walking, sprinting and crouching speed this step (1). */
   speed: number;
+  /**
+   * How low the body is this step: `'stand'`, `'crouch'`, or `'low'` (a slide's height). It starts
+   * as the platform's movement has it (crouching, sliding); an ability can change it for this step
+   * (a dodge roll goes `'low'`). It's the body's hitbox for bullets, the height of their eyes (and
+   * their camera), and how their figure looks to others (crouched, or low as in a slide), and it's
+   * predicted on their screen like the rest. It isn't how the body moves: speeds stay the ability's.
+   */
+  stance: AbilityStance;
+  /**
+   * Their camera this step, on their own screen only (predicted, so it moves the moment they do):
+   * `roll` tilts it (radians, positive leans right, as a head tilts), `pitch` tips it (radians, up
+   * is positive; where they aim doesn't move), `dip` lowers it (blocks). All 0 at the start of each
+   * step: set them on every step they should show (a roll's tumble, a landing's dip).
+   */
+  camera: { roll: number; pitch: number; dip: number };
   /** Set the velocity (the axes given), or add to it. Upward speed lifts them off the ground. */
   setVelocity(v: Partial<Vec3>): void;
   addVelocity(v: Partial<Vec3>): void;
@@ -337,8 +352,18 @@ export interface AbilityBody {
   /**
    * Tell the game this ability did something (`'dash'`, `'jump'`, `'start'`): the host's `ability`
    * event, heard once, after the step. (Their screen replays steps, so only the host's are heard.)
+   * With `clip`, their figure plays that clip of their model (as `player.animate` would, with its
+   * options): on their own screen at once, and on everyone else's from the host.
    */
-  trigger(name: string): void;
+  trigger(name: string, opts?: AbilityTriggerOptions): void;
+}
+
+/** How low a body is (`AbilityBody.stance`): standing, crouched, or as low as a slide. */
+export type AbilityStance = 'stand' | 'crouch' | 'low';
+
+/** `AbilityBody.trigger`'s options: a clip for their figure to play, and how (see `ClipOptions`). */
+export interface AbilityTriggerOptions extends ClipOptions {
+  clip?: string;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1018,8 +1043,18 @@ export interface PlayerApi {
   /** Restore full health after death. */
   revive(): void;
   impulse(x: number, y: number, z: number): void;
-  /** Freeze movement (cutscenes, countdowns). */
-  freeze(frozen: boolean): void;
+  /**
+   * Freeze movement (cutscenes, countdowns), or let them go (`false`). With `weapons: true` their
+   * weapons are locked too while it lasts: no switching slots, aiming, reloading, firing or using
+   * items, and a shot their screen fires anyway is refused (no rounds spent). The lock ends with
+   * the freeze (`freeze(false)`, or a `revive`). A freeze before they're in play (at `playerJoin`)
+   * holds when they press Play.
+   */
+  freeze(frozen: boolean, opts?: { weapons?: boolean }): void;
+  /** Their body is frozen: `freeze`, dead, driving, or not in play yet. */
+  readonly frozen: boolean;
+  /** Reloading the gun they hold (rounds going in, one at a time or all at once). */
+  readonly reloading: boolean;
   /**
    * Put them in one of the game's `vehicles`, starting from `state` (plain numbers, booleans and
    * lists: it goes to their screen as data). From now on their controls drive it (the vehicle's
@@ -2224,6 +2259,12 @@ export interface GameEvents {
   pickup: { player: Player; item: string; count: number };
   /** A player joined a game in progress (multiplayer). */
   playerJoin: { player: Player };
+  /**
+   * A person's screen is in play: they pressed Play (after `start`, for the first). On a server
+   * that's right after their `playerJoin`; in single-player, the first click on Play. The place
+   * for what needs their screen (a modal widget, a welcome). Bots have no screen: not for them.
+   */
+  playerReady: { player: Player };
   /** A player left (multiplayer). They're no longer in `players`. */
   playerLeave: { player: Player };
   /** A block was broken by the player, an entity, an explosion or `world.breakBlock`. */
@@ -2245,8 +2286,16 @@ export interface EventApi {
 }
 
 export interface ClockApi {
-  /** Seconds of game time since `start` (pauses with the game). */
+  /**
+   * Seconds of game time since `start`: the match's clock. It pauses with the game, and a
+   * `restart()` puts it back to 0 (with the timers, which it clears).
+   */
   readonly now: number;
+  /**
+   * Seconds of game time since the game first started, which a `restart()` doesn't reset: for
+   * what outlives a match (a cooldown across restarts, when someone joined). Pauses with the game.
+   */
+  readonly total: number;
   after(seconds: number, fn: () => void): () => void;
   every(seconds: number, fn: () => void): () => void;
 }

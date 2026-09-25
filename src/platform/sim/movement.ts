@@ -1,6 +1,6 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { MovementOptions, VehicleControls, VehicleWorld } from '../api/types';
-import { roundMemory, stepAbilities, statesFor, type Abilities, type AbilityStates } from './abilities';
+import { roundMemory, stepAbilities, statesFor, type Abilities, type AbilityCamera, type AbilityEvent, type AbilityStates } from './abilities';
 
 /** The part of a player's controls that moves them (and that their movement abilities read). */
 export interface MoveControls extends VehicleControls {
@@ -85,12 +85,16 @@ export const NO_MODS: MoveMods = { speed: 1, noSprint: false };
 
 const any = (keys: string[], f: (k: string) => boolean) => keys.some(f);
 
-/** What a step of movement did: crouching, sprinting, sliding, and what abilities triggered ([ability, name]). */
+/**
+ * What a step of movement did: crouching, sprinting, sliding (as the body stands: an ability's
+ * `stance` shows here), what abilities triggered, and the camera they asked for.
+ */
 export interface MoveResult {
   sneak: boolean;
   sprint: boolean;
   slide: boolean;
-  events: [string, string][];
+  events: AbilityEvent[];
+  camera: AbilityCamera | null;
 }
 
 const NO_EVENTS: MoveResult['events'] = [];
@@ -202,12 +206,19 @@ export function stepMovement(
   let gravity = 1;
   let control = 1;
   let events = NO_EVENTS;
+  let camera: AbilityCamera | null = null;
+  // How low the body is: the platform's crouch and slide, unless an ability says otherwise. It's
+  // the hitbox, the eye and the figure's pose, not the physics (the engine's step is as it was).
+  let sneakOut = crouch || sliding;
+  let slideOut = sliding;
   if (tune.abilities.length) {
     if (!query) throw new Error('movement abilities need the world to ask');
     const start = { yaw, pitch, wx, wz, jump, crouching: crouch || sliding, sprinting: sprint && !sliding, sliding, speed };
     const r = stepAbilities(world, slot, c, tune.abilities, abilityStates(m, tune), m.time, dt, start, query);
-    ({ wx, wz, jump, gravity, control, speed, events } = r);
+    ({ wx, wz, jump, gravity, control, speed, events, camera } = r);
+    sneakOut = r.stance !== 'stand';
+    slideOut = r.stance === 'low';
   }
   world.player_step(slot, wx, wz, jump, crouch || sliding, sprint && !sliding, sliding, speed, gravity, control, dt);
-  return { sneak: crouch || sliding, sprint: sprint && !sliding, slide: sliding, events };
+  return { sneak: sneakOut, sprint: sprint && !slideOut, slide: slideOut, events, camera };
 }

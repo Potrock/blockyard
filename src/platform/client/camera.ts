@@ -37,6 +37,12 @@ export class PlayerCamera {
   private circled = new THREE.Vector3();
   /** How far the camera can go from a point along a direction before a block stops it. */
   clearance: (from: THREE.Vector3, dir: THREE.Vector3, max: number) => number = (_from, _dir, max) => max;
+  /**
+   * What a movement ability asks of the camera now ([roll, pitch, dip], `AbilityBody.camera`), in
+   * first person: eased toward, so a tumble that stops doesn't snap the view straight.
+   */
+  tilt: readonly [number, number, number] | null = null;
+  private tiltNow: [number, number, number] = [0, 0, 0];
 
   constructor(readonly camera: THREE.PerspectiveCamera) {}
 
@@ -102,8 +108,14 @@ export class PlayerCamera {
     const bobY = Math.abs(Math.sin(phase)) * 0.055 * bobAmt;
     const bobX = Math.cos(phase) * 0.03 * bobAmt;
 
-    this.camera.position.set(f.x + Math.cos(this.yaw) * bobX, f.y + this.eye + bobY, f.z - Math.sin(this.yaw) * bobX);
-    this.euler.set(this.pitch, this.yaw, Math.cos(phase) * 0.004 * bobAmt);
+    // An ability's tilt, dip and pitch kick (first person only): the view, not the aim.
+    const want = this.distance > 0 ? null : this.tilt;
+    const ease = 1 - Math.exp(-dt * 30);
+    const t = this.tiltNow;
+    for (let i = 0; i < 3; i++) t[i] += ((want?.[i] ?? 0) - t[i]) * ease;
+    const kicked = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, this.pitch + t[1]));
+    this.camera.position.set(f.x + Math.cos(this.yaw) * bobX, f.y + this.eye + bobY - t[2], f.z - Math.sin(this.yaw) * bobX);
+    this.euler.set(kicked, this.yaw, Math.cos(phase) * 0.004 * bobAmt - t[0]);
     this.camera.quaternion.setFromEuler(this.euler);
 
     // Third person: back from the eyes, round the point the game's orbit circles (reached over the
