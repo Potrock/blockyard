@@ -4,6 +4,11 @@ export interface SavedWorld {
   seed: number;
   /** The engine's exported edits; null until first saved. */
   edits: Uint8Array | null;
+  /**
+   * The game's own blocks' keys when the edits were saved, in id order (from the first game block
+   * id): loaded with other definitions, the edits are translated by name. Absent: none.
+   */
+  blocks?: string[] | null;
   /** Time of day. */
   time: number;
 }
@@ -16,8 +21,8 @@ export interface SavedPlayer {
   yaw: number;
   pitch: number;
   flying: boolean;
-  /** Creative building's block hotbar. */
-  hotbar?: number[];
+  /** Creative building's block hotbar: ids, and the game's own blocks by key (their ids can move). */
+  hotbar?: (number | string)[];
 }
 
 /**

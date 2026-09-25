@@ -178,6 +178,8 @@ export type ClientCommand =
 /** A saved world, handed to the host at start. */
 export interface SaveState {
   edits: Uint8Array;
+  /** The game's own blocks' keys in id order when it was saved: the edits are translated by name. */
+  blocks?: string[];
   player: [number, number, number, number, number];
   flying: boolean;
   time: number;
@@ -220,6 +222,12 @@ export interface ServerWelcome {
   spawn: { x: number; y: number; z: number; yaw: number };
   /** Steps per second. */
   tickRate: number;
+  /**
+   * The game's own blocks' keys in id order (from the first game block id): the client gives the
+   * blocks it defines the same ids, so edits and structures agree even if its copy of the game
+   * differs (an older version: a block it hasn't got shows as "missing").
+   */
+  blocks?: string[];
 }
 
 /** A batch from a server, stamped with the host's clock (seconds) for smooth playback. */

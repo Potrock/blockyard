@@ -7,7 +7,8 @@ export interface WorldGenConfig {
 }
 
 export type WorkerRequest =
-  | { type: 'init'; module: WebAssembly.Module; seed: number; world: WorldGenConfig }
+  /** `blocks`: the game's own blocks, as the engine takes them (`set_game_blocks`). */
+  | { type: 'init'; module: WebAssembly.Module; seed: number; world: WorldGenConfig; blocks: string }
   | { type: 'gen'; id: number; cx: number; cz: number }
   | { type: 'mesh'; id: number; cx: number; cz: number; region: Uint8Array };
 

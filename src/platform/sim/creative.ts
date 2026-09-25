@@ -73,7 +73,7 @@ export class CreativeBuild {
     if (t && (input.buttonPressed(0) || (input.button(0) && this.breakTimer <= 0))) {
       if (!input.buttonPressed(0)) this.swing();
       const def = this.registry.blocks[t.block];
-      if (def && def.name !== 'bedrock') this.breakBlock(t.x, t.y, t.z);
+      if (def?.breakable) this.breakBlock(t.x, t.y, t.z);
       this.breakTimer = input.buttonPressed(0) ? 0.3 : 0.22;
     }
     if (t && (input.buttonPressed(2) || (input.button(2) && this.placeTimer <= 0))) {

@@ -1,5 +1,6 @@
 import { engine } from '../engine/wasm';
-import type { BlockRef } from '../api/types';
+import type { BlockRef, SoundName } from '../api/types';
+import { firstGameBlock, type GameBlocks } from './blocks';
 
 export type BlockModel = '' | 'torch' | 'wall_torch' | 'slab' | 'stairs' | 'bed';
 
@@ -25,6 +26,12 @@ export interface BlockDef {
   replaceable: boolean;
   /** In the block picker: one variant per family. */
   placeable: boolean;
+  /** Players and explosions can break it (not bedrock, not liquids). */
+  breakable: boolean;
+  /** A game's own block: seconds to mine it by hand (`BlockDefinition.hardness`). */
+  hardness?: number;
+  /** A game's own block: the sounds it makes broken and placed. */
+  sounds?: { break?: SoundName; place?: SoundName };
   /** Plants and torches: break at a touch, and show as flat items. */
   small: boolean;
   /** A slab: the block its two halves make together (else 0). */
@@ -46,16 +53,23 @@ export interface Registry {
   families: Map<string, BlockDef[]>;
 }
 
-export function loadRegistry(): Registry {
+/**
+ * The blocks in use in this thread's engine: the built-in ones and, after `useGameBlocks(game)`,
+ * the game's own (pass it for what only the definitions say: hardness, sounds, texture names).
+ */
+export function loadRegistry(game?: GameBlocks): Registry {
   const json = JSON.parse(engine.block_registry_json()) as {
     blocks: (Omit<BlockDef, 'state' | 'key'> & { state: string })[];
     textures: string[];
   };
-  const blocks: BlockDef[] = json.blocks.map((b) => ({
-    ...b,
-    state: parseState(b.state),
-    key: b.state ? `${b.name}[${b.state}]` : b.name,
-  }));
+  const first = firstGameBlock();
+  const blocks: BlockDef[] = json.blocks.map((b) => {
+    const d: BlockDef = { ...b, state: parseState(b.state), key: b.state ? `${b.name}[${b.state}]` : b.name };
+    const own = b.id >= first ? game?.defs.get(b.name) : undefined;
+    if (own?.hardness !== undefined) d.hardness = own.hardness;
+    if (own?.sounds) d.sounds = { ...own.sounds };
+    return d;
+  });
   const byName = new Map<string, BlockDef>();
   const families = new Map<string, BlockDef[]>();
   for (const b of blocks) {
@@ -64,7 +78,7 @@ export function loadRegistry(): Registry {
     else families.set(b.name, [b]);
     if (!byName.has(b.name) || (b.placeable && !byName.get(b.name)!.placeable)) byName.set(b.name, b);
   }
-  return { blocks, textures: json.textures, byName, families };
+  return { blocks, textures: [...json.textures, ...(game?.textureNames ?? [])], byName, families };
 }
 
 function parseState(s: string): Record<string, string> {

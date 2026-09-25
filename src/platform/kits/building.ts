@@ -4,13 +4,14 @@ import type { Entity, GameContext, ItemStack, Player, RayHit, Vec3 } from '@plat
 export type Builder = Entity | Player;
 
 export interface BuildingOptions {
-  /** May this block be broken? Default: anything but bedrock. */
+  /** May this block be broken? Default: anything `blockInfo` says is breakable (not bedrock). */
   canBreak?(at: Vec3, block: string, by: Builder): boolean;
   /** May this block be placed here? Default: yes. */
   canPlace?(at: Vec3, block: string, by: Builder): boolean;
   /**
    * Seconds for a player to mine a block with what's in their hand (0 = instant, Infinity =
-   * can't). Default: `defaultBreakTime`, so tools are yours to add here.
+   * can't). Default: the block's `hardness` if the game gave it one, else `defaultBreakTime`, so
+   * tools are yours to add here.
    */
   breakTime?(block: string, held: ItemStack | null, player: Player): number;
   /** The block an item places, if any. Default: items whose icon is a block place that block. */
@@ -48,7 +49,7 @@ export function building(game: GameContext, opts: BuildingOptions = {}): Buildin
 
   const canBreak = (at: Vec3, block: string, by: Builder) => {
     const info = world.blockInfo(block);
-    if (!info || block === 'bedrock' || info.liquid || block === 'air') return false;
+    if (!info || !info.breakable || info.liquid || block === 'air') return false;
     return opts.canBreak?.(at, block, by) ?? true;
   };
   const canPlace = (at: Vec3, block: string, by: Builder) => opts.canPlace?.(at, block, by) ?? true;
@@ -95,7 +96,7 @@ export function building(game: GameContext, opts: BuildingOptions = {}): Buildin
     let mining = false;
     if (hit && canMine && input.button(0)) {
       const name = world.blockName(hit.block);
-      const time = canBreak(hit, name, player) ? (opts.breakTime?.(name, held, player) ?? defaultBreakTime(name, world.blockInfo(name)?.plant ?? false)) : Infinity;
+      const time = canBreak(hit, name, player) ? (opts.breakTime?.(name, held, player) ?? world.blockInfo(name)?.hardness ?? defaultBreakTime(name, world.blockInfo(name)?.plant ?? false)) : Infinity;
       // Unbreakable: leave the click alone (the weapon just swings at it).
       if (Number.isFinite(time)) {
         input.consume(0);

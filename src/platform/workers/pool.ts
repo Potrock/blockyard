@@ -22,7 +22,7 @@ export class WorkerPool {
     this.size = size;
   }
 
-  static async create(module: WebAssembly.Module, seed: number, size: number, world: WorldGenConfig): Promise<WorkerPool> {
+  static async create(module: WebAssembly.Module, seed: number, size: number, world: WorldGenConfig, blocks = '[]'): Promise<WorkerPool> {
     const pool = new WorkerPool(size);
     const ready: Promise<void>[] = [];
     for (let i = 0; i < size; i++) {
@@ -42,7 +42,7 @@ export class WorkerPool {
           worker.onerror = (e) => reject(e);
         }),
       );
-      const init: WorkerRequest = { type: 'init', module, seed, world };
+      const init: WorkerRequest = { type: 'init', module, seed, world, blocks };
       worker.postMessage(init);
     }
     await Promise.all(ready);

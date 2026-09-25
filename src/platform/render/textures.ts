@@ -9,14 +9,36 @@ export interface TextureSet {
   /** Raw sRGB albedo bytes (layer-major, 16x16 RGBA) for UI icons and particles. */
   albedoData: Uint8Array;
   layers: number;
+  /** Which game's own textures follow the built-in ones (`GameBlocks.textureKey`; '' for none). */
+  key: string;
 }
 
-export function createBlockTextures(renderer: THREE.WebGLRenderer): TextureSet {
-  const layers = engine.texture_layer_count();
+let builtinLayers: { albedo: Uint8Array; material: Uint8Array } | null = null;
+
+/** The built-in block textures' pixels (painted once per page). */
+export function builtinTextures(): { albedo: Uint8Array; material: Uint8Array } {
+  if (builtinLayers) return builtinLayers;
+  const n = engine.texture_layer_count() * 16 * 16 * 4;
   const all = engine.generate_textures();
-  const n = layers * 16 * 16 * 4;
-  const albedoData = all.slice(0, n);
-  const materialData = all.slice(n, 2 * n);
+  return (builtinLayers = { albedo: all.slice(0, n), material: all.slice(n, 2 * n) });
+}
+
+/**
+ * The block texture arrays: the built-in layers, then a game's own (`extra`, painted by
+ * `paintGameTextures`) after them.
+ */
+export function createBlockTextures(renderer: THREE.WebGLRenderer, extra?: { albedo: Uint8Array; material: Uint8Array; key: string }): TextureSet {
+  const base = builtinTextures();
+  const join = (a: Uint8Array, b?: Uint8Array) => {
+    if (!b?.length) return a.slice();
+    const out = new Uint8Array(a.length + b.length);
+    out.set(a);
+    out.set(b, a.length);
+    return out;
+  };
+  const albedoData = join(base.albedo, extra?.albedo);
+  const materialData = join(base.material, extra?.material);
+  const layers = albedoData.length / (16 * 16 * 4);
   const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
   const albedo = new THREE.DataArrayTexture(albedoData, 16, 16, layers);
@@ -41,7 +63,7 @@ export function createBlockTextures(renderer: THREE.WebGLRenderer): TextureSet {
   material.anisotropy = aniso;
   material.needsUpdate = true;
 
-  return { albedo, material, albedoData, layers };
+  return { albedo, material, albedoData, layers, key: extra?.key ?? '' };
 }
 
 export function createNoiseTexture(): THREE.DataTexture {

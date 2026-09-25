@@ -106,6 +106,7 @@ export class RoomCore {
     this.ids.set(client, id);
     const sp = this.host.sim.spawn;
     const welcome: ServerWelcome = { t: 'welcome', game: this.def.id, room: this.spec.instance, seed: this.host.seed, player: null, spawn: { x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw }, tickRate: this.spec.tickRate };
+    if (this.host.blocks.keys.length) welcome.blocks = this.host.blocks.keys;
     this.out.send(client, encode(welcome));
     const frame = batch.frame ? quantize(batch.frame) : undefined;
     if (frame) this.had.set(client, frame);

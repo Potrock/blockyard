@@ -34,7 +34,7 @@
 //! ```
 
 use crate::blocks::*;
-use crate::shapes::{on_side, shapes, side_mask, Cuboid, Model, FULL_SIDE, NO_TEX, OPPOSITE};
+use crate::shapes::{on_side, side_mask, Cuboid, Model, FULL_SIDE, NO_TEX, OPPOSITE};
 
 pub const RW: usize = 48;
 const SZ: usize = RW;
@@ -106,6 +106,8 @@ pub struct Mesher {
     slice_used: [bool; 96],
     visited: Vec<u8>,
     stack: Vec<u16>,
+    /// The blocks in use, taken at the start of each mesh.
+    reg: &'static Registry,
 }
 
 impl Default for Mesher {
@@ -132,11 +134,13 @@ impl Mesher {
             slice_used: [false; 96],
             visited: vec![0; 4096],
             stack: Vec::with_capacity(4096),
+            reg: registry(),
         }
     }
 
     /// Light + mesh the centre column of a region. Returns header + vertex data.
     pub fn mesh(&mut self, region: &[u8]) -> Vec<u32> {
+        self.reg = registry();
         self.load(region);
         self.light_sky();
         self.light_block();
@@ -178,7 +182,7 @@ impl Mesher {
 
     fn light_sky(&mut self) {
         let top = self.top;
-        let Mesher { blocks, sky, queue, low, .. } = self;
+        let Mesher { blocks, sky, queue, low, reg, .. } = self;
         // Everything at or above `top` is open sky.
         sky[..(top + 1) * SY].fill(0);
         sky[(top + 1) * SY..].fill(15);
@@ -189,7 +193,7 @@ impl Mesher {
                 let mut y = top as isize - 1;
                 while y >= 0 {
                     let i = (y as usize + 1) * SY + base;
-                    let op = OPACITY[blocks[i] as usize];
+                    let op = reg.opacity[blocks[i] as usize];
                     if op == 0 {
                         sky[i] = 15;
                         y -= 1;
@@ -198,7 +202,7 @@ impl Mesher {
                     if op < 15 {
                         sky[i] = 15 - op;
                         queue.push(i as u32);
-                    } else if LIT_INSIDE[blocks[i] as usize] == 1 {
+                    } else if reg.lit_inside[blocks[i] as usize] == 1 {
                         sky[i] = 15;
                     }
                     break;
@@ -229,12 +233,12 @@ impl Mesher {
                 }
             }
         }
-        bfs(blocks, sky, queue);
+        bfs(reg, blocks, sky, queue);
     }
 
     fn light_block(&mut self) {
         let top = self.top;
-        let Mesher { blocks, blk, queue, emits, .. } = self;
+        let Mesher { blocks, blk, queue, emits, reg, .. } = self;
         blk.fill(0);
         queue.clear();
         for k in 0..9 {
@@ -253,7 +257,7 @@ impl Mesher {
                         let row = ri(xo, s * 16 + y + 1, zo + z);
                         for x in 0..16 {
                             let i = row + x;
-                            let em = EMIT[blocks[i] as usize];
+                            let em = reg.emit[blocks[i] as usize];
                             if em > 0 {
                                 blk[i] = em;
                                 queue.push(i as u32);
@@ -264,7 +268,7 @@ impl Mesher {
             }
         }
         let _ = top;
-        bfs(blocks, blk, queue);
+        bfs(reg, blocks, blk, queue);
     }
 
     #[inline(always)]
@@ -272,14 +276,15 @@ impl Mesher {
         let du = U_OFF[face];
         let dv = V_OFF[face];
         let b = &self.blocks;
+        let opaque = &self.reg.opaque;
         let mut out = [Corner { ao: 3, sky: 0, blk: 0 }; 4];
         for (k, &(su, sv)) in CORNER_SIGNS.iter().enumerate() {
             let s1 = (q as isize + su * du) as usize;
             let s2 = (q as isize + sv * dv) as usize;
             let c = (q as isize + su * du + sv * dv) as usize;
-            let o1 = OPAQUE[b[s1] as usize];
-            let o2 = OPAQUE[b[s2] as usize];
-            let oc = OPAQUE[b[c] as usize];
+            let o1 = opaque[b[s1] as usize];
+            let o2 = opaque[b[s2] as usize];
+            let oc = opaque[b[c] as usize];
             let both = o1 & o2;
             let ao = if both == 1 { 0 } else { 3 - (o1 + o2 + oc) };
             let mut ss = self.sky[q] as u32;
@@ -337,7 +342,8 @@ impl Mesher {
     fn mesh_section(&mut self, s: usize) -> (bool, u32) {
         let mut sunlit = false;
         let mut opaque_count = 0u32;
-        let shapes = shapes();
+        let reg = self.reg;
+        let shapes = &reg.shapes;
         let cover = &shapes.cover;
         self.slice_used = [false; 96];
         let y0 = s * 16;
@@ -350,9 +356,9 @@ impl Mesher {
                     if b == AIR {
                         continue;
                     }
-                    let shape = SHAPE[b as usize];
-                    let def = block(b);
-                    if OPAQUE[b as usize] == 1 {
+                    let shape = reg.shape[b as usize];
+                    let def = &reg.blocks[b as usize];
+                    if reg.opaque[b as usize] == 1 {
                         opaque_count += 1;
                     }
                     match shape {
@@ -402,7 +408,7 @@ impl Mesher {
                                 if def.cull_self && nb == b {
                                     continue;
                                 }
-                                if def.leaves && block(nb).leaves && f % 2 == 1 {
+                                if def.leaves && reg.blocks[nb as usize].leaves && f % 2 == 1 {
                                     continue;
                                 }
                                 let c = self.corners(q, f);
@@ -533,7 +539,7 @@ impl Mesher {
                 }
                 // Lit smoothly from the cell it faces, like a cube face; from its own cell where
                 // that one's solid (under a top slab) and for small things (torches).
-                let c = if m.flat_light || OPAQUE[nb] == 1 { [own; 4] } else { self.corners(q, f) };
+                let c = if m.flat_light || self.reg.opaque[nb] == 1 { [own; 4] } else { self.corners(q, f) };
                 if c.iter().any(|c| c.sky > 0) {
                     sunlit = true;
                 }
@@ -545,12 +551,12 @@ impl Mesher {
 
     /// Which pairs of section faces are connected through non-opaque blocks.
     fn connectivity(&mut self, s: usize) -> u32 {
-        let Mesher { blocks, visited, stack, .. } = self;
+        let Mesher { blocks, visited, stack, reg, .. } = self;
         visited.fill(0);
         let y0 = s * 16;
         let opaque_at = |c: usize| -> bool {
             let (x, y, z) = (c & 15, c >> 8, (c >> 4) & 15);
-            OPAQUE[blocks[ri(16 + x, y0 + y + 1, 16 + z)] as usize] == 1
+            reg.opaque[blocks[ri(16 + x, y0 + y + 1, 16 + z)] as usize] == 1
         };
         let mut conn = 0u32;
         for start in 0..4096usize {
@@ -641,7 +647,7 @@ impl Mesher {
     }
 }
 
-fn bfs(blocks: &[u8], light: &mut [u8], queue: &mut Vec<u32>) {
+fn bfs(reg: &Registry, blocks: &[u8], light: &mut [u8], queue: &mut Vec<u32>) {
     let mut head = 0;
     while head < queue.len() {
         let i = queue[head] as usize;
@@ -655,10 +661,10 @@ fn bfs(blocks: &[u8], light: &mut [u8], queue: &mut Vec<u32>) {
         let y = i / SY;
         let mut visit = |n: usize, queue: &mut Vec<u32>| {
             let b = blocks[n] as usize;
-            let op = OPACITY[b];
+            let op = reg.opacity[b];
             if op >= 15 {
                 // A slab or stairs: lit, but the light goes no further.
-                if LIT_INSIDE[b] == 1 && l - 1 > light[n] {
+                if reg.lit_inside[b] == 1 && l - 1 > light[n] {
                     light[n] = l - 1;
                 }
                 return;
@@ -882,6 +888,45 @@ mod tests {
         let conn = out[55] & ALL_CONNECTED;
         assert_eq!(conn.count_ones(), 10);
         assert!(conn & (1 << PAIR[0][1]) != 0 && conn & (1 << PAIR[2][3]) == 0);
+    }
+
+    /// A stone floor across the region with `b` standing on it in the middle of the centre column.
+    fn floor_with(b: u8, emits: bool) -> Vec<u8> {
+        let mut data = vec![0u8; REGION_HEADER];
+        for k in 0..9 {
+            data[k * 4] = 1;
+        }
+        for k in 0..9 {
+            let mut sec = vec![0u8; 4096];
+            sec[..256].fill(STONE);
+            if k == 4 {
+                sec[(16 + 8) * 16 + 8] = b;
+                data[k * 4 + 2] = emits as u8;
+            }
+            data.extend_from_slice(&sec);
+        }
+        data
+    }
+
+    #[test]
+    fn game_blocks_mesh_like_built_in_ones() {
+        // A game's copy of a neon block (its textures and light) meshes exactly like the original.
+        let t = crate::blocks::tex::NEON_RED;
+        let json = format!(r#"[{{"name":"my_neon","tex":[{t},{t},{t},{t},{t},{t}],"emit":12}},{{"name":"crate","tex":[113,113,114,114,113,113]}}]"#);
+        crate::blocks::set_game_blocks(&json).unwrap();
+        let neon_red = BLOCKS.iter().position(|b| b.name == "neon_red").unwrap() as u8;
+        let mut m = Mesher::new();
+        let neon = m.mesh(&floor_with(neon_red, true));
+        let blk = m.blk[ri(24, 2, 24)];
+        let copy = m.mesh(&floor_with(GAME_FIRST as u8, true));
+        assert_eq!(blk, 12, "the neon lights its cell");
+        assert_eq!(m.blk[ri(24, 2, 24)], 12, "and so does the copy");
+        assert!(neon == copy, "the copy's mesh differs from the neon's");
+        // A block with textures of its own: its quads use them.
+        let out = m.mesh(&floor_with(GAME_FIRST as u8 + 1, false));
+        let layers: std::collections::HashSet<u32> = out[MESH_HEADER..].chunks(2).map(|v| v[1] & 1023).collect();
+        assert!(layers.contains(&113) && layers.contains(&114), "crate textures: {layers:?}");
+        crate::blocks::set_game_blocks("[]").unwrap();
     }
 
     #[test]
