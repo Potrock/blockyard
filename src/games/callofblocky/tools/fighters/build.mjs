@@ -45,6 +45,8 @@ const argv = process.argv.slice(2);
 const SCALE = Number(argv.find((a) => a.startsWith('--scale='))?.slice(8) ?? 24);
 const OUT = argv.find((a) => a.startsWith('--out='))?.slice(6) ?? join(HERE, '../../models/fighters');
 const DU = 1 / 24;
+/** The figures' first-person scale and gait width (written to index.ts as FIGHTER_STYLE). */
+const STYLE = { firstPerson: { scale: 0.5 }, poses: { gait: { width: 0.15 } } };
 const MAX_TRIS = 25000;
 const MAX_BYTES = 300 * 1024;
 
@@ -241,15 +243,17 @@ function fist(vox, s, side, [x0, x1]) {
 }
 
 /** A boot: chunky, its toe reaching forward, the sole a darker row underneath. */
-function boot(vox, s, side, [x0, x1], [z0, z1]) {
+function boot(vox, s, side, [lx0, lx1], [z0, z1]) {
   const part = `foot${side}`;
   const st = s.o.shoeStyle;
+  // A voxel wider than the leg, on the outside.
+  const [x0, x1] = side === 'L' ? [lx0, lx1 + 1] : [lx0 - 1, lx1];
   const top = st === 'boot' ? Y.ankle + 2 : Y.ankle;
   const toe = z1 + (st === 'flat' ? 2 : 3);
   const toeTop = st === 'flat' ? 2 : 3;
   fill(vox, part, [x0, 0, z0 - 1], [x1, top, z1], 'shoes', (p) => inRound(p, [x0, -2, z0 - 1], [x1, top, z1 + 1], [0.9, 0, 0.9]));
   fill(vox, part, [x0, 0, z0], [x1, toeTop, toe], 'shoes', (p) => inRound(p, [x0, -2, z0 - 1], [x1, toeTop, toe], [1.2, 1.3, 1.8]));
-  fill(vox, part, [x0 + 1, top, z0 + 1], [x1 - 1, top + 2, z1 - 1], 'shoes');
+  fill(vox, part, [lx0 + 1, top, z0 + 1], [lx1 - 1, top + 2, z1 - 1], 'shoes');
   vox.recolour(part, (i, j) => (j === 0 ? 'sole' : undefined));
 }
 
@@ -589,12 +593,12 @@ function dress(vox, s) {
     for (const part of ['chest', 'spine', 'upperArmL', 'upperArmR', 'hips'])
       vox.recolour(part, (i, j, k, c) => {
         if (c !== 'shirt') return;
-        const gi = Math.floor((i + 40) / 5), gj = Math.floor(j / 5), gk = Math.floor((k + 40) / 5);
+        const gi = Math.floor((i + 40) / 4), gj = Math.floor(j / 4), gk = Math.floor((k + 40) / 4);
         const seed = hash(gi, gj, gk);
-        const ci = gi * 5 - 40 + 1 + Math.floor(seed * 3), cj = gj * 5 + 1 + Math.floor(hash(gj, gi, gk) * 3), ck = gk * 5 - 40 + 1 + Math.floor(hash(gk, gj, gi) * 3);
+        const ci = gi * 4 - 40 + 1 + Math.floor(seed * 2), cj = gj * 4 + 1 + Math.floor(hash(gj, gi, gk) * 2), ck = gk * 4 - 40 + 1 + Math.floor(hash(gk, gj, gi) * 2);
         const dd = Math.abs(i - ci) + Math.abs(j - cj) + Math.abs(k - ck);
-        if (seed < 0.62) return dd === 0 ? 'flowerMid' : dd === 1 ? 'flower' : undefined;
-        if (seed < 0.9 && dd <= 1 && hash(i, j, k) < 0.8) return 'leaf';
+        if (seed < 0.7) return dd === 0 ? 'flowerMid' : dd === 1 ? 'flower' : undefined;
+        if (dd <= 1 && hash(i, j, k) < 0.8) return 'leaf';
       });
   }
   // Pinstripes: every third column a little lighter on the Boss's suit (not on a part's sides).
@@ -851,6 +855,13 @@ if (!only.length && OUT === join(HERE, '../../models/fighters')) {
     'export const FIGHTERS: FighterModel[] = [',
     ...OUTFITS.map((d) => `  { id: '${d.id}', name: '${d.name}', url: ${d.id} },`),
     '];',
+    '',
+    '/**',
+    ' * How the platform draws and moves these figures (`Models.gltf` options): their first-person arms at',
+    ' * half their size (the voxel fists are big, and a gun needs the view), their feet as far apart as',
+    ' * their hips.',
+    ' */',
+    `export const FIGHTER_STYLE = ${JSON.stringify(STYLE).replace(/"(\w+)":/g, '$1: ').replace(/,/g, ', ').replace(/{/g, '{ ').replace(/}/g, ' }')};`,
     '',
   ];
   writeFileSync(join(OUT, 'index.ts'), lines.join('\n'));

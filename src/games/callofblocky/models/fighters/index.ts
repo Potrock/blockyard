@@ -31,3 +31,10 @@ export const FIGHTERS: FighterModel[] = [
   { id: 'waitress', name: 'The Waitress', url: waitress },
   { id: 'boss', name: 'The Boss', url: boss },
 ];
+
+/**
+ * How the platform draws and moves these figures (`Models.gltf` options): their first-person arms at
+ * half their size (the voxel fists are big, and a gun needs the view), their feet as far apart as
+ * their hips.
+ */
+export const FIGHTER_STYLE = { firstPerson: { scale: 0.5 }, poses: { gait: { width: 0.15 } } };

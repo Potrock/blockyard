@@ -87,7 +87,10 @@ material) on a skeleton whose bones are the joints, each vertex weighted to up t
 Blender and Mixamo export them. The rig turns the bones; the platform's own shading skins the
 mesh, and its shadow, on the GPU (three.js's bone texture, only for skinned meshes). Bones the
 rig doesn't know (fingers, toes, twist bones) ride along with the joint they hang from, or a
-clip moves them.
+clip moves them. A skin's own space needn't be the figure's: its bind matrices may move and scale
+it (a quantized mesh's integer positions, a scaled armature), and the platform culls it by where
+its bones put it at rest. One skinned mesh with one material draws a figure in one call (Call of
+Blocky's voxel fighters: each part's voxels wholly on its joint's bone, a rigid skin).
 
 ## Other skeletons
 

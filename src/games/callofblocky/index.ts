@@ -6,12 +6,12 @@ import { MAP, type SpawnPoint } from './map';
 import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
 import { GUNS } from './models';
-import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
+import { FIGHTERS as FIGHTER_MODELS, FIGHTER_STYLE } from './models/fighters';
 import hudCss from './hud.css?raw';
 import { DOSSIER, streakPips } from './hud';
 
 /** Each outfit's fighter (in the same order as `OUTFITS`): a model on the platform's humanoid rig, animated by it. */
-const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfit % FIGHTER_MODELS.length].url, { rig: 'humanoid' });
+const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfit % FIGHTER_MODELS.length].url, { rig: 'humanoid', ...FIGHTER_STYLE });
 
 /**
  * Call of Blocky: a fast free-for-all on Jackrabbit Lane, a Nuketown-style cul-de-sac painted
