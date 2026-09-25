@@ -7,7 +7,7 @@ import katana from './katana.glb?url';
 import briefcase from './briefcase.glb?url';
 
 /**
- * The weapon models (GLB, written by `scripts/guns/build.mjs`; see its header for the conventions:
+ * The weapon models (GLB, written by `src/games/callofblocky/tools/guns/build.mjs`; see its header for the conventions:
  * blocks as units, the barrel along +z, marker nodes `grip`, `grip2`, `muzzle`, `sight`, `mag`).
  */
 export interface GunModel {

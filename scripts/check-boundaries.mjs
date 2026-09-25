@@ -1,7 +1,8 @@
 // Keeps games and kits on the public API.
 //
 // - Games (src/games/<name>/) may import only '@platform', '@platform/art', '@platform/kits' and
-//   files inside their own folder.
+//   files inside their own folder. Their build tools (`tools/`, Node scripts that write the game's
+//   models and art, never part of the game itself) may also use Node's built-ins (`node:*`).
 // - Kits and the art toolkit (src/platform/kits/, src/platform/art/) may import only
 //   '@platform' (and '@platform/art') and files inside their own folder: they get no access a
 //   game doesn't have, so any kit could be copied into a game unchanged.
@@ -21,10 +22,13 @@ const imports = (file) =>
 const inside = (file, spec, folder) => spec.startsWith('.') && (resolve(dirname(file), spec) + sep).startsWith(folder + sep);
 
 const problems = [];
+/** A game's own build tools (`src/games/<name>/tools/`: Node scripts that write its models and art) may use Node's built-ins; they never run in the game. */
+const tool = (file, folder, spec) => spec.startsWith('node:') && (file + sep).startsWith(join(folder, 'tools') + sep);
+
 function check(folder, allowed, what) {
   for (const file of files(folder)) {
     for (const spec of imports(file)) {
-      if (allowed.includes(spec) || inside(file, spec, folder)) continue;
+      if (allowed.includes(spec) || inside(file, spec, folder) || tool(file, folder, spec)) continue;
       problems.push(`${relative(root, file)}: ${what} may not import '${spec}'`);
     }
   }

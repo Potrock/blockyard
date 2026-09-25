@@ -37,7 +37,7 @@ src/games/
     weapons.ts          the guns (kind 'gun') and the katana
     bots.ts nav.ts      bot fighters (game.bots) and the walking grid they path-find on
     map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
-    models/             the guns as GLB files (scripts/guns/build.mjs writes them)
+    models/             the guns and fighters as GLB files (tools/ writes them)
     art.ts sounds.ts    the pulp wardrobe (skins painted in code), gunshots and stingers
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
     index.ts            rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
@@ -249,7 +249,7 @@ The platform does the rest:
 - **Sights.** `iron` sights are the model's own. A `dot` or `holo` sight lights its reticle (a red dot, or a holo's ring and dot; `aim.color`) at the aim point as the optic's window comes up to the eye: model the optic with its window open and its `sight` point in the window's middle. A `scope` fills the view with the scope.
 - **The HUD.** An ammo counter replaces the hotbar's job, and the crosshair opens with the spread (and goes when aiming).
 - **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
-- **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working a pump. A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. `scripts/guns/build.mjs` builds Call of Blocky's guns from boxes and writes them as GLB files that way.
+- **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working a pump. A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. Call of Blocky builds its guns in code (`src/games/callofblocky/tools/guns/build.mjs`) and writes them as GLB files that way.
 
 ## Controllers
 

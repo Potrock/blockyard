@@ -2,7 +2,7 @@
 /**
  * Call of Blocky: the weapon models, modelled as low-poly hard-surface meshes and written as binary
  * glTF 2.0 (`.glb`) to `src/games/callofblocky/models/`. Dependency-free (Node 22+):
- * `node scripts/guns/build.mjs [ids...] [--fast] [--parts]` (`--fast` skips the ambient-occlusion
+ * `node src/games/callofblocky/tools/guns/build.mjs [ids...] [--fast] [--parts]` (`--fast` skips the ambient-occlusion
  * bake; `--parts` lists triangles by part). About 30 s for all seven, each file under 400 KB.
  * Each file is parsed back and checked after it's written (chunks, JSON, accessors, winding,
  * images, markers), and each optic's window is checked clear.
@@ -68,7 +68,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = join(HERE, '../../src/games/callofblocky/models');
+const OUT = join(HERE, '../../models');
 
 // ---------------------------------------------------------------------------------------------
 // Math
@@ -1775,7 +1775,7 @@ function glb(gun, b) {
   }
   const markerNames = Object.keys(gun.markers);
   const json = {
-    asset: { version: '2.0', generator: 'Call of Blocky scripts/guns/build.mjs' },
+    asset: { version: '2.0', generator: 'Call of Blocky src/games/callofblocky/tools/guns/build.mjs' },
     scene: 0,
     scenes: [{ name: gun.id, nodes: [0] }],
     nodes: [

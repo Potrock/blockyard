@@ -2,7 +2,7 @@
 /**
  * Call of Blocky: the fighters, built procedurally and written as binary glTF 2.0 (`.glb`) to
  * `src/games/callofblocky/models/fighters/<id>.glb`, plus `index.ts` listing them. Dependency-free
- * (Node 22+): `node scripts/fighters/build.mjs [ids...]` (with ids, only those files are rebuilt and
+ * (Node 22+): `node src/games/callofblocky/tools/fighters/build.mjs [ids...]` (with ids, only those files are rebuilt and
  * index.ts is left alone). Every file is parsed back and checked after it's written: chunks,
  * accessors, winding, the rig (names, parents, rest positions, no rotations) and the budgets.
  *
@@ -45,7 +45,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = join(HERE, '../../src/games/callofblocky/models/fighters');
+const OUT = join(HERE, '../../models/fighters');
 const MAX_TRIS = 4000;
 const MAX_BYTES = 200 * 1024;
 
@@ -2120,7 +2120,7 @@ function glb(fig) {
   }
   const images = usedTex.map((ti) => ({ name: `${fig.id}_${fig.textures[ti].name}`, bufferView: addView(png(fig.textures[ti])), mimeType: 'image/png' }));
   const json = {
-    asset: { version: '2.0', generator: 'Call of Blocky scripts/fighters/build.mjs' },
+    asset: { version: '2.0', generator: 'Call of Blocky src/games/callofblocky/tools/fighters/build.mjs' },
     scene: 0,
     scenes: [{ name: fig.id, nodes: [0] }],
     nodes,
@@ -2287,7 +2287,7 @@ if (!only.length) {
     ...OUTFITS.map((d) => `import ${d.id} from './${d.id}.glb?url';`),
     '',
     '/**',
-    ' * The fighters (GLB, written by `scripts/fighters/build.mjs`; see its header and docs/HUMANOID.md',
+    ' * The fighters (GLB, written by `src/games/callofblocky/tools/fighters/build.mjs`; see its header and docs/HUMANOID.md',
     ' * for the rig: hips > spine > chest > neck > head, the arms and legs, `gripR` / `gripL`).',
     ' */',
     'export interface FighterModel {',
