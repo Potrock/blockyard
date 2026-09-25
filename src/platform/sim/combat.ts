@@ -28,6 +28,8 @@ export interface Fighter {
   hitMarker(kind: boolean | 'kill'): void;
   /** Guns: a bullet's path (see `castBullet`), checked where targets were at host time `seen`. */
   bullet(from: Vec3, dir: Vec3, range: number, seen: number | null): BulletHit;
+  /** Guns: carve where a bullet hit a block (null when the world's blocks don't carve). */
+  readonly carve: ((point: Vec3, dir: Vec3, opts: { radius: number; depth: number }) => void) | null;
   /** Guns: what everyone else sees and hears of a shot (the shooter's own screen showed it already). */
   shotSeen(shot: ShotWire, sound: string, at: Vec3): void;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
@@ -223,6 +225,8 @@ export class Combat {
       wire.ends.push([hit.point.x, hit.point.y, hit.point.z, hit.target ? 2 : hit.block >= 0 ? 1 : 0]);
       wire.normals.push(hit.normal ? [hit.normal.x, hit.normal.y, hit.normal.z] : null);
       wire.blocks.push(hit.block);
+      // A block it hit loses a little of itself (the host's word: everyone's world takes it).
+      if (!hit.target && hit.block >= 0 && g.carve && this.me.carve) this.me.carve(hit.point, dir, g.carve);
       if (!hit.target) continue;
       const d = damage.get(hit.target) ?? { amount: 0, head: false, at: hit.point };
       d.amount += damageAt(g, hit.dist, hit.head);

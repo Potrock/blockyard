@@ -5,6 +5,7 @@ use wasm_bindgen::prelude::*;
 
 pub mod blocks;
 pub mod cull;
+pub mod damage;
 pub mod entities;
 pub mod entitytex;
 pub mod gen;
@@ -248,6 +249,67 @@ impl VoxelWorld {
 
     pub fn edit_count(&self) -> u32 {
         self.inner.edit_count() as u32
+    }
+
+    // ---- Damage: blocks shot into, little voxel by little voxel (see `damage.rs`) ----
+
+    /// Which blocks `carve` can take bits out of: `ids` has 1 for each destructible block id (by
+    /// id; all 0 or empty turns carving off), and only blocks higher than `above`. Solid opaque
+    /// cubes only, whatever it says.
+    pub fn set_destructible(&mut self, above: i32, ids: &[u8]) {
+        if !ids.iter().any(|&b| b != 0) {
+            self.inner.destructible = None;
+            return;
+        }
+        let mut t = [false; 256];
+        for (i, &b) in ids.iter().take(256).enumerate() {
+            t[i] = b != 0;
+        }
+        self.inner.destructible = Some(Box::new(world::Destructible { above, ids: t }));
+    }
+
+    /// Take a capsule of little voxels out of the destructible blocks it reaches: from (x, y, z)
+    /// along (dx, dy, dz) for `depth` blocks, `radius` round. Returns [removed u32, n u32, then n
+    /// blocks left with nothing (air now, an edit) as x, y, z, the block it was (i32 each), then
+    /// the changes to the rest for other copies of the world (`apply_damage`)], little-endian.
+    #[allow(clippy::too_many_arguments)]
+    pub fn carve(&mut self, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, radius: f64, depth: f64) -> Vec<u8> {
+        let c = self.inner.carve([x, y, z], [dx, dy, dz], radius, depth);
+        let mut out = Vec::with_capacity(8 + c.emptied.len() * 16 + c.cells.len() * 64);
+        out.extend_from_slice(&c.removed.to_le_bytes());
+        out.extend_from_slice(&(c.emptied.len() as u32).to_le_bytes());
+        for (p, id) in &c.emptied {
+            for v in [p[0], p[1], p[2], *id as i32] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        for (cell, gone) in &c.cells {
+            damage::encode(&mut out, *cell, gone);
+        }
+        out
+    }
+
+    /// Damage from the simulation's copy of the world (`carve`'s changes, `export_damage`), here
+    /// too. Returns the loaded columns whose meshes change: [cx, cz, relight] triples, relight 1
+    /// where a block went altogether (remesh around it: its light changed).
+    pub fn apply_damage(&mut self, data: &[u8]) -> Vec<i32> {
+        self.inner.apply_damage(data)
+    }
+
+    /// All the damage, for `apply_damage` in a copy of the world that has none (a late joiner).
+    pub fn export_damage(&self) -> Vec<u8> {
+        self.inner.export_damage()
+    }
+
+    /// How many blocks are damaged.
+    pub fn damage_count(&self) -> u32 {
+        self.inner.damage_count() as u32
+    }
+
+    /// How many of a block's 4096 little voxels are left: fewer once it's been carved, 4096 for
+    /// a block that hasn't (whatever it is).
+    pub fn damage_left(&self, x: i32, y: i32, z: i32) -> u32 {
+        self.inner.damage_at(x, y, z).map_or(damage::CELLS, |d| d.left)
     }
 
     /// [hit, bx, by, bz, nx, ny, nz, block, distance]
@@ -553,7 +615,8 @@ impl VoxelWorld {
     }
 
     /// Whether block `id` at (x, y, z) would overlap any player's body (only its solid boxes:
-    /// a bottom slab leaves room above it).
+    /// a bottom slab leaves room above it). By id, not what's there: the block would be new, and
+    /// whole.
     pub fn player_overlaps(&self, x: i32, y: i32, z: i32, id: u8) -> bool {
         let k = 1.0 / 16.0;
         self.players.iter().flatten().any(|p| {

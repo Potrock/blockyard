@@ -10,6 +10,12 @@ export interface WorldHost {
   edit(x: number, y: number, z: number, id: number): boolean;
   /** Set many (explosions) so they appear together; returns how many changed. */
   editMany(cells: [number, number, number, number][]): number;
-  /** Undo every edit this session (restart). */
+  /** Undo every edit this session (restart): blocks put back, whole. */
   revert(): number;
+  /**
+   * Carve little voxels out of destructible blocks (`VoxelWorld.carve`): a channel from `o` along
+   * `d`, `radius` round and `depth` long. Returns how many went, and the blocks carved to nothing
+   * (air now, as edits): where, and what they were.
+   */
+  carve(o: [number, number, number], d: [number, number, number], radius: number, depth: number): { removed: number; emptied: [number, number, number, number][] };
 }

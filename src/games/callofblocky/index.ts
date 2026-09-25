@@ -493,6 +493,10 @@ export default defineGame({
     spawnYaw: -Math.PI / 2,
     time: MAP.time,
     freezeTime: true,
+    // Walls, roofs, the truck, the diner: shot into, pixel by pixel (each gun's `carve`). The
+    // ground layer under the street and everything below it (the storm drain) stay whole, so
+    // nobody shoots their way out of the map. A restart puts it all back.
+    destructible: { above: MAP.floorY - 1 },
   },
   player: {
     health: 100,

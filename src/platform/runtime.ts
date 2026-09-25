@@ -675,6 +675,9 @@ export class Runtime {
         case 'edits':
           this.chunks.mirrorEdits(e.cells);
           break;
+        case 'damage':
+          this.chunks.applyDamage(e.data);
+          break;
         case 'revert':
           this.chunks.revertEdits();
           break;
@@ -701,6 +704,8 @@ export class Runtime {
           break;
       }
     }
+    // The batch's shots show together.
+    this.chunks.flushDamage();
     if (b.frame) {
       this.frameData = b.frame;
       this.ticking = false;

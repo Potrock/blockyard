@@ -5,6 +5,10 @@ import { GUNS } from './models';
  * The arsenal. Everyone carries a primary of their choosing, the Lucky 45 and the Hattori
  * katana. Numbers are tuned for 100 health: most guns kill in three to five body shots, heads
  * take fewer, the katana and the Honey Bunny (up close) in one.
+ *
+ * Every bullet chips the walls (`carve`): a pit `radius` round, and each shot on the same spot
+ * goes about `radius + depth` further in. Through a block-thick wall that's about eight rifle or
+ * pistol shots, ten from the SMG, two from the Honey Bunny; the shotgun's pellets pepper it.
  */
 
 const url = (id: string) => GUNS.find((g) => g.id === id)?.url ?? '';
@@ -32,6 +36,7 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 0.85, side: 0.35, recover: 0.7 },
     aim: { zoom: 1.35, time: 0.22, move: 0.62, sight: 'holo' },
     mobility: 0.95,
+    carve: { radius: 0.09, depth: 0.04 },
     sounds: { use: 'shot_rifle', reload: 'reload_mag' },
   } satisfies GunItem,
   smg: {
@@ -50,6 +55,7 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 0.5, side: 0.5, recover: 0.8 },
     aim: { zoom: 1.2, time: 0.15, move: 0.8, sight: 'holo' },
     mobility: 1.08,
+    carve: { radius: 0.1, depth: 0.025 },
     tracer: '#ff9ec8',
     sounds: { use: 'shot_smg', reload: 'reload_mag' },
   } satisfies GunItem,
@@ -71,6 +77,7 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 3.5, side: 1, recover: 0.8 },
     aim: { zoom: 1.15, time: 0.18, move: 0.75, sight: 'holo' },
     action: 'pump',
+    carve: { radius: 0.07, depth: 0.01 },
     tracer: '#ffb36b',
     sounds: { use: 'shot_shotgun', reload: 'reload_shell', cycle: 'pump' },
   } satisfies GunItem,
@@ -91,6 +98,7 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     aim: { zoom: 4, time: 0.32, move: 0.45, sight: 'scope' },
     action: 'bolt',
     mobility: 0.9,
+    carve: { radius: 0.12, depth: 0.42 },
     tracer: '#fff1a8',
     sounds: { use: 'shot_sniper', reload: 'reload_mag', cycle: 'bolt' },
   } satisfies GunItem,
@@ -109,6 +117,7 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 1.4, side: 0.4, recover: 0.85 },
     aim: { zoom: 1.2, time: 0.14, move: 0.85, sight: 'dot' },
     mobility: 1.1,
+    carve: { radius: 0.09, depth: 0.04 },
     sounds: { use: 'shot_pistol', reload: 'reload_pistol' },
   } satisfies GunItem,
   katana: {
