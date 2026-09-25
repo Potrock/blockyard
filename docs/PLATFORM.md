@@ -124,7 +124,7 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
-At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
+At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion. In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. Every change to a block, however it's made (set, broken, placed, blown up, carved into, put back by `restart`), fires `blockChange` (`{ x, y, z, block }`, after the change), for keeping something built from the blocks up to date; listen from `setup`. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
 
 ### Block shapes and states
 
@@ -158,6 +158,8 @@ defineGame({
 Only solid, opaque, full blocks carve: not glass, leaves, slabs, stairs, torches, plants or liquids. Guns carve where their bullets land (each gun's `carve`, see Guns). `game.world.carve(point, dir, { radius, depth, by })` does it on purpose: a rounded channel from `point` along `dir`, `radius` round and `depth` long (blocks, defaults 0.1 and 0.2), through every block it reaches: a blast with a big radius, a drill with a long depth. It returns how many little voxels went (4096 make a block), 0 when there was nothing it could take, so carving the same place twice changes nothing the second time.
 
 `restart` makes every block whole again with the rest of the world. Damage isn't saved (a block carved away altogether is an edit, and a `persist` world keeps that). A damaged block keeps light out as it did (it's lit inside by what reaches it), so a hole through a roof lets you see the sky but not its light. Creatures' pathfinding treats a damaged block as whole until it's gone. Call of Blocky makes everything above its street destructible.
+
+`world.carved(x, y, z)` says how much of a block has been carved away (0 whole, up to 1), and `world.fits(p)` whether a player's body (0.6 x 1.8 x 0.6) fits with its feet at `p`, going by what's left of each block (a hole through a wall, for one). Each block carved into fires `blockChange`, like any other change to a block. The `navGrid` kit (see Kits) uses all three: a hole a body fits through is a way through the wall for bots.
 
 ### Blocks of your own
 
@@ -492,7 +494,7 @@ bot.controls.press('KeyR');                 // this tick only
 game.bots.remove(bot);
 ```
 
-Set their controls in `update`; they apply from the next tick. `player.bot` tells them from people. Call of Blocky's bots (`src/games/callofblocky/bots.ts`) look for enemies, react, swing their aim on imperfectly, fire, strafe, reload and roam the map along a walking grid built from the world's blocks (`nav.ts`).
+Set their controls in `update`; they apply from the next tick. `player.bot` tells them from people. For a shooter, the `shooterBots` and `navGrid` kits (see Kits) do all of it: bots that look for enemies, react, swing their aim on imperfectly, fire, strafe, reload and roam the map along a walking grid built from the world's blocks. Call of Blocky and High Noon use them (`src/games/*/bots.ts`: each game's weapons, tuning and rules).
 
 ## Kits: ready-made systems, no special access
 
@@ -502,6 +504,8 @@ Some gameplay systems are common enough that the platform ships them, but they a
 | --- | --- |
 | `building(game, rules)` | Survival building: hold left-click to mine a block (cracks grow over it, the arm swings), right-click with a block to place it against the face you aim at. Your rules decide what may be broken or placed, by whom, and how long mining takes. |
 | `interactions(game, { type: (entity, player) => … })` | Right-click a mob to talk to it: shopkeepers, quest givers, levers. |
+| `navGrid(game, { bounds })` | Where bots can walk inside a box: steps, slabs and stairs, jumps and drops; A* paths, the cell someone's in, places to wander to. It keeps up with the world: a block placed or broken, a hole shot or blown through a wall that a body fits through. |
+| `shooterBots(game, { nav, weapons, … })` | Bot fighters for a shooter: they see (over cover, through holes) and hear gunshots, react and aim by skill, fire in bursts or at a gun's pace, strafe, hold their gun's range, reload, switch guns, and roam the grid. Hooks add your game's rules. |
 
 ```ts
 import { building, interactions, type Building, type Interactions } from '@platform/kits';
@@ -525,6 +529,48 @@ update(game, dt) {
 ```
 
 Without `breakTime`, mining takes a Minecraft-like time by material (`defaultBreakTime`: plants instantly, wool and glass fast, wood medium, stone slow, obsidian very slow). Bots build under the same rules through `build.placeBlock(x, y, z, block, bot)` and `build.breakBlock(x, y, z, bot)`; that's how the Bed Wars bots bridge and dig.
+
+### Bots for a shooter: `navGrid` and `shooterBots`
+
+```ts
+import { navGrid, shooterBots, type ShooterBots } from '@platform/kits';
+
+let bots: ShooterBots;
+
+setup(game) {
+  const nav = navGrid(game, { bounds: MAP.bounds });       // builds itself once the map's blocks have loaded
+  bots = shooterBots(game, {
+    nav,
+    hotspots: MAP.hotspots,                                 // where fights happen: somewhere to wander to
+    weapons: {
+      rifle: { range: 16 },                                 // the distance it likes to fight at
+      shotgun: { range: 4, ads: false, rush: true },        // never down the sights; sprints in
+      sniper: { range: 32, ads: true, steady: true },       // always scoped, and only fires scoped
+    },
+    goal: (bot, mind) => briefcase,                         // somewhere to go when nobody's in sight
+  });
+  game.events.on('playerJoin', ({ player }) => player.bot && bots.add(player as Bot, game.rng.range(0.3, 0.8)));
+},
+update(game, dt) {
+  bots.update(dt, phase !== 'playing');                     // frozen: hands off the controls
+},
+// after each respawn or new round: bots.reset(player)
+```
+
+**The walking grid** (`navGrid`): every cell of the box a body can stand in (something under its feet, two blocks of room), linked to its neighbours by a step (stairs, a bottom slab, told by their state), a jump (a block up, with room overhead) or a drop (up to `drop` blocks, default 3). `path(from, to)` is A* over it: the cells to walk through, each with `at`, the point to walk to. `cellAt(p)` is the cell someone's in, `random()` somewhere to wander to, `needsJump(a, b)` whether a step needs a jump. It builds itself on the first question once every chunk in the bounds has loaded (`ready`), and from then on it follows `blockChange`, so create it in `setup`: a block placed takes cells away, a block broken opens a way, and a hole carved through a wall (`world.destructible`) is a way through if a body fits in it (`world.fits`), crossed straight and lined up (a `hole` cell). `opened` goes up whenever a change opens a new way, and `has(cell)` tells whether a cell is still there. Ladders aren't walked yet.
+
+**The fighters** (`shooterBots`) drive each bot through its controls, like a person. A bot sees anyone in front of it (or right beside it) in line of sight, by the chest or, failing that, the head (over cover, through a hole); it reacts after a beat, swings its aim on off by a body or two, settles in as it tracks, and fires when near enough on target: bursts from an automatic (`GunItem.auto`), a shot at the gun's pace from anything else, a swing in reach with a blade. It strafes, closes in or backs off to its weapon's `range`, hops and crouches now and then, reloads, swaps to another loaded gun when the one in hand runs dry up close, and between fights goes back to its first hotbar slot and tops up. Seen through a gap a sidestep would lose (a hole shot in a wall), it holds still and shoots through it. Out of a fight it hears gunshots (and knows where a hit came from; `bots.hear(at)` tells it of any other noise, an explosion say) and heads there, or to where it last saw someone, or wanders the grid toward your `hotspots`, planning again when the grid opens a new way.
+
+How good each bot is comes from its skill (0..1, given to `add`). `aim` tunes it: each of `reaction`, `miss`, `head`, `settle`, `drag`, `shake`, `turn`, `tolerance` and `pace` is `[a skill-0 bot's, a skill-1 bot's]`. `senses` (`sight`, `view`, `near`, `hearing`, and how long it chases what it heard or saw) and `moves` (`range`, `keep`, `strafe`, `hop`, `crouch`, `slide`, `hotspot`, `wander`, `replan`, `glance`, `swapWithin`, `homeSlot`, `topUp`) tune the rest. The defaults are Call of Blocky's, tuned so a bot takes about 1.3 to 1.5 s to kill someone standing in the open 8 blocks away (a person does it in about 0.8 s); `tests/headless/_duel.ts` measures it.
+
+Hooks add your game's rules, each given the bot and what it has in mind (`BotMind`: its target, where it last saw them, what it heard, when it was hit, its strafe, goal and path):
+- `hostile(bot, other)`: teams (default: everyone else).
+- `goal(bot, mind)`: somewhere to go when nobody's in sight, before its own ideas (an objective, a pickup when it's low, the nearest enemy).
+- `weapon(bot, mind, distance)`: the gun for the range (it switches if that one's loaded).
+- `fight(bot, mind, distance)`: each tick of a fight, after it has decided (a dodge roll when hit).
+- `throw(bot, at, mind)`: throw something (a grenade) your game's way when someone it was fighting ducks out of sight not far off; return whether it did (`throwEvery` seconds apart at most).
+
+Call of Blocky's `bots.ts` is the defaults plus its weapons and the briefcase; High Noon's retunes everything for slow guns, picks the rifle or the revolver by range, dodge-rolls when hit and hunts everyone down once the sun gives them away.
 
 **The primitives underneath**, available to any game:
 - **Items that look like blocks.** An item with `icon: { block: 'oak_planks' }` shows the block in the hotbar and menus, is held as a little cube and drops as a spinning cube of the block.
@@ -898,7 +944,7 @@ game.commands.run('/give pike'); // run one from code
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
-| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'playerJoin' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'blockChange' \| 'playerJoin' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
 | `rng` | Seeded random numbers |
 
 **The HUD's look.** `hud` on the game definition sets how the HUD looks on every screen:

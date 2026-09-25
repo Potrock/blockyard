@@ -15,7 +15,7 @@ import { Presentation, type Sink } from './present';
 import { toLocal, toWorld } from './movers';
 import { PropSim, PropState, type PropFrame } from './props';
 import { rayHit, surfaceY, worldQuery } from './worldquery';
-import type { WorldHost } from './world';
+import { watchBlocks, type WorldHost } from './world';
 
 function mulberry32(seed: number): Rng {
   let a = seed >>> 0;
@@ -129,7 +129,12 @@ export class Sim {
   constructor(private o: SimOptions) {
     this.def = o.def;
     this.registry = o.registry;
-    this.host = o.world;
+    // Every block that changes, told to the game (`blockChange`) while anyone's listening.
+    this.host = watchBlocks(
+      o.world,
+      () => !!this.listeners.get('blockChange')?.size,
+      (x, y, z) => this.emit('blockChange', { x, y, z, block: this.registry.blocks[o.world.world.get_block(x, y, z)]?.name ?? 'unknown' }),
+    );
     this.content = o.content;
     this.gunRules = resolveGunRules(o.def.guns);
     this.history.keep = Math.max(1, this.gunRules.rewind + 0.1);
@@ -737,6 +742,8 @@ export class Sim {
         surfaceY: (x, z) => sim.surfaceY(Math.floor(x), Math.floor(z)),
         explode: (c, r, opts) => sim.explode(c, r, opts),
         carve: (point, dir, opts) => sim.carve(point, dir, opts),
+        carved: (x, y, z) => 1 - world.damage_left(Math.floor(x), Math.floor(y), Math.floor(z)) / 4096,
+        fits: (p) => world.player_fits(p.x, p.y, p.z),
         breakBlock: (x, y, z, opts) => sim.breakBlockAt(Math.floor(x), Math.floor(y), Math.floor(z), opts?.by ?? 'world'),
         placeBlock: (x, y, z, block, opts) => {
           const f = opts?.facing && FACING_DIR[opts.facing];

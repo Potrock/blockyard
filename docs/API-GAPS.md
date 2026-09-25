@@ -27,7 +27,9 @@ hurt. They're saved to do after the destructible micro-voxels.
    sent nothing, even after `start()`. *Fix:* resend modals when a player enters play, add a
    `playerReady` event, and make `widget()` after a HUD clear always resend.
 5. **Bots.** There's no navigation or shooter-bot kit: High Noon copied Call of Blocky's `nav.ts`
-   and adapted its bot brain (about 600 lines). *Fix:* `navgrid` and `shooterBot` kits.
+   and adapted its bot brain (about 600 lines). *Fix:* `navgrid` and `shooterBot` kits. *Done:*
+   the `navGrid` and `shooterBots` kits (with `world.fits`, `world.carved` and the `blockChange`
+   event); both shooters use them.
 6. **Blocks.** Game blocks can't face a direction or be thin: no signs that face one way, no
    railings, posts, panes or ladders. *Fix:* a facing state with a `front` texture; `fence`,
    `pane`, `post` and custom box shapes; a `climbable` flag. *Done:* `facing`, `front`/`back`,
