@@ -466,13 +466,17 @@ export class ChunkManager {
     return this.world.get_block(x, y, z);
   }
 
-  /** Main-camera visibility: frustum + cave culling in WebAssembly, applied as draw ranges. */
-  applyMainVisibility(camera: THREE.PerspectiveCamera) {
+  /**
+   * Main-camera visibility: frustum + cave culling in WebAssembly, applied as draw ranges. Returns
+   * whether any water is on screen.
+   */
+  applyMainVisibility(camera: THREE.PerspectiveCamera): boolean {
     const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.vpArray.set(vp.elements);
     const p = camera.position;
     this.culler.cull(this.vpArray, p.x, p.y, p.z, this.renderDistance + 1, this.occlusion);
     const out = new Uint32Array(wasmMemory().buffer, this.culler.out_ptr(), this.culler.capacity() * 6);
+    let water = false;
     for (const col of this.meshed) {
       const o = col.slot * 6;
       for (let l = 0; l < 3; l++) {
@@ -482,8 +486,10 @@ export class ChunkManager {
         m.visible = count > 0;
         m.geometry.drawRange.start = out[o + l * 2];
         m.geometry.drawRange.count = count;
+        if (l === 2 && count > 0) water = true;
       }
     }
+    return water;
   }
 
   applyShadowVisibility(vp: THREE.Matrix4, center: THREE.Vector3, radiusBlocks: number) {

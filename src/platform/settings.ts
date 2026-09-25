@@ -21,6 +21,8 @@ export interface Settings {
   viewBobbing: boolean;
   dayMinutes: number;
   occlusion: boolean;
+  /** Graphics lowered a notch at a time while frames are slow (these settings are the most it shows). */
+  autoQuality: boolean;
 }
 
 const KEY = 'voxel.settings.v1';
@@ -45,6 +47,7 @@ export function defaultSettings(): Settings {
     viewBobbing: true,
     dayMinutes: 20,
     occlusion: true,
+    autoQuality: true,
   };
 }
 
@@ -58,6 +61,9 @@ export function loadSettings(): Settings {
   }
   return d;
 }
+
+/** The settings auto quality works within: a change to any of them starts it again from the top. */
+export const GRAPHICS: (keyof Settings)[] = ['shadows', 'msaa', 'bloom', 'godrays', 'ssr', 'clouds', 'renderScale', 'autoQuality'];
 
 export function saveSettings(s: Settings) {
   try {

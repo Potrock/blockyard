@@ -19,8 +19,8 @@ export const LAYER_CHUNKS = 1;
 export interface FrameHooks {
   /** Set draw ranges for the shadow pass given the light's view-projection matrix. */
   shadowCull(vp: THREE.Matrix4): void;
-  /** Set draw ranges for the main camera. */
-  mainCull(): void;
+  /** Set draw ranges for the main camera; whether any water is on screen. */
+  mainCull(): boolean;
 }
 
 type Uniform<T> = { value: T };
@@ -487,20 +487,23 @@ export class Renderer {
     }
 
     // 3. Opaque + cutout + sky into the HDR target.
-    hooks.mainCull();
+    const water = hooks.mainCull();
     gl.setRenderTarget(this.sceneRT);
     gl.setClearColor(0x000000, 1);
     gl.clear(true, true, false);
     gl.render(this.opaqueScene, camera);
     gl.render(this.entityScene, camera);
 
-    // 4. Copy colour + linear depth for water refraction / reflections.
-    const copy = this.mats.copy.uniforms;
-    (copy.uColor as Uniform<THREE.Texture>).value = this.sceneRT.texture;
-    (copy.uDepth as Uniform<THREE.Texture | null>).value = this.sceneRT.depthTexture;
-    (copy.uNear as Uniform<number>).value = camera.near;
-    (copy.uFar as Uniform<number>).value = camera.far;
-    this.pass(this.mats.copy, this.copyRT);
+    // 4. Copy colour + linear depth for water refraction / reflections (a full-screen float
+    // target: only when there's water on screen to read it).
+    if (water) {
+      const copy = this.mats.copy.uniforms;
+      (copy.uColor as Uniform<THREE.Texture>).value = this.sceneRT.texture;
+      (copy.uDepth as Uniform<THREE.Texture | null>).value = this.sceneRT.depthTexture;
+      (copy.uNear as Uniform<number>).value = camera.near;
+      (copy.uFar as Uniform<number>).value = camera.far;
+      this.pass(this.mats.copy, this.copyRT);
+    }
 
     // 5. Water.
     (this.materials.water.uniforms.uFar as Uniform<number>).value = camera.far;
