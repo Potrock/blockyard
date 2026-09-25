@@ -14,8 +14,8 @@
 //!
 //! A damaged block (shot at: see `damage`) is drawn from what's left of it, little voxel by little
 //! voxel, as fine quads with its own texture. It still keeps light out like the block it is (and
-//! is lit inside from its brightest neighbour), but nothing culls against a side of it with holes
-//! in, and the culler sees through it.
+//! is lit inside by what reaches it from the open cells around), but nothing culls against a side
+//! of it with holes in, and the culler sees through it.
 //!
 //! Output (`Vec<u32>`): `MESH_HEADER` words of header followed by vertex data of the opaque,
 //! cutout and translucent layers. Each quad is 4 vertices x 2 words:
@@ -694,14 +694,19 @@ impl Mesher {
                 show[5][r] = row & !if zz > 0 { bits[r - 1] } else { hide[5][yy] };
             }
         }
-        // Light inside: the brightest neighbour's, a step down (as slabs are lit).
-        let (mut sky, mut blk) = (0u8, 0u8);
+        // Light inside: what reaches in from the open cells around it, on average, and shaded as
+        // a hollow is (the shadow map is too coarse to darken a pit a few pixels across).
+        let (mut sky, mut blk, mut open) = (0u32, 0u32, 0u32);
         for off in FACE_OFF {
             let n = (i as isize + off) as usize;
-            sky = sky.max(self.sky[n]);
-            blk = blk.max(self.blk[n]);
+            if self.reg.opaque[self.blocks[n] as usize] == 0 {
+                sky += self.sky[n] as u32;
+                blk += self.blk[n] as u32;
+                open += 1;
+            }
         }
-        let inside = Corner { ao: 3, sky: sky.saturating_sub(1) * 4, blk: blk.saturating_sub(1) * 4 };
+        let avg = |v: u32| if open == 0 { 0 } else { ((v * 4 + open / 2) / open) as u8 };
+        let inside = Corner { ao: 2, sky: avg(sky), blk: avg(blk) };
         let cell = [lx as u32, y as u32, lz as u32];
         let mut sunlit = false;
         for f in 0..6 {

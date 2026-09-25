@@ -1,5 +1,5 @@
 import { TerrainGen, VoxelWorld } from '@engine/voxel_engine.js';
-import type { BlockRef, DestructibleOptions, GameDefinition } from '../api/types';
+import type { BlockRef, GameDefinition } from '../api/types';
 import { Content } from '../content';
 import { loadEngineSync } from '../engine/wasm';
 import { IDLE_INPUT, type ClientCommand, type HostBatch, type HostEvent, type PlayerInput, type SaveState } from '../net/protocol';
@@ -9,7 +9,7 @@ import type { WorldHost } from '../sim/world';
 import { applyWorldConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
 import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from '../world/blocks';
-import { blockIdOf, loadRegistry, type Registry } from '../world/registry';
+import { blockIdOf, destructibleIds, loadRegistry, type Registry } from '../world/registry';
 import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
 import { PresentState } from './state';
 import { MemoryStore, type SavedPlayer, type Store } from './store';
@@ -630,25 +630,6 @@ export class GameHost {
     this.events = [];
     return out;
   }
-}
-
-/**
- * Which block ids carve (`world.destructible`), as the engine's table: 1 for each of the named
- * families' variants (every block for `'all'`), less `except`. The engine keeps to solid, opaque,
- * full blocks whatever this says.
- */
-export function destructibleIds(registry: Registry, o: DestructibleOptions): Uint8Array {
-  const ids = new Uint8Array(256);
-  const family = (name: string) => {
-    const f = registry.families.get(name);
-    if (!f) throw new Error(`world.destructible: unknown block "${name}"`);
-    return f;
-  };
-  if (o.blocks === undefined || o.blocks === 'all') {
-    for (const b of registry.blocks) if (b.breakable) ids[b.id] = 1;
-  } else for (const name of o.blocks) for (const b of family(name)) ids[b.id] = 1;
-  for (const name of o.except ?? []) for (const b of family(name)) ids[b.id] = 0;
-  return ids;
 }
 
 /** The engine's exported edits ([cx, cz, count, (local, block)*]…) as cells. */

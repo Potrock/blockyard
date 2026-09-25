@@ -564,10 +564,9 @@ impl World {
             // The next column's mesh draws its faces against this block's side.
             let (lx, lz) = (x & 15, z & 15);
             for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                if (dx == -1 && lx == 0) || (dx == 1 && lx == 15) || (dz == -1 && lz == 0) || (dz == 1 && lz == 15) {
-                    if self.cols.contains_key(&key((x >> 4) + dx, (z >> 4) + dz)) {
-                        note((x >> 4) + dx, (z >> 4) + dz, 0);
-                    }
+                let border = (dx == -1 && lx == 0) || (dx == 1 && lx == 15) || (dz == -1 && lz == 0) || (dz == 1 && lz == 15);
+                if border && self.cols.contains_key(&key((x >> 4) + dx, (z >> 4) + dz)) {
+                    note((x >> 4) + dx, (z >> 4) + dz, 0);
                 }
             }
         }

@@ -1,5 +1,5 @@
 import { engine } from '../engine/wasm';
-import type { BlockRef, SoundName } from '../api/types';
+import type { BlockRef, DestructibleOptions, SoundName } from '../api/types';
 import { firstGameBlock, type GameBlocks } from './blocks';
 
 export type BlockModel = '' | 'torch' | 'wall_torch' | 'slab' | 'stairs' | 'bed';
@@ -123,6 +123,26 @@ export function variant(reg: Registry, base: BlockDef, state: Record<string, str
   const family = reg.families.get(base.name) ?? [base];
   const keys = new Set([...Object.keys(want), ...family.flatMap((b) => Object.keys(b.state))]);
   return family.find((b) => [...keys].every((k) => (b.state[k] ?? '') === (want[k] ?? ''))) ?? null;
+}
+
+/**
+ * Which block ids carve (`world.destructible`), as the engine's table (`set_destructible`): 1 for
+ * each variant of the named families (every breakable block for `'all'`), less `except`, and only
+ * solid, full, opaque blocks (what the engine carves: not glass, leaves, slabs or plants).
+ */
+export function destructibleIds(registry: Registry, o: DestructibleOptions): Uint8Array {
+  const ids = new Uint8Array(256);
+  const family = (name: string) => {
+    const f = registry.families.get(name);
+    if (!f) throw new Error(`world.destructible: unknown block "${name}"`);
+    return f;
+  };
+  const carves = (b: BlockDef) => b.solid && b.shape === 'cube' && b.layer === 0;
+  if (o.blocks === undefined || o.blocks === 'all') {
+    for (const b of registry.blocks) if (b.breakable && carves(b)) ids[b.id] = 1;
+  } else for (const name of o.blocks) for (const b of family(name)) if (carves(b)) ids[b.id] = 1;
+  for (const name of o.except ?? []) for (const b of family(name)) ids[b.id] = 0;
+  return ids;
 }
 
 /** Default biome tint used for icons and particles (sRGB 0..1). */
