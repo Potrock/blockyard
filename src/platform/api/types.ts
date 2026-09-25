@@ -1110,6 +1110,11 @@ export interface HoldSpec {
   scale?: number;
   /** How a humanoid figure holds this gun (`HumanoidPoses`). Default: a pistol if it's short (`pistolUnder`), else a rifle. */
   stance?: 'rifle' | 'pistol';
+  /**
+   * How a humanoid figure holds this item, over its model's `poses` (docs/HUMANOID.md): this gun's
+   * stance, its kick, its sprint carry, its reload (the pose and the hand's `cycle`), its action.
+   */
+  poses?: ItemPoses;
   /** Animation for attacking or using: built-in (`swing`, `punch`, `jab`, `drink`, `release`, `chop`, `stab`), registered with `viewModel.define`, or inline. */
   use?: string | ViewAnimation;
   /** The `gun` style's poses for this gun: whatever it gives goes over the defaults (see `GunHold`). */
@@ -1151,6 +1156,45 @@ export interface GunHold {
   /** A shot's kick back (blocks, 0.075) and muzzle rise (degrees, 7), per unit of recoil. */
   kick?: number;
   rise?: number;
+  /**
+   * Hands on the gun: 2 (the default: the support hand on `grip2`), or 1, a gun fired one-handed
+   * (a revolver). With 1 the support hand is out of sight in first person, and comes up only to
+   * reload (to the `mag` point, and away); a humanoid figure's free hand takes its stance's
+   * `offHand` pose, and comes to the gun only to reload.
+   */
+  hands?: 1 | 2;
+  /** A humanoid player's own arms on this gun, over their model's `firstPerson` (see `FirstPersonArms`). */
+  arm?: FirstPersonArms;
+}
+
+/**
+ * A humanoid player's own arms in first person (`GltfSpec.firstPerson` for the model, and a gun's
+ * `hold.gun.arm` over that for one gun). Every value is optional.
+ */
+export interface FirstPersonArms {
+  /**
+   * Times life size: 1.2 (a little bigger, as shooters draw them, so the hands read round a gun).
+   * The arms' size doesn't change with the gun's (`hold.scale`).
+   */
+  scale?: number;
+  /**
+   * How far the firing and the support arm run from the wrist to the shoulder, in blocks
+   * ([0.55, 0.72]), along the gun pose's `forearm` and `forearm2`: far enough that the shoulder is
+   * off the screen, as in any shooter.
+   */
+  reach?: [firing: number, support: number];
+  /**
+   * The elbow, radians: 0 (the default), a straight arm, forearm and upper arm in one line from
+   * the wrist to the shoulder. More bends it: the arm runs from the wrist to the same shoulder
+   * (`reach` along `forearm`) with the elbow bent this much at rest, dropped down and out, and
+   * the shoulder stays put as the hand moves (a reload, a kick), so the elbow bends and straightens
+   * to follow. One number for both arms, or [firing, support]. A one-handed gun aimed at the eye
+   * wants it (0.6 or so), with its `forearm.ads` running back toward the camera: the forearm then
+   * drops away under the gun instead of crossing the screen.
+   */
+  bend?: number | [firing: number, support: number];
+  /** Where the support fist sits from the handguard's near side, in the model's own blocks along the gun's axes (x out to the side we see, y up, z toward the muzzle; [0.01, -0.012, 0]). */
+  support?: [number, number, number];
 }
 
 /**
@@ -1346,8 +1390,15 @@ export interface GunItem extends ItemBase {
   range?: number;
   /** Movement speed while it's held (a heavy gun is slower). Default 1. */
   mobility?: number;
-  /** A pump or bolt worked after each shot (its animation plays before the next). */
-  action?: 'pump' | 'bolt';
+  /**
+   * Worked after each shot, a beat after it (0.08 s): a `pump` (the support hand back and forth),
+   * a `bolt` (the gun rolled over to work it), a `lever` (the gun rocked on the support hand, the
+   * firing hand swinging the lever down and back), a `hammer` cocked by the thumb (a
+   * single-action revolver: the gun canted in and tipped up), or a first-person animation of the
+   * game's own (`ViewAnimation`, the hand's motion; keep it shorter than the time between shots).
+   * A humanoid figure works a `lever` and a `hammer` too (`HumanoidPoses.lever`, `.hammer`).
+   */
+  action?: GunAction;
   /** The tracer's colour, or false for none. Default a warm yellow. */
   tracer?: string | false;
   knockback?: number;
@@ -1361,6 +1412,9 @@ export interface GunItem extends ItemBase {
    */
   carve?: { radius?: number; depth?: number } | false;
 }
+
+/** A gun's action, worked after each shot (`GunItem.action`). */
+export type GunAction = 'pump' | 'bolt' | 'lever' | 'hammer' | ViewAnimation;
 
 /**
  * How guns play in a game (`GameDefinition.guns`). The host and each shooter's own screen both
@@ -1526,13 +1580,11 @@ export interface GltfSpec {
   rig?: 'humanoid';
   /**
    * A humanoid player's own arms in first person (its forearms and fists on what they hold), for
-   * a model whose proportions want other numbers: `scale` times life size (1.2: a little bigger,
-   * as shooters draw them, so the hands read round a gun); `reach`, how far the firing and the
-   * support arm run back from the fist, in blocks, so they leave the screen's edge ([0.55, 0.72]);
-   * `support`, where the support fist sits from the handguard's near side, in the model's own
-   * blocks along the gun's axes (x out to the side we see, y up, z toward the muzzle; [0.01, -0.012, 0]).
+   * a model whose proportions want other numbers (see `FirstPersonArms`): `scale` times life size
+   * (1.2), how far each arm `reach`es to its shoulder, the elbow's `bend` (0, straight), where the
+   * `support` fist sits. A gun's `hold.gun.arm` goes over these for that gun.
    */
-  firstPerson?: { scale?: number; reach?: [firing: number, support: number]; support?: [number, number, number] };
+  firstPerson?: FirstPersonArms;
   /**
    * A skeleton named its own way (a Mixamo or Blender export) driving the humanoid rig: which of
    * its nodes (bones or not) is each of the rig's joints, e.g. `HumanoidJoints.mixamo`. Joints
@@ -1589,6 +1641,14 @@ export interface HumanoidPoses {
   sprint?: HeldPose;
   /** Reloading: the gun tipped to show its magazine, the support hand to the magazine and to `belt` (the hips' space) and back every `cycle` seconds. */
   reload?: HeldPose & { cycle?: number; belt?: [number, number, number] };
+  /**
+   * Working a gun's action after each shot (`GunItem.action`): a `lever` (default: the gun dipped
+   * and its muzzle rocked up, offset [0, -0.035, 0.01], turn [-0.2, 0, 0]) or a `hammer` cocked
+   * (tipped up and canted in, offset [0, 0.01, 0], turn [-0.12, 0, 0.3]): the change to where the
+   * gun is at its height, `time` seconds in and out (0.45, 0.26), a beat (0.08 s) after the shot.
+   */
+  lever?: HeldPose & { time?: number };
+  hammer?: HeldPose & { time?: number };
   /** A sword in both hands: low, the blade up and forward; a swing (the item's attack) lifts it for `windup` of `time` seconds and chops. */
   sword?: HeldPose & { swing?: { time?: number; windup?: number; raise?: HeldPose; chop?: HeldPose } };
   /** The fall on death: seconds to the ground, and how often it's backward (0..1). Default 0.65, 0.65. */
@@ -1602,7 +1662,21 @@ export interface GunStance {
   ads?: [number, number, number];
   twist?: number;
   cheek?: number;
+  /**
+   * A gun held in one hand (`hold.gun.hands: 1`): where the free hand is, its fist's place from
+   * the middle of the shoulders and its turn, both in the chest's frame (so it goes with the
+   * body's lean and twist). Default: hanging loose at the side, offset [0.21, -0.56, 0.04], turn
+   * [0, 0, 0]. A reload brings it to the gun.
+   */
+  offHand?: HeldPose;
 }
+
+/**
+ * How a humanoid figure holds one item (`hold.poses`): the parts of `HumanoidPoses` about holding
+ * things, over the figure's own for this item. Say only what differs: `{ reload: { cycle: 0.42 } }`
+ * changes that and keeps the rest of the figure's reload pose.
+ */
+export type ItemPoses = Pick<HumanoidPoses, 'rifle' | 'pistol' | 'kick' | 'sprint' | 'reload' | 'sword' | 'lever' | 'hammer'>;
 
 /** A held item's place (from the shoulders' middle) and turn (from the body's), or a change to them. */
 export interface HeldPose {

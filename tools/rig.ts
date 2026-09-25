@@ -4,6 +4,9 @@
  * `&poses=<names>` (`t` freezes time for a screenshot; guns come from Call of Blocky's models).
  * `joints=mixamo` (or a JSON joint map) for a skeleton named its own way; `style=<JSON>` for
  * `HumanoidPoses`; the poses ending in a clip's name (`wave`, `cheer`) play the model's clip.
+ * Another game's guns: `guns=<folder of GLBs>` and `gun=<id>` (it takes the place of every
+ * gun), with `hold=<JSON>` for how the item holds it (`hands`, `stance`, `action`, `poses`, as
+ * its `hold` and `hold.gun` give them).
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -17,7 +20,10 @@ const q = new URLSearchParams(location.search);
 const MODEL = q.get('model') ?? '/src/games/gallery/models/mannequin.glb';
 const FREEZE = q.has('t') ? Number(q.get('t')) : null;
 const VIEW = q.get('view') ?? '34';
-const GUNS = '/src/games/callofblocky/models/';
+const GUNS = q.get('guns') ?? '/src/games/callofblocky/models/';
+/** One gun in place of every gun (not the katana), and what its item says about holding it. */
+const GUN = q.get('gun');
+const HOLD: Partial<HeldInfo> = q.has('hold') ? JSON.parse(q.get('hold')!) : {};
 const JOINTS: Partial<Record<HumanoidJoint, string>> | undefined = q.get('joints') === 'mixamo' ? HumanoidJoints.mixamo() : q.has('joints') ? JSON.parse(q.get('joints')!) : undefined;
 const STYLE: HumanoidPoses | undefined = q.has('style') ? JSON.parse(q.get('style')!) : undefined;
 
@@ -49,6 +55,7 @@ const POSES: Pose[] = [
   { name: 'look up', gun: 'rifle', state: () => ({ headPitch: -0.6 }) },
   { name: 'aim (ADS)', gun: 'rifle', state: () => ({ ads: 1 }) },
   { name: 'firing', gun: 'rifle', state: (t) => ({ shotT: t % 0.1 }) },
+  { name: 'cycling', gun: 'rifle', state: () => ({ shotT: 0.3 }) },
   { name: 'walk', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 4 }) },
   { name: 'run', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 6 }) },
   { name: 'strafe left', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 5, moveX: 1, moveZ: 0 }) },
@@ -80,8 +87,9 @@ const figures: { rig: HumanoidRig; root: THREE.Object3D; pose: Pose; state: Anim
 
 async function main() {
   const model = await load(MODEL);
+  if (GUN) for (const p of POSES) if (p.gun && p.gun !== 'katana') p.gun = GUN;
   const guns = new Map<string, THREE.Object3D>();
-  for (const id of new Set(POSES.map((p) => p.gun).filter((g): g is string => !!g))) guns.set(id, (await load(`${GUNS}${id}.glb`)).scene);
+  for (const id of new Set(POSES.map((p) => p.gun).filter((g): g is string => !!g))) guns.set(id, (await load(`${id === 'katana' ? '/src/games/callofblocky/models/' : GUNS}${id}.glb`)).scene);
   const pick = q.get('poses')?.split(',').map((n) => n.trim().toLowerCase());
   const shown = pick ? POSES.filter((p) => pick.includes(p.name.toLowerCase())) : POSES.slice(0, 8);
   const cols = shown.length;
@@ -112,7 +120,7 @@ async function main() {
       g.traverse((o) => ((o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).castShadow = true) : null));
       const point = (n: string) => g.getObjectByName(n)?.position.clone();
       const box = new THREE.Box3().setFromObject(g);
-      const info: HeldInfo = { kind: pose.gun === 'katana' ? 'melee' : 'gun', grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z };
+      const info: HeldInfo = { kind: pose.gun === 'katana' ? 'melee' : 'gun', grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z, ...(pose.gun === 'katana' ? {} : HOLD) };
       rig.hold(g, info);
     }
     const label = document.createElement('span');

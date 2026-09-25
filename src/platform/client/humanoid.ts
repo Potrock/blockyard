@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { GunStance, HeldPose, HumanoidGait, HumanoidJoint, HumanoidPoses } from '../api/types';
+import type { GunStance, HeldPose, HumanoidGait, HumanoidJoint, HumanoidPoses, ItemPoses } from '../api/types';
 import type { AnimState } from '../render/entities';
 import { ClipLayer, type ClipPlay } from './clips';
 
@@ -35,16 +35,19 @@ export const HELD_SCALE = 0.52;
 
 type V3 = [number, number, number];
 type Held = Required<HeldPose>;
+type Stance = Required<Omit<GunStance, 'offHand'>> & { offHand: Held };
 
 /** `HumanoidPoses` with everything filled in. */
 export interface Poses {
   heldScale: number;
-  rifle: Required<GunStance>;
-  pistol: Required<GunStance>;
+  rifle: Stance;
+  pistol: Stance;
   pistolUnder: number;
   kick: { back: number; tip: number; decay: number };
   sprint: Held;
   reload: Held & { cycle: number; belt: V3 };
+  lever: Held & { time: number };
+  hammer: Held & { time: number };
   sword: Held & { swing: { time: number; windup: number; raise: Held; chop: Held } };
   death: { time: number; backward: number };
   gait: Required<HumanoidGait>;
@@ -54,13 +57,16 @@ export interface Poses {
 export const DEFAULT_POSES: Poses = {
   heldScale: HELD_SCALE,
   // Shouldered (a rifle) or held out in both hands (a pistol), the sights a little under the eye
-  // (the face shows); up to the eye aiming down them.
-  rifle: { hip: [-0.13, -0.19, 0.27], ads: [-0.05, -0.05, 0.24], twist: -0.18, cheek: 0.12 },
-  pistol: { hip: [-0.03, -0.15, 0.4], ads: [0, -0.04, 0.4], twist: -0.18, cheek: 0.12 },
+  // (the face shows); up to the eye aiming down them. One-handed, the free hand hangs loose.
+  rifle: { hip: [-0.13, -0.19, 0.27], ads: [-0.05, -0.05, 0.24], twist: -0.18, cheek: 0.12, offHand: { offset: [0.21, -0.56, 0.04], turn: [0, 0, 0] } },
+  pistol: { hip: [-0.03, -0.15, 0.4], ads: [0, -0.04, 0.4], twist: -0.18, cheek: 0.12, offHand: { offset: [0.21, -0.56, 0.04], turn: [0, 0, 0] } },
   pistolUnder: 0.45,
   kick: { back: 0.05, tip: 0.14, decay: 22 },
   sprint: { offset: [-0.02, -0.32, 0.18], turn: [0.6, 0.75, 0.1] },
   reload: { offset: [-0.04, -0.2, 0.28], turn: [0.3, 0.35, -0.6], cycle: 1.1, belt: [0.12, -0.02, 0.12] },
+  // A lever worked: the gun dips and its muzzle rocks up. A hammer cocked: tipped up, canted in.
+  lever: { offset: [0, -0.035, 0.01], turn: [-0.2, 0, 0], time: 0.45 },
+  hammer: { offset: [0, 0.01, 0], turn: [-0.12, 0, 0.3], time: 0.26 },
   sword: { offset: [-0.06, -0.3, 0.3], turn: [-0.95, 0.15, 0], swing: { time: 0.4, windup: 0.3, raise: { offset: [0.04, 0.35, -0.1], turn: [-1.1, 0, 0] }, chop: { offset: [0, -0.1, 0.2], turn: [1.9, 0, 0.5] } } },
   death: { time: 0.65, backward: 0.65 },
   gait: { run: [3.5, 7.5], stride: [1.15, 2.4], step: [0.22, 0.52], lift: [0.1, 0.22], bob: [0.02, 0.055], lean: [0.04, 0.18], armSwing: [0.45, 0.95], sway: 0.018, width: 0.1, crouch: 0.33 },
@@ -73,18 +79,26 @@ function fill<T extends object>(d: T, g: Partial<T> | undefined): T {
   return out;
 }
 
-/** A game's `HumanoidPoses` over the platform's own. */
-export function resolvePoses(p: HumanoidPoses = {}): Poses {
-  const D = DEFAULT_POSES;
+/** A stance given over one filled in (its free hand's pose part by part). */
+const stance = (d: Stance, g: GunStance | undefined): Stance => ({ ...fill(d, g as Partial<Stance>), offHand: fill(d.offHand, g?.offHand) });
+
+/**
+ * A game's `HumanoidPoses` over the platform's own; or, with `base`, over those (an item's
+ * `hold.poses` over its figure's: `resolvePoses(item, figure)`).
+ */
+export function resolvePoses(p: HumanoidPoses = {}, base: Poses = DEFAULT_POSES): Poses {
+  const D = base;
   const swing = p.sword?.swing;
   return {
     heldScale: p.heldScale ?? D.heldScale,
-    rifle: fill(D.rifle, p.rifle),
-    pistol: fill(D.pistol, p.pistol),
+    rifle: stance(D.rifle, p.rifle),
+    pistol: stance(D.pistol, p.pistol),
     pistolUnder: p.pistolUnder ?? D.pistolUnder,
     kick: fill(D.kick, p.kick),
     sprint: fill(D.sprint, p.sprint),
     reload: fill(D.reload, p.reload),
+    lever: fill(D.lever, p.lever),
+    hammer: fill(D.hammer, p.hammer),
     sword: {
       ...fill(D.sword, { offset: p.sword?.offset, turn: p.sword?.turn }),
       swing: { ...fill(D.sword.swing, { time: swing?.time, windup: swing?.windup }), raise: fill(D.sword.swing.raise, swing?.raise), chop: fill(D.sword.swing.chop, swing?.chop) },
@@ -108,6 +122,12 @@ export interface HeldInfo {
   scale?: number;
   /** A gun held as a rifle or a pistol (the item's `hold.stance`); default by its length. */
   stance?: 'rifle' | 'pistol';
+  /** Hands on a gun (`hold.gun.hands`): with one, the free hand takes the stance's `offHand` pose, and comes to the gun to reload. Default 2. */
+  hands?: 1 | 2;
+  /** The item's own poses (`hold.poses`), over the figure's while it's held. */
+  poses?: ItemPoses;
+  /** A gun's action (`GunItem.action`): a `lever` or `hammer` is worked after each shot. */
+  action?: string;
 }
 
 /**
@@ -231,6 +251,11 @@ const q2 = new THREE.Quaternion();
 const q3 = new THREE.Quaternion();
 const m1 = new THREE.Matrix4();
 const m2 = new THREE.Matrix4();
+// Scratch for the free hand (apart from what `limb` works with).
+const h1 = new THREE.Vector3();
+const h2 = new THREE.Vector3();
+const h3 = new THREE.Vector3();
+const hq = new THREE.Quaternion();
 const e1 = new THREE.Euler(0, 0, 0, 'YXZ');
 
 /** A rotation from Euler angles (YXZ: turn, then tip, then roll). */
@@ -284,6 +309,8 @@ export class HumanoidRig {
   /** What's held, on the chest: the rig puts it where the pose wants it each frame. */
   private holder = new THREE.Object3D();
   private held: { mesh: THREE.Object3D; info: HeldInfo; stance: 'rifle' | 'pistol' } | null = null;
+  /** The poses for what's held: its own (`hold.poses`) over the figure's. */
+  private heldPoses: Poses;
   private last = -1;
   private phase = 0;
   private sprint = 0;
@@ -307,6 +334,7 @@ export class HumanoidRig {
     this.frames = f;
     this.body = root;
     this.poses = resolvePoses(opts.poses);
+    this.heldPoses = this.poses;
     // The rig's skeleton: each joint where the model's is standing straight, unturned.
     const j = {} as Record<Joint, THREE.Object3D>;
     for (const b of REQUIRED) {
@@ -370,6 +398,7 @@ export class HumanoidRig {
   hold(mesh: THREE.Object3D | null, info: HeldInfo | null) {
     if (this.held) this.held.mesh.removeFromParent();
     this.held = null;
+    this.heldPoses = info?.poses ? resolvePoses(info.poses, this.poses) : this.poses;
     if (!mesh || !info) return;
     const scale = info.scale ?? (info.kind === 'other' ? 0.5 : this.poses.heldScale);
     const stance = info.stance ?? (info.length * scale < this.poses.pistolUnder ? 'pistol' : 'rifle');
@@ -430,7 +459,7 @@ export class HumanoidRig {
     const look = clamp(-s.headPitch, -1.25, 1.25);
     const held = this.held?.info.kind ?? null;
     const twoHanded = held === 'gun' || held === 'melee';
-    const stance = this.held?.stance === 'pistol' ? P.pistol : P.rifle;
+    const stance = this.held?.stance === 'pistol' ? this.heldPoses.pistol : this.heldPoses.rifle;
     this.sprint += ((s.sprint && held === 'gun' ? 1 : 0) - this.sprint) * clamp01(dt * 10);
     this.reload += ((s.reloading && held === 'gun' ? 1 : 0) - this.reload) * clamp01(dt * 12);
     this.reloadT = s.reloading ? this.reloadT + dt : 0;
@@ -517,10 +546,13 @@ export class HumanoidRig {
     f.nodes.hips.position.copy(this.j.hips.position).applyMatrix4(this.hipsFrom);
   }
 
-  /** Both hands on a gun or a sword: where it's held (aimed, carried low, reloaded, swung), then the arms to it. */
+  /**
+   * Both hands on a gun or a sword: where it's held (aimed, carried low, reloaded, swung, its
+   * action worked), then the arms to it. A gun held in one hand: the free hand in its own pose.
+   */
   private poseHeld(s: AnimState, aimQ: THREE.Quaternion, bodyQ: THREE.Quaternion, scale: number) {
     const info = this.held!.info;
-    const P = this.poses;
+    const P = this.heldPoses;
     const j = this.j;
     const chest = j.chest;
     // The shoulders' middle, the pivot the aim turns about.
@@ -536,6 +568,14 @@ export class HumanoidRig {
       const kick = s.shotT !== undefined && s.shotT < 5.5 / k.decay ? Math.exp(-s.shotT * k.decay) : 0;
       offset.z -= k.back * kick;
       gunQ.multiply(rot(q2, -k.tip * kick, 0, 0));
+      // Working the action, a beat after the shot: a lever rocked, a hammer cocked.
+      const act = info.action === 'lever' ? P.lever : info.action === 'hammer' ? P.hammer : null;
+      const t = act && s.shotT !== undefined ? (s.shotT - 0.08) / act.time : -1;
+      if (act && t > 0 && t < 1) {
+        const w = Math.sin(t * Math.PI);
+        offset.addScaledVector(v3.fromArray(act.offset), w);
+        gunQ.multiply(rot(q2, act.turn[0] * w, act.turn[1] * w, act.turn[2] * w));
+      }
       // Sprinting: low across the chest, muzzle down and to the left.
       if (this.sprint > 0.001) {
         offset.lerp(v3.fromArray(P.sprint.offset), this.sprint);
@@ -573,6 +613,7 @@ export class HumanoidRig {
     const handQ = this.holder.getWorldQuaternion(new THREE.Quaternion());
     const grip = this.holder.getWorldPosition(v4);
     this.limb('R', grip, handQ, v1.set(-0.8, -0.55, -0.35).applyQuaternion(bodyQ), false);
+    if (info.kind === 'gun' && info.hands === 1) return this.offHand(info, mesh, handQ, bodyQ, P);
     const support = info.grip2 ? mesh.localToWorld(v2.copy(info.grip2)) : null;
     if (support) {
       if (info.kind === 'gun' && this.reload > 0.001 && info.mag) {
@@ -586,6 +627,29 @@ export class HumanoidRig {
       }
       this.limb('L', support, handQ, v1.set(0.45, -0.9, 0.05).applyQuaternion(bodyQ), false);
     }
+  }
+
+  /**
+   * The free hand of a gun held in one hand: in the stance's `offHand` pose (from the middle of
+   * the shoulders, in the chest's frame), and to the gun's magazine and the belt to reload.
+   */
+  private offHand(info: HeldInfo, mesh: THREE.Object3D, gunQ: THREE.Quaternion, bodyQ: THREE.Quaternion, P: Poses) {
+    const chest = this.j.chest;
+    const pose = (this.held!.stance === 'pistol' ? P.pistol : P.rifle).offHand;
+    const at = chest.localToWorld(h1.copy(this.pivot).add(h2.fromArray(pose.offset)));
+    const handQ = chest.getWorldQuaternion(hq).multiply(turnOf(q2, pose.turn));
+    // Loose: the elbow back and out. To the gun: out and down, like a support hand's.
+    const pole = h3.set(0.4, -0.2, -1).normalize();
+    if (this.reload > 0.001 && info.mag) {
+      const t = (this.reloadT % P.reload.cycle) / P.reload.cycle;
+      const away = t < 0.25 ? 0 : t < 0.6 ? smooth((t - 0.25) / 0.35) : 1 - smooth((t - 0.6) / 0.4);
+      const mag = mesh.localToWorld(h2.copy(info.mag));
+      mag.lerp(this.j.hips.localToWorld(v4.fromArray(P.reload.belt)), away);
+      at.lerp(mag, this.reload);
+      handQ.slerp(gunQ, this.reload);
+      pole.lerp(v4.set(0.45, -0.9, 0.05), this.reload).normalize();
+    }
+    this.limb('L', at, handQ, pole.applyQuaternion(bodyQ), false);
   }
 
   /** Empty-handed (or one thing in the fist): the arms swing as it walks. */
