@@ -26,10 +26,12 @@
  *   pistol grip); the left hangs below its wrist round a bar along z (a handguard). `gripR` /
  *   `gripL` are empty nodes at the centre of each fist's hold, identity rotation; the bar itself
  *   isn't modelled (a gun's grip passes through).
- * - Look (tools/voxel.mjs): a quad per visible voxel face, never merged, each showing a bevelled
- *   8 x 8 tile of the fighter's palette atlas (occlusion baked into tile variants, shades varied
- *   voxel by voxel), with a metallic-roughness atlas (gold, buckles and chains glossy) and an
- *   emissive one. One mesh, one material: one draw call a fighter (one more for its shadow).
+ * - Look (tools/voxel.mjs): clean voxels, flat colours with soft occlusion in the concave corners
+ *   (tile variants of the fighter's palette atlas), the faces of a colour in a plane merged where
+ *   nothing shades them; a metallic-roughness atlas (gold, buckles, shades glossy) and an emissive
+ *   one. One mesh, one material: one draw call a fighter (one more for its shadow).
+ * - Scale: `--scale=16` resamples a figure to the world's destructible micro-voxel (1/16 block),
+ *   for comparison; the details (mouths, ties, lapels) are drawn for 1/24 and some get lost.
  * - Vertices: KHR_mesh_quantization (positions as voxel coordinates in bytes, the voxel size in the
  *   inverse bind matrices; normals as bytes), through EXT_meshopt_compression.
  * - Budgets (checked): <= 25000 triangles and <= 300 KB per file.

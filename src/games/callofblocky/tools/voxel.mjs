@@ -1,10 +1,10 @@
 /**
  * Micro-voxel models, dependency-free (Node 22+): shapes painted into voxel volumes in code, meshed
- * one quad per visible voxel face (never merged: the grid is the look), each quad showing a tile of
- * a small palette atlas painted as a bevelled cube face (a darker rim, a light ridge inside it), with
- * ambient occlusion baked into tile variants, and written as one-material glTF: a baseColorTexture,
- * a metallicRoughnessTexture (G roughness, B metalness) and an emissiveTexture of one UV layout.
- * Used by the fighters (`fighters/build.mjs`, skinned) and the weapons (`guns/build.mjs`).
+ * as the visible voxel faces, each on a tile of a small palette atlas, and written as one-material
+ * glTF: a baseColorTexture, a metallicRoughnessTexture (G roughness, B metalness) and an
+ * emissiveTexture of one UV layout. The look is clean voxels: flat colours, no outlines, the grid
+ * read from the steps, the colours and the soft occlusion in the concave corners. Used by the
+ * fighters (`fighters/build.mjs`, skinned) and the weapons (`guns/build.mjs`).
  *
  * - Voxels: integer cells (i, j, k); cell (i, j, k) spans [i, i+1] x [j, j+1] x [k, k+1] in voxel
  *   units. A model is parts (the fighters': a part per joint), each a map of cells to colour names.
@@ -14,11 +14,14 @@
  *   counter-clockwise from outside. Its occlusion: the cells round the one it faces (any part's):
  *   an occupied edge neighbour darkens that edge of the tile, an occupied corner neighbour (with
  *   both its edges open) that corner. The 8-bit state is reduced to a canonical one under the
- *   square's eight symmetries and the quad's UVs turned to match, so a few tiles serve.
- * - Colour: each voxel's colour, times a shade picked per voxel from its cell (colours that `vary`),
- *   so surfaces read as many little cubes. A tile per (colour, shade, occlusion) in use, 8 x 8
- *   texels, the quad's UVs half a texel in from its edges (bilinear filtering stays in the tile);
- *   tiles of a colour sit together, so distant mip levels blend a colour with its own variants.
+ *   square's eight symmetries and the quad's UVs turned to match, so a few tiles serve. Faces a
+ *   part shows toward another part's voxel are kept (they show when the parts move apart). Faces
+ *   of one part, plane and colour that nothing shades merge into rectangles (`merge`).
+ * - Tiles: one per (colour, shade, occlusion) in use, 8 x 8 texels, flat (`VOXEL_BEVEL=pillow` or
+ *   `ridge` paints each as a bevelled cube face instead, unmerged, for comparison); the quad's UVs
+ *   half a texel in from its edges (bilinear filtering stays in the tile); a colour's tiles sit
+ *   together, so distant mip levels blend a colour with its own variants. `vary` picks a shade per
+ *   voxel from its cell (off by default).
  */
 import { deflateSync } from 'node:zlib';
 import { encodeIndexSequence, encodeVertexBuffer, decodeIndexSequence, decodeVertexBuffer } from './meshopt.mjs';
