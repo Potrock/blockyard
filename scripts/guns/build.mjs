@@ -29,6 +29,8 @@
  *     base plate below the grip (the rest is inside it); the shotgun's is its loading port under
  *     the receiver. The katana has none; its `grip` is the rear hand on the handle and `grip2` the
  *     front hand, and its blade runs along +z with the edge facing +y.
+ * - The briefcase (a pickup, not a weapon) has no markers: its origin is the centre of its bottom
+ *   face, +y up, its front (latches, the lid) toward +z; about 10 x 7 x 3 px, the handle on top.
  * - One material per file: the engine merges a held model's meshes and uses only the first
  *   material's `baseColorTexture` and `emissiveTexture` (factors are ignored). So all boxes map into
  *   one embedded PNG atlas, sampled NEAREST (9728), and one emissive PNG of the same layout: black,
@@ -290,6 +292,25 @@ function wrap(ctx) {
   return add(c, (rnd(ctx) - 0.5) * 8);
 }
 
+/** Black leather: a soft grain, a sheen along the top edges. */
+function leather(ctx) {
+  const [x, y, z] = ctx.w;
+  let c = hex('#1f1c1e');
+  c = add(c, (vnoise(x * 1.7, y * 1.7, z * 1.7, 31) - 0.5) * 16 + (rnd(ctx) - 0.5) * 6);
+  if (ctx.face === '+y') c = add(c, 12);
+  return bevel(ctx, c, 26, 0.8);
+}
+
+/** What's in the briefcase: molten gold light, brightest high in the middle, with sparkles. It glows. */
+function golden(ctx) {
+  const [x, y] = ctx.w;
+  const t = clamp01(1 - Math.abs(x) / 5.5) * 0.6 + clamp01((y - 1) / 6.5) * 0.4;
+  let c = mix(hex('#ff9a1a'), hex('#fff3a8'), t);
+  if (rnd(ctx, 8) > 0.88) c = mix(c, hex('#ffffff'), 0.6);
+  ctx.glow = 0.8 + 0.2 * t;
+  return c;
+}
+
 const M = {
   steel: brushed('#454b55'),
   darksteel: brushed('#34383f', { streak: 8, edge: 20 }),
@@ -317,6 +338,8 @@ const M = {
   bore,
   blade,
   wrap,
+  leather,
+  golden,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1088,9 +1111,64 @@ function katana() {
   return g;
 }
 
+/**
+ * The Briefcase: a black leather attache case, its lid (the front half) leaning open from its
+ * bottom edge so a wedge of golden light spills out along the top and sides. A pickup: no markers.
+ */
+function briefcase() {
+  const g = new Gun('briefcase', 'The Briefcase');
+  // The lid pivots on its bottom-front edge, 12 degrees forward: a ~1.5 px gap at the top, none below.
+  const lid = ['x', 12, [0, 0.5, 1.5]];
+  // Stitching one texel in from the edges of the big faces.
+  const stitch = (ctx, c) => {
+    if (ctx.face !== '+z' && ctx.face !== '-z') return;
+    const { i, j, tw, th } = ctx;
+    const ring = ((i === 1 || i === tw - 2) && j >= 1 && j <= th - 2) || ((j === 1 || j === th - 2) && i >= 1 && i <= tw - 2);
+    return ring && (i + j) % 2 === 0 ? add(c, 14) : c;
+  };
+  // Light spilling from the gap onto the lips of both halves: their edges along the opening glow
+  // warm, strongest at the top. `seam` is the local z of the half's edge at the gap.
+  const spill = (seam) => (ctx, c) => {
+    if (ctx.face === '+z' || ctx.face === '-z' || ctx.face === '-y') return;
+    const [, y, z] = ctx.p;
+    if (Math.abs(z - seam) > 0.5) return;
+    const k = ctx.face === '+y' ? 1 : clamp01((y - 3.5) / 4);
+    if (k <= 0) return;
+    ctx.glow = 0.55 * k;
+    return mix(c, hex('#ffb13a'), 0.35 + 0.5 * k);
+  };
+  const both = (a, b) => (ctx, c) => {
+    const c1 = a(ctx, c) ?? c;
+    return b(ctx, c1) ?? c1;
+  };
+  // The two halves (their inner faces lit by what's inside) and the glowing contents in the gap.
+  g.box([-5, 0.5, -1.5], [5, 7.5, 0], 'leather', { faces: { '+z': 'golden' }, paint: both(stitch, spill(0)) });
+  g.box([-5, 0.5, 0], [5, 7.5, 1.5], 'leather', { rot: lid, faces: { '-z': 'golden' }, paint: both(stitch, spill(0)) });
+  g.box([-4.5, 1, 0], [4.5, 7.25, 0.5], 'golden');
+  // Handle on top of the back half: brass mounts, leather posts and grip.
+  g.pair([1.25, 7.5, -1.25], [2.75, 8, 0.25], 'brass');
+  g.pair([1.5, 8, -1], [2.5, 9, 0], 'leather');
+  g.box([-2.5, 9, -1], [2.5, 10, 0], 'leather');
+  // Two brass latches (sprung) and the combination lock between them, on the lid.
+  const keyhole = (ctx, c) => (ctx.face === '+z' && ctx.j === ctx.th - 1 ? hex('#3a2508') : c);
+  g.pair([2.5, 5.5, 1.5], [3.5, 7, 2], 'brass', { rot: lid, paint: keyhole });
+  const dials = (ctx, c) => (ctx.face === '+z' ? (ctx.i % 2 ? hex('#2a1a06') : hex('#f7e3a0')) : c);
+  g.box([-1, 6, 1.5], [1, 7, 2], 'brass', { rot: lid, paint: dials });
+  // Brass corner caps: the lid's front corners, the back half's back corners.
+  for (const [x0, x1] of [[4.25, 5.25], [-5.25, -4.25]])
+    for (const [y0, y1] of [[6.75, 7.75], [0.25, 1.25]]) {
+      g.box([x0, y0, 1.25], [x1, y1, 1.75], 'brass', { rot: lid });
+      g.box([x0, y0, -1.75], [x1, y1, -1.25], 'brass');
+    }
+  // Brass feet at the corners.
+  for (const x of [-4.5, 3.5])
+    for (const z of [-1.25, 0.5]) g.box([x, 0, z], [x + 1, 0.5, z + 0.75], 'brass');
+  return g;
+}
+
 // ---------------------------------------------------------------------------------------------
 
-const GUNS = [pistol(), smg(), rifle(), shotgun(), sniper(), katana()];
+const GUNS = [pistol(), smg(), rifle(), shotgun(), sniper(), katana(), briefcase()];
 const only = process.argv.slice(2);
 mkdirSync(OUT, { recursive: true });
 for (const gun of GUNS) {
