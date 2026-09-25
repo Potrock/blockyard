@@ -236,7 +236,7 @@ game.items.define('rifle', {
   magazine: 30, reserve: 120, reload: 2.1,    // `shells: true` loads round by round (shotguns)
   spread: { hip: 2.2, aim: 0.12, move: 1.3, air: 3, bloom: 0.22 },   // degrees
   recoil: { up: 0.85, side: 0.35, recover: 0.7 },
-  aim: { zoom: 1.35, time: 0.22, move: 0.62, sight: 'iron' },       // 'dot', or 'scope' (the view fills with it)
+  aim: { zoom: 1.35, time: 0.22, move: 0.62, sight: 'holo' },       // 'iron', 'dot', 'holo' or 'scope'
   mobility: 0.95, pellets: 1, action: undefined,                    // 'pump' | 'bolt'
   sounds: { use: 'shot_rifle', reload: 'reload_mag', empty: 'gun_empty', cycle: 'pump' },
 });
@@ -246,7 +246,8 @@ The platform does the rest:
 - **Fair online.** The shooter's own screen fires the moment the trigger's pulled: the flash, the kick, the tracer, the sound, the rounds. The shots go to the host with the controls. The host takes each one the gun could have fired (its rate, its rounds) and casts it where the targets were *on the shooter's screen*: it keeps a second of everyone's positions and rewinds to the moment that screen was showing, at most 0.35 s back. Spread is seeded per shot, so the tracer you see is where the host's bullet goes.
 - **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself. Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up.
 - **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people).
-- **The HUD.** An ammo counter replaces the hotbar's job, the crosshair opens with the spread (and goes when aiming), and there's a scope overlay.
+- **Sights.** `iron` sights are the model's own. A `dot` or `holo` sight lights its reticle (a red dot, or a holo's ring and dot; `aim.color`) at the aim point as the optic's window comes up to the eye: model the optic with its window open and its `sight` point in the window's middle. A `scope` fills the view with the scope.
+- **The HUD.** An ammo counter replaces the hotbar's job, and the crosshair opens with the spread (and goes when aiming).
 - **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
 - **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working a pump. A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. `scripts/guns/build.mjs` builds Call of Blocky's guns from boxes and writes them as GLB files that way.
 
