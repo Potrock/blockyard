@@ -372,7 +372,8 @@ export class Runtime {
       this.renderer.setTextures(this.textures.albedo, this.textures.material, this.biome.texture);
     }
     const biome = this.biome;
-    this.renderer.uniforms.uVoid.value = def.world?.terrain === 'void' ? 1 : 0;
+    // Over the void the sky goes on below the horizon, an abyss; a void world with ground has a horizon like any other.
+    this.renderer.uniforms.uVoid.value = def.world?.terrain === 'void' && !def.world.ground ? 1 : 0;
     this.graphics = new EntityGraphics(this.renderer.uniforms);
     this.graphics.gltf.renderer = this.renderer.gl;
     // Model files the game names (glTF props and figures): fetched at once, so they're here by play.
@@ -1343,9 +1344,10 @@ export class Runtime {
     return Math.min(12, this.viewDistance(s));
   }
 
-  /** The player's render distance, raised to the game's minimum (`world.viewDistance`). */
+  /** The player's render distance, raised to the game's minimum (`world.viewDistance`) and held to its maximum (`world.maxViewDistance`). */
   private viewDistance(s: Settings): number {
-    return Math.max(s.renderDistance, Math.min(24, this.def.world?.viewDistance ?? 0));
+    const w = this.def.world;
+    return Math.min(w?.maxViewDistance ?? 24, Math.max(s.renderDistance, Math.min(24, w?.viewDistance ?? 0)));
   }
 
   private applySettings(s: Settings, persist = true) {

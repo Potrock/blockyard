@@ -114,8 +114,10 @@ Game time (`game.clock.now`, `after`, `every`) pauses with the game. Prefer it o
 
 - `structures: Blueprint[]`: voxel structures stamped **during generation** in the Rust workers. They are there from the first frame, cost nothing at runtime, and survive chunk reloads. Cells you never write keep the natural terrain; write `'air'` to carve.
 - `terraform`: flatten terrain around a point (`radius` fully flat, `blend` back to natural). Terraformed and blueprint areas get no caves, trees or plants. The ground keeps the local biome's surface (grass, podzol, sand, snow), so if the floor matters, write it into your blueprint (the arena stamps a sand floor) or fix `seed`.
-- `terrain: 'flat'` plus `flatHeight`: a flat world.
+- `terrain: 'flat'` plus `flatHeight`: natural ground made flat (its biomes, trees and caves still made), at `flatHeight`.
 - `terrain: 'void'`: nothing but your structures, floating in an open sky (Bed Wars and SkyWars islands). The sky wraps all the way round below the horizon, so there's no floor to see.
+- `terrain: 'void'` with a `ground`: your structures on a plain slab, `ground: { y, top, fill, depth }` (its `top` block, grass by default, at `y`, over `depth - 1` of `fill`, dirt; 4 deep in all), as far as anyone sees, with a normal horizon. `terraform` shapes it: a height above `y` raises a hill (a backdrop, a ridge for a landmark to stand on), below it sinks a hollow. No noise, caves, water or plants are made, so it's the choice for a game played in one place: Call of Blocky's street and Arena's colosseum stand on one, and cost a fraction of a natural world to make and draw (Arena: from about 880 000 triangles a frame to 45 000).
+- `maxViewDistance`: hold the player's view distance to this many chunks. A game played in a small space has nothing further to load, mesh and draw (the haze follows it, so keep backdrop landmarks within it).
 - `spawn`, `spawnYaw`, `time` (0 = midnight, 0.5 = noon), `freezeTime`, `seed`, `persist` (save block edits and position; Sandbox uses it).
 - `viewDistance`: a minimum view distance in chunks for games that see far (flight). The player's own setting wins if it's higher.
 

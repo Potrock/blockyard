@@ -2,6 +2,8 @@
 export interface WorldGenConfig {
   flat?: number;
   void?: boolean;
+  /** A void world's ground (block ids). */
+  ground?: { y: number; top: number; fill: number; depth: number };
   terraforms: { x: number; z: number; radius: number; blend: number; height: number }[];
   blueprints: { origin: { x: number; y: number; z: number }; size: { x: number; y: number; z: number }; data: Uint8Array }[];
 }

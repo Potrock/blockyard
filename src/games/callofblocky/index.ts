@@ -486,6 +486,11 @@ export default defineGame({
   instances: true,
   world: {
     seed: MAP.seed,
+    // No landscape to make: the lane and its backdrop stand on a plain ground over the void,
+    // deep enough for the storm drain, and nothing past the haze is loaded.
+    terrain: 'void',
+    ground: { y: MAP.floorY - 1, top: 'grass_block', fill: 'dirt', depth: 10 },
+    maxViewDistance: 10,
     structures: MAP.structures,
     terraform: MAP.terraform,
     // The home page looks down the street from the west end, toward the diner (fighters spawn at the map's spawns).

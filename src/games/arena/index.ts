@@ -1,5 +1,5 @@
 import { defineGame, type GameContext, type Player } from '@platform';
-import { buildArena, FLOOR, GATES, GATE_SPAWN_RADIUS, PIT } from './structure';
+import { buildArena, FLOOR, GATES, GATE_SPAWN_RADIUS } from './structure';
 import { defineArt, defineItems, defineMonsters } from './content';
 import { Sprite } from './art';
 import { defineSounds } from './sounds';
@@ -231,8 +231,12 @@ export default defineGame({
     ['1-9', 'weapons'],
   ],
   world: {
+    // No landscape to make: the arena stands on a plain ground over the void (below its rim, so
+    // from inside it's all sky), and nothing past the haze is loaded.
+    terrain: 'void',
+    ground: { y: FLOOR, top: 'grass_block', fill: 'dirt', depth: 4 },
+    maxViewDistance: 8,
     structures: [buildArena()],
-    terraform: [{ x: 0, z: 0, radius: PIT + 16, blend: 28, height: FLOOR + 0.5 }],
     spawn: { x: CENTER.x, y: CENTER.y + 0.05, z: CENTER.z },
     spawnYaw: 0,
     time: 0.66,

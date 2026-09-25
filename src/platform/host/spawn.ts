@@ -10,6 +10,7 @@ export function worldGenConfig(def: GameDefinition, blockId: (b: BlockRef) => nu
   return {
     flat: w.terrain === 'flat' ? (w.flatHeight ?? 64) : undefined,
     void: w.terrain === 'void',
+    ground: w.terrain === 'void' && w.ground ? { y: w.ground.y, top: blockId(w.ground.top ?? 'grass_block'), fill: blockId(w.ground.fill ?? 'dirt'), depth: w.ground.depth ?? 4 } : undefined,
     terraforms: w.terraform ?? [],
     blueprints: (w.structures ?? []).map((s) => s.build(blockId)),
   };

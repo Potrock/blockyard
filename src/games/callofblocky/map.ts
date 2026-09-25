@@ -1136,7 +1136,7 @@ function hillSign(): Blueprint {
 
 /** A water tower on the sandy ridge north-east of the diner (ground there is y 83). */
 function waterTower(): Blueprint {
-  const [cx, cz, base] = [74, -45, 84];
+  const [cx, cz, base] = [60, -44, 84];
   const t = new Blueprint({ x: cx - 6, y: base - 6, z: cz - 6 }, { x: 13, y: 32, z: 13 });
   // Legs and cross braces.
   for (const [dx, dz] of [[-3, -3], [3, -3], [-3, 3], [3, 3]]) t.fill({ x: cx + dx, y: base - 5, z: cz + dz }, { x: cx + dx, y: base + 12, z: cz + dz }, 'gray_concrete');
@@ -1212,9 +1212,17 @@ export const MAP: MapSpec = {
   time: 0.72,
   floorY: FLOOR,
   structures: [build(), hillSign(), waterTower()],
+  // The lane is level with the plain; the hills around it are the backdrop: the one the sign's
+  // letters stand on, the ridge under the water tower, and a few off in the haze.
   terraform: [
     { x: -22, z: 0, radius: 40, blend: 22, height: G + 0.5 },
     { x: 22, z: 0, radius: 40, blend: 22, height: G + 0.5 },
+    ...HILL_LETTERS.map(([, x0, z, y0]) => ({ x: x0 + 3, z: z - 6, radius: 7, blend: 34, height: y0 - 3.5 })),
+    { x: 60, z: -44, radius: 6, blend: 24, height: 83.5 },
+    { x: 118, z: 30, radius: 16, blend: 40, height: 84.5 },
+    { x: -120, z: 20, radius: 18, blend: 44, height: 88.5 },
+    { x: -70, z: 105, radius: 20, blend: 40, height: 82.5 },
+    { x: 60, z: 110, radius: 14, blend: 40, height: 79.5 },
   ],
   bounds: { min: { x: WEST, y: DRAIN_FLOOR - 1, z: NORTH }, max: { x: EAST, y: SKY, z: SOUTH } },
   spawns: [

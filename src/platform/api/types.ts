@@ -122,13 +122,23 @@ export interface HudTheme {
 export interface WorldOptions {
   /** Fixed seed. Default: `?seed=` from the URL, else random. */
   seed?: number;
-  /** `natural` (default) or a `flat` world at `flatHeight`. */
-  /** `natural` (default), `flat` (at `flatHeight`), or `void`: nothing but your structures (sky islands). */
+  /**
+   * `natural` (default: a whole generated landscape), `flat` (natural ground made flat at
+   * `flatHeight`, trees and all), or `void`: nothing but your structures (sky islands), or your
+   * structures on a plain `ground`, which costs next to nothing to make and draw (an arena's).
+   */
   terrain?: 'natural' | 'flat' | 'void';
   flatHeight?: number;
+  /**
+   * A `void` world's own ground: a plain slab under your structures, as far as anyone sees, its
+   * `top` block (default grass) at `y` over `depth - 1` of `fill` (dirt; default 4 deep in all),
+   * the void below. `terraform` raises or lowers it (a hill for a backdrop, a sunken yard). The
+   * sky's horizon then meets the ground, not an abyss.
+   */
+  ground?: { y: number; top?: BlockRef; fill?: BlockRef; depth?: number };
   /** Voxel structures stamped into the world while it generates (see `Blueprint`). */
   structures?: BlueprintLike[];
-  /** Flatten terrain around points: `radius` fully flat, blending back over `blend` blocks. */
+  /** Flatten terrain around points: `radius` fully flat at `height`, blending back over `blend` blocks (on a `ground`, `height` may raise a hill). */
   terraform?: { x: number; z: number; radius: number; blend: number; height: number }[];
   /** Player spawn point. `auto` picks pleasant land near the origin. */
   spawn?: Vec3 | 'auto';
@@ -139,6 +149,11 @@ export interface WorldOptions {
   freezeTime?: boolean;
   /** Minimum view distance in chunks (flight games see further); the player's setting wins if higher. Max 24. */
   viewDistance?: number;
+  /**
+   * Maximum view distance in chunks: the player's setting is held to it. For a game played in
+   * a small space (an arena, a street), there's nothing further to load, mesh and draw.
+   */
+  maxViewDistance?: number;
   /** Save block edits and the player position between sessions. Default false. */
   persist?: boolean;
 }
