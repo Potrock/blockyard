@@ -555,6 +555,9 @@ export class GltfLibrary {
 
 type Clip = 'idle' | 'walk' | 'run' | 'attack' | 'cast';
 
+/** Each skin's bounds at rest in its mesh's space (shared by every copy of a model, as its geometry is). */
+const restSpheres = new WeakMap<THREE.BufferGeometry, THREE.Sphere>();
+
 /**
  * One copy of a glTF model: its node tree (named nodes are its pivots), the platform's materials,
  * and its animations. As an entity it plays `idle`, `walk` or `run` by how fast it goes (walking
@@ -619,10 +622,18 @@ export class GltfFigure implements Figure {
       mesh.material = m;
       mesh.customDepthMaterial = lib.shadow(map, skin);
       if (skin) {
-        // Culled by its bounds at rest, with room for the poses its bones put it in.
+        // Culled by its bounds at rest, with room for the poses its bones put it in. Where the
+        // bones put it: a skin's own space needn't be the model's (its bind matrices can move and
+        // scale it, as a quantized mesh's or a scaled armature's do).
         const sm = mesh as THREE.SkinnedMesh;
-        if (!sm.geometry.boundingSphere) sm.geometry.computeBoundingSphere();
-        sm.boundingSphere = sm.geometry.boundingSphere!.clone();
+        let rest = restSpheres.get(sm.geometry);
+        if (!rest) {
+          scene.updateMatrixWorld(true);
+          sm.computeBoundingSphere();
+          rest = sm.boundingSphere!.clone();
+          restSpheres.set(sm.geometry, rest);
+        }
+        sm.boundingSphere = rest.clone();
         sm.boundingSphere.radius *= 2;
       }
     });

@@ -4,6 +4,7 @@
  * `&poses=<names>` (`t` freezes time for a screenshot; guns come from Call of Blocky's models).
  * `joints=mixamo` (or a JSON joint map) for a skeleton named its own way; `style=<JSON>` for
  * `HumanoidPoses`; the poses ending in a clip's name (`wave`, `cheer`) play the model's clip.
+ * `flat=0` shades every mesh by the file's normals (as the game does), `flat=1` faceted.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -20,6 +21,7 @@ const VIEW = q.get('view') ?? '34';
 const GUNS = '/src/games/callofblocky/models/';
 const JOINTS: Partial<Record<HumanoidJoint, string>> | undefined = q.get('joints') === 'mixamo' ? HumanoidJoints.mixamo() : q.has('joints') ? JSON.parse(q.get('joints')!) : undefined;
 const STYLE: HumanoidPoses | undefined = q.has('style') ? JSON.parse(q.get('style')!) : undefined;
+const FLAT = q.get('flat');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(1);
@@ -96,8 +98,8 @@ async function main() {
         m.frustumCulled = false;
         const mat = m.material as THREE.MeshStandardMaterial;
         m.material = mat.clone();
-        // Rigid parts faceted; a skin smooth.
-        (m.material as THREE.MeshStandardMaterial).flatShading = !(m as THREE.SkinnedMesh).isSkinnedMesh;
+        // Rigid parts faceted; a skin smooth (`flat=0`: every mesh by the file's normals, as the game shades it; `flat=1`: every mesh faceted).
+        (m.material as THREE.MeshStandardMaterial).flatShading = FLAT === null ? !(m as THREE.SkinnedMesh).isSkinnedMesh : FLAT === '1';
       }
     });
     root.add(copy);

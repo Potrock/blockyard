@@ -16,8 +16,9 @@
  *   translation (parent space) and no rotation or scale. The root node is named after the fighter's
  *   id (extras.title is its name). Joint heights are the doc's for every fighter; only the x of the
  *   shoulders (0.188-0.222) and hips (0.096-0.106) varies by build (see BUILDS).
- * - Rest pose: standing straight, arms hanging along -y. Geometry is rigid: each joint node has one
- *   child mesh node (`<joint>_mesh`) holding what that joint moves, in the joint's own space.
+ * - Rest pose: standing straight, arms hanging along -y. The figure is one skinned mesh on a skin
+ *   whose bones are the rig's joints (the grips are empties, not bones), skinned rigidly: every
+ *   vertex wholly on its joint's bone, so each part moves with its joint as a rigid part would.
  *   Limb ends are faceted domes centred on their pivots, and each torso segment reaches into its
  *   neighbours with a smaller copy of itself, so elbows and knees bend ~130 degrees, hips and
  *   shoulders ~60 and spine + chest ~70 without opening gaps.
@@ -31,13 +32,16 @@
  *   overlays) and lofts (hair, collars, the skirt, the brim). Every face has its own normal and
  *   vertices are shared only within a face; neighbouring triangles of one material within 7 degrees
  *   of coplanar are shaded as one face.
- * - Materials: glTF PBR metallic-roughness: baseColorFactor (linear) + metallicFactor +
- *   roughnessFactor, 10-19 per figure, one primitive per material per joint. A joint's primitives
- *   share one vertex buffer (POSITION, NORMAL); patterned cloth (pinstripes, Hawaiian print) has its
- *   own with TEXCOORD_0: a small repeating baseColorTexture (128 px, LINEAR, mipmapped, REPEAT), the
- *   colour baked in, a white factor, UVs a box projection in the joint's space (`uvScale` metres per
- *   tile). Untextured primitives have no UVs.
- * - Budgets (checked): <= 4000 triangles and <= 200 KB per file. Core glTF 2.0, no extensions.
+ * - Material: one (one draw call a figure, one more for its shadow). Every flat colour is a 2x2
+ *   block in a small palette texture, each face's UVs on its block's middle; patterned cloth
+ *   (pinstripes, the Hawaiian print) is tiled over a region of the same texture (a face's
+ *   box-projected UVs moved by whole tiles into it); a matching metallicRoughnessTexture holds
+ *   each colour's roughness (G) and metalness (B); the factors are 1. Triangles go colour by
+ *   colour, in the order the rigid parts' materials were drawn.
+ * - Vertices (KHR_mesh_quantization): positions and normals 16-bit normalized, UVs 16-bit
+ *   normalized, JOINTS_0 / WEIGHTS_0 bytes. The mesh's own space starts at ORIGIN (the inverse
+ *   bind matrices carry it).
+ * - Budgets (checked): <= 4000 triangles and <= 200 KB per file.
  */
 import { deflateSync, inflateSync } from 'node:zlib';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
@@ -1945,13 +1949,15 @@ const JOINT_ORDER = Object.keys(JOINT_PARENT);
  * One joint's mesh: flat-shaded triangles grouped by material, sharing one vertex buffer. Each
  * triangle keeps its own face normal, except that neighbours in the same material that are within
  * a few degrees of coplanar are shaded as one face (they share vertices and an averaged normal).
- * Returns { pos, nor, uv (or null), groups: [{ key, idx }] } in the joint's space; `textured`
- * picks the joint's textured materials (their vertices carry UVs) or the rest.
+ * Returns { pos, nor, uv (or null), mat, face, groups: [{ key, idx }] } in the joint's space;
+ * `textured` picks the joint's textured materials (their vertices carry UVs, a box projection in
+ * tiles of the pattern) or the rest. `mat` and `face` are each vertex's material and face (a face
+ * is numbered within its material).
  */
 const MERGE_COS = Math.cos(7 * DEG);
 function jointMesh(fig, joint, textured) {
   const o = fig.J[joint];
-  const pos = [], nor = [], uv = [];
+  const pos = [], nor = [], uv = [], mat = [], face = [];
   const map = new Map();
   const groups = [];
   const pkey = (q) => `${Math.round(q[0] * 1e5)},${Math.round(q[1] * 1e5)},${Math.round(q[2] * 1e5)}`;
@@ -2013,6 +2019,8 @@ function jointMesh(fig, joint, textured) {
           map.set(vk, i);
           pos.push(q[0], q[1], q[2]);
           nor.push(n[0], n[1], n[2]);
+          mat.push(key);
+          face.push(t.face);
           if (textured) {
             // Box projection in the joint's space (the rest pose).
             const S = m.uvScale;
@@ -2025,125 +2033,241 @@ function jointMesh(fig, joint, textured) {
     }
     groups.push({ key, idx });
   }
-  return { pos, nor, uv: textured ? uv : null, groups };
+  return { pos, nor, uv: textured ? uv : null, mat, face, groups };
 }
+
+/**
+ * The texture pair every face is coloured from: the flat colours as a palette, each a 2x2 block of
+ * texels (a face's UVs sit on the block's middle, so filtering never reaches a neighbour), and each
+ * patterned cloth tiled over a region of its own, REGION x REGION tiles (a face's box-projected
+ * UVs move by whole tiles to the middle of it, keeping the pattern's phase, and the pattern carries
+ * on past the region's edges, so filtering and mipmaps find more of it there), with a matching
+ * metallic-roughness image (G roughness, B metalness). With a pattern, the palette sits in the
+ * corner of the first region's first tile, half a tile and more from any patterned face.
+ */
+const REGION = 4;
+const pot = (n) => 2 ** Math.ceil(Math.log2(Math.max(n, 4)));
+function atlas(fig, keys) {
+  const flat = [], patterns = [];
+  const entry = {}, region = {};
+  for (const k of keys) {
+    const m = fig.materials[fig.matKey[k]];
+    const mr = [0, Math.round(m.rough * 255), Math.round(m.metal * 255)];
+    const list = m.tex === undefined ? flat : patterns;
+    const id = `${m.tex === undefined ? m.color : 'tex' + m.tex},${mr}`;
+    let i = list.findIndex((e) => e.id === id);
+    if (i < 0) {
+      i = list.length;
+      list.push(m.tex === undefined ? { id, rgb: hexRGB(m.color), mr } : { id, tex: fig.textures[m.tex], mr });
+    }
+    (m.tex === undefined ? entry : region)[k] = i;
+  }
+  const tile = patterns[0]?.tex.w ?? 0;
+  if (patterns.some((p) => p.tex.w !== tile || p.tex.h !== tile)) throw new Error(`${fig.id}: patterns of different sizes`);
+  const span = REGION * tile;
+  const cols = patterns.length ? tile / 8 : Math.ceil(Math.sqrt(flat.length));
+  if (flat.length > cols * cols) throw new Error(`${fig.id}: too many colours for the palette`);
+  const w = patterns.length ? pot(patterns.length * span) : pot(2 * cols);
+  const h = patterns.length ? pot(span) : w;
+  const albedo = new Uint8Array(w * h * 4), mr = new Uint8Array(w * h * 4);
+  const put = (x, y, rgb, m) => {
+    const i = (y * w + x) * 4;
+    albedo[i] = rgb[0], albedo[i + 1] = rgb[1], albedo[i + 2] = rgb[2], albedo[i + 3] = 255;
+    mr[i] = m[0], mr[i + 1] = m[1], mr[i + 2] = m[2], mr[i + 3] = 255;
+  };
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const p = patterns[Math.min(patterns.length - 1, Math.floor(x / span))];
+      if (!p) put(x, y, [0, 0, 0], [0, 255, 0]);
+      else {
+        const s = ((y % tile) * tile + (x % tile)) * 4;
+        put(x, y, p.tex.px.subarray(s, s + 3), p.mr);
+      }
+    }
+  const block = (i) => [(i % cols) * 2, Math.floor(i / cols) * 2];
+  flat.forEach((e, i) => {
+    const [bx, by] = block(i);
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) put(bx + dx, by + dy, e.rgb, e.mr);
+  });
+  return {
+    w,
+    h,
+    tile,
+    span,
+    albedo: { w, h, px: albedo },
+    mr: { w, h, px: mr },
+    colours: flat.length,
+    patterns: patterns.length,
+    /** A flat colour: its UV (its block's middle), what it is. */
+    flat: (k) => {
+      const [bx, by] = block(entry[k]);
+      return { id: `colour ${entry[k]}`, uv: [(bx + 1) / w, (by + 1) / h], rgb: flat[entry[k]].rgb, mr: flat[entry[k]].mr };
+    },
+    /** A patterned face's UVs (in tiles of its pattern) in the atlas, moved by whole tiles to the middle of its region. */
+    pattern: (k, uvs) => {
+      const r = region[k];
+      const lo = [0, 1].map((a) => Math.min(...uvs.map((t) => t[a])));
+      const hi = [0, 1].map((a) => Math.max(...uvs.map((t) => t[a])));
+      const d = [0, 1].map((a) => Math.round(REGION / 2 - (lo[a] + hi[a]) / 2));
+      for (const a of [0, 1]) if (lo[a] + d[a] < 0.5 || hi[a] + d[a] > REGION - 0.5) throw new Error(`${fig.id}: a ${k} face ${(hi[a] - lo[a]).toFixed(2)} tiles across is too big for the atlas`);
+      return { id: `pattern ${r}`, region: r, mr: patterns[r].mr, tex: patterns[r].tex, uvs: uvs.map(([u, v]) => [(r * span + (u + d[0]) * tile) / w, ((v + d[1]) * tile) / h]) };
+    },
+  };
+}
+
+/**
+ * Where the mesh's own space starts in the figure's: positions are 16-bit normalized (+-1 m about
+ * it, steps of 0.03 mm), so it sits at the hips' height to cover the figure from the ground to
+ * 1.95 m. The inverse bind matrices carry the offset.
+ */
+const ORIGIN = [0, 0.95, 0];
+/** The skin's bones: the rig's joints, in its order (the grips are empties, not bones). */
+const BONES = JOINT_ORDER.filter((j) => !EMPTY.has(j));
 
 function glb(fig) {
   const chunks = [];
   let offset = 0;
   const views = [];
-  const addView = (buf, target) => {
+  const addView = (buf, target, byteStride) => {
     const pad = (4 - (offset % 4)) % 4;
     if (pad) {
       chunks.push(Buffer.alloc(pad));
       offset += pad;
     }
-    views.push({ buffer: 0, byteOffset: offset, byteLength: buf.length, ...(target ? { target } : {}) });
+    views.push({ buffer: 0, byteOffset: offset, byteLength: buf.length, ...(byteStride ? { byteStride } : {}), ...(target ? { target } : {}) });
     chunks.push(buf);
     offset += buf.length;
     return views.length - 1;
   };
-  const f32 = (a) => Buffer.from(new Float32Array(a).buffer);
   const accessors = [];
   const acc = (a) => (accessors.push(a), accessors.length - 1);
-  // All positions share one buffer view, all normals another, UVs and indices one each; accessors
-  // point into them by byte offset. (Views are assigned once everything is gathered.)
-  const streams = { pos: [], nor: [], uv: [], idx: [] };
-  const lengths = { pos: 0, nor: 0, uv: 0, idx: 0 };
-  const put = (stream, buf) => {
-    const at = lengths[stream];
-    streams[stream].push(buf);
-    lengths[stream] += buf.length;
-    return at;
-  };
-  // The shortest decimal that reads back as the same float32 (bounds stay exact, JSON short).
-  const short = (v) => {
-    for (let p = 1; p < 10; p++) {
-      const x = Number(v.toPrecision(p));
-      if (Math.fround(x) === Math.fround(v)) return x;
-    }
-    return v;
-  };
-  const meshes = [];
+
+  // The rig's nodes: each joint at its rest translation (rounded as written), no rotation; the
+  // grips empty. `at` is each joint in the figure's space as a reader adds the translations up.
   const nodes = [{ name: fig.id, children: [], extras: { title: fig.name } }];
   const nodeOf = {};
-  const meshOf = {};
-  for (const j of JOINT_ORDER) if (!EMPTY.has(j)) meshOf[j] = [jointMesh(fig, j, false), jointMesh(fig, j, true)].filter((mm) => mm.groups.length);
-  // Only the materials (and textures) the parts use are written.
-  const usedKeys = fig.materials.map((m) => m.key).filter((k) => Object.values(meshOf).some((sets) => sets.some((mm) => mm.groups.some((g) => g.key === k))));
-  const matIndex = Object.fromEntries(usedKeys.map((k, i) => [k, i]));
-  const usedTex = [...new Set(usedKeys.map((k) => fig.materials[fig.matKey[k]].tex).filter((t) => t !== undefined))];
-  let tris = 0;
+  const at = {};
   for (const j of JOINT_ORDER) {
     const parent = JOINT_PARENT[j];
-    const t = parent ? sub(fig.J[j], fig.J[parent]) : fig.J[j];
-    const node = { name: j, translation: t.map((v) => Math.round(v * 1e5) / 1e5), children: [] };
+    const t = (parent ? sub(fig.J[j], fig.J[parent]) : fig.J[j]).map((v) => Math.round(v * 1e5) / 1e5);
+    at[j] = parent ? add(at[parent], t) : t;
     nodeOf[j] = nodes.length;
-    nodes.push(node);
+    nodes.push({ name: j, translation: t, children: [] });
     nodes[parent ? nodeOf[parent] : 0].children.push(nodeOf[j]);
-    if (!meshOf[j]?.length) continue;
-    const primitivesOut = [];
-    for (const mm of meshOf[j]) {
-      // One vertex buffer per joint (two if some of its cloth is textured: only that carries UVs),
-      // positions rounded to 0.01 mm; one index range per material.
-      const count = mm.pos.length / 3;
-      if (count > 65535) throw new Error(`${fig.id}: ${j} has ${count} vertices`);
-      const pos = mm.pos.map((v) => Math.fround(Math.round(v * 1e5) / 1e5));
-      const min = [0, 1, 2].map((k) => Math.min(...pos.filter((_, i) => i % 3 === k)));
-      const max = [0, 1, 2].map((k) => Math.max(...pos.filter((_, i) => i % 3 === k)));
-      const attributes = {
-        POSITION: acc({ bufferView: 'pos', byteOffset: put('pos', f32(pos)), componentType: 5126, count, type: 'VEC3', min: min.map(short), max: max.map(short) }),
-        NORMAL: acc({ bufferView: 'nor', byteOffset: put('nor', f32(mm.nor)), componentType: 5126, count, type: 'VEC3' }),
-      };
-      if (mm.uv) attributes.TEXCOORD_0 = acc({ bufferView: 'uv', byteOffset: put('uv', f32(mm.uv)), componentType: 5126, count, type: 'VEC2' });
-      const allIdx = mm.groups.flatMap((g) => g.idx);
-      const i0 = put('idx', Buffer.from(new Uint16Array(allIdx).buffer));
-      let at = 0;
-      for (const g of mm.groups) {
-        const I = acc({ bufferView: 'idx', byteOffset: i0 + at * 2, componentType: 5123, count: g.idx.length, type: 'SCALAR' });
-        at += g.idx.length;
-        primitivesOut.push({ attributes, indices: I, material: matIndex[g.key] });
-        tris += g.idx.length / 3;
-      }
-    }
-    meshes.push({ name: `${j}_mesh`, primitives: primitivesOut });
-    const mnode = nodes.length;
-    nodes.push({ name: `${j}_mesh`, mesh: meshes.length - 1 });
-    node.children.unshift(mnode);
   }
+  const body = nodes.length;
+  nodes.push({ name: 'body', mesh: 0, skin: 0 });
+  nodes[0].children.push(body);
   for (const n of nodes) if (n.children && !n.children.length) delete n.children;
-  const viewOf = {};
-  for (const k of ['pos', 'nor', 'uv', 'idx']) if (lengths[k]) viewOf[k] = addView(Buffer.concat(streams[k]), k === 'idx' ? 34963 : 34962);
-  for (const a of accessors) {
-    a.bufferView = viewOf[a.bufferView];
-    if (!a.byteOffset) delete a.byteOffset;
+
+  // One mesh: its vertices joint by joint in the rig's order, each joint's flat-coloured faces and
+  // then its patterned ones, every vertex on its joint's bone alone; faces keep their own vertices
+  // and normals (flat shading). Its triangles go colour by colour, in the order the colours are
+  // first met that way (joint by joint), as the rigid parts' materials were drawn: where parts of
+  // two colours lie in one plane, the later still shows.
+  const parts = BONES.map((j) => [jointMesh(fig, j, false), jointMesh(fig, j, true)]);
+  const usedKeys = fig.materials.map((m) => m.key).filter((k) => parts.some((pair) => pair.some((mm) => mm.groups.some((g) => g.key === k))));
+  const A = atlas(fig, usedKeys);
+  const P = [], N = [], T = [], J = [];
+  const tris = [];
+  const rank = new Map();
+  /** What each triangle's texels should be (a colour, or a pattern's region), and each patterned vertex's UV in its pattern. */
+  const expect = { tris: [], patternUV: new Map() };
+  BONES.forEach((j, b) => {
+    for (const mm of parts[b]) {
+      if (!mm.groups.length) continue;
+      const base = P.length / 3;
+      const n = mm.pos.length / 3;
+      const uv = new Array(n);
+      const look = new Array(n);
+      if (!mm.uv) for (let i = 0; i < n; i++) (look[i] = A.flat(mm.mat[i])), (uv[i] = look[i].uv);
+      else {
+        const faces = new Map();
+        for (let i = 0; i < n; i++) {
+          const f = `${mm.mat[i]}:${mm.face[i]}`;
+          if (!faces.has(f)) faces.set(f, []);
+          faces.get(f).push(i);
+        }
+        for (const vs of faces.values()) {
+          const p = A.pattern(mm.mat[vs[0]], vs.map((i) => [mm.uv[i * 2], mm.uv[i * 2 + 1]]));
+          vs.forEach((i, k) => {
+            uv[i] = p.uvs[k];
+            look[i] = { region: p.region, mr: p.mr, tex: p.tex };
+            expect.patternUV.set(base + i, [mm.uv[i * 2], mm.uv[i * 2 + 1]]);
+          });
+        }
+      }
+      for (let i = 0; i < n; i++) {
+        for (let k = 0; k < 3; k++) {
+          P.push(mm.pos[i * 3 + k] + at[j][k] - ORIGIN[k]);
+          N.push(mm.nor[i * 3 + k]);
+        }
+        T.push(uv[i][0], uv[i][1]);
+        J.push(b);
+      }
+      for (const g of mm.groups)
+        for (let t = 0; t < g.idx.length; t += 3) {
+          const l = look[g.idx[t]];
+          if (!rank.has(l.id)) rank.set(l.id, rank.size);
+          tris.push({ v: [base + g.idx[t], base + g.idx[t + 1], base + g.idx[t + 2]], look: l, rank: rank.get(l.id), seq: tris.length });
+        }
+    }
+  });
+  tris.sort((a, b) => a.rank - b.rank || a.seq - b.seq);
+  const idx = tris.flatMap((t) => t.v);
+  expect.tris = tris.map((t) => t.look);
+  const count = P.length / 3;
+  if (count > 65535) throw new Error(`${fig.id}: ${count} vertices`);
+
+  // Vertices, KHR_mesh_quantization: positions and normals 16-bit normalized (padded to 8 bytes),
+  // UVs 16-bit normalized, a bone index and its weight a byte each.
+  const pos = Buffer.alloc(count * 8), nor = Buffer.alloc(count * 8), tex = Buffer.alloc(count * 4), joints = Buffer.alloc(count * 4), weights = Buffer.alloc(count * 4);
+  const lo = [32767, 32767, 32767], hi = [-32767, -32767, -32767];
+  for (let i = 0; i < count; i++) {
+    for (let k = 0; k < 3; k++) {
+      const q = Math.round(P[i * 3 + k] * 32767);
+      if (Math.abs(q) > 32767) throw new Error(`${fig.id}: a vertex beyond the mesh's range (${P[i * 3 + k] + ORIGIN[k]})`);
+      pos.writeInt16LE(q, i * 8 + k * 2);
+      lo[k] = Math.min(lo[k], q);
+      hi[k] = Math.max(hi[k], q);
+      nor.writeInt16LE(Math.round(N[i * 3 + k] * 32767), i * 8 + k * 2);
+    }
+    for (let k = 0; k < 2; k++) tex.writeUInt16LE(Math.round(T[i * 2 + k] * 65535), i * 4 + k * 2);
+    joints[i * 4] = J[i];
+    weights[i * 4] = 255;
   }
-  const images = usedTex.map((ti) => ({ name: `${fig.id}_${fig.textures[ti].name}`, bufferView: addView(png(fig.textures[ti])), mimeType: 'image/png' }));
+  const attributes = {
+    POSITION: acc({ bufferView: addView(pos, 34962, 8), componentType: 5122, normalized: true, count, type: 'VEC3', min: lo, max: hi }),
+    NORMAL: acc({ bufferView: addView(nor, 34962, 8), componentType: 5122, normalized: true, count, type: 'VEC3' }),
+    TEXCOORD_0: acc({ bufferView: addView(tex, 34962), componentType: 5123, normalized: true, count, type: 'VEC2' }),
+    JOINTS_0: acc({ bufferView: addView(joints, 34962), componentType: 5121, count, type: 'VEC4' }),
+    WEIGHTS_0: acc({ bufferView: addView(weights, 34962), componentType: 5121, normalized: true, count, type: 'VEC4' }),
+  };
+  const indices = acc({ bufferView: addView(Buffer.from(new Uint16Array(idx).buffer), 34963), componentType: 5123, count: idx.length, type: 'SCALAR' });
+  // Each bone's inverse bind matrix: from the mesh's space into the joint's at rest (a translation).
+  const ibm = new Float32Array(BONES.length * 16);
+  BONES.forEach((j, b) => {
+    for (let k = 0; k < 4; k++) ibm[b * 16 + k * 5] = 1;
+    for (let k = 0; k < 3; k++) ibm[b * 16 + 12 + k] = ORIGIN[k] - at[j][k];
+  });
+  const inverseBindMatrices = acc({ bufferView: addView(Buffer.from(ibm.buffer)), componentType: 5126, count: BONES.length, type: 'MAT4' });
+  const images = [
+    { name: `${fig.id}_palette`, bufferView: addView(png(A.albedo)), mimeType: 'image/png' },
+    { name: `${fig.id}_metal_rough`, bufferView: addView(png(A.mr)), mimeType: 'image/png' },
+  ];
   const json = {
     asset: { version: '2.0', generator: 'Call of Blocky src/games/callofblocky/tools/fighters/build.mjs' },
+    extensionsUsed: ['KHR_mesh_quantization'],
+    extensionsRequired: ['KHR_mesh_quantization'],
     scene: 0,
     scenes: [{ name: fig.id, nodes: [0] }],
     nodes,
-    meshes,
-    materials: usedKeys.map((k) => {
-      const m = fig.materials[fig.matKey[k]];
-      return {
-        name: `${fig.id}_${m.key}`,
-        pbrMetallicRoughness: {
-          baseColorFactor: linear(m.color).map((v) => Math.round(v * 1e4) / 1e4),
-          metallicFactor: m.metal,
-          roughnessFactor: m.rough,
-          ...(m.tex !== undefined ? { baseColorTexture: { index: usedTex.indexOf(m.tex) } } : {}),
-        },
-      };
-    }),
-    ...(images.length
-      ? {
-          textures: images.map((_, i) => ({ sampler: 0, source: i })),
-          samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }],
-          images,
-        }
-      : {}),
+    meshes: [{ name: 'body', primitives: [{ attributes, indices, material: 0 }] }],
+    skins: [{ name: `${fig.id}_skeleton`, inverseBindMatrices, joints: BONES.map((j) => nodeOf[j]), skeleton: nodeOf.hips }],
+    materials: [{ name: fig.id, pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 1, roughnessFactor: 1, metallicRoughnessTexture: { index: 1 } } }],
+    textures: images.map((_, i) => ({ sampler: 0, source: i })),
+    samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }],
+    images,
     accessors,
     bufferViews: views,
     buffers: [{ byteLength: 0 }],
@@ -2164,13 +2288,36 @@ function glb(fig) {
   const bh = Buffer.alloc(8);
   bh.writeUInt32LE(bin.length, 0);
   bh.writeUInt32LE(0x004e4942, 4);
-  return { bytes: Buffer.concat([header, jh, jsonBuf, bh, bin]), tris };
+  return { bytes: Buffer.concat([header, jh, jsonBuf, bh, bin]), expect, atlas: A };
 }
 
 // ---------------------------------------------------------------------------------------------
-// Validation: parse the GLB back and check the file, the rig and the budgets.
+// Validation: parse the GLB back and check the file, the rig, the skin, the atlas and the budgets.
 
-function validate(buf, fig) {
+/** A PNG as written here (RGB, every row filtered "sub"): its pixels, RGB. */
+function unpng(data, fail) {
+  if (!data.subarray(0, 8).equals(PNG_SIG)) fail('image is not a PNG');
+  const w = data.readUInt32BE(16), h = data.readUInt32BE(20);
+  let o = 8;
+  const idat = [];
+  while (o < data.length) {
+    const l = data.readUInt32BE(o);
+    if (crc32(data.subarray(o + 4, o + 8 + l)) !== data.readUInt32BE(o + 8 + l)) fail('PNG CRC');
+    if (data.subarray(o + 4, o + 8).toString('ascii') === 'IDAT') idat.push(data.subarray(o + 8, o + 8 + l));
+    o += 12 + l;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  if (raw.length !== (w * 3 + 1) * h) fail('PNG data size');
+  const px = new Uint8Array(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    const r = y * (w * 3 + 1);
+    if (raw[r] !== 1) fail('PNG filter');
+    for (let x = 0; x < w * 3; x++) px[y * w * 3 + x] = (raw[r + 1 + x] + (x >= 3 ? px[y * w * 3 + x - 3] : 0)) & 255;
+  }
+  return { w, h, px };
+}
+
+function validate(buf, fig, expect) {
   const fail = (m) => {
     throw new Error(`${fig.id}.glb: ${m}`);
   };
@@ -2183,22 +2330,26 @@ function validate(buf, fig) {
   if (buf.readUInt32LE(bo + 4) !== 0x004e4942 || blen % 4 || bo + 8 + blen !== buf.length) fail('bad BIN chunk');
   const bin = buf.subarray(bo + 8);
   if (json.buffers[0].byteLength !== blen) fail('buffer length');
-  for (const v of json.bufferViews) if (v.byteOffset + v.byteLength > blen || v.byteOffset % 4) fail('bufferView out of range');
-  const size = { SCALAR: 1, VEC2: 2, VEC3: 3 };
-  const comp = { 5126: 4, 5123: 2, 5125: 4 };
+  for (const v of json.bufferViews) if (v.byteOffset + v.byteLength > blen || v.byteOffset % 4 || (v.byteStride ?? 4) % 4) fail('bufferView out of range or misaligned');
+  if (!json.extensionsRequired?.includes('KHR_mesh_quantization')) fail('KHR_mesh_quantization not declared');
+  const size = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+  const comp = { 5120: [1, 'readInt8'], 5121: [1, 'readUInt8'], 5122: [2, 'readInt16LE'], 5123: [2, 'readUInt16LE'], 5125: [4, 'readUInt32LE'], 5126: [4, 'readFloatLE'] };
   const read = (a) => {
     const v = json.bufferViews[a.bufferView];
-    const n = a.count * size[a.type];
-    if ((a.byteOffset ?? 0) + n * comp[a.componentType] > v.byteLength) fail('accessor out of range');
-    const at = bin.byteOffset + v.byteOffset + (a.byteOffset ?? 0);
-    const ab = bin.buffer.slice(at, at + n * comp[a.componentType]);
-    return a.componentType === 5126 ? new Float32Array(ab) : a.componentType === 5123 ? new Uint16Array(ab) : new Uint32Array(ab);
+    const n = size[a.type];
+    const [cs, fn] = comp[a.componentType];
+    const stride = v.byteStride ?? n * cs;
+    if ((a.byteOffset ?? 0) + stride * (a.count - 1) + n * cs > v.byteLength) fail('accessor out of range');
+    const out = new Float64Array(a.count * n);
+    for (let i = 0; i < a.count; i++) for (let k = 0; k < n; k++) out[i * n + k] = bin[fn](v.byteOffset + (a.byteOffset ?? 0) + i * stride + k * cs);
+    return out;
   };
-  // The rig: names, parents, rest translations, no rotation or scale.
+  // The rig: names, parents, rest translations, no rotation or scale; the grips empty.
   const byName = new Map(json.nodes.map((n, i) => [n.name, i]));
   const parentOf = new Map();
   json.nodes.forEach((n, i) => (n.children ?? []).forEach((c) => parentOf.set(c, i)));
-  if (json.nodes[json.scenes[0].nodes[0]].name !== fig.id) fail('root not named after the fighter');
+  const root = json.scenes[0].nodes[0];
+  if (json.nodes[root].name !== fig.id) fail('root not named after the fighter');
   const world = (i) => {
     let p = [0, 0, 0];
     for (let k = i; k !== undefined; k = parentOf.get(k)) p = add(p, json.nodes[k].translation ?? [0, 0, 0]);
@@ -2214,58 +2365,101 @@ function validate(buf, fig) {
     if (len(sub(world(i), fig.J[j])) > 1e-4) fail(`${j} at ${world(i)}`);
     if (EMPTY.has(j) && (n.mesh !== undefined || n.children)) fail(`${j} should be empty`);
   }
-  // Geometry: bounds, unit normals, winding, indices; triangles in budget.
-  let tris = 0;
+  // One skinned mesh (on a node of the root's, untransformed), one primitive, one material.
+  if (json.meshes.length !== 1 || json.meshes[0].primitives.length !== 1 || json.materials.length !== 1) fail('not one mesh, one primitive, one material');
+  const meshNodes = json.nodes.filter((n) => n.mesh !== undefined);
+  const bodyNode = json.nodes.indexOf(meshNodes[0]);
+  if (meshNodes.length !== 1 || parentOf.get(bodyNode) !== root || meshNodes[0].skin !== 0 || meshNodes[0].translation || meshNodes[0].rotation || meshNodes[0].scale) fail('the mesh node');
+  // The skin: the rig's joints as bones, each bind matrix the way from the mesh's space into the joint's.
+  const skin = json.skins?.[0];
+  if (json.skins?.length !== 1 || skin.skeleton !== byName.get('hips') || skin.joints.join() !== BONES.map((j) => byName.get(j)).join()) fail('the skin\'s joints');
+  const ibm = read(json.accessors[skin.inverseBindMatrices]);
+  BONES.forEach((j, b) => {
+    const w = world(byName.get(j));
+    for (let k = 0; k < 16; k++) {
+      const want = k === 12 || k === 13 || k === 14 ? ORIGIN[k - 12] - w[k - 12] : k % 5 === 0 ? 1 : 0;
+      if (Math.abs(ibm[b * 16 + k] - want) > 1e-6) fail(`${j}'s inverse bind matrix`);
+    }
+  });
+  // The vertices: types, bounds, unit normals, each on one bone; the triangles: winding, each rigid.
+  const prim = json.meshes[0].primitives[0];
+  const at = prim.attributes;
+  const kinds = { POSITION: [5122, true, 'VEC3'], NORMAL: [5122, true, 'VEC3'], TEXCOORD_0: [5123, true, 'VEC2'], JOINTS_0: [5121, false, 'VEC4'], WEIGHTS_0: [5121, true, 'VEC4'] };
+  for (const [name, [ct, normed, type]] of Object.entries(kinds)) {
+    const a = json.accessors[at[name]];
+    if (!a || a.componentType !== ct || !!a.normalized !== normed || a.type !== type || a.count !== json.accessors[at.POSITION].count) fail(`${name} accessor`);
+  }
+  if (Object.keys(at).length !== 5) fail('unexpected attributes');
+  const pa = json.accessors[at.POSITION];
+  const Q = read(pa), Nq = read(json.accessors[at.NORMAL]), UV = read(json.accessors[at.TEXCOORD_0]), JO = read(json.accessors[at.JOINTS_0]), WE = read(json.accessors[at.WEIGHTS_0]), I = read(json.accessors[prim.indices]);
+  const count = pa.count;
+  const P = Q.map((q, i) => q / 32767 + ORIGIN[i % 3]);
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-  for (const [mi, mesh] of json.meshes.entries()) {
-    const node = json.nodes.findIndex((n) => n.mesh === mi);
-    const w = world(node);
-    for (const prim of mesh.primitives) {
-      const pa = json.accessors[prim.attributes.POSITION];
-      const P = read(pa), N = read(json.accessors[prim.attributes.NORMAL]), I = read(json.accessors[prim.indices]);
-      const mat0 = json.materials[prim.material];
-      if (mat0.pbrMetallicRoughness.baseColorTexture) {
-        if (prim.attributes.TEXCOORD_0 === undefined || read(json.accessors[prim.attributes.TEXCOORD_0]).length / 2 !== pa.count) fail('textured primitive without UVs');
+  for (let k = 0; k < 3; k++) {
+    let a = Infinity, b = -Infinity;
+    for (let m = k; m < Q.length; m += 3) (a = Math.min(a, Q[m])), (b = Math.max(b, Q[m]));
+    if (a !== pa.min[k] || b !== pa.max[k]) fail('POSITION min/max');
+    lo[k] = a / 32767 + ORIGIN[k];
+    hi[k] = b / 32767 + ORIGIN[k];
+  }
+  for (let i = 0; i < count; i++) {
+    if (Math.abs(Math.hypot(Nq[i * 3], Nq[i * 3 + 1], Nq[i * 3 + 2]) / 32767 - 1) > 1e-4) fail('normal not unit');
+    if (JO[i * 4] >= BONES.length || JO[i * 4 + 1] || JO[i * 4 + 2] || JO[i * 4 + 3] || WE[i * 4] !== 255 || WE[i * 4 + 1] || WE[i * 4 + 2] || WE[i * 4 + 3]) fail('a vertex not wholly on one bone');
+  }
+  if (I.length % 3 || expect.tris.length !== I.length / 3) fail('index count');
+  for (const i of I) if (i >= count) fail('index out of range');
+  for (let m = 0; m < I.length; m += 3) {
+    if (JO[I[m] * 4] !== JO[I[m + 1] * 4] || JO[I[m] * 4] !== JO[I[m + 2] * 4]) fail('a triangle across two bones');
+    const [a, b, c] = [I[m], I[m + 1], I[m + 2]].map((i) => [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]);
+    const cr = cross(sub(b, a), sub(c, a));
+    const n = [Nq[I[m] * 3], Nq[I[m] * 3 + 1], Nq[I[m] * 3 + 2]];
+    if (dot(cr, n) <= 0 && len(cr) > 1e-6) fail(`triangle winding ${len(cr)}`);
+  }
+  // The material and its textures.
+  const mat = json.materials[0].pbrMetallicRoughness;
+  if (!mat || mat.baseColorFactor || mat.metallicFactor !== 1 || mat.roughnessFactor !== 1 || mat.baseColorTexture?.index !== 0 || mat.metallicRoughnessTexture?.index !== 1) fail('material');
+  const [albedo, mr] = json.textures.map((t) => {
+    const v = json.bufferViews[json.images[t.source].bufferView];
+    return unpng(bin.subarray(v.byteOffset, v.byteOffset + v.byteLength), fail);
+  });
+  if (albedo.w !== mr.w || albedo.h !== mr.h) fail('the images differ in size');
+  const { w: W, h: H } = albedo;
+  const texel = (img, x, y) => [...img.px.subarray((y * W + x) * 3, (y * W + x) * 3 + 3)];
+  const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+  // Every triangle's texels: a flat one's corners on one palette block, whose four texels (all a
+  // filter reads there) are its colour and shine; a patterned one's inside its region, the texel
+  // under each corner the one its pattern has there, its shine the cloth's.
+  for (let t = 0; t < I.length / 3; t++) {
+    const e = expect.tris[t];
+    const corners = [I[t * 3], I[t * 3 + 1], I[t * 3 + 2]].map((i) => [UV[i * 2] / 65535, UV[i * 2 + 1] / 65535, i]);
+    if (e.rgb) {
+      if (corners.some(([u, v]) => u !== corners[0][0] || v !== corners[0][1])) fail('a flat triangle\'s UVs differ');
+      const [u, v] = corners[0];
+      const x0 = Math.floor(u * W - 0.5), y0 = Math.floor(v * H - 0.5);
+      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+        if (!same(texel(albedo, x0 + dx, y0 + dy), e.rgb) || !same(texel(mr, x0 + dx, y0 + dy), e.mr)) fail(`triangle ${t}'s colour at (${x0 + dx}, ${y0 + dy})`);
       }
-      for (let k = 0; k < 3; k++) {
-        let a = Infinity, b = -Infinity;
-        for (let m = k; m < P.length; m += 3) (a = Math.min(a, P[m])), (b = Math.max(b, P[m]));
-        if (a !== Math.fround(pa.min[k]) || b !== Math.fround(pa.max[k])) fail('POSITION min/max');
-        lo[k] = Math.min(lo[k], a + w[k]);
-        hi[k] = Math.max(hi[k], b + w[k]);
+    } else {
+      const tile = e.tex.w;
+      for (const [u, v, i] of corners) {
+        const x = u * W, y = v * H;
+        const x0 = e.region * REGION * tile;
+        if (x < x0 + tile / 2 - 0.01 || x > x0 + (REGION - 0.5) * tile + 0.01 || y < tile / 2 - 0.01 || y > (REGION - 0.5) * tile + 0.01) fail(`patterned triangle ${t} outside its region`);
+        if (!same(texel(mr, Math.floor(x), Math.floor(y)), e.mr)) fail(`patterned triangle ${t}'s shine`);
+        const [u0, v0] = expect.patternUV.get(i);
+        const s = [(u0 - Math.floor(u0)) * tile, (v0 - Math.floor(v0)) * tile];
+        const edge = (c) => Math.abs(c - Math.round(c)) < 0.02;
+        if (edge(s[0]) || edge(s[1]) || edge(x) || edge(y)) continue;
+        const want = [0, 1, 2].map((c) => e.tex.px[(Math.floor(s[1]) * tile + Math.floor(s[0])) * 4 + c]);
+        if (!same(texel(albedo, Math.floor(x), Math.floor(y)), want)) fail(`patterned vertex ${i}: the pattern out of phase`);
       }
-      for (let m = 0; m < N.length; m += 3) if (Math.abs(Math.hypot(N[m], N[m + 1], N[m + 2]) - 1) > 1e-4) fail('normal not unit');
-      for (const i of I) if (i >= pa.count) fail('index out of range');
-      for (let m = 0; m < I.length; m += 3) {
-        const [a, b, c] = [I[m], I[m + 1], I[m + 2]].map((i) => [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]);
-        const cr = cross(sub(b, a), sub(c, a));
-        const n = [N[I[m] * 3], N[I[m] * 3 + 1], N[I[m] * 3 + 2]];
-        if (dot(cr, n) <= 0 && len(cr) > 1e-6) fail(`triangle winding (${mesh.name}) ${len(cr)}`);
-      }
-      tris += I.length / 3;
-      const mat = json.materials[prim.material];
-      if (!mat?.pbrMetallicRoughness?.baseColorFactor) fail('material without PBR');
     }
   }
+  const tris = I.length / 3;
   if (tris > MAX_TRIS) fail(`${tris} triangles (budget ${MAX_TRIS})`);
   if (buf.length > MAX_BYTES) fail(`${buf.length} bytes (budget ${MAX_BYTES})`);
   if (lo[1] < -0.002 || hi[1] > 2.0 || hi[1] < 1.75) fail(`height ${lo[1]}..${hi[1]}`);
-  for (const img of json.images ?? []) {
-    const v = json.bufferViews[img.bufferView];
-    const data = bin.subarray(v.byteOffset, v.byteOffset + v.byteLength);
-    if (!data.subarray(0, 8).equals(PNG_SIG)) fail('image is not a PNG');
-    const w = data.readUInt32BE(16), h = data.readUInt32BE(20);
-    let o = 8;
-    const idat = [];
-    while (o < data.length) {
-      const l = data.readUInt32BE(o);
-      if (crc32(data.subarray(o + 4, o + 8 + l)) !== data.readUInt32BE(o + 8 + l)) fail('PNG CRC');
-      if (data.subarray(o + 4, o + 8).toString('ascii') === 'IDAT') idat.push(data.subarray(o + 8, o + 8 + l));
-      o += 12 + l;
-    }
-    if (inflateSync(Buffer.concat(idat)).length !== (w * 3 + 1) * h) fail('PNG data size');
-  }
-  return { tris, lo, hi, materials: json.materials.length };
+  return { tris, count, lo, hi, atlas: `${W}x${H}` };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2275,12 +2469,13 @@ mkdirSync(OUT, { recursive: true });
 for (const d of OUTFITS) {
   if (only.length && !only.includes(d.id)) continue;
   const fig = makeFighter(d);
-  const { bytes } = glb(fig);
+  const { bytes, expect, atlas: A } = glb(fig);
   const file = join(OUT, `${d.id}.glb`);
   writeFileSync(file, bytes);
-  const v = validate(readFileSync(file), fig);
+  const v = validate(readFileSync(file), fig, expect);
   const fmt = (p) => p.map((x) => x.toFixed(3)).join(', ');
-  console.log(`${d.id}.glb  ${d.name} (${d.build}): ${v.tris} tris, ${v.materials} materials, ${(bytes.length / 1024).toFixed(1)} KB, bounds (${fmt(v.lo)}) .. (${fmt(v.hi)})`);
+  const look = `${A.colours} colours${A.patterns ? ` + ${A.patterns} pattern${A.patterns > 1 ? 's' : ''}` : ''} in a ${v.atlas} atlas`;
+  console.log(`${d.id}.glb  ${d.name} (${d.build}): ${v.tris} tris, ${v.count} vertices, ${look}, ${(bytes.length / 1024).toFixed(1)} KB, bounds (${fmt(v.lo)}) .. (${fmt(v.hi)})`);
 }
 if (!only.length) {
   const lines = [
