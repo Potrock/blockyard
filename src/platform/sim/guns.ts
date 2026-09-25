@@ -213,9 +213,9 @@ export type Stance = 0 | 1 | 2;
  * They match the figure everyone sees: upright, crouched, or leaning back in a slide.
  */
 export function playerBoxes(p: Vec3, stance: Stance): { body: [Vec3, Vec3]; head: [Vec3, Vec3] } {
-  const [bodyTop, headTop] = stance === 2 ? [0.75, 1.2] : stance === 1 ? [1.08, 1.56] : [1.42, 1.9];
-  const bw = 0.36;
-  const hw = 0.3;
+  // The figure is two blocks tall: legs and body to 1.5, the head above. Crouched it's 0.3
+  // lower; sliding it leans back from the hips, so the boxes are lower and wider.
+  const [bodyTop, headTop, bw, hw] = stance === 2 ? [0.85, 1.4, 0.45, 0.45] : stance === 1 ? [1.2, 1.7, 0.38, 0.3] : [1.5, 2.0, 0.36, 0.28];
   return {
     body: [
       { x: p.x - bw, y: p.y, z: p.z - bw },

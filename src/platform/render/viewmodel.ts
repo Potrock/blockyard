@@ -144,7 +144,7 @@ const STYLES: Record<HoldStyle, StyleDef> = {
   // Two hands on the shaft, aimed at the crosshair (see `polearmRest`).
   polearm: { rotation: [0, 0, 0], scale: 0.85, grip: [8, 8], translation: [0, 0, 0], use: 'jab' },
   // Two hands on a gun: at the hip, up to the eye, across the chest (see `gunRest`).
-  gun: { rotation: [0, 0, 0], scale: 0.62, grip: [8, 8], translation: [0, 0, 0], use: 'fire' },
+  gun: { rotation: [0, 0, 0], scale: 0.42, grip: [8, 8], translation: [0, 0, 0], use: 'fire' },
 };
 
 /**
@@ -154,14 +154,15 @@ const STYLES: Record<HoldStyle, StyleDef> = {
  * the eye line, `ads` blocks ahead). Forearms run from each fist toward its elbow.
  */
 const GUN = {
-  fist: [0.25, -0.27, -0.55] as V3,
-  compactFist: [0.15, -0.22, -0.47] as V3,
-  aimAt: [0, -0.02, -14] as V3,
-  roll: -0.07,
+  fist: [0.235, -0.255, -0.62] as V3,
+  compactFist: [0.12, -0.19, -0.52] as V3,
+  /** Which way the barrel points at the hip: nearly straight ahead, a touch inward. */
+  hipDir: [-0.1, 0.045, -1] as V3,
+  roll: -0.22,
   sprint: { yaw: 0.8, pitch: -0.5, roll: -0.45, move: [-0.08, -0.06, 0.08] as V3 },
   slide: { roll: 0.35, move: [-0.04, -0.03, 0.02] as V3 },
-  ads: 0.2,
-  scopeAds: 0.3,
+  ads: 0.42,
+  scopeAds: 0.46,
   forearm: [0.32, -0.74, 0.6] as V3,
   forearm2: [-0.52, -0.72, 0.48] as V3,
   adsForearm: [0.22, -0.64, 0.74] as V3,
@@ -412,7 +413,7 @@ function gunRest(pts: GunPoints, hold: HoldSpec, side: number, drop: number, gv:
   const f0 = isCompact(pts) ? GUN.compactFist : GUN.fist;
   // At the hip.
   const fistH = _fa.set(side * f0[0], f0[1], f0[2]);
-  const axis = _fb.set(side * GUN.aimAt[0], GUN.aimAt[1], GUN.aimAt[2]).sub(fistH).normalize();
+  const axis = _fb.set(side * GUN.hipDir[0], GUN.hipDir[1], GUN.hipDir[2]).normalize();
   const qH = aimBasis(axis, side * GUN.roll, _qa);
   // Sprinting: swung down and across.
   const sp = GUN.sprint;
@@ -1375,7 +1376,7 @@ export class ViewModel implements ViewModelApi {
     this.root.visible = this.apiVisible && !(gv?.sight === 'scope' && gv.aim > 0.9);
     this.gunHands.visible = !!this.skin && !this.armLook;
     // The view model's own lens narrows a little when aiming, so the sights fill more of it.
-    const fov = 70 - 12 * (gv?.aim ?? 0);
+    const fov = 70 - 4 * (gv?.aim ?? 0);
     if (Math.abs(this.camera.fov - fov) > 0.01) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();

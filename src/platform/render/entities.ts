@@ -436,27 +436,30 @@ export class ModelInstance implements Figure {
         armL = -1.4 * attack + armL * (1 - attack);
       }
       const sway = Math.sin(s.time * 1.7) * 0.05;
-      // A gun: both arms forward along the look, the left reaching across for the handguard.
+      // Crouching: down, legs apart front and back. Sliding: leaning back from the hips, legs out ahead.
+      const crouch = Math.min(1, s.stance);
+      const slide = Math.max(0, s.stance - 1);
+      const lean = 0.6 * slide;
+      const inner = this.root.children[0];
+      if (inner) {
+        const hip = 0.75 * this.spec.scale;
+        inner.rotation.x = -lean;
+        inner.position.set(0, hip - hip * Math.cos(lean) - 0.3 * crouch - 0.15 * slide, hip * Math.sin(lean));
+      }
+      // A gun: both arms forward along the look (whatever the lean), the left reaching across for the handguard.
       const aim = s.aim;
-      const aimX = -Math.PI / 2 + s.headPitch;
+      const aimX = -Math.PI / 2 + s.headPitch + lean;
       const rx = armR + (aimX - armR) * aim;
       const lx = armL + (aimX + 0.05 - armL) * aim;
       this.pose('armR', rx, -0.12 * aim, (sway + 0.05) * (1 - aim));
       this.pose('armL', lx, 0.62 * aim, (-sway - 0.05) * (1 - aim));
-      this.pose('head', s.headPitch, s.headYaw);
-      this.pose('body', 0);
-      // Crouching: down, legs apart front and back; sliding: leaning back, legs out ahead.
-      const crouch = Math.min(1, s.stance);
-      const slide = Math.max(0, s.stance - 1);
-      const inner = this.root.children[0];
-      if (inner) {
-        inner.position.y = -0.3 * crouch - 0.3 * slide;
-        inner.rotation.x = -0.75 * slide;
-      }
+      this.pose('head', s.headPitch + lean, s.headYaw);
+      this.pose('body', 0.3 * crouch * (1 - slide));
       if (crouch > 0) {
-        this.pose('legR', legSwing * (1 - crouch) - 0.75 * crouch - 0.5 * slide, 0, 0.08 * crouch);
-        this.pose('legL', -legSwing * (1 - crouch) + 0.55 * crouch - 1.6 * slide, 0, -0.08 * crouch);
-        this.pose('body', 0.3 * crouch * (1 - slide));
+        const lr = -0.7 + (-0.9 + 0.7) * slide;
+        const ll = 0.5 + (-0.75 - 0.5) * slide;
+        this.pose('legR', legSwing * (1 - crouch) + lr * crouch, 0, 0.08 * crouch);
+        this.pose('legL', -legSwing * (1 - crouch) + ll * crouch, 0, -0.08 * crouch);
       }
     } else if (this.spec.rig === 'spider') {
       for (let i = 0; i < 4; i++) {

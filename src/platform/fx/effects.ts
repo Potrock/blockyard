@@ -195,7 +195,7 @@ export class Effects implements FxApi {
     }
     this.particles.burstColor(x, y, z, color, { count: 6, speed: 3.5, size: 0.07, gravity: 20, life: 0.6, spread: 0.2, up: 1.2 });
     this.particles.burstColor(x, y, z, [1, 0.85, 0.5], { count: 3, speed: 6, size: 0.035, glow: 2, gravity: 16, life: 0.18, collide: false, up: 1 });
-    this.particles.burstColor(x, y, z, [0.55, 0.52, 0.48], { count: 2, speed: 0.8, size: 0.18, gravity: -1, life: 0.7, drag: 2, collide: false, up: 0.4 });
+    this.particles.burstColor(x, y, z, [0.55, 0.52, 0.48], { count: 2, speed: 0.8, size: 0.08, gravity: -1, life: 0.6, drag: 2, collide: false, up: 0.4 });
     if (!normal) return;
     const mesh = new THREE.Mesh(this.decalGeo, this.decalMat);
     mesh.position.set(at.x + n.x * 0.003, at.y + n.y * 0.003, at.z + n.z * 0.003);
