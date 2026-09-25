@@ -1,13 +1,17 @@
 /**
  * Development: a humanoid model (docs/HUMANOID.md) in a row of poses, animated by the platform's
  * own rig code, lit simply. `/tools/rig.html?model=<glb url>&t=<seconds>&view=front|side|34`
- * `&poses=<names>` (`t` freezes time for a screenshot; guns come from Call of Blocky's models).
+ * `&poses=<names>` (`t` freezes time for a screenshot, the same every time; guns come from Call of
+ * Blocky's models; `cycling` is a moment after a shot, while a lever or hammer is worked).
  * `joints=mixamo` (or a JSON joint map) for a skeleton named its own way; `style=<JSON>` for
  * `HumanoidPoses`; the poses ending in a clip's name (`wave`, `cheer`) play the model's clip.
  *
  * Any item and any clip:
  * - `item=<glb url>` puts that model in the hand wherever a pose holds a gun (High Noon's
- *   revolver: `item=/src/games/highnoon/models/revolver.glb`); `kind=melee` holds it as a blade.
+ *   revolver: `item=/src/games/highnoon/models/revolver.glb`); `kind=melee` holds it as a blade,
+ *   `kind=throw` in the fist as a throwable (the `throw` poses).
+ * - `hold=<JSON>`: how the item holds a gun, as its `hold` and `hold.gun` say (`hands`, `stance`,
+ *   `action`, `poses`): `hold={"hands":1,"action":"hammer","poses":{"reload":{"cycle":0.42}}}`.
  * - `clips=<names>` (or `clips=all`: every clip in the model) adds a figure playing each clip,
  *   looping, holding the item if one's given; `layer=upper` plays them over the legs' own motion.
  *   With `clips` and no `poses`, only the clips are shown.
@@ -25,11 +29,18 @@ const MODEL = q.get('model') ?? '/src/games/gallery/models/mannequin.glb';
 const FREEZE = q.has('t') ? Number(q.get('t')) : null;
 const VIEW = q.get('view') ?? '34';
 const GUNS = '/src/games/callofblocky/models/';
+/** How the item holds a gun (its `hold`: hands, stance, action, poses). */
+const HOLD: Partial<HeldInfo> = q.has('hold') ? JSON.parse(q.get('hold')!) : {};
 const JOINTS: Partial<Record<HumanoidJoint, string>> | undefined = q.get('joints') === 'mixamo' ? HumanoidJoints.mixamo() : q.has('joints') ? JSON.parse(q.get('joints')!) : undefined;
 const STYLE: HumanoidPoses | undefined = q.has('style') ? JSON.parse(q.get('style')!) : undefined;
+// Frozen for a screenshot, the same every time (a fall's direction is random).
+if (FREEZE !== null) {
+  let seed = 1;
+  Math.random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+}
 /** An item of any game's to hold instead of Call of Blocky's guns, and how it's held. */
 const ITEM = q.get('item');
-const KIND = q.get('kind') === 'melee' ? 'melee' : null;
+const KIND = q.get('kind') === 'melee' ? 'melee' : q.get('kind') === 'throw' ? 'other' : null;
 /** The held model for a pose's gun: the item given, else Call of Blocky's. */
 const gunUrl = (id: string) => ITEM ?? `${GUNS}${id}.glb`;
 
@@ -61,6 +72,10 @@ const POSES: Pose[] = [
   { name: 'look up', gun: 'rifle', state: () => ({ headPitch: -0.6 }) },
   { name: 'aim (ADS)', gun: 'rifle', state: () => ({ ads: 1 }) },
   { name: 'firing', gun: 'rifle', state: (t) => ({ shotT: t % 0.1 }) },
+  { name: 'cycling', gun: 'rifle', state: () => ({ shotT: 0.3 }) },
+  { name: 'throw', gun: 'rifle', state: (t) => ({ attackT: t % 0.8, aim: 0 }) },
+  { name: 'throw cocked', gun: 'rifle', state: () => ({ attackT: 0.12, aim: 0 }) },
+  { name: 'throw whipped', gun: 'rifle', state: () => ({ attackT: 0.3, aim: 0 }) },
   { name: 'walk', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 4 }) },
   { name: 'run', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 6 }) },
   { name: 'strafe left', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 5, moveX: 1, moveZ: 0 }) },
@@ -130,7 +145,8 @@ async function main() {
       g.traverse((o) => ((o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).castShadow = true) : null));
       const point = (n: string) => g.getObjectByName(n)?.position.clone();
       const box = new THREE.Box3().setFromObject(g);
-      const info: HeldInfo = { kind: KIND ?? (pose.gun === 'katana' && !ITEM ? 'melee' : 'gun'), grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z };
+      const kind = KIND ?? (pose.gun === 'katana' && !ITEM ? 'melee' : 'gun');
+      const info: HeldInfo = { kind, grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z, throws: q.get('kind') === 'throw', ...(kind === 'gun' ? HOLD : {}) };
       rig.hold(g, info);
     }
     const label = document.createElement('span');

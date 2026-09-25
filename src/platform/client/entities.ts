@@ -4,6 +4,8 @@ import type { Content } from '../content';
 import type { AnimState, EntityGraphics, Figure } from '../render/entities';
 import { Shaders } from '../render/shaders';
 import type { EntityFrame, ProjectileFrame } from '../sim/entities';
+import { gunHands, gunPoints, heldPoint } from './held';
+import type { HeldInfo } from './humanoid';
 
 let boltGeo: THREE.BufferGeometry[] | null = null;
 
@@ -251,12 +253,27 @@ export class EntityView {
     const mesh = new THREE.Mesh(geometry, this.graphics.materialFor(look.albedo, look.emissive, look.surface));
     if (look.points?.muzzle) mesh.userData.muzzle = look.points.muzzle.clone();
     else if (model?.muzzle) mesh.userData.muzzle = new THREE.Vector3(...model.muzzle).divideScalar(16);
-    // A humanoid holds it its own way: a gun or a sword in both hands, anything else in the fist.
+    // A humanoid holds it its own way: a gun in one hand or both, a sword in both hands, anything
+    // else in the fist; by the points its spec gives (`HeldModels.gltf(url, { grip2 })`) or its
+    // file marks, as in first person.
     if (model && v.model.hold) {
       geometry.computeBoundingBox();
       const box = geometry.boundingBox!;
-      const kind = def.kind === 'gun' ? 'gun' : look.points?.grip2 ? 'melee' : 'other';
-      const info = { kind, grip: look.points?.grip?.clone() ?? new THREE.Vector3(), grip2: look.points?.grip2?.clone(), mag: look.points?.mag?.clone(), length: box.max.z - box.min.z, stance: def.hold?.stance } as const;
+      const gun = def.kind === 'gun' ? gunPoints(model, look.points, box) : null;
+      const grip2 = gun ? gun.grip2 : heldPoint(model, look.points, 'grip2');
+      const kind = gun ? 'gun' : grip2 ? 'melee' : 'other';
+      const info: HeldInfo = {
+        kind,
+        grip: gun?.grip ?? heldPoint(model, look.points, 'grip') ?? new THREE.Vector3(),
+        grip2,
+        mag: gun?.mag ?? heldPoint(model, look.points, 'mag'),
+        length: box.max.z - box.min.z,
+        stance: def.hold?.stance,
+        hands: gun ? gunHands(def.hold) : undefined,
+        poses: def.hold?.poses,
+        action: def.kind === 'gun' && typeof def.action === 'string' ? def.action : undefined,
+        throws: def.kind === 'throwable',
+      };
       if (v.model.hold(mesh, info)) {
         v.heldMesh = mesh;
         return;
