@@ -34,7 +34,7 @@
  *     the centre of the optic's open window (a red dot or holo) at the frame's rear face. The
  *     optics are open reflex sights: a frame one voxel thick and one deep round the window (its
  *     top corners chamfered a voxel), standing on a long low body that steps down ahead of it.
- *     The window holds no voxel, and seen from the aiming eye (EYE_BACK behind it) nothing shows
+ *     The window holds no voxel, and seen from the aiming eye (EYE_BACKS behind it) nothing shows
  *     through it, ahead of the frame or between the eye and the frame; the platform draws the
  *     reticle. On the sniper, `sight` is the centre of the scope's rear lens.
  *   - `mag`: the centre of the magazine (reloads send the support hand there): the pistol's is its
@@ -70,10 +70,11 @@ const OUT = join(HERE, '../../models');
 const V = 0.625;
 const MAX_BYTES = 300 * 1024;
 /**
- * How far behind the `sight` point the eye is when aiming, in model px: the platform holds an
- * optic's sight 0.3 blocks in front of the eye with the gun at scale 0.42 (0.3 / 0.42 * 16).
+ * How far behind the `sight` point the eye can be when aiming, in model px: the platform holds an
+ * optic's sight 0.3 blocks in front of the eye with the gun at scale 0.42 (0.3 / 0.42 * 16), and
+ * Call of Blocky's holds it 0.4 out (weapons.ts); the window is checked clear from both.
  */
-const EYE_BACK = (0.3 / 0.42) * 16;
+const EYE_BACKS = [(0.3 / 0.42) * 16, (0.4 / 0.42) * 16];
 
 // ---------------------------------------------------------------------------------------------
 // 2D helpers: polygons (with rounded corners) and their insides
@@ -305,11 +306,11 @@ class Gun {
 /**
  * An open reflex sight: a window `w` x `h` voxels (centred across x, its sill at `sill` px and the
  * frame's rear face at `z` px, both on the grid) in a frame one voxel thick and one deep, its top
- * corners chamfered; the body under it `body` voxels tall and `bodyW` wide, from `back` voxels
+ * corners chamfered (`chamfer`, on a window three or more tall); the body under it `body` voxels tall and `bodyW` wide, from `back` voxels
  * behind the frame, running on `len` voxels ahead of it `drop` voxels lower and `aheadW` wide.
  * Returns the `sight` point: the window's centre at the frame's rear face.
  */
-function optic(g, { w, h, sill, z, frame, body = 2, bodyW = w + 2, back = 1, len, drop = 1, aheadW = bodyW, colour = 'anod' }) {
+function optic(g, { w, h, sill, z, frame, body = 2, bodyW = w + 2, back = 1, len, drop = 1, aheadW = bodyW, colour = 'anod', chamfer = h >= 3 }) {
   const [x0, x1] = g.xs(w);
   const j0 = Math.round(sill / V - g.offset[1]), k = Math.round(z / V - g.offset[2]);
   if (Math.abs(g.b(1, j0) - sill) > 1e-6 || Math.abs(g.b(2, k) - z) > 1e-6) throw new Error(`${g.id}: optic off the grid`);
@@ -318,7 +319,7 @@ function optic(g, { w, h, sill, z, frame, body = 2, bodyW = w + 2, back = 1, len
   g.box([a0, j0 - body, k + 1], [a1, j0 - drop, k + 1 + len], colour);
   for (const x of [x0 - 1, x1]) g.box([x, j0, k], [x + 1, j0 + h, k + 1], frame);
   g.box([x0, j0 + h, k], [x1, j0 + h + 1, k + 1], frame);
-  const corners = [[x0, j0 + h - 1], [x1 - 1, j0 + h - 1]];
+  const corners = chamfer ? [[x0, j0 + h - 1], [x1 - 1, j0 + h - 1]] : [];
   for (const [i, j] of corners) g.box([i, j, k], [i + 1, j + 1, k + 1], frame);
   g.window = { x0, x1, y0: j0, y1: j0 + h, k, corners };
   return [0, (g.b(1, j0) + g.b(1, j0 + h)) / 2, z];
@@ -350,7 +351,7 @@ function pistol() {
   g.pbox(1, [0, 0.625], [1.25, 5.0], 'blued');
   g.pbox(1, [0, 1.875], [4.375, 5.0], 'blued');
   // The mini red dot: the body on the back of the slide, a gold frame, the nose stepping down.
-  const sight = optic(g, { w: 5, h: 4, sill: 6.25, z: -1.875, frame: 'gold', body: 2, bodyW: 5, back: 1, len: 4, drop: 1, aheadW: 5 });
+  const sight = optic(g, { w: 3, h: 2, sill: 6.25, z: -1.875, frame: 'gold', body: 2, bodyW: 5, back: 1, len: 4, drop: 1, aheadW: 3 });
   g.box([-3, 9, -4], [4, 10, -2], 'anod');
   const muzzle = [0, (g.b(1, 5) + g.b(1, 8)) / 2, g.b(2, 14)];
   const [mz, my] = G(-0.05, -3.1);
@@ -387,7 +388,7 @@ function smg() {
   g.box([-3, -1, -11], [3, 5, -10], (i, j) => (j === -1 ? 'anod' : i === -3 || i === 2 || j === 4 ? 'parkerDark' : false));
   // The holo on a plate on the back of the top, its hood hot pink.
   g.pbox(4, [5.625, 6.25], [-4.375, 0], 'parker');
-  const sight = optic(g, { w: 6, h: 6, sill: 7.5, z: -3.75, frame: 'pink', body: 2, bodyW: 8, back: 1, len: 5, drop: 1, aheadW: 6 });
+  const sight = optic(g, { w: 4, h: 3, sill: 7.5, z: -3.75, frame: 'pink', body: 2, bodyW: 6, back: 1, len: 5, drop: 1, aheadW: 4 });
   return g.mark('grip', [0, 0, 0]).mark('grip2', [0, -0.3125, 5.3125]).mark('muzzle', [0, 4.375, 10]).mark('sight', sight).mark('mag', [0, -5.625, 0]);
 }
 
@@ -440,7 +441,7 @@ function rifle() {
   g.pbox(1, [3.125, 3.75], [16.25, 18.125], 'darksteel');
   // The holo, yellow, on a mount on the rail.
   g.pbox(5, [5.625, 7.5], [0, 3.75], 'anod');
-  const sight = optic(g, { w: 7, h: 6, sill: 8.75, z: 0, frame: 'yellow', body: 2, bodyW: 9, back: 1, len: 6, drop: 1, aheadW: 7 });
+  const sight = optic(g, { w: 5, h: 3, sill: 8.75, z: 0, frame: 'yellow', body: 2, bodyW: 7, back: 1, len: 6, drop: 1, aheadW: 5 });
   const at = alongPath(magPath, 0.45);
   return g.mark('grip', [0, 0, 0]).mark('grip2', [0, 1.875, 10]).mark('muzzle', [0, 3.4375, 18.125]).mark('sight', sight).mark('mag', [0, at[1], at[0]]);
 }
@@ -478,7 +479,7 @@ function shotgun() {
   // The holo, cherry red like the pump, on a rail and mount on the receiver.
   g.pbox(2, [4.375, 5.0], [1.25, 6.875], 'anod');
   g.pbox(4, [5.0, 6.25], [1.875, 5.625], 'anod');
-  const sight = optic(g, { w: 8, h: 6, sill: 7.5, z: 1.875, frame: 'cherry', body: 2, bodyW: 10, back: 1, len: 6, drop: 1, aheadW: 8 });
+  const sight = optic(g, { w: 4, h: 3, sill: 7.5, z: 1.875, frame: 'cherry', body: 2, bodyW: 6, back: 1, len: 6, drop: 1, aheadW: 4 });
   return g.mark('grip', [0, 0, 0]).mark('grip2', [0, 0.625, 12.5]).mark('muzzle', [0, 3.75, 20]).mark('sight', sight).mark('mag', [0, 1.25, 6.25]);
 }
 
@@ -733,12 +734,17 @@ function hull(pts) {
 
 /**
  * What blocks an optic's window: a voxel in it, or one that shows through it from the aiming eye
- * (on the sight line, EYE_BACK behind the frame's rear face), beyond its front or between the eye
+ * (on the sight line, each of EYE_BACKS behind the frame's rear face), beyond its front or between the eye
  * and its rear. The window is its cells less the chamfered corners, a hair inside their edges.
  */
 function blocked(g) {
   const w = g.window;
   if (!w) return [];
+  return [...new Set(EYE_BACKS.flatMap((back) => blockedFrom(g, back)))];
+}
+
+function blockedFrom(g, EYE_BACK) {
+  const w = g.window;
   const e = 0.03;
   const X0 = g.b(0, w.x0), X1 = g.b(0, w.x1), Y0 = g.b(1, w.y0), Y1 = g.b(1, w.y1);
   const rects = [

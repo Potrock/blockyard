@@ -1,4 +1,4 @@
-import { HeldModels, type GameContext, type GunItem, type ItemDefinition, type MeleeItem, type ThrowableItem } from '@platform';
+import { HeldModels, type GameContext, type GunHold, type GunItem, type ItemDefinition, type MeleeItem, type ThrowableItem } from '@platform';
 import { GUNS } from './models';
 
 /**
@@ -21,10 +21,27 @@ import { GUNS } from './models';
 
 const url = (id: string) => GUNS.find((g) => g.id === id)?.url ?? '';
 
+/**
+ * How the guns sit in first person, as modern shooters frame them: close and low at the right,
+ * big in the view, the barrel run in toward the crosshair; the forearms dropping away under the
+ * gun so they leave the screen soon. Compact guns (the pistol, the SMG) nearer the middle.
+ */
+const FP: GunHold = {
+  fist: [0.22, -0.31, -0.44],
+  barrel: [-0.3, 0.04, -1],
+  roll: -0.12,
+  forearm: { hip: [0.35, -0.8, 0.45] },
+  forearm2: { hip: [-0.35, -0.85, 0.35] },
+};
+const FP_COMPACT: GunHold = { ...FP, fist: [0.12, -0.27, -0.4] };
+/** Aimed, a red dot or holo a little further out than the platform's, so it frames the target rather than filling the view. */
+const ADS = 0.4;
+const FP_HOLDS: Record<string, GunHold> = { pistol: { ...FP_COMPACT, ads: ADS }, smg: { ...FP_COMPACT, ads: ADS }, rifle: { ...FP, ads: ADS }, shotgun: { ...FP, ads: ADS } };
+
 /** How a gun sits and shows: its model, its side-on icon (kill feed), and a gun's hold. */
 const looks = (id: string): Pick<GunItem, 'icon' | 'hold'> => ({
   icon: { gltf: url(id) },
-  hold: { style: 'gun', model: HeldModels.gltf(url(id)) },
+  hold: { style: 'gun', model: HeldModels.gltf(url(id)), gun: FP_HOLDS[id] ?? FP },
 });
 
 export const WEAPONS: Record<string, ItemDefinition> = {
