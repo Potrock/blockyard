@@ -118,11 +118,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
   private barFill: HTMLElement;
   private barLag: HTMLElement;
   private barText: HTMLElement;
-  private ammoEl: HTMLElement;
-  private ammoKey = '';
-  /** Throwables carried (bottom right, over the rounds and the radar): each one's picture, how many, its key. */
-  private throwsEl: HTMLElement;
-  private throwsKey = '';
+  /** Client code's own layers with the panels (see `layer`), by name. */
+  private layers = new Map<string, HTMLElement>();
   /** An open menu's key listener, removed when it closes, however it closes. */
   private unhooks = new Map<HTMLElement, () => void>();
   /** Each open menu's close (B on a controller backs out of the top one). */
@@ -168,10 +165,6 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     this.barText = h('span.healthbar-text');
     this.barEl = h('div.healthbar', {}, h('div.healthbar-track', {}, this.barLag, this.barFill), this.barText);
     this.barEl.style.display = 'none';
-    this.ammoEl = h('div.ammo');
-    this.ammoEl.style.display = 'none';
-    this.throwsEl = h('div.throwables');
-    this.throwsEl.style.display = 'none';
     this.widgetSheet = h('style') as HTMLStyleElement;
     this.widgetLayer = h('div.gw-layer', {}, this.widgetSheet);
     this.root = h(
@@ -192,8 +185,6 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
       this.radarCanvas,
       this.popEl,
       this.barEl,
-      this.ammoEl,
-      this.throwsEl,
       this.widgetLayer,
       this.boardEl,
     );
@@ -272,56 +263,25 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     }
   }
 
-  /** The held gun's rounds (bottom right): the magazine big, the spare beside it; null hides it. */
-  ammo(a: { mag: number; reserve: number; size: number; name: string; reloading: boolean } | null) {
-    const key = a ? `${a.mag}|${a.reserve}|${a.size}|${a.name}|${a.reloading}` : '';
-    if (key === this.ammoKey) return;
-    const prev = this.ammoKey.split('|');
-    this.ammoKey = key;
-    this.ammoEl.style.display = a ? '' : 'none';
-    if (!a) return;
-    // One pip per round in the magazine (up to a drum's worth), spent ones hollow.
-    const pips = Math.min(a.size, 40);
-    const bullets = h('div.ammo-pips');
-    for (let i = 0; i < pips; i++) bullets.append(h(`span.ammo-pip${i < Math.round((a.mag / a.size) * pips) ? '' : '.spent'}`));
-    const note = a.reloading ? h('div.ammo-reload', {}, 'RELOADING') : a.mag === 0 && a.reserve === 0 ? h('div.ammo-reload.out', {}, 'NO AMMO') : a.mag <= Math.ceil(a.size * 0.25) ? h('div.ammo-reload.low', {}, 'RELOAD') : null;
-    this.ammoEl.replaceChildren(
-      ...[h('div.ammo-name', {}, a.name), h('div.ammo-count', {}, h('span.ammo-mag', {}, String(a.mag)), h('span.ammo-sep', {}, '/'), h('span.ammo-reserve', {}, String(a.reserve))), bullets, note].filter((x): x is HTMLElement => x !== null),
-    );
-    this.ammoEl.classList.toggle('low', a.mag <= Math.ceil(a.size * 0.25));
-    if (prev[0] !== undefined && Number(prev[0]) > a.mag) {
-      this.ammoEl.classList.remove('fired');
-      void this.ammoEl.offsetWidth;
-      this.ammoEl.classList.add('fired');
-    }
-  }
-
   /**
-   * The throwables with keys of their own they carry (bottom right, over the rounds): a picture
-   * of each, how many, and its key; one being cooked shows it. Null (or none) hides them.
+   * A layer for client code's own panels, made the first time it's named: over the platform's
+   * panels, under the game's widgets and the scoreboard. Layers stack in the order they're made.
    */
-  throwables(list: { icon: IconRef; count: number; key: string; cooking: boolean }[] | null) {
-    const key = list ? JSON.stringify(list) : '';
-    if (key === this.throwsKey) return;
-    const was = this.throwsKey ? (JSON.parse(this.throwsKey) as { count: number }[]) : [];
-    this.throwsKey = key;
-    this.throwsEl.style.display = list?.length ? '' : 'none';
-    if (!list?.length) return;
-    this.throwsEl.replaceChildren(
-      ...list.map((t, i) => {
-        const el = h(`div.throwable${t.count === 0 ? '.out' : ''}${t.cooking ? '.cooking' : ''}`, {}, this.icon('img.throwable-icon', t.icon), h('span.throwable-count', {}, `×${t.count}`), h('span.throwable-key', {}, t.key));
-        // One gone: a bump.
-        if (was[i] && was[i].count > t.count) el.classList.add('spent');
-        return el;
-      }),
-    );
+  layer(name: string): HTMLElement {
+    let el = this.layers.get(name);
+    if (el) return el;
+    el = h('div.hud-layer');
+    el.dataset.layer = name;
+    this.root.insertBefore(el, this.widgetLayer);
+    this.layers.set(name, el);
+    return el;
   }
 
   /**
    * An icon as an image. A picture of a model that hasn't loaded yet fills in once it has (it's
    * blank until then, never a broken image).
    */
-  private icon(spec: string, ref: IconRef): HTMLElement {
+  icon(spec: string, ref: IconRef): HTMLImageElement {
     const src = this.iconFor(ref);
     const img = h(spec, { alt: '' }) as HTMLImageElement;
     if (src) {
@@ -797,12 +757,12 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
   }
 
   /** A hit landed (`true`: a critical or head hit; `'kill'`: it killed). */
-  hitMarker(kind: boolean | 'kill') {
+  hitMarker(mark: boolean | 'kill') {
     this.hitEl.classList.remove('show', 'crit', 'kill');
     void this.hitEl.offsetWidth;
     this.hitEl.classList.add('show');
-    if (kind === 'kill') this.hitEl.classList.add('kill');
-    else if (kind) this.hitEl.classList.add('crit');
+    if (mark === 'kill') this.hitEl.classList.add('kill');
+    else if (mark) this.hitEl.classList.add('crit');
   }
 
   damageNumber(pos: THREE.Vector3, amount: number, crit: boolean, color?: string) {
@@ -875,8 +835,6 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
     for (const n of this.numbers) n.el.remove();
     this.numbers = [];
     this.scoreboard(null);
-    this.ammo(null);
-    this.throwables(null);
     for (const a of this.hurts) a.el.remove();
     this.hurts = [];
     this.popEl.classList.remove('show');

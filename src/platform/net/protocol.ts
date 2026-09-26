@@ -16,8 +16,12 @@ import type { BlueprintData } from '../api/blueprint';
 import type { SimFrame } from '../sim/sim';
 import type { WidgetWire } from '../ui/markup';
 
-/** Where a presentation call goes on the client. */
-export type PresentTarget = 'hud' | 'fx' | 'audio' | 'view' | 'client';
+/**
+ * Where a presentation call goes on the client. `message` is a message for the client code: the
+ * game's own (`game.clients.send(to, name, data)`: `method` is its name, `args` `[data]`), or the
+ * platform's (named with a `$`: `$shot`, `$thrown`, `$thrownEnd`, `$fire`, `$debris`, `$reset`).
+ */
+export type PresentTarget = 'hud' | 'fx' | 'audio' | 'view' | 'message';
 
 /** One presentation call: `target.method(...args)` on one player's client (`to`), or everyone's. */
 export interface PresentCall {
@@ -61,7 +65,15 @@ export type ClientMessage =
   /** A button in a game's widget was pressed (`data-action`, with its `data-value`). */
   | { t: 'widgetAction'; player: string; widget: string; action: string; value: string }
   /** The player closed a modal widget (Esc, B, a click outside). */
-  | { t: 'widgetClosed'; player: string; widget: string };
+  | { t: 'widgetClosed'; player: string; widget: string }
+  /** A message from the game's client code (`client.send(name, data)`), for its server (`clientMessage`). */
+  | { t: 'game'; player: string; name: string; data: unknown };
+
+/** A game's message name (either way): a letter, then letters, digits, `_`, `-`, `.` or `:` (the platform's own start with `$`). */
+export const MESSAGE_NAME = /^[A-Za-z][\w.:-]{0,63}$/;
+
+/** The most a game's message may carry, as JSON: from its server, and from a client. */
+export const MESSAGE_MAX = { server: 64 * 1024, client: 8 * 1024 };
 
 /**
  * One player's controls for one tick. The client owns mouse look (it feels immediate), so the

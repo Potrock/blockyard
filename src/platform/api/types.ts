@@ -439,6 +439,8 @@ export interface GameContext {
   readonly props: PropApi;
   /** Players driven by the game's code (see `BotApi`). */
   readonly bots: BotApi;
+  /** Messages to the game's own code on players' screens (see `ClientsApi`). */
+  readonly clients: ClientsApi;
   /** Clear entities, timers, pickups and HUD, revive the player at spawn, then call `start` again. */
   restart(): void;
   /** Return to the game launcher. */
@@ -2492,6 +2494,26 @@ export interface GameEvents {
   blockChange: { x: number; y: number; z: number; block: string };
   /** A movement ability called `body.trigger(name)`: a dash began, a wall-jump (for sounds, effects). */
   ability: { player: Player; ability: string; name: string };
+  /**
+   * A message from the game's code on a player's screen (`client.send(name, data)`): who sent it
+   * (the connection's player, whatever it says), its name, and its data (plain data, checked for
+   * size and shape already). What it asks for is the game's to check: any client can send anything.
+   */
+  clientMessage: { player: Player; name: string; data: unknown };
+}
+
+/**
+ * Messages to the game's own code on players' screens (`client.ts`): they arrive at
+ * `client.on(name, fn)` there, in order with the presentation calls. Bots have no screen.
+ */
+export interface ClientsApi {
+  /**
+   * To one player's screen, several players', or everyone's (`'all'`). `name`: a letter, then
+   * letters, digits, `_`, `-`, `.` or `:` (at most 64). `data`: plain data (strings, numbers,
+   * booleans, null, lists and records; functions and `undefined` are left out), at most 64 KB as
+   * JSON. A bad name or too much data throws.
+   */
+  send(to: Player | readonly Player[] | 'all', name: string, data?: unknown): void;
 }
 
 export interface EventApi {

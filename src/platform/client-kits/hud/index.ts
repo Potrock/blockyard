@@ -1,6 +1,10 @@
 import type { ClientKit } from '@platform/client';
+import { gunner } from './gunner';
+import { throwables } from './throwables';
 
-/** (Phase 2: ported into a kit; until then the engine still does this itself.) */
+export { gunner, throwables };
+
+/** The HUD pieces the platform's games have always had: the held gun's (`gunner`), then the throwables' (`throwables`). */
 export function standard(): ClientKit[] {
-  return [];
+  return [gunner(), throwables()];
 }

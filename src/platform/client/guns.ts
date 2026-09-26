@@ -20,6 +20,9 @@ export interface GunBody {
   dead: boolean;
 }
 
+/** What a frame of the gun brought besides shots: a reload started, the trigger on an empty gun (their sounds are client code's). */
+export type GunNews = 'reload' | 'empty';
+
 /** One shot fired this frame: for the host, and for this screen's tracers and impacts. */
 export interface FiredShot {
   serial: number;
@@ -111,10 +114,11 @@ export class GunController {
   }
 
   /**
-   * A frame: aim, reload, fire. Returns the shots fired (and kicks the view through `kick`).
-   * `yaw` / `pitch` are the view now.
+   * A frame: aim, reload, fire. Returns the shots fired (and kicks the view through `kick`);
+   * `happened` hears of a reload started and the trigger pulled on an empty gun. `yaw` / `pitch`
+   * are the view now.
    */
-  update(dt: number, c: GunControls, body: GunBody, yaw: number, pitch: number, kick: (dPitch: number, dYaw: number) => void, sound: (name: string) => void): FiredShot[] {
+  update(dt: number, c: GunControls, body: GunBody, yaw: number, pitch: number, kick: (dPitch: number, dYaw: number) => void, happened: (e: GunNews) => void): FiredShot[] {
     const st = this.state;
     const g = this.g;
     const def = this.def;
@@ -129,14 +133,14 @@ export class GunController {
     const trigger = active && c.trigger;
     const was = st.mag;
     if (stepReload(g, st, dt, trigger) || st.mag !== was) this.quiet = 0;
-    if (active && c.reload && canReload(g, st)) this.reload(g, st, sound);
+    if (active && c.reload && canReload(g, st)) this.reload(g, st, happened);
     const out: FiredShot[] = [];
     const pull = active && (def.auto ? c.trigger : c.triggerPressed);
     // Coming out of a sprint, the gun has to come up first.
     const ready = this.sprint < 0.35;
     if (pull && st.reload >= 0 && def.shells && st.mag > 0) st.reload = -1;
     if (pull && st.mag <= 0 && st.reload < 0 && st.cooldown <= 0) {
-      sound(def.sounds?.empty ?? 'gun_empty');
+      happened('empty');
       st.cooldown = 0.25;
     }
     while (pull && ready && st.mag > 0 && st.reload < 0 && st.cooldown <= 0) {
@@ -157,7 +161,7 @@ export class GunController {
       if (!def.auto) break;
     }
     // Empty: reload by itself.
-    if (this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st, sound);
+    if (this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st, happened);
     // Between bursts, the view settles back down some of the way.
     if (this.sinceShot > g.interval * 1.5 && this.debt > 0) {
       const r = Math.min(this.debt, this.debt * dt * 9 + 0.0005);
@@ -167,12 +171,12 @@ export class GunController {
     return out;
   }
 
-  private reload(g: Gun, st: GunState, sound: (name: string) => void) {
+  private reload(g: Gun, st: GunState, happened: (e: GunNews) => void) {
     startReload(g, st);
     this.quiet = 0;
     this.reloadTotal = g.def.reload;
     this.shellsToLoad = g.def.shells ? Math.min(g.def.magazine - st.mag, st.reserve) : 0;
-    sound(g.def.sounds?.reload ?? 'gun_reload');
+    happened('reload');
   }
 
   /** Reload progress 0..1 (a shotgun: over all its rounds), or -1. */

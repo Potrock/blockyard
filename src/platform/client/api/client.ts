@@ -6,6 +6,8 @@ export interface ClientHost {
   services: ClientServices;
   item(id: string): ItemDefinition | undefined;
   send(name: string, data: unknown): void;
+  /** The game is under way on its server. */
+  running(): boolean;
 }
 
 // The services are the host's, on the client object itself (`client.view`, `client.fx`, …).
@@ -38,6 +40,9 @@ export class ClientRuntime implements Client {
 
   get events(): readonly ClientEvent[] {
     return this.seen;
+  }
+  get running(): boolean {
+    return this.host.running();
   }
   item(id: string) {
     return this.host.item(id);
@@ -79,6 +84,17 @@ export class ClientRuntime implements Client {
     this.queue = [];
     for (const k of this.kits) k.frame?.(this, dt);
     this.def.frame?.(this, dt);
+  }
+
+  /** Late in the frame (the world's effects moved on, about to draw): the kits' `late`, then the game's. Events since `frame` join this frame's. */
+  late(dt: number) {
+    if (!this.started) return;
+    if (this.queue.length) {
+      this.seen = [...this.seen, ...this.queue];
+      this.queue = [];
+    }
+    for (const k of this.kits) k.late?.(this, dt);
+    this.def.late?.(this, dt);
   }
 
   dispose() {

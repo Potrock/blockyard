@@ -1,4 +1,5 @@
-import type { ClientCommand, ClientMessage, PlayerInput } from './protocol';
+import { plainData } from '../ui/markup';
+import { MESSAGE_MAX, MESSAGE_NAME, type ClientCommand, type ClientMessage, type PlayerInput } from './protocol';
 
 /**
  * A client's command as a server should take it: checked field by field, numbers finite and in
@@ -142,7 +143,22 @@ function sanitizeMessage(raw: unknown): ClientMessage | null {
     const widget = name(raw.widget);
     return widget ? { t: 'widgetClosed', player: '', widget } : null;
   }
+  if (raw.t === 'game') return sanitizeGameMessage(raw.name, raw.data);
   return null;
+}
+
+/**
+ * A message from a game's client code (`client.send(name, data)`): a name as games write them
+ * (never the platform's `$` ones), and plain data (strings, finite numbers, booleans, null, lists
+ * and records, not too deep) of at most `MESSAGE_MAX.client` as JSON. The game checks what it says.
+ */
+export function sanitizeGameMessage(name: unknown, data: unknown): ClientMessage | null {
+  if (typeof name !== 'string' || !MESSAGE_NAME.test(name)) return null;
+  const clean = data === undefined ? null : plainData(data);
+  if (clean === undefined) return null;
+  const json = JSON.stringify(clean);
+  if (json.length > MESSAGE_MAX.client) return null;
+  return { t: 'game', player: '', name, data: clean };
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);

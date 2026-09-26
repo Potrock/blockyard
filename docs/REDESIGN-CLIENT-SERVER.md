@@ -283,6 +283,7 @@ interface ClientKit {
   name: string;
   setup?(client: Client): void;              // once, when the game's client starts
   frame?(client: Client, dt: number): void;  // every frame, in the order listed
+  late?(client: Client, dt: number): void;   // every frame, once the world's effects have moved on
   dispose?(): void;
 }
 defineClient(shared, { kits: [firstPerson.standard(), figures.humanoid(), hud.gunner(), effects.gunfire()], setup, frame });
@@ -293,7 +294,10 @@ Each frame runs in this order:
 2. `client.me` and this frame's `client.events` are filled in;
 3. each kit's `frame`, in order;
 4. the game's own `frame`;
-5. render.
+5. the world's effects (particles, tracers) move on by the frame's time;
+6. each kit's `late`, then the game's (what's made here is drawn where it starts: a shot fired
+   this frame, its tracer leaving the muzzle as the hand is drawn);
+7. render.
 
 ### The client object
 

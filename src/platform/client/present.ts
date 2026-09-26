@@ -12,8 +12,8 @@ export interface PresenterParts {
   view: ViewModel;
   /** Messages back to the simulation (callbacks, closed menus). */
   send: (m: ClientMessage) => void;
-  /** Calls for the client itself: `debris` from broken blocks, `reset` on restart. */
-  client: (method: string, args: unknown[]) => void;
+  /** Messages for the client code: the game's own (`clients.send`), and the platform's (`$` names). */
+  message: (name: string, data: unknown) => void;
 }
 
 type Callable = Record<string, (...args: unknown[]) => unknown>;
@@ -41,6 +41,8 @@ export class Presenter {
   apply(c: PresentCall) {
     if (c.to !== null ? c.to !== this.player : c.skip !== undefined && c.skip === this.player) return;
     const p = this.parts;
+    // (A message's data is the game's, as it sent it: nothing in it is a callback.)
+    if (c.target === 'message') return p.message(c.method, c.args[0]);
     const args = c.args.map((a) => this.decode(a));
     switch (c.target) {
       case 'hud':
@@ -53,8 +55,6 @@ export class Presenter {
         if (c.method === 'visible') p.view.visible = args[0] as boolean;
         else (p.view as unknown as Callable)[c.method](...args);
         return;
-      case 'client':
-        return p.client(c.method, args);
     }
   }
 

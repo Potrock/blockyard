@@ -25,7 +25,7 @@ interface Rocket {
   color: [number, number, number];
 }
 
-/** A bullet's glowing streak racing from the muzzle to where it landed. */
+/** A glowing streak racing from one point to another (a shot's path). */
 interface Tracer {
   mesh: THREE.Group;
   material: THREE.RawShaderMaterial;
@@ -35,13 +35,13 @@ interface Tracer {
   travelled: number;
 }
 
-/** A bullet hole on a wall, fading after a while. */
+/** A hole on a wall, fading after a while. */
 interface Decal {
   mesh: THREE.Mesh;
   age: number;
 }
 
-/** A muzzle's flash in the world (someone else's gun): a hot glow for a moment. */
+/** A flare in the world: a hot glow for a moment. */
 interface Glow {
   mesh: THREE.Mesh;
   age: number;
@@ -77,7 +77,7 @@ export class Effects implements FxApi {
   onBlast: ((at: Vec3, size: number) => void) | null = null;
 
   constructor(
-    private particles: Particles,
+    private dots: Particles,
     private hud: GameHud,
     private fxScene: THREE.Scene,
     private sfx?: Sfx,
@@ -88,7 +88,7 @@ export class Effects implements FxApi {
     const k = Math.max(0.2, opts.size ?? 1);
     this.onBlast?.(at, k);
     const fire = linearColor(opts.color ?? '#ff9a3c');
-    const p = this.particles;
+    const p = this.dots;
     // White-hot core, a fireball, rising smoke and flying sparks. A bigger blast throws more
     // puffs, not bigger ones (past 1.2 or so, a square the size of a block reads as cardboard).
     const n = k > 1 ? k * k : k;
@@ -109,7 +109,7 @@ export class Effects implements FxApi {
   }
 
   burst(at: Vec3, opts: { color?: string; count?: number; speed?: number; size?: number; gravity?: number; glow?: number; life?: number; drag?: number } = {}) {
-    this.particles.burstColor(at.x, at.y, at.z, linearColor(opts.color ?? '#ffffff'), {
+    this.dots.burstColor(at.x, at.y, at.z, linearColor(opts.color ?? '#ffffff'), {
       count: opts.count ?? 18,
       speed: opts.speed ?? 3,
       size: opts.size ?? 0.09,
@@ -119,6 +119,11 @@ export class Effects implements FxApi {
       drag: opts.drag,
       collide: opts.glow ? false : undefined,
     });
+  }
+
+  /** Particles with every knob (see `ClientFx.particles`): a linear colour, `spread` round the point, a push `up`. */
+  particles(at: Vec3, color: [number, number, number], opts: Parameters<Particles['burstColor']>[4] = {}) {
+    this.dots.burstColor(at.x, at.y, at.z, color, opts);
   }
 
   shake(strength: number, duration = 0.35) {
@@ -157,7 +162,7 @@ export class Effects implements FxApi {
     const c = linearColor(color);
     for (let i = 0; i < 40; i++) {
       const a = (i / 40) * Math.PI * 2;
-      this.particles.burstColor(at.x + Math.cos(a) * 0.8, at.y + 0.2, at.z + Math.sin(a) * 0.8, c, { count: 1, speed: 0.5, up: 3, size: 0.12, gravity: 10 });
+      this.dots.burstColor(at.x + Math.cos(a) * 0.8, at.y + 0.2, at.z + Math.sin(a) * 0.8, c, { count: 1, speed: 0.5, up: 3, size: 0.12, gravity: 10 });
     }
   }
 
@@ -200,12 +205,12 @@ export class Effects implements FxApi {
     const y = at.y + n.y * 0.04;
     const z = at.z + n.z * 0.04;
     if (body) {
-      this.particles.burstColor(x, y, z, color, { count: 10, speed: 3.2, size: 0.09, gravity: 14, life: 0.45, spread: 0.3, up: 1 });
+      this.dots.burstColor(x, y, z, color, { count: 10, speed: 3.2, size: 0.09, gravity: 14, life: 0.45, spread: 0.3, up: 1 });
       return;
     }
-    this.particles.burstColor(x, y, z, color, { count: 6, speed: 3.5, size: 0.07, gravity: 20, life: 0.6, spread: 0.2, up: 1.2 });
-    this.particles.burstColor(x, y, z, [1, 0.85, 0.5], { count: 3, speed: 6, size: 0.035, glow: 2, gravity: 16, life: 0.18, collide: false, up: 1 });
-    this.particles.burstColor(x, y, z, [0.55, 0.52, 0.48], { count: 2, speed: 0.8, size: 0.08, gravity: -1, life: 0.6, drag: 2, collide: false, up: 0.4 });
+    this.dots.burstColor(x, y, z, color, { count: 6, speed: 3.5, size: 0.07, gravity: 20, life: 0.6, spread: 0.2, up: 1.2 });
+    this.dots.burstColor(x, y, z, [1, 0.85, 0.5], { count: 3, speed: 6, size: 0.035, glow: 2, gravity: 16, life: 0.18, collide: false, up: 1 });
+    this.dots.burstColor(x, y, z, [0.55, 0.52, 0.48], { count: 2, speed: 0.8, size: 0.08, gravity: -1, life: 0.6, drag: 2, collide: false, up: 0.4 });
     // A bullet hole (not in a block that's carved: the pit it left is the mark).
     if (!normal || !mark) return;
     const mesh = new THREE.Mesh(this.decalGeo, this.decalMat);
@@ -217,8 +222,8 @@ export class Effects implements FxApi {
     while (this.decals.length > 80) this.fxScene.remove(this.decals.shift()!.mesh);
   }
 
-  /** A muzzle flash in the world: a hot glow facing the camera for a moment. */
-  muzzleFlash(at: Vec3, size = 0.5) {
+  /** A hot glow facing the camera for a moment (a shot's flash in the world). */
+  flare(at: Vec3, size = 0.5) {
     const material = new THREE.RawShaderMaterial({
       vertexShader: Shaders.fx.vertex,
       fragmentShader: Shaders.fx.fragment,
@@ -320,9 +325,9 @@ export class Effects implements FxApi {
       r.fuse -= dt;
       r.vel.y -= 9 * dt;
       r.pos.addScaledVector(r.vel, dt);
-      this.particles.burstColor(r.pos.x, r.pos.y, r.pos.z, [1, 0.7, 0.4], { count: 1, speed: 0.3, up: 0, size: 0.06, glow: 1, life: 0.4, gravity: 2, collide: false });
+      this.dots.burstColor(r.pos.x, r.pos.y, r.pos.z, [1, 0.7, 0.4], { count: 1, speed: 0.3, up: 0, size: 0.06, glow: 1, life: 0.4, gravity: 2, collide: false });
       if (r.fuse <= 0) {
-        this.particles.burstColor(r.pos.x, r.pos.y, r.pos.z, r.color, { count: 90, speed: 9, up: 0, size: 0.13, glow: 1.2, life: 1.3, gravity: 4, drag: 1.6, collide: false, spread: 0 });
+        this.dots.burstColor(r.pos.x, r.pos.y, r.pos.z, r.color, { count: 90, speed: 9, up: 0, size: 0.13, glow: 1.2, life: 1.3, gravity: 4, drag: 1.6, collide: false, spread: 0 });
         this.rockets.splice(i, 1);
       }
     }

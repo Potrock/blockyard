@@ -9,7 +9,7 @@ Every game is played on a game server: its rules run there, and each player's br
 | `meta.ts` | `defineMeta` | the launcher, and both sides | what the home page lists: `id`, `title`, `tagline`, `accent`, `controls`, `gamepad`, `instances`. Tiny, and it imports nothing but `@platform` |
 | `shared.ts` | `defineShared` | the server and every screen | what both sides must agree on: `world` (terrain, `structures`, `terraform`, `destructible`), `blocks` and their painters, `player` (movement, abilities, hotbar, skin, model), `guns`, `vehicles`, `hud`, `cheats`. Data, and pure functions both run the same way (structure builders, block painters, vehicles' and abilities' steps). It starts from the meta: `defineShared({ ...meta, world: { ... } })` |
 | `server.ts` | `defineServer(shared, { setup, start, update })` | the server only | the rules: items and entities, events, bots, scoring, the HUD calls. Never sent to a browser |
-| `client.ts` | `defineClient(shared, { ... })` (`@platform/client`) | each player's screen only | what the screen does of its own. For now it only names the shared definition (`defineClient(shared)`); the client API grows here (see docs/REDESIGN-CLIENT-SERVER.md) |
+| `client.ts` | `defineClient(shared, { ... })` (`@platform/client`) | each player's screen only | what the screen does of its own: the kits it uses (`@platform/client/kits`), and its own code (see "Client code") |
 
 Other files in the folder are helpers any part may import (maps, weapon tables, painters), except that `meta.ts` imports none, shared code and client code never reach `server.ts`, neither `server.ts` nor shared code reaches client code, and only server code uses `@platform/kits` (the kits are server rules). A `client/` folder holds client code. `npm run check:boundaries` enforces all of it, following imports through helpers; after a production build, `npm run build` also checks that no server-only module ended up in the browser's output (`scripts/check-bundle.mjs`). A folder holding several small games (previews) prefixes their parts: `previews/shipyard.meta.ts`, `previews/shipyard.server.ts`.
 
@@ -999,7 +999,7 @@ game.audio.define('laser', (s) => {
 - `s.noise` is filtered noise with a sweeping filter.
 - `s.pitch` is the play's pitch: multiply frequencies by it.
 - Your game's rules run away from the player's speakers (on the server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
-- The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers, a grenade's `bounce`, a bottle's `glass`, `fire`).
+- The built-in sounds (`BuiltinSound`) are the ones the platform's own systems play. The engine itself keeps only its world's and its screens' (`hit`, `hurt`, `pickup`, `heal`, `click`, `spawn`, `countdown`, `lock`, `alarm`, `wave`, `victory`, `defeat`); the rest (weapons: `swing`, `crit`, `bow_draw`, `bow_shoot`, `arrow_hit`, `gunshot`, `gun_reload`, `gun_empty`, `gun_cycle`, `hitmarker`, `kill`; creatures: `mob_hurt`, `mob_death`; `explosion`, `explosion_big`, a grenade's `bounce`, a bottle's `glass`, `fire`, `whoosh`) are ordinary voices the sounds kit defines on each screen (`sounds.standard()`, see "Client code"). A sound your server defines under the same name wins over the kit's.
 
 ## Keeping data
 
@@ -1069,7 +1069,8 @@ game.commands.run('/give pike'); // run one from code
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
 | `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
 | `env.time`, `env.frozen` | Time of day |
-| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'blockChange' \| 'playerJoin' \| 'playerReady' \| 'playerLeave' \| 'ability', fn)` | Events (player events name the `player`) |
+| `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'blockChange' \| 'playerJoin' \| 'playerReady' \| 'playerLeave' \| 'ability' \| 'clientMessage', fn)` | Events (player events name the `player`) |
+| `clients.send(to, name, data)` | A message to the game's client code on one player's screen, a list of players', or everyone's (`'all'`), heard there with `client.on(name, fn)`; `clientMessage` hears theirs (see "Client code") |
 | `rng` | Seeded random numbers |
 
 **The HUD's look.** `hud` on the game definition sets how the HUD looks on every screen:
@@ -1089,7 +1090,7 @@ hud: {
 },
 ```
 
-**A stylesheet of the game's own.** `theme.css` restyles the platform's HUD by its classes: `.stat`, `.objective`, `.banner-title`, `.hud-pop-text`, `.feed-line`, `.scoreboard` and `.sb-table`, `.healthbar-track`, `.ammo-mag`, `.hotbar` and `.slot`, `.menu-card` and `.menu-entry`, `.result-card`, and the rest (find them with the browser's inspector). The platform keeps it to the HUD, the menus, the result screens and the game's widgets (the home page and pause menu stay the platform's), and each rule counts one class more than written, so `.stat { … }` beats the platform's own `.stat`. The `colors` above are there as `var(--hud-ink)`, `--hud-paper`, `--hud-accent`, `--hud-fg`, `--hud-danger` and `--hud-good`, the fonts as `var(--pixel)` (display) and `var(--sans)`. Call of Blocky's comic-book look (ink outlines, hard shadows, paper panels) is all in `src/games/callofblocky/hud.css`: copy it to start from. Left out: `@import`, `@font-face` (use `fonts`), pictures from other sites (`url()` takes `data:` images and files on this site), and anything that could run code.
+**A stylesheet of the game's own.** `theme.css` restyles the platform's HUD by its classes: `.stat`, `.objective`, `.banner-title`, `.hud-pop-text`, `.feed-line`, `.scoreboard` and `.sb-table`, `.healthbar-track`, `.hotbar` and `.slot`, `.menu-card` and `.menu-entry`, `.result-card`, the HUD kits' pieces (`.ammo-mag`, `.ammo-pip`, `.gun-cross span`, `.throwable`), and the rest (find them with the browser's inspector). The platform keeps it to the HUD, the menus, the result screens and the game's widgets (the home page and pause menu stay the platform's), and each rule counts one class more than written, so `.stat { … }` beats the platform's own `.stat`. The `colors` above are there as `var(--hud-ink)`, `--hud-paper`, `--hud-accent`, `--hud-fg`, `--hud-danger` and `--hud-good`, the fonts as `var(--pixel)` (display) and `var(--sans)`. Call of Blocky's comic-book look (ink outlines, hard shadows, paper panels) is all in `src/games/callofblocky/hud.css`: copy it to start from. Left out: `@import`, `@font-face` (use `fonts`), pictures from other sites (`url()` takes `data:` images and files on this site), and anything that could run code.
 
 **Widgets of your own.** When the built-in pieces aren't what a game needs, it makes its own from HTML and CSS, filled in from data. Define it once, then put it up on everyone's screens (`game.hud.widget`) or one player's (`player.hud.widget`) with its data. Call `widget` again whenever you like (every tick is fine): only what changed reaches the screens, as a small patch, and a player who joins late gets what's up now. Heart Hunt's row of hearts:
 
@@ -1144,6 +1145,61 @@ They work wherever a name does, beside the widget's own data: `{{$gun.mag}}`, `d
 **Safe to show.** A widget's markup and CSS come from the game's code, which may run on a server someone else runs, so each player's screen checks them again and builds them element by element (never as HTML). Left out: `<script>`, `<style>`, frames, forms and fields, SVG, links; `on…` attributes, `id`, `name` and `href`; pictures and `url()` except `data:` images and files on this site; CSS other than style rules, `@media`, `@supports`, `@container` and `@keyframes`, and values that load from elsewhere or could run code. `hud.define` says in the console what it left out. Data is only ever text.
 
 Call of Blocky's corner of the screen (kills, place, the leader, the streak toward the UAV and the Adrenaline Shot, their timers) is a widget: `src/games/callofblocky/hud.ts`.
+
+## Client code: HUD, effects, sounds and messages
+
+A game's `client.ts` runs on each player's screen (`defineClient(shared, { kits, setup, frame, late })`, `@platform/client`). What the platform's games have always shown is built from the public client API as **kits** (`@platform/client/kits`), which a game lists (every game uses `standardKits()` for now), copies into its own folder and changes, or replaces. Each frame the kits' `frame` runs in order, then the game's; then the world's effects move on by the frame's time; then the kits' and the game's `late` (for what's made at the very end, drawn where it starts: a shot fired this frame).
+
+**The HUD (`client.hud`).** Plain DOM: client code is bundled with the game and trusted, so it builds its own elements (what the server sends stays sanitized).
+
+| API | What |
+| --- | --- |
+| `hud.layer(name, place?)` | A layer of its own (made the first time it's named), covering the screen, the mouse passing through. `place`: `'lens'` straight over the world, under the crosshair (a sight's glow, a scope's view); `'middle'` with the crosshair; `'panels'` (the default) with the HUD's panels, under the game's widgets and the scoreboard. Layers at one place stack in the order they're made |
+| `hud.style(css)` | A stylesheet for what the layers show, under the game's theme (`hud.theme.css` restyles a kit's elements as it does the platform's). Returns a function that takes it out |
+| `hud.crosshair.wanted`, `hud.crosshair.replace(el)` | Whether the game shows a crosshair (its server's `hud.crosshair`), and an element of a layer's in the plain cross's place (shown whenever the game wants a crosshair; `null` puts the plain one back) |
+| `hud.icon(ref)` | An icon (a sprite, a block, a picture of a model) as an `<img>`, filled in once it's ready |
+| `hud.theme` | The game's `hud.theme` |
+| `hud.progress`, `marker`, `banner`, `toast`, `pop`, `feed` | The server's HUD calls, on this screen only (a marker takes a point) |
+
+**What the kits read.** `client.me` is the local player as this screen predicts it: `held` (the item and its local state: a gun's `mag`, `reserve`, `reload` progress, `aim`, `spread` in degrees, `sight` and its `color`), `quick` (throwables with keys of their own they carry: how many, less throws the server hasn't taken, and the key) and `cooking` (one being held: for how long, its fuse). `client.thrown` lists what's in the air on this screen, flown as the server flies it (where, rolling, at rest, how old, how far its harm reaches). `client.events` has this frame's happenings: `bullets` (a shot's bullets: ours as fired here, or someone else's, each with where it ended, what it hit, the block's colour and face, whether it carved it, the walls it went through), `reload`, `empty`, `cook`, `thrown`, `bounce`, `thrownEnd`, `fire`, `reset`, and messages. `client.scene` puts things in the world (`scene.item(id)`: an item's look as a mesh), `client.fx` draws effects (`tracer`, `impact`, `flare`, `particles`, `burst`, …), `client.world.raycast` finds blocks, `client.camera` has the view's `position`, `fov` and `toWorld`, and `client.view.worldPoint('muzzle')` a held item's point in the world.
+
+**The kits.**
+
+| Kit | What it draws |
+| --- | --- |
+| `hud.gunner()` | The held gun's rounds (bottom right: the magazine, the spare, a pip a round, RELOADING / NO AMMO / RELOAD at a quarter or less), its crosshair opening with the spread (gone while aiming), a red dot's or holo's reticle as the sight comes up, a scope's view |
+| `hud.throwables()` | Throwables carried with keys of their own (a picture, how many, the key, a wiggle while cooking), and the fuse burning round the crosshair |
+| `effects.gunfire()` | Tracers from the muzzle (every third of a shotgun's), chips and holes where bullets land, blood on someone, holes both sides of a wall shot through, someone else's muzzle flaring; the gun's own sounds (shot, reload, dry click) |
+| `effects.throwables()` | Throwables spinning through the air (ours leaving the hand), their trails, the knock as they bounce, a warning marker on a live one nearby, and the fires they start, crackling |
+| `sounds.standard()` | The standard voices, as ordinary `client.audio.define` definitions (see "Your own art and sound") |
+
+`hud.standard()`, `effects.standard()` and `sounds.standard()` give each group; the kits' CSS is theirs too (the classes are the same as ever, so a theme like Call of Blocky's `hud.css` restyles them).
+
+**Messages between the server and client code.** The game's own, either way:
+
+```ts
+// server.ts
+game.clients.send(player, 'hitConfirm', { damage: 12, head: true }); // one player's screen
+game.clients.send(game.players, 'round', { n: 3 });                  // a list (each once)
+game.clients.send('all', 'round', { n: 3 });                         // everyone's (and anyone watching)
+game.events.on('clientMessage', ({ player, name, data }) => {
+  if (name === 'emote' && typeof (data as { id?: unknown }).id === 'string') showEmote(player, (data as { id: string }).id);
+});
+
+// client.ts
+defineClient(shared, {
+  kits: standardKits(),
+  setup(client) {
+    client.on('hitConfirm', (data) => { /* … */ });
+    client.send('emote', { id: 'wave' });
+  },
+});
+```
+
+- A message's name is a letter, then letters, digits, `_`, `-`, `.` or `:` (up to 64); names starting with `$` are the platform's own. Its data is plain data (strings, numbers, booleans, null, lists and records; functions and `undefined` are left out).
+- From the server: at most 64 KB as JSON; a bad name or too much throws in the game's code. It arrives in order with the HUD, effects and sound calls, at `client.on(name, fn)` and in `client.events` (`{ t: 'message', name, data }`). Bots have no screen.
+- From a client: at most 8 KB as JSON. The server checks the name, the shape and the size and drops anything else, then `clientMessage` hears it as the player whose connection it came on (whatever the message says). Someone only watching sends nothing. What it asks for is the game's to check: anyone can send anything.
+- The platform's own presentation (someone's shot, a throwable in the air and where it went off, a fire, a block's debris, a restart) travels as messages of its own (`$shot`, `$thrown`, `$thrownEnd`, `$fire`, `$debris`, `$reset`), which the engine turns into the events above for the kits.
 
 ## Running and debugging
 
