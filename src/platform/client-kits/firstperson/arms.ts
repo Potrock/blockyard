@@ -1,10 +1,10 @@
-import * as THREE from 'three';
-import type { FirstPersonArms } from '../api/types';
-import type { HumanoidArm } from '../client/gltf';
+import type { FirstPersonArms } from '@platform';
+import type { ViewArm } from '@platform/client';
+import { Mat4, Quat, Vec3 } from '@platform/client/math';
 
 /**
  * A humanoid player's own arms in the first-person view (their model's upper arms, forearms and
- * fists, see `GltfLibrary.humanoidArms`), placed on what the hands hold: the fist on its grip, and
+ * fists, `client.view.arms.humanoid`), placed on what the hands hold: the fist on its grip, and
  * the arm back from it to a shoulder off the screen's edge, straight (the forearm and upper arm in
  * one line) or bent at the elbow (two bones reaching a shoulder that stays put).
  */
@@ -29,7 +29,7 @@ export interface ArmFit {
 export const ARM_FIT: ArmFit = { scale: 1.2, hands: 1, reach: [0.55, 0.72], bend: [0, 0], support: [0.01, -0.012, 0] };
 
 /** The platform's fit, with each layer's over it in turn (a model's `firstPerson`, then a gun's `hold.gun.arm`). */
-export function fitArms(...layers: (FirstPersonArms | undefined)[]): ArmFit {
+export function fitArms(...layers: (FirstPersonArms | null | undefined)[]): ArmFit {
   const out: ArmFit = { scale: ARM_FIT.scale, hands: ARM_FIT.hands, reach: ARM_FIT.reach, bend: ARM_FIT.bend, support: ARM_FIT.support };
   for (const l of layers) {
     if (!l) continue;
@@ -42,37 +42,29 @@ export function fitArms(...layers: (FirstPersonArms | undefined)[]): ArmFit {
   return out;
 }
 
-/** One arm as drawn: the model's parts (see `HumanoidArm`) under the view model's hand. */
-export interface ArmParts {
-  arm: HumanoidArm;
-  upper: THREE.Group;
-  forearm: THREE.Group;
-  fist: THREE.Group;
-}
-
-const _q = new THREE.Quaternion();
-const _a = new THREE.Vector3();
-const _b = new THREE.Vector3();
-const _c = new THREE.Vector3();
-const _d = new THREE.Vector3();
-const _m = new THREE.Matrix4();
+const _q = new Quat();
+const _a = new Vec3();
+const _b = new Vec3();
+const _c = new Vec3();
+const _d = new Vec3();
+const _m = new Mat4();
 
 /** The fist holding at `grip` turned as `gripQ` (its parent's space), at `scale` to the model; returns where the wrist is. */
-function placeFist(h: ArmParts, grip: THREE.Vector3, gripQ: THREE.Quaternion, scale: number): THREE.Vector3 {
-  const fistQ = h.fist.quaternion.copy(gripQ).multiply(_q.copy(h.arm.gripQ).invert());
-  h.fist.position.copy(grip).sub(_a.copy(h.arm.grip).multiplyScalar(scale).applyQuaternion(fistQ));
+function placeFist(h: ViewArm, grip: Vec3, gripQ: Quat, scale: number): Vec3 {
+  const fistQ = h.fist.quaternion.copy(gripQ).multiply(_q.copy(h.gripQ).invert());
+  h.fist.position.copy(grip).sub(_a.copy(h.grip).multiplyScalar(scale).applyQuaternion(fistQ));
   h.fist.scale.setScalar(scale);
   return h.fist.position;
 }
 
 /** Where the wrist is for a fist holding at `grip` turned as `gripQ` (without placing it), the fist `hands` times the arm's `scale`. */
-export function wristFor(h: ArmParts, grip: THREE.Vector3, gripQ: THREE.Quaternion, scale: number, out: THREE.Vector3, hands = 1): THREE.Vector3 {
-  const fistQ = _q.copy(h.arm.gripQ).invert().premultiply(gripQ);
-  return out.copy(grip).sub(_c.copy(h.arm.grip).multiplyScalar(scale * hands).applyQuaternion(fistQ));
+export function wristFor(h: ViewArm, grip: Vec3, gripQ: Quat, scale: number, out: Vec3, hands = 1): Vec3 {
+  const fistQ = _q.copy(h.gripQ).invert().premultiply(gripQ);
+  return out.copy(grip).sub(_c.copy(h.grip).multiplyScalar(scale * hands).applyQuaternion(fistQ));
 }
 
 /** A bone's turn: its +y along `y` (it hangs down its -y), its +z as near `z` as goes. */
-function boneBasis(y: THREE.Vector3, z: THREE.Vector3, out: THREE.Quaternion): THREE.Quaternion {
+function boneBasis(y: Vec3, z: Vec3, out: Quat): Quat {
   const zz = _c.copy(z).addScaledVector(y, -z.dot(y));
   if (zz.lengthSq() < 1e-8) zz.set(0, 0, 1).addScaledVector(y, -y.z);
   zz.normalize();
@@ -83,17 +75,17 @@ function boneBasis(y: THREE.Vector3, z: THREE.Vector3, out: THREE.Quaternion): T
 /**
  * Straight: the fist holding at `grip` turned as `gripQ`, the forearm running back from the wrist
  * toward the elbow (`elbowDir`) and the upper arm on from there in the same line, at `scale` to
- * the model (the fist `hands` times that); the upper arm drawn out so the whole arm is `reach` long (off the screen's edge, like
- * any shooter's arms).
+ * the model (the fist `hands` times that); the upper arm drawn out so the whole arm is `reach`
+ * long (off the screen's edge, like any shooter's arms).
  */
-export function placeStraight(h: ArmParts, grip: THREE.Vector3, gripQ: THREE.Quaternion, elbowDir: THREE.Vector3, scale: number, reach: number, hands = 1) {
+export function placeStraight(h: ViewArm, grip: Vec3, gripQ: Quat, elbowDir: Vec3, scale: number, reach: number, hands = 1) {
   const wrist = placeFist(h, grip, gripQ, scale * hands);
   const y = _b.copy(elbowDir).normalize();
   boneBasis(y, _a.set(0, 0, 1).applyQuaternion(h.fist.quaternion), h.forearm.quaternion);
-  h.forearm.position.copy(wrist).addScaledVector(y, h.arm.wrist.length() * scale);
+  h.forearm.position.copy(wrist).addScaledVector(y, h.wrist.length() * scale);
   h.forearm.scale.setScalar(scale);
-  const upperLen = h.arm.elbow.length() * scale;
-  const stretch = Math.max(1, (reach - h.arm.wrist.length() * scale) / Math.max(1e-3, upperLen));
+  const upperLen = h.elbow.length() * scale;
+  const stretch = Math.max(1, (reach - h.wrist.length() * scale) / Math.max(1e-3, upperLen));
   h.upper.quaternion.copy(h.forearm.quaternion);
   h.upper.position.copy(h.forearm.position).addScaledVector(y, upperLen * stretch);
   h.upper.scale.set(scale, scale * stretch, scale);
@@ -113,7 +105,7 @@ export function upperFor(reach: number, fore: number, upper: number, bend: numbe
  * forearm `fore`: bent toward `pole` (straight, and the upper arm drawn out, if the wrist is further
  * than the two reach).
  */
-export function elbowFor(shoulder: THREE.Vector3, wrist: THREE.Vector3, upper: number, fore: number, pole: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+export function elbowFor(shoulder: Vec3, wrist: Vec3, upper: number, fore: number, pole: Vec3, out: Vec3): Vec3 {
   const u = _a.subVectors(wrist, shoulder);
   const d = u.length();
   u.divideScalar(Math.max(1e-6, d));
@@ -126,16 +118,16 @@ export function elbowFor(shoulder: THREE.Vector3, wrist: THREE.Vector3, upper: n
   return out.copy(shoulder).addScaledVector(u, upper * cos).addScaledVector(perp, upper * Math.sqrt(1 - cos * cos));
 }
 
-const _e = new THREE.Vector3();
-const _w = new THREE.Vector3();
+const _e = new Vec3();
+const _w = new Vec3();
 
 /**
  * Bent: the fist holding at `grip` turned as `gripQ`, the arm reaching back to `shoulder` (all in
  * the parent's space) with the elbow toward `pole`; the upper arm drawn out to `upper` long.
  */
-export function placeBent(h: ArmParts, grip: THREE.Vector3, gripQ: THREE.Quaternion, shoulder: THREE.Vector3, pole: THREE.Vector3, scale: number, upper: number, hands = 1) {
+export function placeBent(h: ViewArm, grip: Vec3, gripQ: Quat, shoulder: Vec3, pole: Vec3, scale: number, upper: number, hands = 1) {
   const wrist = _w.copy(placeFist(h, grip, gripQ, scale * hands));
-  const fore = h.arm.wrist.length() * scale;
+  const fore = h.wrist.length() * scale;
   const elbow = elbowFor(shoulder, wrist, upper, fore, pole, _e);
   // The forearm from the wrist to the elbow, turned with the fist (the wrist doesn't twist).
   const y = _b.subVectors(elbow, wrist).normalize();
@@ -148,6 +140,6 @@ export function placeBent(h: ArmParts, grip: THREE.Vector3, gripQ: THREE.Quatern
   yU.divideScalar(Math.max(1e-6, len));
   h.upper.quaternion.setFromUnitVectors(y, yU).multiply(h.forearm.quaternion);
   h.upper.position.copy(shoulder);
-  const own = h.arm.elbow.length() * scale;
+  const own = h.elbow.length() * scale;
   h.upper.scale.set(scale, (scale * len) / Math.max(1e-3, own), scale);
 }

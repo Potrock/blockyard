@@ -9,7 +9,13 @@ import type { ClientHud } from './hud';
  * sees it (it never imports three.js). Positions, turns and sizes use the platform's math types
  * (`@platform/client/math`).
  */
-export type Node = Pick<THREE.Object3D, 'position' | 'quaternion' | 'scale' | 'rotation' | 'visible' | 'renderOrder' | 'add' | 'remove' | 'children' | 'parent' | 'name' | 'updateMatrixWorld' | 'matrixWorld'>;
+export type Node = Pick<THREE.Object3D, 'position' | 'quaternion' | 'scale' | 'rotation' | 'visible' | 'renderOrder' | 'name' | 'updateMatrixWorld' | 'matrixWorld'> & {
+  /** Hang nodes from this one (taken from wherever they hung before). */
+  add(...nodes: Node[]): Node;
+  remove(...nodes: Node[]): Node;
+  readonly children: Node[];
+  readonly parent: Node | null;
+};
 
 /** A kit: a piece of a game's client behaviour (what a first-person gun looks like, a HUD panel). */
 export interface ClientKit {
@@ -39,7 +45,8 @@ export interface MeHeld {
   /**
    * The item's local state, as its mechanics keep it: a gun's `mag`, `reserve`, `reload`
    * (progress 0..1, -1 when not reloading), `shells` (rounds still to load, one at a time),
-   * `aim` (0..1 down the sights), `sprint` (0..1 carried for sprinting), `sight`, `action`.
+   * `aim` (0..1 down the sights), `sprint` (0..1 carried for sprinting), `slide` (0..1), `sight`,
+   * `action`, `zoom` (how much aiming all the way zooms the view).
    */
   state: Record<string, unknown>;
 }

@@ -219,14 +219,20 @@ clips in its own bones' rotations; `scripts/mannequin.mjs` turns rig-terms clips
 ## First-person arms
 
 A player whose model is a humanoid sees its own arms in first person: its upper arms, forearms
-and fists, each as the rig has it standing straight (the arm hanging, the bone along -y), placed
-by the view model on the gun. Rigid parts go with the joint they hang from. A skinned model's
-arms are cut from the skin into rigid pieces where it rests: each triangle goes with the bone
-that weighs most on its corners (a finger bone's with the hand). The pieces meet where the
-skin bends, so a wrist bent hard can show a seam; in first person the view model keeps the
+and fists, each as the rig has it standing straight (the arm hanging, the bone along -y). The
+engine builds these pieces and hands them to the game's client code as
+`client.view.arms.humanoid`: each side's `upper`, `forearm` and `fist` nodes, where the elbow and
+wrist are, where (and how turned) the fist holds, the model's `firstPerson` fit and the
+`heldScale` the arms are sized for. The first-person kit (`firstPerson.standard()`, see
+docs/PLATFORM.md) places them on what's held. Rigid parts go with the joint they hang from. A
+skinned model's arms are cut from the skin into rigid pieces where it rests: each triangle goes
+with the bone that weighs most on its corners (a finger bone's with the hand). The pieces meet
+where the skin bends, so a wrist bent hard can show a seam; in first person the kit keeps the
 wrists fairly straight.
 
-Each arm runs from the fist back to a shoulder off the screen's edge: straight by default, or,
-with `firstPerson.bend` (or a gun's `hold.gun.arm.bend`), bent at the elbow, the two bones reaching
-a shoulder that stays put in the view as the hand kicks and reloads. Their size is the model's
-(`firstPerson.scale`, and the fists `firstPerson.hands` times that), not the gun's.
+With the platform's kit, each arm runs from the fist back to a shoulder off the screen's edge:
+straight by default, or, with `firstPerson.bend` (or a gun's `hold.gun.arm.bend`), bent at the
+elbow, the two bones reaching a shoulder that stays put in the view as the hand kicks and reloads.
+Their size is the model's (`firstPerson.scale`, and the fists `firstPerson.hands` times that), not
+the gun's. The kit's arm fitting is `client-kits/firstperson/arms.ts`: a game that copies the kit
+can place the pieces any way it likes.

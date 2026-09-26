@@ -789,6 +789,73 @@ game.player.viewModel.setSkin([0, 0], 'mine');        // any skin in any atlas; 
 game.player.viewModel.visible = false;                // cutscenes
 ```
 
+### It's a kit: the view layer and `firstPerson.standard()`
+
+None of the above is the engine's. The engine draws a **first-person layer** and loads what goes
+in it; everything this section describes (the styles, the Minecraft transforms, guns' poses,
+reloads and actions, the kick and the flash, the bob and the sway, the arms fitted to what's
+held) is a client kit, `firstPerson.standard()` from `@platform/client/kits`, written only against
+the public client API. Every game lists it (`standardKits()` includes it). A game that wants its
+first person another way copies the kit and changes the copy.
+
+**The view layer (`client.view`).** Drawn over the world with its own lens (its space is the
+eye's: x right, y up, z back, in blocks), lit by the light where the player's eyes are:
+
+| Member | What it is |
+| --- | --- |
+| `root` | Everything in the layer hangs from it (`node.add`). The engine never moves it. |
+| `camera` | The layer's own lens: `fov` (70, yours to change), `aspect` (the world camera's). |
+| `visible` | Whether the engine draws the layer this frame: not dead, in a vehicle, in third person, on the title screen, or in a game with its own camera. |
+| `held` | What's in hand, loaded: the item selected (or a throwable thrown with its key, or a building game's block). `null` for an empty hand. A new object each time it changes (the `equip` event); the old one stays usable until you let it go, so a kit can lower one and raise the next. |
+| `held.node` | Its mesh: add it where it's held. |
+| `held.form` | `sprite` (its icon extruded, one block square, centred), `model` (its box or glTF model, `held.model` its spec), `block` (a little cube), `cross` (a plant). |
+| `held.points` | Its marked points in its own space (`grip`, `grip2`, `muzzle`, `sight`, `mag`: the spec's pixels over the file's empty nodes). A kit may add its own: the first-person kit writes in the gun points it guessed. |
+| `held.bounds`, `held.halfWidthAt(z)`, `held.pixel(x, y)` | Its size, how wide it is at a point along it, and where a sprite's pixel is (for grips). |
+| `held.alternate(on)` | Show its other look (its `drawIcon`: a bow drawn) or its own, at once. |
+| `held.toWorld(p)`, `worldPoint(name)` | A point of it in the world as drawn this frame (tracers leave `worldPoint('muzzle')`). |
+| `arms.skin`, `arms.setSkin(uv, atlas)` | The skin the arms wear (the server's `viewModel.setSkin` arrives as an event; the kit passes it on). |
+| `arms.arm({ length, mirror })` | A new arm mesh: the player model's own arm if it has one (`arms.model`), else the skin's right arm as a 4 × `length` × 4 pixel box (`mirror`: the left's look). |
+| `arms.box(size)` | A new box the colour of the skin's hand: palms and fingers. |
+| `arms.humanoid` | A humanoid model's arms: each side's `upper`, `forearm` and `fist` nodes, its elbow and wrist, where the fist holds (`grip`, `gripQ`), the model's `firstPerson` fit, the `heldScale` they're sized for (docs/HUMANOID.md). |
+| `arms.version` | Counts up when any of the arms change: make what you made again. |
+| `node()`, `sprite(image, { additive, depthTest, color })`, `free(node)` | A group; a flat square showing an image (`'flash'`, a muzzle flash, or an address); give back what the layer made. |
+| `animations` | The game's first-person animations by name (`viewModel.define` on the server). |
+
+**What the kit reads.** `client.me`: `look` (sway), `bob`, `dead` (the hand lowers), `hand`
+(melee readiness, a bow's draw) and `held.state`, the gun as this screen fires it (`aim`,
+`sprint`, `slide`, `reload`, `shells`, `sight`, `action`, `zoom`, `mag`, `reserve`). And
+`client.events`: `shot` (a gun went off here), `use` and `swing` (the server's, from a hit, a
+drink, a bow loosed), `kick`, `toss` (a throw made here), `land` (with the speed they fell at),
+`equip`, and the server's `view.play`, `view.visible`, `view.setSkin`. Aiming down the sights
+zooms the world through `client.camera.zoom`.
+
+**Its files** (`src/platform/client-kits/firstperson/`): `index.ts` (`standard()`), `kit.ts` (the
+rig, what's in hand coming up, the frame: rests, animations, a gun's motion, springs and the
+flash, bob and sway), `poses.ts` (the styles, Minecraft's transforms, the gun pose table),
+`anims.ts` (the built-in animations), `arms.ts` (a humanoid's arms fitted to the grip, straight or
+bent) and `points.ts` (a gun's points guessed from its size).
+
+**Changing it.** The kit imports only `@platform`, `@platform/client` and
+`@platform/client/math`, so it copies unchanged. Copy the folder into the game's own client code
+and list the copy in place of the platform's:
+
+```ts
+// src/games/mygame/client.ts (the kit copied to src/games/mygame/client/firstperson/)
+import { defineClient } from '@platform/client';
+import { effects, figures, hud, sounds } from '@platform/client/kits';
+import * as firstPerson from './client/firstperson';
+import { shared } from './shared';
+
+export default defineClient(shared, {
+  kits: [...sounds.standard(), ...firstPerson.standard(), ...figures.standard(), ...hud.standard(), ...effects.standard()],
+});
+```
+
+Then change the copy: another pose table in `poses.ts`, another flash (`client.view.sprite`),
+no bob, arms placed another way. A game's own client code can also talk to the platform's kit
+directly: `new firstPerson.FirstPersonKit()` in its kit list, then `kit.define(name, anim)`, `kit.play(name)`,
+`kit.kick()`, `kit.visible`.
+
 ## Vehicles, flight and custom cameras
 
 ![Starfighter](starfighter.png)

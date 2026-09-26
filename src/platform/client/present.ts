@@ -2,14 +2,14 @@ import type { LoopHandle, MenuHandle } from '../api/types';
 import type { Sfx } from '../audio/sfx';
 import type { Effects } from '../fx/effects';
 import { isCallbackRef, type ClientMessage, type PresentCall } from '../net/protocol';
-import type { ViewModel } from '../render/viewmodel';
 import type { GameHud } from '../ui/hudkit';
 
 export interface PresenterParts {
   hud: GameHud;
   fx: Effects;
   sfx: Sfx;
-  view: ViewModel;
+  /** The first-person view's calls (`visible`, `setSkin`, `play`, `kick`, `use`, `swing`): the runtime makes them events for the game's client code. */
+  view: (method: string, args: unknown[]) => void;
   /** Messages back to the simulation (callbacks, closed menus). */
   send: (m: ClientMessage) => void;
   /** Calls for the client itself: `debris` from broken blocks, `reset` on restart. */
@@ -50,9 +50,7 @@ export class Presenter {
       case 'audio':
         return this.audio(c.method, args);
       case 'view':
-        if (c.method === 'visible') p.view.visible = args[0] as boolean;
-        else (p.view as unknown as Callable)[c.method](...args);
-        return;
+        return p.view(c.method, args);
       case 'client':
         return p.client(c.method, args);
     }

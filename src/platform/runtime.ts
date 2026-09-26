@@ -24,7 +24,6 @@ import { BiomeMap, builtinTextures, createBlockTextures, createNoiseTexture, typ
 import { paintGameTextures } from './render/blocktextures';
 import { Particles } from './render/particles';
 import { BlockHighlight } from './render/highlight';
-import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
 import { firstGameBlock, gameBlocks, useGameBlocks, type GameBlocks } from './world/blocks';
@@ -54,8 +53,9 @@ import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
 import type { BlockRef, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
-import type { Client, ClientDefinition, ClientGame, GameEntry, Me, Node } from './api/client';
+import type { Client, ClientDefinition, ClientGame, GameEntry, Me } from './api/client';
 import { ClientRuntime } from './client/api/client';
+import { FirstPersonLayer } from './client/api/view';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -132,7 +132,8 @@ export class Runtime {
   private pause!: PauseMenu;
   private picker: BlockPicker | null = null;
   private hooks!: FrameHooks;
-  private held!: ViewModel;
+  /** The first-person layer (`client.view`): what's in hand and the player's arms, placed by the game's kits. */
+  private held!: FirstPersonLayer;
   private graphics!: EntityGraphics;
   private entityView!: EntityView;
   private pickupView!: PickupView;
@@ -484,13 +485,12 @@ export class Runtime {
 
     this.view = new PlayerCamera(this.camera);
     this.view.clearance = (from, dir, max) => this.clearance(from, dir, max);
-    this.held = new ViewModel(this.textures.albedo, this.textures.material, this.graphics);
-    this.renderer.overlay = { scene: this.held.scene, camera: this.held.camera };
+    this.held = new FirstPersonLayer(this.textures.albedo, this.textures.material, this.graphics, this.camera, this.content.animations, (e) => this.client?.emit(e));
+    this.renderer.overlay = { scene: this.held.view.scene, camera: this.held.view.camera };
     this.renderer.opaqueScene.add(this.highlight.object);
 
     // The game's content reaches the client's renderer and audio as it's defined.
     this.content.onSound((name, voice) => this.sfx.define(name, voice));
-    this.content.onAnimation((name, anim) => this.held.define(name, anim));
     this.content.onWidget((name, widget) => this.gameHud.defineWidget(name, widget));
     this.content.onAtlas((name, source) => {
       if ('pixels' in source) this.graphics.addAtlas(name, source.width, source.height, source.pixels, source.emissive);
@@ -502,7 +502,7 @@ export class Runtime {
       hud: this.gameHud,
       fx: this.fx,
       sfx: this.sfx,
-      view: this.held,
+      view: (method, args) => this.viewCall(method, args),
       send: (m) => this.link.send({ t: 'message', msg: m }),
       client: (method, args) => this.clientCall(method, args),
     });
@@ -529,7 +529,7 @@ export class Runtime {
     }
     this.hud.setVisible(false);
     this.gameHud.setVisible(false);
-    this.held.scene.visible = false;
+    this.held.visible = false;
 
     this.pause = new PauseMenu(this.ui, this.settings, (s) => this.applySettings(s), () => this.input.lock());
     this.pause.onTime = (t) => this.link.send({ t: 'env', time: t });
@@ -594,7 +594,7 @@ export class Runtime {
     this.client = new ClientRuntime(this.def, this.clientDef, {
       services: {
         // First person.
-        view: { root: this.held.scene as unknown as Node },
+        view: this.held,
         // Figures.
         figures: {},
         // HUD and effects.
@@ -685,10 +685,34 @@ export class Runtime {
     }
   }
 
-  /** Show a block in the hand (a bed whole: its head too). */
-  private holdBlock(id: number) {
+  /**
+   * The server's calls to this player's first-person view (`player.viewModel`, and the sim's own
+   * uses, swings and kicks): events for the game's client code (its first-person kit plays them).
+   */
+  private viewCall(method: string, args: unknown[]) {
+    const power = (args[0] as number | undefined) ?? 1;
+    switch (method) {
+      case 'visible':
+        return this.client.emit({ t: 'view.visible', visible: args[0] as boolean });
+      case 'setSkin':
+        return this.client.emit({ t: 'view.setSkin', skin: args[0] as [number, number] | null, atlas: args[1] as string | undefined });
+      case 'play': {
+        const opts = args[1] as { power?: number; speed?: number } | undefined;
+        return this.client.emit({ t: 'view.play', anim: args[0] as string, power: opts?.power ?? 1, speed: opts?.speed ?? 1 });
+      }
+      case 'kick':
+        return this.client.emit({ t: 'kick', strength: power });
+      case 'use':
+        return this.client.emit({ t: 'use', power });
+      case 'swing':
+        return this.client.emit({ t: 'swing', power });
+    }
+  }
+
+  /** Show a block in the hand (a bed whole: its head too), from the block picker or an item that looks like one. */
+  private holdBlock(id: number, item: string | null = null, itemDef?: ItemDefinition) {
     const def = this.registry.blocks[id];
-    this.held.setBlock(def, def?.model === 'bed' ? (variant(this.registry, def, { part: 'head' }) ?? undefined) : undefined);
+    this.held.holdBlock(def, def?.model === 'bed' ? (variant(this.registry, def, { part: 'head' }) ?? undefined) : undefined, item, itemDef);
   }
 
   /** `hud.highlight`: outline a block, with break cracks at `progress`. */
@@ -739,7 +763,7 @@ export class Runtime {
         case 'ready':
           this.hostReady = true;
           // The skin may live in an atlas the game registered in `setup`, which has arrived by now.
-          if (this.def.player?.skin) this.held.setSkin(this.def.player.skin, this.def.player.skinAtlas);
+          if (this.def.player?.skin) this.held.arms.setSkin(this.def.player.skin, this.def.player.skinAtlas);
           break;
         case 'exit':
           this.exit();
@@ -1049,7 +1073,7 @@ export class Runtime {
     this.title.hide();
     this.hud.setVisible(this.hudVisible);
     this.gameHud.setVisible(this.hudVisible);
-    this.held.scene.visible = this.hudVisible;
+    this.held.visible = this.hudVisible;
     this.mode = 'playing';
     // Joining the game: as the name on the title screen.
     this.link.send({ t: 'start', name: this.title.name() });
@@ -1088,7 +1112,7 @@ export class Runtime {
       if (this.mode !== 'title') {
         this.hud.setVisible(this.hudVisible);
         this.gameHud.setVisible(this.hudVisible);
-        this.held.scene.visible = this.hudVisible;
+        this.held.visible = this.hudVisible;
       }
     }
     if (code === 'KeyE' && this.picker) {
@@ -1226,12 +1250,12 @@ export class Runtime {
     const arm = model?.gltf && hand ? `${model.gltf.url}|${hand}` : '';
     if (arm !== this.shown.arm) {
       if (!arm) {
-        this.held.setArm(null);
+        this.held.setModelArm(null);
         this.shown.arm = '';
       } else {
         const look = this.graphics.gltf.limb(model!.gltf!.url, hand!, 12 / 16);
         if (look) {
-          this.held.setArm(look);
+          this.held.setModelArm(look);
           this.shown.arm = arm;
         }
       }
@@ -1262,10 +1286,10 @@ export class Runtime {
         this.holdBlock(creative.hotbar[creative.selected]);
       }
     }
-    if (me.hotbar) this.showHotbar(me.hotbar.slots, me.hotbar.selected, me.hand);
+    if (me.hotbar) this.showHotbar(me.hotbar.slots, me.hotbar.selected);
   }
 
-  private showHotbar(slots: (ItemStack | null)[], selected: number, hand: PlayerFrame['hand']) {
+  private showHotbar(slots: (ItemStack | null)[], selected: number) {
     // (Redrawn as model files arrive: an icon can be a picture of one.)
     const key = `${slots.map((s) => (s ? `${s.item}x${s.count}` : '')).join(',')}|${selected}|${this.graphics.gltf.version}`;
     if (key !== this.shown.hotbar) {
@@ -1281,41 +1305,22 @@ export class Runtime {
         prevSelected !== undefined && prevSelected !== String(selected),
       );
     }
-    // The held item: its 3D model, its sprite extruded, a block, or the bow's draw frame; a
-    // throwable being thrown with its key, over whatever's in hand.
+    // What's in hand (the first-person layer loads it; the game's kits hold it): the item
+    // selected, or a throwable being thrown with its key over it.
     const quick = this.throwsCtl.inHand;
     const stack = quick ? { item: quick, count: 1 } : slots[selected];
     const def = stack ? this.content.items.get(stack.item) : undefined;
-    const drawn = def?.kind === 'bow' && hand.drawing && hand.charge > 0.25;
-    const heldKey = `${stack?.item ?? ''}|${drawn}`;
+    const heldKey = stack?.item ?? '';
     if (heldKey === this.shown.held) return;
-    const sameItem = this.shown.held.split('|')[0] === (stack?.item ?? '');
     this.shown.held = heldKey;
-    if (!def) {
-      this.held.setEmpty();
-      return;
-    }
-    if (typeof def.icon === 'object' && 'block' in def.icon) {
-      // Looks like a block: held as a little cube of it.
-      this.holdBlock(this.blockId(def.icon.block));
-      return;
-    }
-    const look = this.graphics.itemLook(def, drawn);
-    if (!look) {
+    if (!def) return this.held.holdNothing();
+    // Looks like a block: held as a little cube of it.
+    if (typeof def.icon === 'object' && 'block' in def.icon) return this.holdBlock(this.blockId(def.icon.block), stack!.item, def);
+    if (!this.held.holdItem(stack!.item, def)) {
       // Its model's file is still coming: nothing in hand yet, and look again next frame.
       this.shown.held = '';
-      this.held.setEmpty();
-      return;
+      this.held.holdNothing();
     }
-    if (def.kind === 'bow' && sameItem) {
-      // Drawing or releasing: swap the frame without the lower-and-raise.
-      this.held.swapItemGeometry(look.geometry);
-      return;
-    }
-    const style = def.kind === 'melee' ? 'sword' : def.kind === 'bow' ? 'bow' : def.kind === 'gun' ? 'gun' : def.kind === 'throwable' ? 'throw' : 'item';
-    // Held as a model (boxes or glTF), posed by its grip; else as its sprite.
-    const hold = look.model ? { ...def.hold, model: look.model } : def.hold ?? {};
-    this.held.setItem(look.geometry, look.albedo, look.emissive, hold, style, look.points, look.surface);
   }
 
   /** Columns the host keeps around the player: what this client shows, within reason. */
@@ -1533,15 +1538,16 @@ export class Runtime {
     for (let i = this.blasts.length - 1; i >= 0; i--) if ((this.blasts[i].age += dt) > 0.3) this.blasts.splice(i, 1);
     this.fx.update(dt);
     this.held.setLight(this.probe);
-    // The game's client code: its kits, then its own frame (where the view model's own update
-    // was; kits take the engine's presentation over, piece by piece).
+    // The first-person layer: drawn only in first person (nothing in hand while dead, someone out
+    // of the game watching sees only the game, or in third person).
+    this.held.frame(this.camera.aspect, this.walker && this.mode !== 'title' && !me.dead && !me.vehicle && !this.view.thirdPerson);
+    // The game's client code: its kits (the first-person view, ...), then its own frame.
     const mine = this.meOf(me, dt);
     if (!this.clientStarted) {
       this.clientStarted = true;
       this.client.setup(mine);
     }
     this.client.frame(dt, mine);
-    if (this.walker) this.updateHand(dt, me);
     this.drawOwnShots();
     this.gunHud(me);
     this.throwHud(me);
@@ -1606,48 +1612,14 @@ export class Runtime {
     return max;
   }
 
-  private updateHand(dt: number, me: PlayerFrame) {
-    // Nothing in hand while dead (someone out of the game watching sees only the game), or in third person.
-    this.held.scene.visible = this.mode !== 'title' && !me.dead && !me.vehicle && !this.view.thirdPerson;
-    this.held.draw = me.hand.drawing ? me.hand.charge : 0;
-    const bobAmt = this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0;
-    this.held.update(dt, {
-      aspect: this.camera.aspect,
-      bobPhase: me.bob * Math.PI * 0.9,
-      bobAmount: bobAmt,
-      yaw: this.view.yaw,
-      pitch: this.view.pitch,
-      onGround: me.onGround,
-      vy: me.vy,
-      down: me.dead,
-      strength: this.itemMode ? me.hand.strength : 1,
-      gun: this.gunView(me),
-    });
-  }
-
-  /** The held gun, for the view model: aimed, sprinting, sliding, reloading. */
-  private gunView(me: PlayerFrame) {
-    const st = this.guns.state;
-    const def = this.guns.def;
-    if (!st || !def) return undefined;
-    const g = gunOf(def);
-    return {
-      aim: st.aim,
-      sprint: this.guns.sprint,
-      slide: me.sliding ? 1 : 0,
-      reload: this.guns.reloadProgress,
-      shells: def.shells ? this.guns.shellsToLoad : 0,
-      sight: g.aim.sight,
-      action: def.action,
-    };
-  }
-
   /** The local player for the game's client code (`client.me`): as predicted and shown this frame. */
   private meOf(me: PlayerFrame, dt: number): Me {
     void dt;
-    const held = this.guns.state && this.guns.def ? this.gunView(me) : undefined;
     const stack = me.hotbar?.slots[me.hotbar.selected] ?? null;
-    const heldItem = this.guns.def ? (stack?.item ?? null) : null;
+    // Landing: how fast they were falling (the frame before).
+    if (me.onGround && !this.wasGround) this.client.emit({ t: 'land', vy: this.lastVy });
+    this.wasGround = me.onGround;
+    this.lastVy = me.vy;
     return {
       id: this.playerId,
       position: { x: me.x, y: me.y, z: me.z },
@@ -1665,8 +1637,35 @@ export class Runtime {
       bob: { phase: me.bob * Math.PI * 0.9, amount: this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0 },
       thirdPerson: this.view.thirdPerson,
       hand: { item: stack?.item ?? null, count: stack?.count ?? 0, strength: this.itemMode ? me.hand.strength : 1, drawing: me.hand.drawing, charge: me.hand.charge },
-      held: held && heldItem ? { item: heldItem, def: this.content.items.get(heldItem), state: { ...held } } : null,
+      held: this.heldGun(me, stack?.item ?? null),
       abilities: {},
+    };
+  }
+  /** On the ground last frame, and falling how fast (for `land`). */
+  private wasGround = true;
+  private lastVy = 0;
+
+  /** The held gun as this screen fires and reloads it: aimed, sprinting, sliding, reloading, its rounds; null without one. */
+  private heldGun(me: PlayerFrame, item: string | null): Me['held'] {
+    const st = this.guns.state;
+    const def = this.guns.def;
+    if (!st || !def || !item) return null;
+    const g = gunOf(def);
+    return {
+      item,
+      def: this.content.items.get(item),
+      state: {
+        aim: st.aim,
+        sprint: this.guns.sprint,
+        slide: me.sliding ? 1 : 0,
+        reload: this.guns.reloadProgress,
+        shells: def.shells ? this.guns.shellsToLoad : 0,
+        sight: g.aim.sight,
+        action: def.action,
+        zoom: g.aim.zoom,
+        mag: st.mag,
+        reserve: st.reserve,
+      },
     };
   }
 
@@ -1721,13 +1720,9 @@ export class Runtime {
     const kick = this.guns.g?.recoil.up ?? 1;
     if (shots.length && this.input.device === 'pad' && this.settings.vibration) rumble(Math.min(1, kick / 5), 0.3 + Math.min(0.5, kick / 6), 55 + kick * 18);
     for (const _ of shots) {
-      this.held.fire(1);
+      this.client.emit({ t: 'shot', item: stack!.item, power: 1 });
       this.sfx.play(def?.sounds?.use ?? 'gunshot', { volume: 0.9, pitch: 0.97 + Math.random() * 0.06 });
     }
-    // Aiming down the sights zooms the view.
-    const g = this.guns.g;
-    const a = this.guns.state?.aim ?? 0;
-    this.view.aimZoom = g ? 1 + (g.aim.zoom - 1) * a * a * (3 - 2 * a) : 1;
     return shots;
   }
 
@@ -1859,7 +1854,7 @@ export class Runtime {
     // From the hand (where it's drawn from), on the path the host will fly it on.
     const hand = this.camera.localToWorld(new THREE.Vector3(0.28, -0.12, -0.5)).sub(this.fx.shakeOffset);
     this.flights.add(`${this.playerId}:${made.serial}`, made.item, made.from, made.v, fuseSteps(throwable(def), made.cooked), hand);
-    this.held.toss();
+    this.client.emit({ t: 'toss' });
   }
 
   /** Throwables on the HUD: how many of each they carry (less throws the host hasn't heard of), its key, one being cooked; and the fuse burning round the crosshair. */
