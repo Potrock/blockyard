@@ -11,13 +11,15 @@ const now = () => ({ mode: match.mode.id as string, map: match.map.id as string 
 /**
  * Call of Blocky's modes and maps, with bots playing them: a whole Team Deathmatch (sides of
  * four in their colours and outfits, nobody hurting their own side), a whole match of The
- * Briefcase (the case planted, and cracked or gone off; the sides swapping), a public room moving
- * on to the next match of its rotation (Team Deathmatch at Big Kahuna Burger, fought there), and
- * a room of one's own picking its mode and map from the menu.
+ * Briefcase (the case planted, and cracked or gone off; the sides swapping), a person planting the
+ * case (holding F at a site) and it going off, a public room moving on to the next match of its
+ * rotation (Team Deathmatch at Big Kahuna Burger, fought there), and a room of one's own picking
+ * its mode and map from the menu.
  */
 export default function cobmodes() {
   teamDeathmatch();
   briefcase();
+  plantAndBlow();
   rotation();
   ownRoom();
 }
@@ -64,11 +66,11 @@ export function teamDeathmatch() {
   check(banners.includes('VICTORY') || banners.includes('DEFEAT'), `the end is a victory or a defeat: ${banners.slice(-3).join(', ')}`);
 }
 
-export function briefcase() {
+export function briefcase(map = 'jackrabbit', seed = 5) {
   const t0 = performance.now();
-  const h = launch('callofblocky', { seed: 5, radius: 5 });
+  const h = launch('callofblocky', { seed, radius: 5 });
   const g = h.ctx;
-  g.commands.run('mode case jackrabbit');
+  g.commands.run(`mode case ${map}`);
   h.run(0.2);
   check(match.mode.id === 'case', `expected The Briefcase, got ${match.mode.id}`);
   let deaths = 0;
@@ -108,7 +110,7 @@ export function briefcase() {
   const banners = h.find('hud', 'banner').map((c) => String(c.args[0]));
   const swapped = banners.includes('SWITCHING SIDES');
   console.log(
-    `  The Briefcase: ${simulated.toFixed(0)} s in ${wall.toFixed(1)} s: ${rounds} rounds, ${TEAMS[0].short} ${match.score[0]} · ${TEAMS[1].short} ${match.score[1]}; planted ${planted}×, cracked ${cracked}×, went off ${boomed}×, dropped ${dropped}× (picked up ${picked}×), ${deaths} deaths (at most ${maxDeathsInRound} a round)`,
+    `  The Briefcase at ${match.map.name}: ${simulated.toFixed(0)} s in ${wall.toFixed(1)} s: ${rounds} rounds, ${TEAMS[0].short} ${match.score[0]} · ${TEAMS[1].short} ${match.score[1]}; planted ${planted}×, cracked ${cracked}×, went off ${boomed}×, dropped ${dropped}× (picked up ${picked}×), ${deaths} deaths (at most ${maxDeathsInRound} a round)`,
   );
   for (const l of lines.filter((l) => l.includes(' take round '))) console.log(`    ${l}`);
   check(match.phase === 'over', 'the match should end');
@@ -118,6 +120,36 @@ export function briefcase() {
   check(planted >= 1, 'the case should get planted');
   check(cracked + boomed >= 1, 'a planted case should be cracked or go off');
   check(maxDeathsInRound <= 8, `one life a round (${maxDeathsInRound} deaths in a round)`);
+}
+
+/** The person at the keyboard takes the case to A, holds F there, and nobody cracks it. */
+export function plantAndBlow() {
+  const h = launch('callofblocky', { seed: 8, radius: 5 });
+  const g = h.ctx;
+  g.commands.run('mode case kahuna');
+  h.run(0.2);
+  const me = match.fighters.get(g.player.id)!;
+  check(me.team === 0, `the one person is on the side attacking first (${me.team})`);
+  h.run(6);
+  // The bots stand still (they'd crack it), and the case is ours.
+  for (const b of g.bots.all) b.freeze(true, { weapons: true });
+  check(g.commands.run('case') === 'you have the case', 'the case cheat hands it over');
+  const site = match.map.bomb.sites[0];
+  g.player.teleport({ x: site.at.x, y: site.at.y + 0.05, z: site.at.z });
+  h.run(0.5);
+  const lines = () => feed(h);
+  h.run(1, { pilot: () => ({ down: ['KeyF'] }) });
+  check(!lines().some((l) => l.includes('planted the case')), 'planting takes a few seconds');
+  h.run(3, { pilot: () => ({ down: ['KeyF'] }) });
+  check(lines().some((l) => l.includes('planted the case at A')), `holding F at A plants it: ${lines().slice(-3).join(' | ')}`);
+  const deaths: string[] = [];
+  g.events.on('playerDeath', (e) => deaths.push(e.player.name));
+  h.run(37);
+  check(lines().some((l) => l.includes('the case went off at A')), `the fuse runs out: ${lines().slice(-3).join(' | ')}`);
+  check(match.score[0] === 1 && match.score[1] === 0, `the attackers take the round (${match.score.join(' to ')})`);
+  const banners = h.find('hud', 'banner').map((c) => String(c.args[0]));
+  check(banners.includes('ROUND WON'), 'the planter hears they won the round');
+  console.log(`  a person plants the case at ${site.label} and it goes off: ${deaths.length ? `it took ${deaths.join(', ')} with it` : 'nobody near it'}`);
 }
 
 export function rotation() {

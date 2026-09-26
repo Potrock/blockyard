@@ -1,5 +1,6 @@
 import { defineShared, Models } from '@platform';
 import { ATLAS, skinOrigin } from './art';
+import { BLOCKS } from './blocks';
 import hudCss from './hud.css?raw';
 import { WORLD } from './map';
 import meta from './meta';
@@ -17,6 +18,8 @@ export const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfi
  */
 export const shared = defineShared({
   ...meta,
+  // Big Kahuna Burger's thatch, bamboo, tiki heads, chain-link and menu board (blocks.ts).
+  blocks: BLOCKS,
   world: {
     seed: WORLD.seed,
     // No landscape to make: the maps and their backdrops stand on a plain ground over the void,

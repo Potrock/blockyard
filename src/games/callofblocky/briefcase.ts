@@ -261,11 +261,11 @@ export class CaseRounds {
     if (f.player.alive && this.phase !== 'post' && this.phase !== 'prep') f.player.freeze(false);
   }
 
-  private plant(f: Fighter) {
+  private plant(f: Fighter, where?: Site) {
     const g = this.game;
-    const site = this.siteAt(f.player.position)!;
+    const site = where ?? this.siteAt(f.player.position) ?? match.map.bomb.sites[0];
     this.stop(f.player.id);
-    const q = f.player.position;
+    const q = where ? where.at : f.player.position;
     const at = { x: q.x, y: Math.floor(q.y + 0.01), z: q.z };
     this.planted = { site, at, by: f, t: g.clock.now };
     this.carrier = null;
@@ -410,6 +410,27 @@ export class CaseRounds {
     }
   }
 
+  /** Cheat (`/case`): hand an attacker the case, while a round is on and it isn't down yet. */
+  give(f: Fighter): boolean {
+    if (this.phase !== 'live' || this.side(f) !== 'attack' || !f.player.alive) return false;
+    this.clearProps();
+    this.dropped = null;
+    this.carrier = f;
+    this.markers();
+    return true;
+  }
+
+  /** Cheat (`/case A`): the carrier (or any attacker up) plants it at a site now. */
+  plantAt(name: string): boolean {
+    const site = match.map.bomb.sites.find((s) => s.name === name.toUpperCase());
+    const f = this.carrier?.player.alive ? this.carrier : teamFighters(this.attackers).find((o) => o.player.alive);
+    if (!site || !f || this.phase !== 'live') return false;
+    f.player.teleport({ x: site.at.x, y: site.at.y + 0.05, z: site.at.z });
+    this.carrier = f;
+    this.plant(f, site);
+    return true;
+  }
+
   /** Take everything down (the match is over, or another mode is on). */
   end() {
     this.clearCase();
@@ -425,10 +446,9 @@ export class CaseRounds {
   // -----------------------------------------------------------------------------------------------
 
   /** Where a bot goes when nobody's in sight (the `shooterBots` goal hook). */
-  goal(bot: Bot, mind: BotMind): Vec3 | null {
+  goal(bot: Bot, _mind: BotMind): Vec3 | null {
     const f = fighterOf(bot);
     if (!f || f.team === null || (this.phase !== 'live' && this.phase !== 'planted')) return null;
-    const now = this.game.clock.now;
     const sites = match.map.bomb.sites;
     if (this.side(f) === 'attack') {
       if (this.planted) return around(this.planted.at, bot, 4);
@@ -447,12 +467,14 @@ export class CaseRounds {
       return nearest === f ? this.planted.at : around(this.planted.at, bot, 5);
     }
     if (this.dropped) return around(this.dropped, bot, 3);
-    // Hold their site; shots heard at a site bring them over to it (a rotation).
-    const heard = mind.heard && now - mind.heard.t < 5 ? mind.heard.at : null;
-    const hit = heard && sites.find((s) => Math.hypot(heard.x - s.at.x, heard.z - s.at.z) < 14);
-    if (hit) return around(hit.at, bot, 4);
-    const mine = teamFighters(this.defenders).indexOf(f);
-    return around(sites[mine % 2].at, bot, 4 + (mine >> 1) * 2);
+    // Hold their site (half the side each); once the other site's holders are all down, it's
+    // lost: over there to take it back (a rotation). Shots heard don't pull them off it.
+    const side = teamFighters(this.defenders);
+    const mine = side.indexOf(f);
+    const held = (s: number) => side.some((o, i) => i % 2 === s && o.player.alive);
+    const other = 1 - (mine % 2);
+    const go = !held(other) && side.some((_, i) => i % 2 === other) ? other : mine % 2;
+    return around(sites[go].at, bot, 4 + (mine >> 1) * 2);
   }
 
   /** After the bots have moved this tick: those in place (and with nobody in sight) hold F. */

@@ -533,7 +533,7 @@ function dropBriefcase(game: GameContext) {
   briefcase = game.items.spawnPickup('briefcase', at, { beam: '#ffcc00', despawn: 40 });
   bots.objective = { x: best.x, y: best.y, z: best.z };
   game.hud.marker('briefcase', at, { shape: 'diamond', color: COLORS.gold, label: 'THE BRIEFCASE', edge: true, pulse: true, size: 22 });
-  game.hud.banner('THE BRIEFCASE', 'Somebody left it on the street. Grab it.', { color: COLORS.gold, duration: 2.5 });
+  game.hud.banner('THE BRIEFCASE', `Somebody left it ${match.map.id === 'jackrabbit' ? 'on the street' : 'lying around'}. Grab it.`, { color: COLORS.gold, duration: 2.5 });
   game.audio.play('lock');
 }
 
@@ -814,6 +814,17 @@ export default defineServer(shared, {
       },
     });
     game.commands.register('win', { help: 'End the match now', cheat: true, run: (_a, g, p) => endMatch(g, p, match.mode.teams ? (fighterOf(p)?.team ?? 0) : undefined) });
+    game.commands.register('case', {
+      usage: '[A|B]',
+      help: 'The Briefcase: take the case (you attack), or plant it at A or B now',
+      cheat: true,
+      run: ([site], _g, p) => {
+        const f = fighterOf(p);
+        if (!isCase() || !f) return 'not in The Briefcase';
+        if (site) return rounds.plantAt(site) ? `planted at ${site.toUpperCase()}` : 'no round on, or no such site';
+        return rounds.give(f) ? 'you have the case' : 'only an attacker, while the round is on';
+      },
+    });
     game.commands.register('mode', {
       usage: '<ffa|tdm|case> [jackrabbit|kahuna]',
       help: 'Start a match of this mode (on this map)',

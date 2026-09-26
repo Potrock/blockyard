@@ -34,6 +34,8 @@ export default function roomCost() {
     core.connect(id);
     core.command(id, { t: 'start', name: id });
   }
+  // A command once they've joined (Call of Blocky's mode and map: COMMAND='mode tdm kahuna').
+  if (process.env.COMMAND) core.host.sim.ctx.commands.run(process.env.COMMAND);
   const idle = (o: Partial<PlayerInput> = {}): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: -1, ...o });
   const seq = new Map<string, number>();
   const host = core.host;

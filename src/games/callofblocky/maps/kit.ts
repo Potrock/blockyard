@@ -81,6 +81,72 @@ export const yawTo = (x: number, z: number, tx: number, tz: number) => Math.atan
 export const spawnAt = (x: number, y: number, z: number, tx: number, tz: number): SpawnPoint => ({ x: x + 0.5, y, z: z + 0.5, yaw: yawTo(x, z, tx, tz) });
 
 // ---------------------------------------------------------------------------------------------
+// Canvases: a Blueprint, or a place on one, moved and turned
+// ---------------------------------------------------------------------------------------------
+
+/** What a prop is drawn on: a Blueprint, or a `Place` on one. */
+export interface Canvas {
+  set(x: number, y: number, z: number, block: BlockRef): unknown;
+  fill(a: Vec3, b: Vec3, block: BlockRef | ((x: number, y: number, z: number) => BlockRef | undefined)): unknown;
+}
+
+const TURN: Record<Facing, Facing> = { north: 'east', east: 'south', south: 'west', west: 'north' };
+
+/**
+ * A spot on a Blueprint to build something in its own coordinates, moved to (ox, oz) and turned
+ * `turns` quarter turns (clockwise from above: what faces -x, west, faces north after one), with
+ * the blocks that face a way (stairs, torches, beds) and lie along an axis (logs, poles) turned
+ * with it. The props here all face -x, so `new Place(bp, x, z, 1)` parks a car nose north.
+ */
+export class Place implements Canvas {
+  constructor(
+    private bp: Canvas,
+    private ox: number,
+    private oz: number,
+    private turns = 0,
+  ) {}
+
+  private at(x: number, z: number): [number, number] {
+    switch (((this.turns % 4) + 4) % 4) {
+      case 1:
+        return [this.ox - z, this.oz + x];
+      case 2:
+        return [this.ox - x, this.oz - z];
+      case 3:
+        return [this.ox + z, this.oz - x];
+      default:
+        return [this.ox + x, this.oz + z];
+    }
+  }
+
+  private turned(block: BlockRef): BlockRef {
+    const n = ((this.turns % 4) + 4) % 4;
+    if (!n || typeof block !== 'string') return block;
+    return block
+      .replace(/facing=(north|east|south|west)/, (_, f: Facing) => {
+        let g = f;
+        for (let i = 0; i < n; i++) g = TURN[g];
+        return `facing=${g}`;
+      })
+      .replace(/axis=(x|z)/, (_, a: string) => (n % 2 ? `axis=${a === 'x' ? 'z' : 'x'}` : `axis=${a}`));
+  }
+
+  set(x: number, y: number, z: number, block: BlockRef) {
+    const [wx, wz] = this.at(x, z);
+    this.bp.set(wx, y, wz, this.turned(block));
+  }
+
+  fill(a: Vec3, b: Vec3, block: BlockRef | ((x: number, y: number, z: number) => BlockRef | undefined)) {
+    for (let y = Math.min(a.y, b.y); y <= Math.max(a.y, b.y); y++)
+      for (let z = Math.min(a.z, b.z); z <= Math.max(a.z, b.z); z++)
+        for (let x = Math.min(a.x, b.x); x <= Math.max(a.x, b.x); x++) {
+          const v = typeof block === 'function' ? block(x, y, z) : block;
+          if (v !== undefined) this.set(x, y, z, v);
+        }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Pixel fonts and sprites
 // ---------------------------------------------------------------------------------------------
 
@@ -132,7 +198,7 @@ export function layout(text: string, font: Record<string, string[]>): string[] {
  * Stamp a sprite (rows top first) onto a vertical plane. `at(u, v)` maps the sprite column u
  * (left to right as seen by the viewer) and row-from-bottom v to a world cell.
  */
-export function sprite(bp: Blueprint, rows: string[], colors: Record<string, BlockRef>, at: (u: number, v: number) => Vec3, scale = 1) {
+export function sprite(bp: Canvas, rows: string[], colors: Record<string, BlockRef>, at: (u: number, v: number) => Vec3, scale = 1) {
   const h = rows.length;
   rows.forEach((row, r) => {
     [...row].forEach((ch, c) => {
@@ -182,7 +248,7 @@ export function outlined(rows: string[]): string[] {
  * A palm standing on y0: a tall banded trunk that leans only near the top (no ledge anyone could
  * climb), and a crown of long drooping fronds.
  */
-export function palm(bp: Blueprint, x: number, z: number, height: number, lean: [number, number], y0: number) {
+export function palm(bp: Canvas, x: number, z: number, height: number, lean: [number, number], y0: number) {
   let tx = x;
   let tz = z;
   const kink = Math.max(7, Math.floor(height * 0.75));
@@ -213,13 +279,13 @@ export function palm(bp: Blueprint, x: number, z: number, height: number, lean: 
   bp.set(tx, top - 1, tz - 1, 'brown_concrete');
 }
 
-export function hydrant(bp: Blueprint, x: number, y: number, z: number) {
+export function hydrant(bp: Canvas, x: number, y: number, z: number) {
   bp.set(x, y, z, 'red_concrete');
   bp.set(x, y + 1, z, slab('brick'));
 }
 
 /** The Big Kahuna Burger truck standing on y, nose toward -x: cab at x0, box body behind, open back doors at x0 + 9. */
-export function foodTruck(bp: Blueprint, x0: number, y: number, z0: number) {
+export function foodTruck(bp: Canvas, x0: number, y: number, z0: number) {
   const fill = (xa: number, ya: number, za: number, xb: number, yb: number, zb: number, block: Fill) => bp.fill({ x: xa, y: ya, z: za }, { x: xb, y: yb, z: zb }, block);
   const x1 = x0 + 9;
   const z1 = z0 + 3;
@@ -269,7 +335,7 @@ export function foodTruck(bp: Blueprint, x0: number, y: number, z0: number) {
  * A 1960s convertible standing on y, nose toward -x: a long low body, chrome windscreen posts,
  * white bench seats standing proud of the belt line, tail fins.
  */
-export function convertible(bp: Blueprint, x0: number, y: number, z0: number, body: BlockRef = 'red_concrete') {
+export function convertible(bp: Canvas, x0: number, y: number, z0: number, body: BlockRef = 'red_concrete') {
   const x1 = x0 + 5;
   const z1 = z0 + 2;
   bp.fill({ x: x0, y, z: z0 }, { x: x1, y, z: z1 }, body);
@@ -289,7 +355,7 @@ export function convertible(bp: Blueprint, x0: number, y: number, z0: number, bo
 }
 
 /** A yellow cab standing on y, nose toward -x, with a checker stripe and a roof light. */
-export function taxi(bp: Blueprint, x0: number, y: number, z0: number) {
+export function taxi(bp: Canvas, x0: number, y: number, z0: number) {
   const x1 = x0 + 5;
   const z1 = z0 + 2;
   bp.fill({ x: x0, y, z: z0 }, { x: x1, y: y + 1, z: z1 }, (x, yy, z) => {
@@ -306,4 +372,61 @@ export function taxi(bp: Blueprint, x0: number, y: number, z0: number) {
   bp.fill({ x: x0 + 2, y: y + 1, z: z0 + 1 }, { x: x0 + 3, y: y + 1, z: z0 + 1 }, stairs('spruce', 'west'));
   bp.set(x0 + 2, y + 4, z0 + 1, 'neon_yellow');
   bp.set(x0 + 3, y + 4, z0 + 1, 'neon_yellow');
+}
+
+/**
+ * A split-window bus standing on y, nose toward -x: two-tone, windows all round, a sliding door
+ * open on its +z side (hide in it, or shoot through it).
+ */
+export function van(bp: Canvas, x0: number, y: number, z0: number, lower: BlockRef = 'orange_concrete', upper: BlockRef = 'white_concrete') {
+  const x1 = x0 + 5;
+  const z1 = z0 + 2;
+  bp.fill({ x: x0, y, z: z0 }, { x: x1, y: y + 3, z: z1 }, (x, yy, z) => {
+    const side = z === z0 || z === z1;
+    const end = x === x0 || x === x1;
+    if (yy === y + 3) return upper;
+    if (yy === y) return side && (x === x0 + 1 || x === x1 - 1) ? 'black_concrete' : lower;
+    if (!side && !end) return 'air';
+    if (yy === y + 1) return x === x0 ? upper : lower;
+    // Windows, pillars between them.
+    return x === x0 || (x !== x0 + 2 && x !== x1) ? 'glass' : upper;
+  });
+  // The sliding door, open.
+  bp.fill({ x: x0 + 2, y: y + 1, z: z1 }, { x: x0 + 3, y: y + 2, z: z1 }, 'air');
+  // A bench seat inside, the spare on the nose.
+  bp.set(x1 - 1, y + 1, z0 + 1, stairs('spruce', 'west'));
+  bp.set(x0 - 1, y + 1, z0 + 1, 'black_concrete');
+}
+
+/** A pickup truck standing on y, nose toward -x: a cab, and an open bed behind it. */
+export function pickup(bp: Canvas, x0: number, y: number, z0: number, body: BlockRef = 'light_blue_concrete') {
+  const x1 = x0 + 6;
+  const z1 = z0 + 2;
+  bp.fill({ x: x0, y, z: z0 }, { x: x1, y: y + 1, z: z1 }, (x, yy, z) => {
+    if (yy === y) return (z === z0 || z === z1) && (x === x0 + 1 || x === x1 - 1) ? 'black_concrete' : body;
+    if (x >= x0 + 3 && x < x1 && z !== z0 && z !== z1) return 'air'; // the bed
+    return body;
+  });
+  // The cab: windscreen, roof.
+  bp.fill({ x: x0 + 1, y: y + 2, z: z0 }, { x: x0 + 2, y: y + 2, z: z1 }, (x, _y, z) => (x === x0 + 1 || z === z0 || z === z1 ? 'glass' : body));
+  bp.fill({ x: x0 + 1, y: y + 3, z: z0 }, { x: x0 + 2, y: y + 3, z: z1 }, body);
+  bp.set(x0 - 1, y, z0 + 1, 'iron_block'); // chrome bumper
+  // Something in the bed: a crate of buns.
+  bp.set(x0 + 4, y + 1, z0 + 1, 'oak_planks');
+}
+
+/** A woody station wagon standing on y, nose toward -x: wood-panelled sides, a cream roof. */
+export function wagon(bp: Canvas, x0: number, y: number, z0: number, body: BlockRef = 'white_concrete') {
+  const x1 = x0 + 6;
+  const z1 = z0 + 2;
+  bp.fill({ x: x0, y, z: z0 }, { x: x1, y: y + 1, z: z1 }, (x, yy, z) => {
+    const side = z === z0 || z === z1;
+    if (yy === y) return side && (x === x0 + 1 || x === x1 - 1) ? 'black_concrete' : body;
+    if (x === x0) return body; // hood
+    return side ? 'birch_planks' : x === x1 ? body : 'air';
+  });
+  bp.fill({ x: x0 + 1, y: y + 2, z: z0 }, { x: x1, y: y + 2, z: z1 }, (x, _y, z) => (z === z0 || z === z1 ? (x === x0 + 1 || x === x1 || x === x0 + 4 ? body : 'glass') : x === x0 + 1 ? 'glass' : undefined));
+  bp.fill({ x: x0 + 1, y: y + 3, z: z0 }, { x: x1, y: y + 3, z: z1 }, (x) => (x === x0 + 1 ? body : 'white_concrete'));
+  bp.set(x0 + 3, y + 1, z0 + 1, stairs('spruce', 'west'));
+  bp.set(x1 - 1, y + 1, z0 + 1, stairs('spruce', 'west'));
 }

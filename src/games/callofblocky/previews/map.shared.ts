@@ -1,4 +1,5 @@
 import { defineShared } from '@platform';
+import { BLOCKS } from '../blocks';
 import { MAPS, WORLD } from '../map';
 import meta from './map.meta';
 
@@ -8,6 +9,7 @@ import meta from './map.meta';
  */
 export const shared = defineShared({
   ...meta,
+  blocks: BLOCKS,
   world: {
     seed: WORLD.seed,
     terrain: 'void',
