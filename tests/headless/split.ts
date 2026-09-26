@@ -16,7 +16,7 @@ const SERVER_ONLY: Record<string, string[]> = {
   arena: ['content.ts', 'sounds.ts'],
   bedwars: ['bots.ts', 'fireballs.ts', 'items.ts', 'nav.ts', 'shop.ts', 'sounds.ts', 'state.ts'],
   callofblocky: ['bots.ts', 'hud.ts', 'weapons.ts'],
-  highnoon: ['bots.ts', 'hud.ts', 'sounds.ts', 'weapons.ts'],
+  highnoon: ['bots.ts', 'hud.ts', 'weapons.ts'],
   obby: ['sounds.ts'],
   skyship: ['ship.ts'],
   starfighter: ['capital.ts', 'enemies.ts', 'pilot.ts', 'sounds.ts', 'weapons.ts'],
@@ -29,6 +29,8 @@ const SERVER_ONLY: Record<string, string[]> = {
  */
 const CLIENT_ONLY: Record<string, string[]> = {
   callofblocky: ['models/index.ts', 'client/looks.ts', 'client/sounds.ts'],
+  // (Its cowboys, `models/index.ts`, are the server's to choose: only the guns' model files are the screens'.)
+  highnoon: ['models/revolver.glb', 'models/rifle.glb', 'client/looks.ts', 'client/sounds.ts'],
 };
 
 /** What a file imports (static, dynamic, re-exports and type-only alike), comments aside. */

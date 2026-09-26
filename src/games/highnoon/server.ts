@@ -5,7 +5,6 @@ import { CYLINDER, DUEL, OUTFITS, ROUNDBAR, WANTED } from './hud';
 import { MAP, type SpawnPoint } from './map';
 import { COWBOYS } from './models';
 import { COLORS, cowboyModel, shared } from './shared';
-import { defineSounds } from './sounds';
 import { defineWeapons, feedIcon, WEAPONS } from './weapons';
 
 /**
@@ -355,7 +354,7 @@ export default defineServer(shared, {
     running = false;
     round = 0;
     defineWeapons(game);
-    defineSounds(game);
+    // (Their looks and the game's voices are each screen's, `client/`: named and played here by name.)
     game.hud.define('cylinder', CYLINDER);
     game.hud.define('wanted', WANTED);
     game.hud.define('duel', DUEL);

@@ -1,9 +1,12 @@
-import type { GameContext, SynthKit } from '@platform';
+import type { SynthKit } from '@platform';
+import type { Client } from '@platform/client';
 
 /**
- * Dry Gulch's sounds, all synthesised: a black-powder crack with a long canyon echo for each gun,
- * a round thumbed into the gate, the lever, the dry click of an empty chamber, a ricochet's whine;
- * the church bell that starts a round, a whistled "wah-wah" for the last one standing, spurs.
+ * Dry Gulch's sounds, all synthesised on each screen (`client.audio.define`: nothing is recorded
+ * or sent): a black-powder crack with a long canyon echo for each gun, a round thumbed into the
+ * gate, the lever, the dry click of an empty chamber, a ricochet's whine; the church bell that
+ * starts a round, a whistled "wah-wah" for the last one standing, spurs. The guns play theirs
+ * through their looks (`./looks`); the server plays the rest by name (`audio.play('bell')`).
  */
 
 /** A shot: a low boom, a blast of noise, a crack, and the echo coming back off the mesas. */
@@ -35,8 +38,8 @@ function bell(s: SynthKit, f: number, delay = 0, v = 0.3) {
     s.tone({ wave: 'sine', from: f * k, to: f * k * 0.998, duration: 2.4 / Math.sqrt(k), volume: v * a, delay, attack: 0.004 });
 }
 
-export function defineSounds(game: GameContext) {
-  const a = game.audio;
+export function defineSounds(client: Client) {
+  const a = client.audio;
   a.define('shot_revolver', (s) => shot(s, { boom: 170, body: 0.16, bright: 3800, crack: 0.5, echo: 0.6, loud: 0.95 }));
   a.define('shot_rifle', (s) => shot(s, { boom: 120, body: 0.24, bright: 4600, crack: 0.7, echo: 0.9, loud: 1.1 }));
   a.define('load_round', (s) => {
