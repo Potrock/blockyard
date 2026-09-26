@@ -42,6 +42,7 @@ export interface Terraform {
  * - `spawns`: where fighters appear in a free-for-all, and respawn in Team Deathmatch.
  * - `teams`: each team's side (Team Deathmatch's first spawns), the first team's first.
  * - `bomb`: The Briefcase: where the attackers and the defenders start, and the two sites.
+ * - `home`: where people come in, and what the home page looks at, while a match is on it.
  * - `overview`: a camera looking over it.
  * - `hotspots`: places worth fighting over (bots drift toward them).
  */
@@ -57,6 +58,7 @@ export interface MapSpec {
   spawns: SpawnPoint[];
   teams: [SpawnPoint[], SpawnPoint[]];
   bomb: { attack: SpawnPoint[]; defend: SpawnPoint[]; sites: [Site, Site] };
+  home: SpawnPoint;
   overview: { position: Vec3; target: Vec3 };
   hotspots: Vec3[];
 }

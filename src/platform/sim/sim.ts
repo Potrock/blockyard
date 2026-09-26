@@ -946,6 +946,12 @@ export class Sim {
         },
         collisionHeight: (x, y, z) => world.collision_top(Math.floor(x), Math.floor(y), Math.floor(z)),
         seaLevel: engine.sea_level(),
+        get spawn() {
+          return { ...sim.spawn };
+        },
+        set spawn(s) {
+          sim.spawn = { x: s.x, y: s.y, z: s.z, yaw: s.yaw ?? 0 };
+        },
       },
       players,
       player: local,

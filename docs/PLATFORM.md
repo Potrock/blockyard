@@ -51,18 +51,22 @@ src/games/
     shop.ts items.ts    the shopkeeper's menu and everything it sells
     fireballs.ts        thrown fireballs that blast wool and wood
     art/ sounds.ts      team skins, item sprites, sounds
-  callofblocky/         Call of Blocky: a pulp free-for-all shooter against bots and people
-    server.ts           rules: the match, spawns, kills, streaks, loadouts, the HUD
-    shared.ts           the street, movement, the fighters' models, the HUD theme
+  callofblocky/         Call of Blocky: a pulp shooter against bots and people, three modes on two maps
+    server.ts           rules: the match and its mode, teams, spawns, kills, streaks, loadouts, the HUD
+    modes.ts            the modes (free-for-all, Team Deathmatch, The Briefcase), the teams, the rotation
+    match.ts            the match as the server's parts share it: the fighters, the mode, the map, the score
+    briefcase.ts        The Briefcase's rounds: planting and cracking the case, one life a round, the bots' roles
+    shared.ts           the maps, movement, the fighters' models, the HUD theme, its own blocks (blocks.ts)
     weapons.ts          what the guns (kind 'gun'), the katana and the lethals (kind 'throwable') do
     client.ts           the kits it uses, listed; its looks and voices (client/)
     client/looks.ts     how each weapon looks: its model, icon, first-person hold, tracer, trail, sounds
-    client/sounds.ts    gunshots, reloads, the lethals, the stingers (client.audio.define)
-    bots.ts             bot fighters (game.bots) on the navGrid kit
-    map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
+    client/sounds.ts    gunshots, reloads, the lethals, the case's fuse, the stingers (client.audio.define)
+    bots.ts             bot fighters (game.bots) on the navGrid kit, the mode saying who's fair game and where to go
+    map.ts maps/        the maps, far apart in one void world: Jackrabbit Lane (a Nuketown-style street) and
+                        Big Kahuna Burger (a burger joint, its lot, a motel round a drained pool), as Blueprints
     models/             the guns and fighters as GLB files (tools/ writes them; the guns reached only by client code)
     art.ts              the pulp wardrobe (skins painted in code)
-    hud.css hud.ts      its HUD: the comic-book theme (hud.theme.css) and its own corner widget
+    hud.css hud.ts      its HUD: the comic-book theme (hud.theme.css), its corner widget, the team modes' bar
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
     server.ts           rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
     course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
@@ -181,6 +185,7 @@ A person's screen coming into play is its own moment: `playerReady` (after `star
 - `terrain: 'void'` with a `ground`: your structures on a plain slab, `ground: { y, top, fill, depth }` (its `top` block, grass by default, at `y`, over `depth - 1` of `fill`, dirt; 4 deep in all), as far as anyone sees, with a normal horizon. `terraform` shapes it: a height above `y` raises a hill (a backdrop, a ridge for a landmark to stand on), below it sinks a hollow. No noise, caves, water or plants are made, so it's the choice for a game played in one place: Call of Blocky's street and Arena's colosseum stand on one, and cost a fraction of a natural world to make and draw (Arena: from about 880 000 triangles a frame to 45 000).
 - `maxViewDistance`: hold the player's view distance to this many chunks. A game played in a small space has nothing further to load, mesh and draw (the haze follows it, so keep backdrop landmarks within it).
 - `spawn`, `spawnYaw`, `time` (0 = midnight, 0.5 = noon), `freezeTime`, `seed`, `persist` (save block edits and position; Sandbox uses it).
+  At runtime `game.world.spawn` (`{ x, y, z, yaw }`) is where players come in (joining, `restart`) and what someone watching from the game's home page looks at. A game played in several places moves it to the one in play: Call of Blocky builds its two maps far apart in one world (`maxViewDistance` keeps only the near one loaded and drawn) and sets it to the map of each match, so the home page shows where the fight is to whoever opens it (anyone already watching keeps the view they came in with).
 - `viewDistance`: a minimum view distance in chunks for games that see far (flight). The player's own setting wins if it's higher.
 - `destructible`: blocks you can shoot holes in (see Blocks you can shoot holes in, below). Off by default.
 
@@ -437,7 +442,7 @@ The server runs the game at 30 steps a second whether or not anyone's watching a
 
 **What a server keeps.** Each server has a SQLite database (`data/<game>.sqlite`, or `--db path`). It holds the world's seed, so restarting the server carries on the same world; for games that keep their world (`world.persist`, like Sandbox) its builds and time of day, and each player's place by name (where they stood, which way they faced, whether they were flying, their block hotbar); and your game's `game.store`. It's saved every 30 seconds, when a game stops for want of players, and when the server stops (Ctrl-C). `--new` starts a fresh world and sets the old database aside. Names aren't checked yet: whoever joins as Ann gets Ann's place, and a second Ann at the same time becomes "Ann 2".
 
-**Games of one's own.** A match game can let players start a game of their own instead of joining the public one: set `instances: true` on the game (Bed Wars, the Arena and Starfighter do). Its home page on a server then has a second button, "Play on your own". It opens a separate copy of the game (its own world, its own match, the bots filling the empty places) at an address of its own (`?game=bedwars&room=k3x9f2`); "Copy invite link" hands that address to friends, and "Public game" goes back. Such a game keeps no world or places, but it shares the game's `game.store` with the public one, so all-time numbers count wherever they were earned. It stops a minute after the last player leaves. Each game on a server runs in a worker thread of its own, so the variables your game keeps in its module are its own in each copy; leave `instances` off for games that are one shared world (Sandbox). A server runs up to 8 games at once (`--rooms`, about 30 to 50 MB each), and one address may have 2 of its own going.
+**Games of one's own.** A match game can let players start a game of their own instead of joining the public one: set `instances: true` on the game (Bed Wars, the Arena and Starfighter do). Its home page on a server then has a second button, "Play on your own". It opens a separate copy of the game (its own world, its own match, the bots filling the empty places) at an address of its own (`?game=bedwars&room=k3x9f2`); "Copy invite link" hands that address to friends, and "Public game" goes back. Such a game keeps no world or places, but it shares the game's `game.store` with the public one, so all-time numbers count wherever they were earned. It stops a minute after the last player leaves. Each game on a server runs in a worker thread of its own, so the variables your game keeps in its module are its own in each copy; leave `instances` off for games that are one shared world (Sandbox). A server runs up to 8 games at once (`--rooms`, about 30 to 50 MB each), and one address may have 2 of its own going. A game knows which it is from `game.room`: `'public'`, or the room's code. Call of Blocky's public room goes round its modes and maps match by match, while in a room of one's own the players pick them (a menu on M).
 
 How a game written for one player behaves with company depends on how it's written: a game that only talks to `game.player` gives the others a world to walk around in, while one that uses `game.players`, `player.hud` and the named player in callbacks works for everyone.
 
@@ -709,7 +714,7 @@ Hooks add your game's rules, each given the bot and what it has in mind (`BotMin
 - `fight(bot, mind, distance)`: each tick of a fight, after it has decided (a dodge roll when hit).
 - `throw(bot, at, mind)`: throw something (a grenade) your game's way when someone it was fighting ducks out of sight not far off; return whether it did (`throwEvery` seconds apart at most).
 
-Call of Blocky's `bots.ts` is the defaults plus its weapons and the briefcase; High Noon's retunes everything for slow guns, picks the rifle or the revolver by range, dodge-rolls when hit and hunts everyone down once the sun gives them away.
+Call of Blocky's `bots.ts` is the defaults plus its weapons, the briefcase, and each mode's `hostile` and `goal` (its teams; in The Briefcase the sites, the case and its carrier); High Noon's retunes everything for slow guns, picks the rifle or the revolver by range, dodge-rolls when hit and hunts everyone down once the sun gives them away.
 
 **The primitives underneath**, available to any game:
 - **Items that look like blocks.** An item with `icon: { block: 'oak_planks' }` shows the block in the hotbar and menus, is held as a little cube and drops as a spinning cube of the block.
@@ -1392,7 +1397,7 @@ export default function myGame() {
 }
 ```
 
-- `launch(id)` finds the server registry's games (`src/games/server.ts`) and the development ones (`launch('highnoon')`), or takes a game's definition itself (`launch(myGame)`, a `defineGame` or a `defineServer`).
+- `launch(id)` finds the server registry's games (`src/games/server.ts`) and the development ones (`launch('highnoon')`), or takes a game's definition itself (`launch(myGame)`, a `defineGame` or a `defineServer`). Its options: `seed`, `radius` (columns generated round each player), `cheats`, `room` (play as a room of one's own: `launch('callofblocky', { room: 'k3x9f2' })`).
 - `h.run(seconds, { pilot, until, dt })` steps the simulation at 60 ticks per second. `h.step(dt, input)` steps once.
 - `pilot` returns the local player's controls as a `PlayerInput`: `down` for keys held, `pressed` for keys pressed this tick, `clicked` for the buttons clicked this tick as a bitmask (1 = left), and `yaw` / `pitch` to aim. Return `{}` to stand still.
 - `h.calls` records every presentation call (banners, feeds, screens, sounds), and `h.find('hud', 'banner')` filters them. `lastScreen(h)` is the title of the last `hud.screen`.
@@ -1400,7 +1405,7 @@ export default function myGame() {
 
 `tests/headless/arena.ts` is a complete example: a bot beats the Arena, Warden included, in under a second.
 
-For online play there are probes rather than tests: `tests/headless/_netprobe.ts` measures what each game sends a player each second (`GAME=starfighter PLAYERS=4`), `tests/headless/_ghost.ts` is a player with no screen that joins a server and flies circles (to watch how smoothly others move), and `scripts/lagproxy.mjs` puts a bad network between a browser and a server.
+For online play there are probes rather than tests: `tests/headless/_netprobe.ts` measures what each game sends a player each second (`GAME=starfighter PLAYERS=4`), `tests/headless/_roomcost.ts` what a room costs a server each step (`COMMAND='mode tdm kahuna'` runs a command first), `tests/headless/_ghost.ts` is a player with no screen that joins a server and flies circles (to watch how smoothly others move), and `scripts/lagproxy.mjs` puts a bad network between a browser and a server.
 
 ## Architecture and the road to multiplayer
 

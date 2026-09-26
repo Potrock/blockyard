@@ -765,6 +765,13 @@ export interface WorldApi {
   /** The water surface: the top of sea-level water is at `seaLevel + 1`. */
   readonly seaLevel: number;
   /**
+   * Where players come in (joining, `restart`) and what someone watching from the game's home page
+   * looks at: the definition's `world.spawn` to begin with. A game played in several places (the
+   * maps of one world) moves it to the one in play, so the home page shows where the action is to
+   * whoever opens it; anyone already watching keeps the view they came in with.
+   */
+  spawn: { x: number; y: number; z: number; yaw: number };
+  /**
    * Blow a ragged sphere out of the world (bedrock and liquids survive) with debris and an
    * explosion. `filter` decides which blocks go (e.g. only ones placed this match); `by` is
    * passed on to the `blockBreak` events. Returns blocks removed.

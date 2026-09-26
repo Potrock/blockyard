@@ -2,7 +2,7 @@ import { defineShared, Models } from '@platform';
 import { ATLAS, skinOrigin } from './art';
 import { BLOCKS } from './blocks';
 import hudCss from './hud.css?raw';
-import { WORLD } from './map';
+import { MAPS, WORLD } from './map';
 import meta from './meta';
 import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
 import { FIGHTER_STYLE } from './style';
@@ -31,9 +31,9 @@ export const shared = defineShared({
     structures: WORLD.structures,
     terraform: WORLD.terraform,
     // The home page looks down Jackrabbit Lane from the west end, toward the diner (fighters
-    // spawn at their map's spawns).
-    spawn: { x: -30.5, y: WORLD.floorY + 0.05, z: 0.5 },
-    spawnYaw: -Math.PI / 2,
+    // spawn at their map's spawns; a match on another map moves this there: `world.spawn`).
+    spawn: { x: MAPS[0].home.x, y: MAPS[0].home.y, z: MAPS[0].home.z },
+    spawnYaw: MAPS[0].home.yaw,
     time: WORLD.time,
     freezeTime: true,
     // Walls, roofs, cars, the diner: shot into, pixel by pixel (each gun's `carve`). The ground

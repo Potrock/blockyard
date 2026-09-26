@@ -168,6 +168,7 @@ export function rotation() {
   const b = KAHUNA.bounds;
   const inside = g.players.filter((p) => p.position.x >= b.min.x && p.position.x <= b.max.x && p.position.z >= b.min.z && p.position.z <= b.max.z);
   check(inside.length === g.players.length, `everyone's at Big Kahuna Burger (${inside.length} of ${g.players.length})`);
+  check(g.world.spawn.x === KAHUNA.home.x, `newcomers (and the home page) go there too (${JSON.stringify(g.world.spawn)})`);
   let shots = 0;
   let deaths = 0;
   g.events.on('shot', () => shots++);

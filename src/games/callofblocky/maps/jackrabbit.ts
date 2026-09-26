@@ -1011,6 +1011,8 @@ export const JACKRABBIT: MapSpec = {
       { name: 'B', label: 'the bus stop', at: { x: 13.5, y: FLOOR, z: 13.5 }, radius: 3 },
     ],
   },
+  // Down the street from the west end, toward the diner (the world's spawn: the home page's view).
+  home: { x: -30.5, y: FLOOR + 0.05, z: 0.5, yaw: -Math.PI / 2 },
   overview: { position: { x: -18, y: FLOOR + 40, z: 62 }, target: { x: 2, y: FLOOR + 8, z: -30 } },
   hotspots: [
     { x: -12, y: FLOOR, z: 0 },

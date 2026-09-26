@@ -268,6 +268,7 @@ export class CaseRounds {
     const q = where ? where.at : f.player.position;
     const at = { x: q.x, y: Math.floor(q.y + 0.01), z: q.z };
     this.planted = { site, at, by: f, t: g.clock.now };
+    this.dropped = null;
     this.carrier = null;
     this.phase = 'planted';
     this.beepAt = g.clock.now;

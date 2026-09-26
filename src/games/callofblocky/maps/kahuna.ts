@@ -567,17 +567,17 @@ function lot() {
   lightPole(-4, -1);
   // Parked cars, noses to the aisles: the stalls are 3 wide, 6 deep. (A car's Place turn 1
   // points its nose north, 3 south.)
-  kit.convertible(at(-15, 5, 1), 0, FLOOR, -1);
-  kit.van(at(-6, 5, 1), 0, FLOOR, -1, 'orange_concrete');
-  kit.wagon(at(3, 5, 1), 0, FLOOR, -1);
-  kit.pickup(at(9, 5, 1), 0, FLOOR, -1, 'light_blue_concrete');
-  kit.taxi(at(-12, 11, 3), 0, FLOOR, -1);
-  kit.convertible(at(0, 11, 3), 0, FLOOR, -1, 'cyan_concrete');
-  kit.van(at(15, 11, 3), 0, FLOOR, -1, 'pink_concrete');
-  kit.pickup(at(-3, 24, 1), 0, FLOOR, -1, 'red_concrete');
-  kit.wagon(at(9, 24, 1), 0, FLOOR, -1, 'yellow_concrete');
-  kit.convertible(at(24, 24, 1), 0, FLOOR, -1, 'white_concrete');
-  kit.taxi(at(21, 11, 3), 0, FLOOR, -1);
+  kit.convertible(at(-15, 0, 1), 0, FLOOR, -1);
+  kit.van(at(-6, 0, 1), 0, FLOOR, -1, 'orange_concrete');
+  kit.wagon(at(3, 0, 1), 0, FLOOR, -1);
+  kit.pickup(at(9, 0, 1), 0, FLOOR, -1, 'light_blue_concrete');
+  kit.taxi(at(-12, 10, 1), 0, FLOOR, -1);
+  kit.convertible(at(0, 10, 1), 0, FLOOR, -1, 'cyan_concrete');
+  kit.van(at(15, 10, 1), 0, FLOOR, -1, 'pink_concrete');
+  kit.pickup(at(-3, 25, 3), 0, FLOOR, -1, 'red_concrete');
+  kit.wagon(at(9, 25, 3), 0, FLOOR, -1, 'yellow_concrete');
+  kit.convertible(at(24, 25, 3), 0, FLOOR, -1, 'white_concrete');
+  kit.taxi(at(21, 10, 1), 0, FLOOR, -1);
   // The south edge: a sidewalk, a brick wall and a hedge on it, the boulevard beyond.
   fill(WEST, FLOOR, SOUTH, EAST, FLOOR, SOUTH, 'bricks');
   fill(WEST, FLOOR + 1, SOUTH, EAST, FLOOR + 3, SOUTH, 'oak_leaves');
@@ -618,9 +618,9 @@ function carhop() {
   sprite(['..X..', '.XXX.', 'XXXXX', '..X..', '..X..'].reverse(), { X: 'neon_yellow' }, (u, v) => ({ x: -40 + u, y: UP + 1 + v, z: z0 + 1 }));
   fill(-40, UP, z0 + 1, -36, UP, z0 + 1, 'black_concrete');
   // Cars at the stalls: a bus and a woody.
-  kit.van(at(-37, 9, 3), 0, FLOOR, -1, 'light_blue_concrete');
-  kit.wagon(at(-27, 9, 3), 0, FLOOR, -1, 'red_concrete');
-  kit.convertible(at(-32, 9, 3), 0, FLOOR, -1, 'magenta_concrete');
+  kit.van(at(-35, 11, 1), 0, FLOOR, -1, 'light_blue_concrete');
+  kit.wagon(at(-25, 11, 1), 0, FLOOR, -1, 'red_concrete');
+  kit.convertible(at(-30, 11, 1), 0, FLOOR, -1, 'magenta_concrete');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -634,11 +634,14 @@ function boulevard() {
   fill(sx, FLOOR, sz, sx + 1, FLOOR + 14, sz, 'iron_block');
   const base = FLOOR + 15;
   fill(sx - 12, base, sz, sx + 13, base + 16, sz, (x, y) => (x === sx - 12 || x === sx + 13 || y === base || y === base + 16 ? ((x + y) % 2 === 0 ? 'neon_yellow' : 'black_concrete') : 'white_concrete'));
-  fill(sx - 12, base, sz + 1, sx + 13, base + 16, sz + 1, 'black_concrete');
+  // Two-sided: the lot's side, and the boulevard's (a white board of its own, the words the right way round from there).
+  fill(sx - 12, base, sz + 1, sx + 13, base + 16, sz + 1, (x, y) => (x === sx - 12 || x === sx + 13 || y === base || y === base + 16 ? ((x + y) % 2 === 0 ? 'neon_yellow' : 'black_concrete') : 'white_concrete'));
   ['BIG', 'KAHUNA'].forEach((w, i) => {
     const rows = layout(w, FONT);
     const width = rows[0].length;
-    sprite(rows, { X: 'red_concrete' }, (u, v) => ({ x: sx + 13 - Math.floor((26 - width) / 2) - u, y: base + 10 - i * 6 + v, z: sz - 1 }));
+    const pad = Math.floor((26 - width) / 2);
+    sprite(rows, { X: 'red_concrete' }, (u, v) => ({ x: sx + 13 - pad - u, y: base + 10 - i * 6 + v, z: sz - 1 }));
+    sprite(rows, { X: 'red_concrete' }, (u, v) => ({ x: sx - 12 + pad + u, y: base + 10 - i * 6 + v, z: sz + 2 }));
   });
   const BURGER = ['..OOOOO..', '.OOWOOOO.', 'OOOOOWOOO', 'LLLLLLLLL', 'BBBBBBBBB', '.OOOOOOO.'];
   sprite(outlined(BURGER), { O: 'orange_concrete', W: 'white_concrete', L: 'lime_concrete', B: 'brown_concrete', K: 'black_concrete' }, (u, v) => ({ x: sx + 6 - u, y: base + 17 + v, z: sz }));
@@ -724,6 +727,8 @@ export const KAHUNA: MapSpec = {
       { name: 'B', label: 'the pool', at: spot(24, SHALLOW, -10), radius: 3 },
     ],
   },
+  // Across the lot to the A-frame, the giant burger over it.
+  home: { x: OX + 0.5, y: FLOOR + 0.05, z: 21.5, yaw: 0 },
   overview: { position: { x: OX - 10, y: FLOOR + 38, z: 62 }, target: { x: OX, y: FLOOR + 4, z: -10 } },
   hotspots: [
     spot(-8, FLOOR, -18),

@@ -696,6 +696,10 @@ function spectate(f: Fighter) {
 // Choosing the match: a public room goes round the rotation; a room of one's own picks (M)
 // -------------------------------------------------------------------------------------------------
 
+/** The menu's pictures: each mode's weapon, each map's own block. */
+const MODE_ICONS: Record<ModeId, IconRef> = { ffa: { item: 'pistol', view: 'side' }, tdm: { item: 'rifle', view: 'side' }, case: { item: 'briefcase' } };
+const MAP_ICONS: Record<string, IconRef> = { jackrabbit: { block: 'neon_cyan' }, kahuna: { block: 'thatch' } };
+
 function matchMenu(game: GameContext, p: Player) {
   if (game.room === 'public') {
     p.hud.toast(`Public games go round the modes and maps · next: ${planName(plan)}`);
@@ -704,12 +708,13 @@ function matchMenu(game: GameContext, p: Player) {
   if (settings?.open) return;
   const pick: MatchPlan = { mode: match.mode.id, map: match.map.id };
   const sections = (): MenuOptions['sections'] => [
-    { title: 'Mode', entries: Object.values(MODES).map((m) => ({ label: m.name, note: m.goal, active: pick.mode === m.id, onSelect: () => ((pick.mode = m.id), settings?.update({ sections: sections() })) })) },
-    { title: 'Map', entries: MAPS.map((m) => ({ label: m.name, note: m.blurb, active: pick.map === m.id, onSelect: () => ((pick.map = m.id), settings?.update({ sections: sections() })) })) },
+    { title: 'Mode', entries: Object.values(MODES).map((m) => ({ icon: MODE_ICONS[m.id], label: m.name, note: m.goal, active: pick.mode === m.id, onSelect: () => ((pick.mode = m.id), settings?.update({ sections: sections() })) })) },
+    { title: 'Map', entries: MAPS.map((m) => ({ icon: MAP_ICONS[m.id], label: m.name, note: m.blurb, active: pick.map === m.id, onSelect: () => ((pick.map = m.id), settings?.update({ sections: sections() })) })) },
     {
       title: 'Go',
       entries: [
         {
+          icon: { block: 'neon_yellow' },
           label: 'Start the match',
           note: planName(pick),
           onSelect: () => {
@@ -814,6 +819,17 @@ export default defineServer(shared, {
       },
     });
     game.commands.register('win', { help: 'End the match now', cheat: true, run: (_a, g, p) => endMatch(g, p, match.mode.teams ? (fighterOf(p)?.team ?? 0) : undefined) });
+    game.commands.register('team', {
+      usage: '<0|1>',
+      help: 'Change sides (a team mode)',
+      cheat: true,
+      run: ([t], g, p) => {
+        const f = fighterOf(p);
+        if (!match.mode.teams || !f || (t !== '0' && t !== '1')) return 'a team mode, and 0 or 1';
+        setTeam(g, f, Number(t) as Team);
+        return TEAMS[Number(t)].name;
+      },
+    });
     game.commands.register('case', {
       usage: '[A|B]',
       help: 'The Briefcase: take the case (you attack), or plant it at A or B now',
@@ -847,6 +863,8 @@ export default defineServer(shared, {
     match.map = mapById(plan.map) ?? MAPS[0];
     match.score = [0, 0];
     hotspots.splice(0, hotspots.length, ...match.map.hotspots);
+    // Newcomers come in there, and the home page looks at it.
+    game.world.spawn = match.map.home;
     startedAt = game.clock.now;
     firstBlood = false;
     lastSecond = -1;
