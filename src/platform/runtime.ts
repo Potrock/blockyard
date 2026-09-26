@@ -54,7 +54,7 @@ import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
 import type { BlockRef, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
-import type { ClientDefinition, ClientGame, GameEntry, Me, Node } from './api/client';
+import type { Client, ClientDefinition, ClientGame, GameEntry, Me, Node } from './api/client';
 import { ClientRuntime } from './client/api/client';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
@@ -588,10 +588,40 @@ export class Runtime {
     this.resize();
     this.renderer.warmup(this.camera);
     // The game's code for this screen: its kits and its own frame.
+    const view = this.view;
+    const input = this.input;
+    const worldCamera = this.camera;
     this.client = new ClientRuntime(this.def, this.clientDef, {
-      view: { root: this.held.scene as unknown as Node },
-      figures: {},
-      hud: {},
+      services: {
+        // First person.
+        view: { root: this.held.scene as unknown as Node },
+        // Figures.
+        figures: {},
+        // HUD and effects.
+        hud: {},
+        // Shared services.
+        camera: {
+          get zoom() {
+            return view.aimZoom;
+          },
+          set zoom(z: number) {
+            view.aimZoom = z;
+          },
+          get fov() {
+            return worldCamera.fov;
+          },
+        } as Client['camera'],
+        fx: this.fx,
+        audio: { play: (name, opts) => this.sfx.play(name, opts), define: (name, voice) => this.sfx.define(name, voice) },
+        input: {
+          isDown: (code) => input.isDown(code),
+          button: (b) => input.button(b),
+          get device() {
+            return input.device;
+          },
+        },
+        world: { blockAt: (x, y, z) => this.registry.blocks[this.chunks.world.get_block(Math.floor(x), Math.floor(y), Math.floor(z))]?.name ?? 'air' },
+      },
       item: (id) => this.content.items.get(id),
       send: (name) => console.warn(`client.send('${name}'): game messages aren't wired yet`),
     });

@@ -11,7 +11,7 @@
 import type { GameMeta, SharedDefinition } from './types';
 import type { ClientDefinition, ClientGame } from './client/core';
 
-export type { Node, ClientKit, ClientDefinition, ClientGame, Client, Me, MeHeld, ClientEvent } from './client/core';
+export type { Node, ClientKit, ClientDefinition, ClientGame, Client, ClientServices, ClientCamera, ClientFx, ClientAudio, ClientInput, ClientWorld, Me, MeHeld, ClientEvent } from './client/core';
 export type { ViewLayer } from './client/view';
 export type { ClientFigures } from './client/figures';
 export type { ClientHud } from './client/hud';

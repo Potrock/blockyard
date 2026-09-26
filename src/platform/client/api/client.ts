@@ -1,23 +1,23 @@
-import type { Client, ClientDefinition, ClientEvent, ClientKit, Me } from '../../api/client/core';
-import type { ClientFigures } from '../../api/client/figures';
-import type { ClientHud } from '../../api/client/hud';
-import type { ViewLayer } from '../../api/client/view';
+import type { Client, ClientDefinition, ClientEvent, ClientKit, ClientServices, Me } from '../../api/client/core';
 import type { ItemDefinition, SharedDefinition } from '../../api/types';
 
-/** What the client API needs of the runtime (it builds each part the API hands out). */
+/** What the client API needs of the runtime: the services it hands out (each built by its part of the platform), items, messages. */
 export interface ClientHost {
-  view: ViewLayer;
-  figures: ClientFigures;
-  hud: ClientHud;
+  services: ClientServices;
   item(id: string): ItemDefinition | undefined;
   send(name: string, data: unknown): void;
 }
+
+// The services are the host's, on the client object itself (`client.view`, `client.fx`, …).
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface ClientRuntime extends ClientServices {}
 
 /**
  * A game's client code at work on this screen: the `Client` its kits and its own code see, the
  * kits run in order each frame, then the game's `frame`, and this frame's events (the runtime and
  * the server's calls `emit` them as they happen; they're cleared once everyone has seen them).
  */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class ClientRuntime implements Client {
   me!: Me;
   time = 0;
@@ -33,19 +33,11 @@ export class ClientRuntime implements Client {
     private host: ClientHost,
   ) {
     this.kits = def.kits ?? [];
+    Object.assign(this, host.services);
   }
 
   get events(): readonly ClientEvent[] {
     return this.seen;
-  }
-  get view() {
-    return this.host.view;
-  }
-  get figures() {
-    return this.host.figures;
-  }
-  get hud() {
-    return this.host.hud;
   }
   item(id: string) {
     return this.host.item(id);
