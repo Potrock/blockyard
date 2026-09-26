@@ -258,8 +258,12 @@ function callOfBlocky() {
     check(drawn.gltf === (item(id)!.icon as { gltf: string }).gltf && drawn.view === (WEAPONS[id] ? 'side' : undefined), `${id} in the feed: ${JSON.stringify(drawn)}`);
   }
   const menu = calls().find((c) => c.method === 'menu' && c.to === ann.player)!;
-  const entries = (menu?.args[1] as { sections: { entries: { label: string; icon: IconRef }[] }[] }).sections.flatMap((s) => s.entries);
+  const sections = (menu?.args[1] as { sections: { title: string; entries: { label: string; icon: IconRef }[] }[] }).sections;
+  const entries = sections.filter((s) => s.title !== 'Outfit').flatMap((s) => s.entries);
   check(entries.length === 6 && entries.every((e) => typeof e.icon === 'object' && 'item' in e.icon), `the loadout menu names its weapons: ${JSON.stringify(entries.map((e) => e.icon))}`);
+  // Its outfits (progression.ts) by name too, each drawn as its fighter.
+  const outfits = sections.find((s) => s.title === 'Outfit')?.entries ?? [];
+  check(outfits.length === 10 && outfits.every((e) => typeof e.icon === 'object' && 'item' in e.icon && ((resolveIcon(e.icon, item) as { gltf?: string }).gltf ?? '').includes('.glb')), `the outfits, named and drawn: ${JSON.stringify(outfits.map((e) => e.icon))}`);
   check(JSON.stringify(resolveIcon(entries[0].icon, item)) === JSON.stringify({ gltf: (item('rifle')!.icon as { gltf: string }).gltf, view: 'side' }), 'the rifle in the menu, side on');
 
   // Every sound the server asks for is one the screen has: the weapons' own through their looks.

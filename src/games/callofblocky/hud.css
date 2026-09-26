@@ -121,3 +121,26 @@
 .sb-table tr.me td.sb-name {
   color: var(--hud-ink, #111) !important;
 }
+/* Locked in the loadout (progression): struck through in hatching, the level it opens at on an ink tag. */
+.menu-entry.disabled,
+.menu-entry.disabled:hover {
+  opacity: 1;
+  border-style: dashed;
+  background: repeating-linear-gradient(-45deg, rgba(17, 17, 17, 0.07) 0 5px, transparent 5px 10px);
+}
+.menu-entry.disabled .menu-icon {
+  filter: grayscale(1);
+  opacity: 0.4;
+}
+.menu-entry.disabled .menu-label,
+.menu-entry.disabled .menu-note {
+  opacity: 0.5;
+}
+.menu-entry.disabled .menu-detail {
+  padding: 3px 7px;
+  background: var(--hud-ink, #111);
+  color: var(--hud-paper, #fdf1d6);
+  font: 400 14px var(--pixel);
+  letter-spacing: 0.04em;
+  transform: rotate(-4deg);
+}

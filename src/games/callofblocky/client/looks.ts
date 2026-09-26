@@ -1,6 +1,7 @@
 import { HeldModels, type GunHold, type ItemLook } from '@platform';
 import type { Client } from '@platform/client';
 import { GUNS } from '../models';
+import { FIGHTERS } from '../models/fighters';
 
 /**
  * How Call of Blocky's weapons look and sound on each screen (`client.items.look`): their models
@@ -64,7 +65,14 @@ export const LOOKS: Record<string, ItemLook> = {
   briefcase: { icon: { gltf: url('briefcase') } },
 };
 
-/** Each weapon's look on this screen (in `setup`, before anything's shown). */
+/**
+ * The outfits, which the server names like items (`outfit_bowler`: in the loadout, on a level-up;
+ * see `progression.ts`): each its fighter's picture.
+ */
+export const OUTFIT_LOOKS: Record<string, ItemLook> = Object.fromEntries(FIGHTERS.map((f) => [`outfit_${f.id}`, { icon: { gltf: f.url } }]));
+
+/** Each weapon's look on this screen, and each outfit's (in `setup`, before anything's shown). */
 export function defineLooks(client: Client) {
   for (const [id, look] of Object.entries(LOOKS)) client.items.look(id, look);
+  for (const [id, look] of Object.entries(OUTFIT_LOOKS)) client.items.look(id, look);
 }

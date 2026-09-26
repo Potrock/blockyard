@@ -9,6 +9,8 @@ import { fighterOf, hostile, match, teamFighters, type Fighter } from './match';
 import { FFA_LIMIT, MODES, ROTATION, ROUNDS, TDM_LIMIT, TEAMS, type MatchPlan, type ModeId, type Team } from './modes';
 import { COLORS, fighterModel, shared } from './shared';
 import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
+import { outfitId, setupProgression, type Progression } from './progression'; // [progression]
+import { killcam, killcamHolds } from './killcam';
 
 /**
  * Call of Blocky: fast pulp shootouts against bots and people, on Jackrabbit Lane (a
@@ -68,6 +70,8 @@ const watching = new Map<string, Player>();
 /** The match settings menu in a room of one's own, and whether anyone's opened it yet. */
 let settings: MenuHandle | null = null;
 let offered = false;
+/** [progression] XP, levels and unlocks (progression.ts). */
+let xp: Progression;
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const ordinal = (n: number) => `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'}`;
@@ -96,7 +100,8 @@ function nameColor(p: Player, fallback: string): string {
 function addFighter(game: GameContext, p: Player): Fighter {
   const taken = new Set([...fighters.values()].map((f) => f.outfit));
   const free = OUTFITS.map((_, i) => i).filter((i) => !taken.has(i));
-  const outfit = free.length ? free[Math.floor(game.rng.next() * free.length)] : game.rng.int(0, OUTFITS.length - 1);
+  // [progression] People wear what they've unlocked (their last pick, else one nobody has on); bots anything.
+  const outfit = !p.bot ? xp.outfitFor(p, taken) : free.length ? free[Math.floor(game.rng.next() * free.length)] : game.rng.int(0, OUTFITS.length - 1);
   const f: Fighter = {
     player: p,
     kills: 0,
@@ -148,11 +153,15 @@ function smallerTeam(person: boolean): Team {
 function setTeam(game: GameContext, f: Fighter, t: Team) {
   f.team = t;
   const p = f.player;
-  const wardrobe = TEAMS[t].outfits;
-  if (!wardrobe.includes(f.outfit)) {
+  // [progression] People wear only what they've unlocked (a side's wardrobe has something for
+  // everyone: its level-1 outfits); bots anything.
+  const all = TEAMS[t].outfits;
+  const wardrobe = p.bot ? all : all.filter((o) => xp.has(p, outfitId(o)));
+  const choices = wardrobe.length ? wardrobe : all;
+  if (!choices.includes(f.outfit)) {
     const worn = new Set(teamFighters(t).filter((o) => o !== f).map((o) => o.outfit));
-    const free = wardrobe.filter((o) => !worn.has(o));
-    f.outfit = free.length ? free[game.rng.int(0, free.length - 1)] : wardrobe[game.rng.int(0, wardrobe.length - 1)];
+    const free = choices.filter((o) => !worn.has(o));
+    f.outfit = free.length ? free[game.rng.int(0, free.length - 1)] : choices[game.rng.int(0, choices.length - 1)];
     dress(p, f.outfit);
   }
   p.color = TEAMS[t].color;
@@ -264,39 +273,43 @@ function loadoutMenu(game: GameContext, f: Fighter) {
     } else p.hud.toast(`${name} next life`);
   };
   const entries = () =>
-    PRIMARIES.filter((id) => canPick(f, id)).map((id) => ({
-      icon: feedIcon(id) ?? undefined,
-      label: WEAPONS[id].name,
-      note: BLURBS[id],
-      active: f.primary === id,
-      onSelect: () => {
-        f.primary = id;
-        f.chose = true;
-        f.menu?.close();
-        pick(WEAPONS[id].name);
-      },
-    }));
+    PRIMARIES.filter((id) => canPick(f, id)).map((id) =>
+      xp.gate(p, id, {
+        icon: feedIcon(id) ?? undefined,
+        label: WEAPONS[id].name,
+        note: BLURBS[id],
+        active: f.primary === id,
+        onSelect: () => {
+          f.primary = id;
+          f.chose = true;
+          f.menu?.close();
+          pick(WEAPONS[id].name);
+        },
+      }),
+    ); // [progression] locked: greyed out, refused
   const lethals = () =>
     (Object.keys(LETHALS) as Lethal[])
       .filter((id) => canPick(f, id))
-      .map((id) => ({
-        icon: feedIcon(id) ?? undefined,
-        label: LETHALS[id].name,
-        note: LETHAL_BLURBS[id],
-        active: f.lethal === id,
-        onSelect: () => {
-          f.lethal = id;
-          f.menu?.update({ sections: [{ title: 'Primary', entries: entries() }, { title: 'Lethal (G)', entries: lethals() }] });
-          pick(LETHALS[id].name);
-        },
-      }));
+      .map((id) =>
+        xp.gate(p, id, {
+          icon: feedIcon(id) ?? undefined,
+          label: LETHALS[id].name,
+          note: LETHAL_BLURBS[id],
+          active: f.lethal === id,
+          onSelect: () => {
+            f.lethal = id;
+            f.menu?.update({ sections: sections() });
+            pick(LETHALS[id].name);
+          },
+        }),
+      ); // [progression]
+  // [progression] Outfits (the locked greyed out), and the sections all together.
+  const outfits = () => xp.outfits(p, f.outfit, (i) => ((f.outfit = i), f.menu?.update({ sections: sections() })));
+  const sections = () => [{ title: 'Primary', entries: entries() }, { title: 'Lethal (G)', entries: lethals() }, outfits()];
   f.menu = p.hud.menu({
     title: 'Pick your piece',
-    subtitle: 'Your primary and your lethal. The Lucky 45 and the katana come along regardless.',
-    sections: [
-      { title: 'Primary', entries: entries() },
-      { title: 'Lethal (G)', entries: lethals() },
-    ],
+    subtitle: `Level ${xp.level(p)}, more unlocking as you go. Your primary, your lethal and your look; the Lucky 45 and the katana come along regardless.`, // [progression]
+    sections: sections(), // [progression]
     onClose: () => {
       f.menu = null;
     },
@@ -368,35 +381,29 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
     k.streak++;
     k.best = Math.max(k.best, k.streak);
     let points = 100;
-    const calls: string[] = [];
     if (headshot) {
       k.headshots++;
       points += 50;
-      calls.push('HEADSHOT');
     }
-    if (weapon === 'katana') calls.push('SLICED');
-    if (weapon === 'frag') calls.push('BLOWN UP');
-    if (weapon === 'molotov') calls.push('TOASTED');
     if (through > 0) {
       points += 50;
-      calls.push('WALLBANG');
     }
     if (!firstBlood) {
       firstBlood = true;
       points += 50;
-      calls.push('FIRST BLOOD');
     }
     k.multi = now - k.lastKillAt < 4 ? k.multi + 1 : 1;
     k.lastKillAt = now;
     const multi = ['', '', 'DOUBLE KILL', 'TRIPLE KILL', 'MASSACRE'][Math.min(4, k.multi)];
     if (multi) points += 50 * (k.multi - 1);
     k.score += points;
-    // What the killer sees: the points and why.
+    // What the killer sees: a big call-out for a multi-kill or a streak. [progression] The points and
+    // why ("+100 KILL", "+50 HEADSHOT") are the XP ticker's (progression.ts).
     const big = multi || (k.streak === 5 ? 'ON A ROLL' : k.streak === 10 ? 'UNSTOPPABLE' : '');
     if (big) {
-      killer.hud.pop(big, { big: true, color: COLORS.gold, sub: `+${points}${calls.length ? ` · ${calls.join(' · ')}` : ''}` });
+      killer.hud.pop(big, { big: true, color: COLORS.gold });
       killer.audio.play('streak');
-    } else killer.hud.pop(`+${points}`, { sub: calls.join(' · ') || `${victim.name.toUpperCase()}` });
+    }
     // Streak rewards.
     if (k.streak === 3) {
       k.uavUntil = now + 25;
@@ -419,8 +426,8 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
       { text: victim.name, color: nameColor(victim, victim.bot ? '#ffd0d0' : COLORS.red) },
     ]);
     victim.hud.banner('KILLED BY', `${killer.name}${weapon ? ` · ${killName(weapon)}` : ''}${headshot ? ' · headshot' : ''}${through > 0 ? ' · through the wall' : ''}`, { color: COLORS.red, duration: RESPAWN - 0.3 });
-    // The kill cam: watch whoever did it. (Hook: a kill cam of its own goes here.)
-    if (!victim.bot && killer.alive) victim.camera.orbit(killer, { distance: 4.5, min: 4.5, max: 4.5 });
+    // KILLCAM hook (killcam.ts): the victim sees it again through the killer's eyes, then respawns.
+    killcam(game, victim, killer, weapon, headshot, through);
     // (Hook: whatever else counts a kill, progression say, hears of it here: `k` got `points`.)
     // The mode's score.
     if (match.mode.id === 'ffa' && k.kills >= FFA_LIMIT) endMatch(game, killer);
@@ -441,6 +448,7 @@ function award(f: Fighter, points: number, title: string) {
   boardDirty = true;
   f.player.hud.pop(title, { big: true, color: COLORS.gold, sub: `+${points}` });
   f.player.audio.play('streak');
+  xp.earn(f.player, points, title); // [progression] the same, in XP (the ticker shows it)
 }
 
 /** The match is over: `winner` took the free-for-all, or `team` the team match. */
@@ -454,6 +462,8 @@ function endMatch(game: GameContext, winner: Player | null, team?: Team) {
   const won: Team | null = team ?? (teams && match.score[0] !== match.score[1] ? (match.score[0] > match.score[1] ? 0 : 1) : null);
   const top = winner ?? table[0]?.player ?? null;
   if (isCase()) rounds.end();
+  // [progression] Each fighter's place, and whether they won (their side, in a team mode).
+  xp.matchOver(table.map((f, i) => ({ player: f.player, place: i + 1, won: teams ? f.team === won : f.player === top })));
   for (const f of fighters.values()) {
     const p = f.player;
     p.freeze(true);
@@ -507,7 +517,7 @@ function defineBriefcase(game: GameContext) {
       bots.objective = null;
       g.hud.marker('briefcase', null);
       g.hud.feed([{ text: player.name, color: nameColor(player, COLORS.gold) }, ' has the briefcase']);
-      player.hud.pop('THE BRIEFCASE', { big: true, color: COLORS.gold, sub: `+${BRIEFCASE_POINTS} · UAV online` });
+      player.hud.pop('THE BRIEFCASE', { big: true, color: COLORS.gold, sub: 'UAV online' }); // [progression] (its XP: the ticker)
       g.audio.play('streak', { at: player.position });
       g.fx.burst({ x: player.position.x, y: player.position.y + 1.2, z: player.position.z }, { color: '#ffcc00', count: 40, speed: 5, glow: 2, life: 0.8, gravity: 2 });
       nextBriefcase = g.clock.now + BRIEFCASE_EVERY;
@@ -759,6 +769,8 @@ export default defineServer(shared, {
     defineArt(game);
     defineWeapons(game);
     defineBriefcase(game);
+    // [progression] XP, levels and unlocks: before the game's own listeners (the kill that ends a match still counts).
+    xp = setupProgression(game);
     // (Its voices are each screen's, `client/sounds.ts`: played here by name.)
     game.hud.define('dossier', DOSSIER);
     game.hud.define('matchbar', MATCHBAR);
@@ -856,6 +868,7 @@ export default defineServer(shared, {
   },
 
   start(game) {
+    xp.matchStart(); // [progression]
     running = true;
     match.phase = 'playing';
     // The match planned: its mode, its map (the bots' grid and hotspots with it).
@@ -926,9 +939,10 @@ export default defineServer(shared, {
       if (!p.bot && p.input.pressed('KeyM')) matchMenu(game, p);
       if (!p.alive) {
         if (f.diedAt < 0) f.diedAt = now;
+        // KILLCAM hook (killcam.ts): the respawn (or the round's spectating) waits for the kill cam.
         if (isCase()) {
-          if (!p.bot && now - f.diedAt >= RESPAWN) spectate(f);
-        } else if (now - f.diedAt >= RESPAWN) spawn(game, f);
+          if (!p.bot && now - f.diedAt >= RESPAWN && !killcamHolds(game, p)) spectate(f);
+        } else if (now - f.diedAt >= RESPAWN && !killcamHolds(game, p)) spawn(game, f);
         if (!p.bot) personalHud(game, f, dt);
         continue;
       }

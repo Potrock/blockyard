@@ -35,6 +35,8 @@ const FILES = [
   'src/platform/client/figures.ts',
   // HUD and effects.
   ...HUD_FILES,
+  // Replays.
+  'src/platform/client/replay.ts',
 ];
 const LITERALS = ['gun', 'sword', 'bow', 'throw', 'axe', 'polearm', 'melee', 'throwable', 'rifle', 'pistol'];
 const WORDS = ['stylename', 'stance', 'ads', 'pump', 'bolt', 'lever', 'hammer', 'scope', 'rifle', 'pistol'];

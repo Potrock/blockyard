@@ -22,6 +22,9 @@ interface Rounds {
  *   aiming down the sights;
  * - a red dot's or a holo's reticle glowing at the aim point as the sight comes to the eye, and a
  *   scope's view filling the screen when aimed through one.
+ *
+ * In a replay through someone's eyes (`client.replay`) the crosshair, reticle and scope are
+ * theirs; the rounds panel stays hidden.
  */
 export function gunner(): ClientKit {
   let unstyle: (() => void) | null = null;
@@ -115,7 +118,8 @@ export function gunner(): ClientKit {
       const st = held?.state as { mag?: number; reserve?: number; reload?: number; aim?: number; spread?: number; sight?: string; color?: string } | undefined;
       if (!def || !st || typeof st.mag !== 'number' || me.dead || me.inVehicle) return hide(client);
       const aim = st.aim ?? 0;
-      showRounds({ mag: st.mag, reserve: st.reserve ?? 0, size: def.magazine, name: def.name, reloading: (st.reload ?? -1) >= 0 });
+      // In a replay (someone else's eyes: `client.replay`), what they aimed through shows, not their rounds.
+      showRounds(client.replay?.playing ? null : { mag: st.mag, reserve: st.reserve ?? 0, size: def.magazine, name: def.name, reloading: (st.reload ?? -1) >= 0 });
       const focal = window.innerHeight / 2 / Math.tan((client.camera.fov * DEG) / 2);
       showCross(client, Math.tan((st.spread ?? 0) * DEG) * focal + 5, aim > 0.55);
       showScope(st.sight === 'scope' && aim > 0.9);

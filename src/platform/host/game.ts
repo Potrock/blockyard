@@ -2,14 +2,16 @@ import { TerrainGen, VoxelWorld } from '@engine/voxel_engine.js';
 import type { BlockRef, GameDefinition } from '../api/types';
 import { Content } from '../content';
 import { loadEngineSync } from '../engine/wasm';
+import { FrameWriter } from '../net/delta';
 import { IDLE_INPUT, type ClientCommand, type DevReply, type HostBatch, type HostEvent, type PlayerInput } from '../net/protocol';
 import type { PlayerSim } from '../sim/player';
-import { Sim } from '../sim/sim';
+import { Sim, type SimFrame } from '../sim/sim';
 import type { WorldHost } from '../sim/world';
 import { applyWorldConfig, worldGenConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
 import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from '../world/blocks';
 import { blockIdOf, destructibleIds, loadRegistry, type Registry } from '../world/registry';
+import { replayable, Replays } from './replay';
 import { groundSpawn, startSpawn } from './spawn';
 import { PresentState } from './state';
 import { MemoryStore, type SavedPlayer, type Store } from './store';
@@ -170,6 +172,13 @@ export class GameHost {
   readonly store: Store;
   /** The game's own blocks (`def.blocks`): their ids, by key, are what saves and joining players get. */
   readonly blocks: GameBlocks;
+  /**
+   * Each step's frame, rounded once, and its patch on the step before's worked out once: what a
+   * server sends (`RoomCore`), and what the replays' history keeps.
+   */
+  readonly frames = new FrameWriter<SimFrame>();
+  /** The room's last few seconds, and the replays playing on players' screens (`game.replay`). */
+  readonly replays: Replays;
   private readonly registry: Registry;
   private onError?: (err: unknown) => void;
   private dev: boolean;
@@ -248,6 +257,7 @@ export class GameHost {
       if (emptied.length) edited(emptied.map(([x, y, z]) => [x, y, z, 0]));
       return { removed: v.getUint32(0, true), emptied };
     };
+    this.replays = new Replays({ now: () => this.sim.time, push: (e) => this.events.push(e), guard: (fn) => this.guard(fn) });
     const content = new Content();
     content.forward = (def) => {
       const e: HostEvent = { t: 'content', def };
@@ -268,6 +278,7 @@ export class GameHost {
       player: o.player,
       room: o.room,
       store,
+      replay: this.replays,
       error: (err) => this.report(err),
     });
     if (o.dayLength && !def.world?.freezeTime) this.sim.env.dayLength = o.dayLength;
@@ -391,6 +402,7 @@ export class GameHost {
     this.clients.delete(id);
     const p = c.player;
     if (!p) return;
+    this.replays.left(p.id);
     this.guard(() => this.keepPlayer(p));
     this.guard(() => this.sim.leave(p.id));
     if (p !== this.sim.local) {
@@ -479,6 +491,8 @@ export class GameHost {
       }
       sim.tick(dt, running && sim.started, inputs, premoved);
     });
+    // Replays whose time is up end (their `onEnd` is the game's code).
+    this.replays.update(sim.time);
     // Presses and clicks were used; what's held stays held until the client says otherwise.
     for (const c of this.clients.values()) {
       const i = c.input;
@@ -492,6 +506,7 @@ export class GameHost {
     }
     const events = this.flush();
     const frame = sim.frame();
+    this.record(events, frame);
     const out = new Map<string, HostBatch>();
     for (const [id, c] of this.clients) {
       const me = c.player?.id;
@@ -500,12 +515,24 @@ export class GameHost {
           if (e.t === 'call') return e.call.to === null ? e.call.skip === undefined || e.call.skip !== me : e.call.to === me;
           if (e.t === 'reply' || e.t === 'exit') return !e.client || e.client === id;
           if (e.t === 'joined') return e.client === id;
+          if (e.t === 'replay' || e.t === 'replayEnd') return e.player === me;
           return true;
         }),
         frame,
       });
     }
     return out;
+  }
+
+  /**
+   * This step's frame, rounded and patched once (`frames`), and kept with what was shown in the
+   * step for replays. A restart forgets the past (and ends the replays playing).
+   */
+  private record(events: HostEvent[], frame: SimFrame) {
+    this.frames.next(frame);
+    if (events.some((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$reset')) this.replays.reset();
+    const h = this.replays.history;
+    if (h.keep > 0) h.record(frame.t, frame.clock, this.frames.current!, this.frames.patch, replayable(events));
   }
 
   private run(id: string, client: Client, c: ClientCommand) {
@@ -549,6 +576,8 @@ export class GameHost {
         return;
       }
       case 'message':
+        // Their screen ended a replay (`client.replay.skip()`).
+        if (c.msg.t === 'replaySkip') return this.replays.skip(me.id, c.msg.id);
         sim.receive({ ...c.msg, player: me.id });
         return;
       case 'start':

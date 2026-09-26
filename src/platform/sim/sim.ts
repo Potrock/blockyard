@@ -1,5 +1,5 @@
 import * as engine from '@engine/voxel_engine.js';
-import type { Actor, Anchor, BlockRef, Bot, BotApi, DamageCause, DestructibleOptions, Entity, GameContext, GameDefinition, GameEvents, Player, Rng, StoreApi, Vec3, VehicleWorld, WorldApi } from '../api/types';
+import type { Actor, Anchor, BlockRef, Bot, BotApi, DamageCause, DestructibleOptions, Entity, GameContext, GameDefinition, GameEvents, Player, ReplayApi, ReplayHandle, ReplayOptions, Rng, StoreApi, Vec3, VehicleWorld, WorldApi } from '../api/types';
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
@@ -82,6 +82,15 @@ export interface SimFrame {
   /** Creative building's hotbar (`player.build`). */
 }
 
+/** What the game's `replay` API needs of whoever keeps the room's history (the host: `host/replay.ts`). */
+export interface ReplayBackend {
+  readonly seconds: number;
+  keep(seconds: number): void;
+  show(player: Player, opts: ReplayOptions): ReplayHandle | null;
+  stop(player: string): void;
+  playing(player: string): ReplayHandle | null;
+}
+
 export interface SimOptions {
   def: GameDefinition;
   seed: number;
@@ -100,6 +109,8 @@ export interface SimOptions {
   store?: { data(): Map<string, unknown>; put(key: string, value: unknown): void };
   /** `game.room`: 'public' (the default), or the code of a room a player started of their own. */
   room?: string;
+  /** Replays (`game.replay`): the host keeps the room's history. Without one, `replay.show` shows nothing. */
+  replay?: ReplayBackend;
   /**
    * Game code threw (a timer, `update`, an entity's AI): report it and carry on with the tick,
    * so one bug doesn't stop the whole game. Without it, errors are thrown.
@@ -966,6 +977,7 @@ export class Sim {
       props: this.props,
       bots: this.botApi(),
       clients: this.presentation.clients(),
+      replay: this.replayApi(),
       env: {
         get time() {
           return sim.env.time;
@@ -1007,6 +1019,20 @@ export class Sim {
       room: this.o.room ?? 'public',
       restart: () => sim.restart(),
       exit: () => sim.o.exit(),
+    };
+  }
+
+  /** `game.replay`: the host's history, played back on one player's screen. */
+  private replayApi(): ReplayApi {
+    const r = () => this.o.replay;
+    return {
+      get seconds() {
+        return r()?.seconds ?? 0;
+      },
+      keep: (seconds) => r()?.keep(seconds),
+      show: (player, opts) => r()?.show(player, opts ?? {}) ?? null,
+      stop: (player) => r()?.stop(player.id),
+      playing: (player) => r()?.playing(player.id) ?? null,
     };
   }
 
