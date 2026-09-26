@@ -151,6 +151,12 @@ export class FrameWriter<F> {
     return this.last;
   }
 
+  /** What takes the step before's frame to this one (`{}`: nothing changed; the first step: the frame whole). */
+  get patch(): unknown {
+    if (this.previous === undefined) return this.last;
+    return this.shared === NONE ? {} : this.shared;
+  }
+
   /** What takes a client from the frame it has (none: it just came) to the newest. */
   patchFor(had: F | undefined): unknown {
     if (had === undefined) return this.last;
@@ -167,6 +173,11 @@ export class FrameReader<F> {
     this.frame = (this.frame === undefined ? patch : apply(this.frame, patch)) as F;
     return this.frame;
   }
+}
+
+/** A patch applied to a frame (`FrameWriter.patch`, `patchFor`), `prev` untouched. */
+export function applyPatch<F>(prev: F, patch: unknown): F {
+  return apply(prev, patch) as F;
 }
 
 /** Exposed for tests. */

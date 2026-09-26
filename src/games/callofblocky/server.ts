@@ -7,6 +7,7 @@ import { COLORS, fighterModel, shared } from './shared';
 import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
 import { DOSSIER, streakPips } from './hud';
 import { setupProgression, type Progression } from './progression'; // [progression]
+import { killcam, killcamHolds } from './killcam';
 
 /**
  * Call of Blocky: a fast free-for-all on Jackrabbit Lane, a Nuketown-style cul-de-sac painted
@@ -307,8 +308,8 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
     }
     game.hud.feed([{ text: killer.name, color: killer.bot ? '#ffe7a3' : COLORS.gold }, ...(icon ? [{ icon }] : weapon ? [` ${weaponName(weapon)} `] : [' ✕ ']), ...(headshot ? ['⌖'] : []), ...(through > 0 ? ['▦'] : []), { text: victim.name, color: victim.bot ? '#ffd0d0' : COLORS.red }]);
     victim.hud.banner('KILLED BY', `${killer.name}${weapon ? ` · ${weaponName(weapon)}` : ''}${headshot ? ' · headshot' : ''}${through > 0 ? ' · through the wall' : ''}`, { color: COLORS.red, duration: RESPAWN - 0.3 });
-    // The kill cam: watch whoever did it.
-    if (!victim.bot && killer.alive) victim.camera.orbit(killer, { distance: 4.5, min: 4.5, max: 4.5 });
+    // KILLCAM hook (killcam.ts): the victim sees it again through the killer's eyes, then respawns.
+    killcam(game, victim, killer, weapon, headshot, through);
     if (k.kills >= SCORE_LIMIT) endMatch(game, killer);
   } else {
     game.hud.feed([{ text: victim.name, color: COLORS.red }, weapon && LETHALS[weapon] ? ` cooked their own ${LETHALS[weapon].name}` : ' took the easy way out']);
@@ -578,7 +579,8 @@ export default defineServer(shared, {
       const p = f.player;
       if (!p.alive) {
         if (f.diedAt < 0) f.diedAt = now;
-        if (now - f.diedAt >= RESPAWN) spawn(game, f);
+        // KILLCAM hook (killcam.ts): the respawn waits for the kill cam.
+        if (now - f.diedAt >= RESPAWN && !killcamHolds(game, p)) spawn(game, f);
         continue;
       }
       if (f.rushUntil && now > f.rushUntil) {

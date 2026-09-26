@@ -69,6 +69,16 @@ body {
   inset: 0;
 }
 
+/*
+ * A replay playing on this screen (game.replay.show): the live HUD steps aside. Client code's own
+ * layers stay (it says what's playing, and its kits hide what's the live player's own), and so do
+ * the world's markers and the screen's flashes.
+ */
+#ui.replaying .hud > :not(.hud-layer),
+#ui.replaying .gamehud > :not(.hud-layer):not(.markers):not(.screen-flash) {
+  visibility: hidden;
+}
+
 /* A layer of client code's own in the HUD (client.hud.layer): the whole screen, the mouse passes through. */
 .hud-layer {
   position: absolute;

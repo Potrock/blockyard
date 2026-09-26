@@ -441,6 +441,8 @@ export interface GameContext {
   readonly bots: BotApi;
   /** Messages to the game's own code on players' screens (see `ClientsApi`). */
   readonly clients: ClientsApi;
+  /** The last few seconds, played back on a player's screen (a kill cam, a goal again): see `ReplayApi`. */
+  readonly replay: ReplayApi;
   /** Clear entities, timers, pickups and HUD, revive the player at spawn, then call `start` again. */
   restart(): void;
   /** Return to the game launcher. */
@@ -2565,6 +2567,78 @@ export interface ClientsApi {
    * JSON. A bad name or too much data throws.
    */
   send(to: Player | readonly Player[] | 'all', name: string, data?: unknown): void;
+}
+
+/**
+ * Replays (`game.replay`). The room keeps its last few seconds, step by step: everyone's places,
+ * looks, poses and what they hold, creatures, props and pickups (the frames, as they went out), and
+ * what was shown in each step (shots and what they hit, throws, effects, sounds, blocks shot into).
+ * `show` plays a stretch of it on one player's screen, through someone's eyes or from a camera,
+ * while the game goes on underneath: their own player stays where the game has them (dead,
+ * waiting). Their screen draws it with the same figures and interpolation as the live game, and
+ * its client code knows (`client.replay`: hide the HUD, say whose eyes these are).
+ *
+ * The world's blocks are shown as they are now: a block shot away during the replay is already
+ * gone at its start.
+ */
+export interface ReplayApi {
+  /** How many seconds back the room's history reaches now. */
+  readonly seconds: number;
+  /** Keep this many seconds (default 8, at most 30; 0 keeps none and turns recording off). */
+  keep(seconds: number): void;
+  /**
+   * Play a stretch of the last few seconds on this player's screen (not a bot's: they have none).
+   * A replay already playing there ends (its `onEnd` runs) and this one takes its place. Null:
+   * nothing kept yet to show.
+   */
+  show(player: Player, opts?: ReplayOptions): ReplayHandle | null;
+  /** End the player's replay now (its `onEnd` runs). */
+  stop(player: Player): void;
+  /** The replay playing on the player's screen, if any. */
+  playing(player: Player): ReplayHandle | null;
+}
+
+export interface ReplayOptions {
+  /**
+   * Where it starts: seconds ago (`from: 5`), or a moment by the game's clock
+   * (`{ at: game.clock.now - 5 }`). Default: as far back as the history goes.
+   */
+  from?: number | { at: number };
+  /** How long a stretch (seconds; default: up to now). It ends by now at the latest. */
+  seconds?: number;
+  /**
+   * Through this player's eyes: their view, their hands and what they hold (first person), their
+   * shots leaving their gun, and what their own screen showed (their effects and sounds).
+   */
+  follow?: Player;
+  /** Or from a camera standing still: where it is and what it looks at (its field of view, degrees). */
+  camera?: { at: Vec3; look: Vec3; fov?: number };
+  /** Played this many times as fast as it happened (default 1; 0.25 to 4). */
+  speed?: number;
+  /** A name for its client code (`client.replay.label`: 'killcam'), and plain data to go with it. */
+  label?: string;
+  data?: unknown;
+  /** The player may end it early (`client.replay.skip()`); default true. */
+  skippable?: boolean;
+  /**
+   * It ended: played out, skipped by the player (`skipped`), stopped, or replaced by another. Not
+   * called if the player leaves the game.
+   */
+  onEnd?(e: { player: Player; skipped: boolean }): void;
+}
+
+/** A replay playing on a player's screen. */
+export interface ReplayHandle {
+  readonly id: number;
+  /** Seconds it plays for (at its speed). */
+  readonly duration: number;
+  /** The stretch it shows, by the game's clock. */
+  readonly from: number;
+  readonly to: number;
+  /** Still playing. */
+  readonly playing: boolean;
+  /** End it now (its `onEnd` runs). */
+  stop(): void;
 }
 
 export interface EventApi {

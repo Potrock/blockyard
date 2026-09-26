@@ -179,7 +179,46 @@ export type ClientEvent =
   /** A fire started (a molotov broke): flames `radius` round `at` for `duration` seconds. */
   | { t: 'fire'; id: number; at: PlainVec3; radius: number; duration: number; color: string }
   /** The game restarted: what the kits put on screen goes. */
-  | { t: 'reset' };
+  | { t: 'reset' }
+  // Replays.
+  /** A replay started on this screen (`client.replay`): `client.me` is now whoever it follows. */
+  | { t: 'replay.start'; label: string; follow: string | null; data: unknown }
+  /** It ended: played out, ended by the server, or skipped here (`skipped`). `client.me` is this player again. */
+  | { t: 'replay.end'; label: string; skipped: boolean };
+
+/**
+ * A replay playing on this screen (the game's server showed one: `game.replay.show`): a stretch of
+ * the last few seconds, drawn in place of the live game (which goes on underneath) with the same
+ * figures and interpolation, through a player's eyes or from a camera of its own.
+ *
+ * While it plays, `client.me` is the player it follows as the replay shows them (their look, what
+ * they hold, their gun as it was: a first-person kit draws their hands), and the events are theirs
+ * (their shots, `mine`). The live HUD steps aside (the platform's panels and the game's widgets);
+ * client code's own layers stay, for it to show what it likes (say whose eyes these are) and hide
+ * what's the live player's own.
+ */
+export interface ClientReplay {
+  /** A replay is playing. */
+  readonly playing: boolean;
+  /** Its number (0 when none is playing). */
+  readonly id: number;
+  /** Whose eyes it looks through (a player's id), or null for a camera of its own. */
+  readonly follow: string | null;
+  /** The game's name for it (`label`) and what it sent with it (`data`). */
+  readonly label: string;
+  readonly data: unknown;
+  /** Seconds into it and how long it lasts, as played (at its speed). */
+  readonly time: number;
+  readonly duration: number;
+  readonly speed: number;
+  /** Its viewer may end it early. */
+  readonly skippable: boolean;
+  /**
+   * End it on this screen, if it's skippable: as the next frame starts (`replay.end` comes then,
+   * `skipped`), and the server hears (its `onEnd` runs with `skipped`).
+   */
+  skip(): void;
+}
 
 /** The world's camera, as client code may change it. */
 export interface ClientCamera {
@@ -300,6 +339,8 @@ export interface ClientServices {
   readonly scene: ClientScene;
   /** Things thrown, in the air on this screen now (see `ClientThrown`). */
   readonly thrown: readonly ClientThrown[];
+  /** A replay playing on this screen (see `ClientReplay`). */
+  readonly replay: ClientReplay;
 }
 
 /** A game's code on each player's screen. */

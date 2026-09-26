@@ -144,6 +144,10 @@ function sanitizeMessage(raw: unknown): ClientMessage | null {
     return widget ? { t: 'widgetClosed', player: '', widget } : null;
   }
   if (raw.t === 'game') return sanitizeGameMessage(raw.name, raw.data);
+  if (raw.t === 'replaySkip') {
+    const id = int(raw.id, 0, Number.MAX_SAFE_INTEGER);
+    return id === null ? null : { t: 'replaySkip', player: '', id };
+  }
   return null;
 }
 
