@@ -31,7 +31,10 @@ export interface Fighter {
   bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, pen: Penetration | null): BulletHit;
   /** Guns: carve where a bullet hit a block (null when the world's blocks don't carve). */
   readonly carve: ((point: Vec3, dir: Vec3, opts: { radius: number; depth: number }) => void) | null;
-  /** Guns: what everyone else sees and hears of a shot (the shooter's own screen showed it already). */
+  /**
+   * Guns: what everyone else sees and hears of a shot (the shooter's own screen showed it already):
+   * `sound` where the gun has no shot of its own on a screen (its `sounds.use`, the server's or its look's).
+   */
   shotSeen(shot: ShotWire, sound: string, at: Vec3): void;
   /**
    * Throwables: into the air (see `ThrowSim.launch`), named `key` on every screen, `mine` when
@@ -183,7 +186,8 @@ export class Combat {
       if (def.use(this.ctx(), this.me.api)) {
         inv.take(stack!.item, 1);
         this.me.view('use');
-        if (def.sounds?.use) this.me.audio.play(def.sounds.use);
+        // Its own sound, as their screen has it (none by default).
+        this.me.audio.play(def.sounds?.use ?? '', { item: { id: stack!.item, sound: 'use' } });
       }
     }
   }
@@ -208,7 +212,7 @@ export class Combat {
     st.bloom = settleBloom(g, st.bloom, dt);
     st.tokens = Math.min(this.rules.rateSlack, st.tokens + dt / g.interval);
     stepReload(g, st, dt, trigger);
-    if (active && input.pressed('KeyR') && canReload(g, st)) this.reload(g, st);
+    if (active && input.pressed('KeyR') && canReload(g, st)) this.reload(id, g, st);
     // Locked, the shots a screen fired anyway are refused: no rounds go.
     const shots = locked ? undefined : input.shots;
     if (shots) {
@@ -226,7 +230,7 @@ export class Combat {
       const pull = def.auto ? trigger : input.buttonPressed(0);
       if (pull && st.reload >= 0 && def.shells && st.mag > 0) st.reload = -1;
       if (pull && st.mag <= 0 && st.reload < 0 && st.cooldown <= 0) {
-        this.me.audio.play(def.sounds?.empty ?? 'gun_empty');
+        this.me.audio.play(def.sounds?.empty ?? 'gun_empty', { item: { id, sound: 'empty' } });
         st.cooldown = 0.25;
       }
       while (pull && st.mag > 0 && st.reload < 0 && st.cooldown <= 0) {
@@ -235,12 +239,12 @@ export class Combat {
       }
     }
     // Empty: reload by itself.
-    if (!locked && this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(g, st);
+    if (!locked && this.rules.autoReload && st.mag <= 0 && st.cooldown <= 0.05 && canReload(g, st)) this.reload(id, g, st);
   }
 
-  private reload(g: Gun, st: GunState) {
+  private reload(id: string, g: Gun, st: GunState) {
     startReload(g, st);
-    this.me.audio.play(g.def.sounds?.reload ?? 'gun_reload', { volume: 0.8 });
+    this.me.audio.play(g.def.sounds?.reload ?? 'gun_reload', { volume: 0.8, item: { id, sound: 'reload' } });
   }
 
   /** One shot: its bullets, what they hit, the damage, the shooter's hit marker, and what everyone else sees and hears. */
@@ -354,8 +358,9 @@ export class Combat {
       const def = inHand ? this.items.get(inHand) : undefined;
       if (!this.cooking && inHand && isThrowable(def) && input.buttonPressed(0) && this.ready(throwable(def))) this.cooking = { item: inHand, cooked: 0, key: null };
       if (this.cooking) {
+        // The pin (its own sound, as their screen has it; none by default).
         const d = this.items.get(this.cooking.item);
-        if (d?.sounds?.draw) this.me.audio.play(d.sounds.draw);
+        this.me.audio.play(d?.sounds?.draw ?? '', { item: { id: this.cooking.item, sound: 'draw' } });
       }
     }
     this.keysWere = down;
@@ -419,7 +424,9 @@ export class Combat {
   private melee(def: Strike, weapon: boolean, item?: string) {
     this.cooldown = this.cooldownMax = def.cooldown;
     this.me.view(weapon ? 'use' : 'swing');
-    this.me.audio.play(def.sounds?.use ?? 'swing', { pitch: 0.9 + Math.random() * 0.2 });
+    // A melee weapon's own sounds, as each screen has them (anything else in hand swings as a fist).
+    const own = weapon && item ? item : null;
+    this.me.audio.play(def.sounds?.use ?? 'swing', { pitch: 0.9 + Math.random() * 0.2, ...(own && { item: { id: own, sound: 'use' as const } }) });
     const cam = this.me.eye;
     const dir = this.me.look;
     const reach = def.reach ?? 3.3;
@@ -444,8 +451,9 @@ export class Combat {
     const dmg = def.damage * (crit ? 1.5 : 1);
     target.damage(dmg, { source: this.me.api, knockback: def.knockback ?? 1, crit, weapon: item, cause: 'melee' });
     this.hits++;
+    // Its own hit sound (pitched up for a crit), else the platform's hit or crit.
     const hitSound = def.sounds?.hit;
-    this.me.audio.play(hitSound ?? (crit ? 'crit' : 'hit'), { at: target.position, pitch: hitSound && crit ? 1.25 : 1 });
+    this.me.audio.play(hitSound ?? (crit ? 'crit' : 'hit'), { at: target.position, pitch: hitSound && crit ? 1.25 : 1, ...(own && { item: { id: own, sound: 'hit' as const, pitch: crit ? 1.25 : 1 } }) });
     this.me.hitMarker(target.alive ? crit : 'kill');
     this.me.fx.shake(crit ? 0.05 : 0.025, 0.12);
     if (def.sweep) {
@@ -467,7 +475,7 @@ export class Combat {
       if (!this.drawing) {
         this.drawing = true;
         this.charge = 0;
-        this.me.audio.play(def.sounds?.draw ?? 'bow_draw', { volume: 0.7 });
+        this.me.audio.play(def.sounds?.draw ?? 'bow_draw', { volume: 0.7, item: { id: item, sound: 'draw' } });
       }
       this.charge = Math.min(1, this.charge + dt / def.drawTime);
     } else if (this.drawing) {
@@ -495,7 +503,7 @@ export class Combat {
           this.me.api,
         );
         this.shots++;
-        this.me.audio.play(def.sounds?.use ?? 'bow_shoot', { pitch: 0.9 + c * 0.2 });
+        this.me.audio.play(def.sounds?.use ?? 'bow_shoot', { pitch: 0.9 + c * 0.2, item: { id: item, sound: 'use' } });
         this.me.view('use', 0.6 + c * 0.6);
       }
       this.charge = 0;
@@ -507,5 +515,5 @@ export class Combat {
 
 /** A sprite icon, or nothing for an item that looks like a block (it can't fly as an arrow). */
 function spriteOf(icon: IconRef | undefined): SpriteRef | undefined {
-  return typeof icon === 'object' && ('block' in icon || 'gltf' in icon) ? undefined : icon;
+  return typeof icon === 'object' && ('block' in icon || 'gltf' in icon || 'item' in icon) ? undefined : icon;
 }

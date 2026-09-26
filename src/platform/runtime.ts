@@ -39,6 +39,7 @@ import { plainRecord, type PlainData } from './ui/markup';
 import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
 import { Content } from './content';
+import { PLACEHOLDER_ICON, resolveIcon } from './looks';
 import { Presenter } from './client/present';
 import { PlayerCamera } from './client/camera';
 import { EntityView, type FigureFrame } from './client/entities';
@@ -53,7 +54,7 @@ import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
-import type { BlockRef, GunItem, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
+import type { BlockRef, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
 import type { Client, ClientBullet, ClientDefinition, ClientEvent, ClientGame, GameEntry, Me } from './api/client';
 import { ClientRuntime } from './client/api/client';
 import { FirstPersonLayer } from './client/api/view';
@@ -422,7 +423,7 @@ export class Runtime {
     }
     this.blockIcons = icons;
     this.hud = new Hud(this.ui, this.registry, icons);
-    this.gameHud = new GameHud(this.ui, (ref) => (typeof ref === 'object' && 'block' in ref ? this.blockIcons.get(this.blockId(ref.block)) ?? '' : this.graphics.icon(ref, 96)));
+    this.gameHud = new GameHud(this.ui, (ref) => this.iconOf(ref, 96));
     this.gameHud.onHighlight = (at, progress) => this.setHighlight(at, progress);
     // Markers and radar blips that follow things: where this screen draws them, every frame.
     this.gameHud.locate = {
@@ -515,6 +516,7 @@ export class Runtime {
       view: (method, args) => this.viewCall(method, args),
       send: (m) => this.link.send({ t: 'message', msg: m }),
       message: (name, data) => this.message(name, data),
+      item: (id) => this.content.items.get(id),
     });
 
     // The game's host is on the server: it set the game up and placed the spawn, and sends batches.
@@ -634,6 +636,7 @@ export class Runtime {
         } as Client['camera'],
         fx: this.fx,
         audio: { play: (name, opts) => this.sfx.play(name, opts), define: (name, voice) => this.sfx.defineLocal(name, voice) },
+        items: { look: (id, look) => this.content.lookItem(id, look), get: (id) => this.content.items.get(id) },
         input: {
           isDown: (code) => input.isDown(code),
           button: (b) => input.button(b),
@@ -1294,9 +1297,18 @@ export class Runtime {
   // The local player's HUD and hand, from the frame
   // ---------------------------------------------------------------------------------------------
 
-  /** The icon an item shows: its sprite, its block, or a picture of its model. */
+  /** The icon an item shows: its sprite, its block, or a picture of its model (as this screen has it: its look over the server's). */
   private itemIcon(d: ItemDefinition, size: number): string {
-    const icon = d.icon;
+    return this.iconOf(d.icon ?? PLACEHOLDER_ICON, size);
+  }
+
+  /**
+   * An icon as a picture: a sprite, a block's, a model's (blank until its file is here), or
+   * `{ item }`, that item's as this screen has it (blank until the item is here).
+   */
+  private iconOf(ref: IconRef, size: number): string {
+    const icon = resolveIcon(ref, (id) => this.content.items.get(id));
+    if (!icon) return '';
     if (typeof icon === 'object' && 'block' in icon) return this.blockIcons.get(this.blockId(icon.block)) ?? '';
     return this.graphics.icon(icon, size);
   }
@@ -1479,6 +1491,11 @@ export class Runtime {
         }
       }
     }
+    // The game's client code starts once we're in the game, before anything reads an item: its
+    // `setup` gives items their looks (`client.items.look`), so the hotbar, the hand, the figures
+    // and the gun's controller never see an item without its look.
+    const first = this.clientStarted ? undefined : this.mine(this.frameData);
+    if (first) this.startClient(first);
     // The held gun fires on this screen at once; its shots go with the next controls sent.
     const latest = this.walker && this.itemMode ? this.mine(this.frameData) : undefined;
     // (A weapons-locked freeze: the gun and throwables don't answer here either, so nothing is fired to be refused.)
@@ -1595,11 +1612,8 @@ export class Runtime {
     this.held.frame(this.camera.aspect, this.walker && this.mode !== 'title' && !me.dead && !me.vehicle && !this.view.thirdPerson);
     // The game's client code: its kits (the first-person view places the hand, the figures are
     // posed, ...), then its own frame.
+    if (!this.clientStarted) this.startClient(me);
     const mine = this.meOf(me, dt);
-    if (!this.clientStarted) {
-      this.clientStarted = true;
-      this.client.setup(mine);
-    }
     this.client.frame(dt, mine);
     // The figures as client code posed them (the figures kit), animated.
     this.entityView.finish();
@@ -1675,14 +1689,25 @@ export class Runtime {
     return max;
   }
 
+  /** The game's client code starts: its kits' `setup`, then its own (the items' looks, its voices). */
+  private startClient(me: PlayerFrame) {
+    this.clientStarted = true;
+    this.client.setup(this.meData(me));
+  }
+
   /** The local player for the game's client code (`client.me`): as predicted and shown this frame. */
   private meOf(me: PlayerFrame, dt: number): Me {
     void dt;
-    const stack = me.hotbar?.slots[me.hotbar.selected] ?? null;
     // Landing: how fast they were falling (the frame before).
     if (me.onGround && !this.wasGround) this.emit({ t: 'land', vy: this.lastVy });
     this.wasGround = me.onGround;
     this.lastVy = me.vy;
+    return this.meData(me);
+  }
+
+  /** `client.me` from a player's frame (with the gun and throw controllers' word). */
+  private meData(me: PlayerFrame): Me {
+    const stack = me.hotbar?.slots[me.hotbar.selected] ?? null;
     // Throwables: those with keys of their own, how many (less throws the host hasn't taken), one being cooked.
     const slots = me.hotbar?.slots ?? [];
     const quick = this.throwsCtl.quick(slots).map((item) => {

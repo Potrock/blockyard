@@ -53,11 +53,14 @@ src/games/
   callofblocky/         Call of Blocky: a pulp free-for-all shooter against bots and people
     server.ts           rules: the match, spawns, kills, streaks, loadouts, the HUD
     shared.ts           the street, movement, the fighters' models, the HUD theme
-    weapons.ts          the guns (kind 'gun'), the katana, and the lethals (kind 'throwable')
+    weapons.ts          what the guns (kind 'gun'), the katana and the lethals (kind 'throwable') do
+    client.ts           the kits it uses, listed; its looks and voices (client/)
+    client/looks.ts     how each weapon looks: its model, icon, first-person hold, tracer, trail, sounds
+    client/sounds.ts    gunshots, reloads, the lethals, the stingers (client.audio.define)
     bots.ts             bot fighters (game.bots) on the navGrid kit
     map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
-    models/             the guns and fighters as GLB files (tools/ writes them)
-    art.ts sounds.ts    the pulp wardrobe (skins painted in code), gunshots and stingers
+    models/             the guns and fighters as GLB files (tools/ writes them; the guns reached only by client code)
+    art.ts              the pulp wardrobe (skins painted in code)
     hud.css hud.ts      its HUD: the comic-book theme (hud.theme.css) and its own corner widget
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
     server.ts           rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
@@ -447,6 +450,7 @@ The platform implements everything around them:
 - **Pickups:** physics, magnet pull, collection and toasts. `onPickup(game, count, player)` can consume the item instead (and plays its own sound).
 - **Sounds:** each item can bring its own (`sounds: { use, hit, draw }`, built-in or `audio.define`d); otherwise it gets the generic swing, hit and bow sounds.
 - **Held items:** a first-person arm holds the item: its 3D model if it names one (`hold.model`), otherwise an extruded 3D version of its sprite (next section).
+- **Looks on the screen.** How an item looks and sounds (`icon`, `hold`, `sounds`, a gun's `tracer`, a throwable's `trail`, a bow's `drawIcon`) can be given by the game's client code instead (`client.items.look`, see "Items' looks and sounds in client code"): the server's definition then has only what the item does, and needs no model files or voices. `icon` is optional; an item given one by neither side shows a placeholder (a grey tag with a question mark).
 
 Built-in starter sprites: `wooden_sword`, `stone_sword`, `iron_sword`, `diamond_sword`, `bow`, `bow_pulling`, `arrow`, `health_potion` and `heart`. Everything else a game brings itself (see "Your own art and sound").
 
@@ -475,6 +479,8 @@ game.items.define('rifle', {
   sounds: { use: 'shot_rifle', reload: 'reload_mag', empty: 'gun_empty', cycle: 'pump' },
 });
 ```
+
+(Its `icon`, `hold`, `sounds` and `tracer` can be the client's instead: Call of Blocky's server defines only what its guns do, and `client/looks.ts` gives each its model, icon, hold, tracer and sounds with `client.items.look`. See "Items' looks and sounds in client code".)
 
 The platform does the rest:
 - **Fair online.** The shooter's own screen fires the moment the trigger's pulled: the flash, the kick, the tracer, the sound, the rounds. The shots go to the host with the controls. The host takes each one the gun could have fired (its rate, its rounds) and casts it where the targets were *on the shooter's screen*: it keeps a second of everyone's positions and rewinds to the moment that screen was showing, at most 0.35 s back (`guns.rewind`). Spread is seeded per shot, so the tracer you see is where the host's bullet goes.
@@ -569,6 +575,8 @@ game.items.define('molotov', {
 });
 player.inventory.give('frag', 2);
 ```
+
+(Here too the look, `icon`, `hold`, `sounds` and `trail`, can be given by the game's client code instead, as Call of Blocky does.)
 
 - **At once, and fair.** The thrower's screen throws it the moment they let go (the hand tosses it, it leaves the hand and flies) and sends the throw with the controls: from where, how fast, how long it was cooked. The host takes it if they have one and aren't throwing faster than its `cooldown`, and flies it the same way; everyone else's screen hears of it and flies it too. A flight is worked out in fixed steps (1/120 s) from the throw with plain arithmetic and the world's own raycasts, so the same throw on the same blocks lands in the same place on every machine, whatever their frame rates, and it goes off where the thrower's screen had it. The host decides when and where: the blast, the fire, the damage.
 - **How it flies.** Gravity and a little drag; off a block it bounces (the part of its speed into the block turned round and cut to `bounce`, the part along it cut by `friction`), landing gently it rolls and comes to rest. It goes through plants and torches like bullets do, and it bounces off what's left of a damaged block. (Not yet: solid props and players; an `impact` one breaks on whoever it meets, on the host.)
@@ -1016,7 +1024,7 @@ game.items.define('cutlass', {
 - Others see each player as the model, walking, running, swinging and holding what's in their hand at the model's `hand` node; `player.setModel(model)` gives one player their own (null: back to the game's). With a `hand` node, the player's own first-person arm is that part of the model.
 - A held model should run along +z to its tip with its handle near the origin, like the built-in ones; `rotation` (degrees about X, Y, Z) and `scale` fix one that doesn't, and `grip` is the point in the fist (in pixels, a sixteenth of a block). It's drawn in first person with the item's hold style (`sword`, `axe`, …), in other players' hands, and lying on the ground.
 - `icon: { gltf: url }` draws the item's icon from the model (a small picture from above and to the side, like an inventory's); an item whose icon is a model and has no `hold.model` is held as that model.
-- **Humanoids.** A figure built on the platform's humanoid rig needs no animations. The rig is a joint per part named `hips`, `spine`, `chest`, `neck`, `head`, `upperArmR`, `lowerArmR`, `handR` and so on, with `gripR` and `gripL` marking where the fists hold (`docs/HUMANOID.md` has the joints and the rest pose). The figures kit (`figures.humanoid()`, in every game's `standardKits()`; see *Figures* below) animates it in code from what it's doing:
+- **Humanoids.** A figure built on the platform's humanoid rig needs no animations. The rig is a joint per part named `hips`, `spine`, `chest`, `neck`, `head`, `upperArmR`, `lowerArmR`, `handR` and so on, with `gripR` and `gripL` marking where the fists hold (`docs/HUMANOID.md` has the joints and the rest pose). The figures kit (`figures.humanoid()`, which every game lists, alone or in `standardKits()`; see *Figures* below) animates it in code from what it's doing:
   - Its feet stay planted and step the way it's going, walking, running, strafing or backpedalling, and its legs bend to reach them.
   - It crouches, slides, jumps and looks.
   - It holds a gun in both hands, aimed where it looks, with its fists on the gun's `grip` and `grip2`. It carries the gun low across its chest to sprint, tips it to reload while the support hand fetches a magazine, kicks with each shot, and works a `lever` or a `hammer`. A gun held in one hand (`hold.gun.hands: 1`) leaves the other free, in its stance's `offHand` pose, until a reload brings it to the gun.
@@ -1089,10 +1097,10 @@ game.items.atlas('mine', { width: ATLAS, height: ATLAS, pixels: albedo, emissive
 
 The Arena paints its whole atlas this way (`src/games/arena/art/`): five mob skins, weapon sprites and the pike's texture, with bevelled pixel-art shading, in about 50 ms at startup. Bed Wars paints four team skins, a shopkeeper and its item sprites the same way.
 
-**Sound.** `game.audio.define(name, voice)` adds a sound; play it like any other with `audio.play(name, { at })`. Voices are synthesised on each play, on each player's machine:
+**Sound.** A game's client code defines its voices (`client.audio.define(name, voice)`, in `setup`), and anything plays them by name: the server's `audio.play(name, { at })`, client code's `client.audio.play`, and items' `sounds`. Voices are synthesised on each play, on each player's machine, with real Web Audio. A game's server can define them too (`game.audio.define`, the same voice): it's sent to each screen recorded (below), and a voice the server defines under a name wins over the client's.
 
 ```ts
-game.audio.define('laser', (s) => {
+client.audio.define('laser', (s) => {
   s.tone({ wave: 'square', from: 2400 * s.pitch, to: 260 * s.pitch, duration: 0.17, volume: 0.22, lowpass: 3800 });
   s.noise({ duration: 0.03, filter: 'highpass', from: 5000, to: 3000, volume: 0.15 });
 });
@@ -1101,7 +1109,7 @@ game.audio.define('laser', (s) => {
 - `s.tone` is an oscillator sweep with an envelope and optional lowpass, bandpass (which can sweep: `bandpass: { freq, to, q }`) or vibrato. Starfighter's TIE howl is three detuned, wavering sawtooths through a sweeping bandpass.
 - `s.noise` is filtered noise with a sweeping filter.
 - `s.pitch` is the play's pitch: multiply frequencies by it.
-- Your game's rules run away from the player's speakers (on the server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
+- A voice the server defines (`game.audio.define`) is sent to the screens as the tones and noises it makes, recorded at two pitches (the game's rules run away from the player's speakers). Build those only from `s.tone` and `s.noise`; a little randomness in one is fixed at the recording. A voice defined in client code is played as written, every time.
 - The built-in sounds (`BuiltinSound`) are the ones the platform's own systems play. The engine itself keeps only its world's and its screens' (`hit`, `hurt`, `pickup`, `heal`, `click`, `spawn`, `countdown`, `lock`, `alarm`, `wave`, `victory`, `defeat`); the rest (weapons: `swing`, `crit`, `bow_draw`, `bow_shoot`, `arrow_hit`, `gunshot`, `gun_reload`, `gun_empty`, `gun_cycle`, `hitmarker`, `kill`; creatures: `mob_hurt`, `mob_death`; `explosion`, `explosion_big`, a grenade's `bounce`, a bottle's `glass`, `fire`, `whoosh`) are ordinary voices the sounds kit defines on each screen (`sounds.standard()`, see "Client code"). A sound your server defines under the same name wins over the kit's.
 
 ## Keeping data
@@ -1163,14 +1171,14 @@ game.commands.run('/give pike'); // run one from code
 | `hud.progress(0..1, { color })` | A ring round the crosshair (mining, charging, capturing) |
 | `hud.feed(text, { color })` | A line in the message feed at the top left (kill feeds, match events); lines stack and fade |
 | `hud.screen({ title, tone, stats, buttons })` | Modal victory / defeat / menu |
-| `hud.menu({ title, subtitle, sections: [{ title, entries }] })` | A panel of clickable entries (shops, upgrades, level select) while the game keeps running. Entries take an `icon` (a sprite or `{ block }`), `label`, `detail` (a price), `note`, `disabled`, `active` and `onSelect`; `update()` refreshes it after a purchase. Esc or E closes it |
+| `hud.menu({ title, subtitle, sections: [{ title, entries }] })` | A panel of clickable entries (shops, upgrades, level select) while the game keeps running. Entries take an `icon` (a sprite, `{ block }`, or `{ item: 'rifle', view: 'side' }`: the item's own icon, as each screen has it), `label`, `detail` (a price), `note`, `disabled`, `active` and `onSelect`; `update()` refreshes it after a purchase. Esc or E closes it |
 | `hud.meter`, `marker`, `radar`, `crosshair` | Vehicle HUD (see above); markers and radar blips can follow props, entities and players; a marker's `bar` draws a bar under its label |
 | `hud.pop(text, { big, sub, color })` | A short pop-up under the crosshair ("+100", "Headshot", "Double kill") |
 | `hud.scoreboard({ title, columns, rows, footer, show })` | The scoreboard players see while holding Tab (or kept up with `show`); a row naming a `player` is highlighted on their screen |
-| `hud.feed([...parts])` | A feed line can be parts: text, `{ text, color }`, `{ icon }` (a gun side on: `{ gltf: url, view: 'side' }`) |
+| `hud.feed([...parts])` | A feed line can be parts: text, `{ text, color }`, `{ icon }` (a gun side on, as each screen has it: `{ icon: { item: 'rifle', view: 'side' } }`; or any icon, `{ gltf: url, view: 'side' }`) |
 | `hud.define(name, { html, css, at, modal, actions })`, `hud.widget(name, data)` | HUD widgets of the game's own, from HTML and CSS, filled in from data (see below) |
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
-| `audio.play(name, { at })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops |
+| `audio.play(name, { at, item })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops. `item: { id, sound, pitch? }` plays that item's own sound instead (its `sounds.use`, `.hit`…, as each screen has it), where it has one |
 | `env.time`, `env.frozen` | Time of day |
 | `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'blockChange' \| 'playerJoin' \| 'playerReady' \| 'playerLeave' \| 'ability' \| 'clientMessage', fn)` | Events (player events name the `player`) |
 | `clients.send(to, name, data)` | A message to the game's client code on one player's screen, a list of players', or everyone's (`'all'`), heard there with `client.on(name, fn)`; `clientMessage` hears theirs (see "Client code") |
@@ -1251,7 +1259,17 @@ Call of Blocky's corner of the screen (kills, place, the leader, the streak towa
 
 ## Client code: HUD, effects, sounds and messages
 
-A game's `client.ts` runs on each player's screen (`defineClient(shared, { kits, setup, frame, late })`, `@platform/client`). What the platform's games have always shown is built from the public client API as **kits** (`@platform/client/kits`), which a game lists (every game uses `standardKits()` for now), copies into its own folder and changes, or replaces. Each frame the kits' `frame` runs in order, then the game's; then the world's effects move on by the frame's time; then the kits' and the game's `late` (for what's made at the very end, drawn where it starts: a shot fired this frame).
+A game's `client.ts` runs on each player's screen (`defineClient(shared, { kits, setup, frame, late })`, `@platform/client`). What the platform's games have always shown is built from the public client API as **kits** (`@platform/client/kits`), which a game lists, copies into its own folder and changes, or replaces. A game lists the kits it uses, in the order they run; Call of Blocky's:
+
+```ts
+import { effects, figures, firstPerson, hud, sounds } from '@platform/client/kits';
+defineClient(shared, {
+  kits: [...sounds.standard(), ...firstPerson.standard(), figures.humanoid(), hud.gunner(), hud.throwables(), effects.gunfire(), effects.throwables()],
+  setup(client) { defineLooks(client); defineSounds(client); },   // client/looks.ts, client/sounds.ts
+});
+```
+
+(`standardKits()` is all of them, as the games that haven't listed theirs yet use.) Each frame the kits' `frame` runs in order, then the game's; then the world's effects move on by the frame's time; then the kits' and the game's `late` (for what's made at the very end, drawn where it starts: a shot fired this frame).
 
 **The HUD (`client.hud`).** Plain DOM: client code is bundled with the game and trusted, so it builds its own elements (what the server sends stays sanitized).
 
@@ -1260,7 +1278,7 @@ A game's `client.ts` runs on each player's screen (`defineClient(shared, { kits,
 | `hud.layer(name, place?)` | A layer of its own (made the first time it's named), covering the screen, the mouse passing through. `place`: `'lens'` straight over the world, under the crosshair (a sight's glow, a scope's view); `'middle'` with the crosshair; `'panels'` (the default) with the HUD's panels, under the game's widgets and the scoreboard. Layers at one place stack in the order they're made |
 | `hud.style(css)` | A stylesheet for what the layers show, under the game's theme (`hud.theme.css` restyles a kit's elements as it does the platform's). Returns a function that takes it out |
 | `hud.crosshair.wanted`, `hud.crosshair.replace(el)` | Whether the game shows a crosshair (its server's `hud.crosshair`), and an element of a layer's in the plain cross's place (shown whenever the game wants a crosshair; `null` puts the plain one back) |
-| `hud.icon(ref)` | An icon (a sprite, a block, a picture of a model) as an `<img>`, filled in once it's ready |
+| `hud.icon(ref)` | An icon (a sprite, a block, a picture of a model, or `{ item }`: an item's as this screen has it) as an `<img>`, filled in once it's ready |
 | `hud.theme` | The game's `hud.theme` |
 | `hud.progress`, `marker`, `banner`, `toast`, `pop`, `feed` | The server's HUD calls, on this screen only (a marker takes a point) |
 
@@ -1277,6 +1295,32 @@ A game's `client.ts` runs on each player's screen (`defineClient(shared, { kits,
 | `sounds.standard()` | The standard voices, as ordinary `client.audio.define` definitions (see "Your own art and sound") |
 
 `hud.standard()`, `effects.standard()` and `sounds.standard()` give each group; the kits' CSS is theirs too (the classes are the same as ever, so a theme like Call of Blocky's `hud.css` restyles them).
+
+### Items' looks and sounds in client code
+
+How an item looks and sounds is the screen's business, so a game gives it in its client code: the server defines what the item does, and never needs a model file or a voice.
+
+```ts
+// client/looks.ts (client code)
+import { HeldModels } from '@platform';
+import rifleUrl from '../models/rifle.glb?url';
+export function defineLooks(client: Client) {
+  client.items.look('rifle', {
+    icon: { gltf: rifleUrl },
+    hold: { style: 'gun', model: HeldModels.gltf(rifleUrl), gun: { ads: 0.4 } },
+    tracer: '#ffd36b',
+    sounds: { use: 'shot_rifle', reload: 'reload_mag' },
+  });
+}
+// server.ts: what it does, and nothing of how it looks
+game.items.define('rifle', { kind: 'gun', name: 'Big Kahuna', auto: true, rpm: 640, damage: [30, 22], magazine: 30, reload: 2.1 });
+```
+
+- **`client.items.look(id, look)`**, in `setup` (before anything's shown; the kits' `setup` runs first, then the game's, all before the first item is read). A look (`ItemLook`) has an item's presentation: `icon`, `hold` (its model, a gun's first-person `hold.gun`, a humanoid's `hold.poses`…), `sounds`, `tracer`, `trail`, `drawIcon`, and the `name` the hotbar shows. Each field given goes over the server's definition (`sounds` sound by sound), wherever the screen reads the item: `client.item(id)` and `client.items.get(id)`, `client.me.held.def`, the model in hand (`client.view.held`), the hotbar, pickups on the ground, other players' figures and what they hold, `client.scene.item(id)`, and every kit. An item the server defines later (or again, at a restart) takes its look when it comes. What an item does (`kind`, damage, rates, magazines, keys, fuses, blasts) stays the server's.
+- **Icons by name.** Where the server shows an item, it names it: `{ item: 'rifle' }` is an icon (`IconRef`) meaning "this item's icon, as each screen has it", in feed lines (`hud.feed`), menu entries (`hud.menu`), result screens (`hud.screen`) and client code's `client.hud.icon`; `view: 'side'` draws a model's picture from the side (`{ item: 'rifle', view: 'side' }` in a kill feed). It's blank until the screen has the item, then filled in.
+- **Sounds by name.** A look's `sounds` name voices the client code defines (`client.audio.define`, above). The platform's own item sounds on the server (someone else's shot, a reload, a throw, a molotov breaking, a blade's swing and hit) name the item as they go (`audio.play`'s `item`), so each screen plays that item's own sound as it has it, else the platform's generic one.
+- **Server-side looks still work.** A game whose server gives `icon`, `hold` and `sounds` keeps them; a look goes over what the server gave. An item given an icon by neither side shows a placeholder (a grey tag with a question mark).
+- **What only the server can draw** still comes from the server's definition: a bow's arrows show its ammo item's icon (or `projectile`), and a `game.props.gltf` model is the server's. Keep those on the server.
 
 **Messages between the server and client code.** The game's own, either way:
 

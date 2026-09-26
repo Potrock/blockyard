@@ -144,7 +144,7 @@ export class ThrowSim {
       const id = this.nextFire++;
       this.fires.push({ id, at: ground, radius: fire.radius, left: fire.duration, dps: fire.damage, by: l.by, weapon: l.item, next: 0.15 });
       h.present.message(null, '$fire', [id, ground.x, ground.y, ground.z, fire.radius, fire.duration, fire.color]);
-      h.audio.play(l.t.def.sounds?.hit ?? 'glass', { at });
+      h.audio.play(l.t.def.sounds?.hit ?? 'glass', { at, item: { id: l.item, sound: 'hit' } });
       h.audio.play('fire', { at: ground });
     }
   }

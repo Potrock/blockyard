@@ -1442,13 +1442,18 @@ export type BuiltinSprite =
 interface ItemBase {
   name: string;
   /**
-   * A sprite, or `{ block }`: an item that looks like a block is shown as the block in the
-   * hotbar, held as a little cube, and dropped as a spinning cube of it.
+   * A sprite, a picture of a glTF model, or `{ block }`: an item that looks like a block is shown
+   * as the block in the hotbar, held as a little cube, and dropped as a spinning cube of it.
+   * Optional: the game's client code can give it instead (`ItemLook`), and an item given one by
+   * neither side shows a placeholder.
    */
-  icon: IconRef;
-  /** How it is held and swung in first person. */
+  icon?: ItemIcon;
+  /** How it is held and swung in first person (or given by the game's client code: `ItemLook`). */
   hold?: HoldSpec;
-  /** Its own sounds (built-in or `audio.define`d); each defaults to the platform's generic one. */
+  /**
+   * Its own sounds (built-in or `audio.define`d); each defaults to the platform's generic one.
+   * Or given by the game's client code, with the voices defined there too (`ItemLook`).
+   */
   sounds?: ItemSounds;
   /** Max stack size. Default 1 for weapons, 64 otherwise. */
   stack?: number;
@@ -1459,6 +1464,39 @@ interface ItemBase {
    * immediately (e.g. hearts) instead of adding it to the inventory; play your own sound then.
    */
   onPickup?(game: GameContext, count: number, player: Player): boolean;
+}
+
+/**
+ * How an item looks and sounds, given by the game's client code on each screen
+ * (`client.items.look(id, look)`, in its `setup`) rather than by its server: its icon, how it's
+ * held (its model, a gun's first-person poses), its sounds, a gun's tracer, a throwable's trail, a
+ * bow's drawn sprite, the name the hotbar shows. Each field given goes over the server's
+ * definition (`sounds` sound by sound) wherever the screen reads the item. The server then needs
+ * no model files or voices: it names items (`{ item }` icons, `audio.play`'s `item`), and each
+ * screen shows them as it has them.
+ */
+export interface ItemLook {
+  /** The name this screen shows (the hotbar's label); the server's own messages use its own. */
+  name?: string;
+  icon?: ItemIcon;
+  hold?: HoldSpec;
+  sounds?: ItemSounds;
+  /** Guns: the tracer's colour, or false for none (`GunItem.tracer`). */
+  tracer?: string | false;
+  /** Throwables: what it trails as it flies (`ThrowableItem.trail`). */
+  trail?: string;
+  /** Bows: the sprite shown while drawing (`BowItem.drawIcon`). */
+  drawIcon?: SpriteRef;
+}
+
+/**
+ * One of an item's own sounds, as each screen has it (`AudioApi.play`'s `item`): the item, which
+ * of its `sounds`, and the pitch to play that at (default the call's own).
+ */
+export interface ItemSoundRef {
+  id: string;
+  sound: keyof ItemSounds;
+  pitch?: number;
 }
 
 export interface ItemSounds {
@@ -1722,12 +1760,20 @@ export interface MiscItem extends ItemBase {
 
 export type ItemDefinition = MeleeItem | BowItem | GunItem | ThrowableItem | ConsumableItem | MiscItem;
 
-/** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
 /**
- * A sprite, a block's picture, or a picture of a glTF model (`{ gltf: url }`, drawn once it has
- * loaded; `view: 'side'` draws it from the side, the way kill feeds show guns).
+ * An item's own icon: a sprite, a block's picture, or a picture of a glTF model (`{ gltf: url }`,
+ * drawn once it has loaded; `view: 'side'` draws it from the side, the way kill feeds show guns).
  */
-export type IconRef = SpriteRef | { block: string } | { gltf: string; view?: 'iso' | 'side' };
+export type ItemIcon = SpriteRef | { block: string } | { gltf: string; view?: 'iso' | 'side' };
+
+/**
+ * An icon anywhere the HUD shows one (a feed line, a menu entry, a result screen, client code's
+ * `client.hud.icon`): any item icon, or `{ item: id }`, that item's icon as each screen has it
+ * (its look, from the game's client code: `client.items.look`), so a server names an item rather
+ * than sending a picture of it. `view: 'side'` draws a model's picture from the side
+ * (`{ item: 'rifle', view: 'side' }` in a kill feed).
+ */
+export type IconRef = ItemIcon | { item: string; view?: 'iso' | 'side' };
 
 export interface Pickup {
   readonly id: number;
@@ -2146,7 +2192,8 @@ export interface ScreenOptions {
   title: string;
   subtitle?: string;
   tone?: 'victory' | 'defeat' | 'neutral';
-  icon?: SpriteRef;
+  /** A sprite, or any icon (`{ item: 'trophy' }`: the item's, as each screen has it). */
+  icon?: IconRef;
   stats?: [string, string][];
   buttons: { label: string; primary?: boolean; onClick: () => void }[];
 }
@@ -2164,7 +2211,8 @@ export interface HudApi {
   /**
    * A line in the message feed (top left): kill feeds, match events, chat. Lines stack, newest at
    * the bottom, and fade after a few seconds. `color` tints the line. A line can be parts: text,
-   * coloured text and icons (`['Ann', { icon: { gltf: rifle, view: 'side' } }, { text: 'Bob', color: '#f55' }]`).
+   * coloured text and icons (`['Ann', { icon: { item: 'rifle', view: 'side' } }, { text: 'Bob', color: '#f55' }]`:
+   * the rifle's icon as each screen has it, drawn from the side).
    */
   feed(text: string | FeedPart[], opts?: { color?: string }): void;
   /** A short pop-up under the crosshair ("+100", "Headshot!", "Double kill"): `big` for the big moments. */
@@ -2408,8 +2456,17 @@ export interface SynthKit {
 export type SynthVoice = (s: SynthKit) => void;
 
 export interface AudioApi {
-  play(name: SoundName, opts?: { at?: Vec3; volume?: number; pitch?: number }): void;
-  /** Add (or replace) a sound, synthesised on each play. Call it in `setup`. */
+  /**
+   * Play a sound: at a spot (fainter further off), or everywhere. `item` plays one of an item's own
+   * sounds instead, as each screen has them (the server's `sounds`, or its look's: `ItemLook`),
+   * where it has that one; `name` plays where it hasn't.
+   */
+  play(name: SoundName, opts?: { at?: Vec3; volume?: number; pitch?: number; item?: ItemSoundRef }): void;
+  /**
+   * Add (or replace) a sound, synthesised on each play. Call it in `setup`. (It's recorded and sent
+   * to each screen; a game can define its voices in its client code instead, `client.audio.define`,
+   * and the server just plays them by name.)
+   */
   define(name: string, voice: SynthVoice): void;
   /** Start a continuous sound; keep the handle to change it and stop it. */
   loop(name: LoopName, opts?: { volume?: number; pitch?: number }): LoopHandle;

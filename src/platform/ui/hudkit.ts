@@ -278,7 +278,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
   }
 
   /**
-   * An icon as an image. A picture of a model that hasn't loaded yet fills in once it has (it's
+   * An icon as an image: `{ item }` is that item's icon as this screen has it (its look). A picture
+   * of a model that hasn't loaded yet (or of an item not here yet) fills in once it has (it's
    * blank until then, never a broken image).
    */
   icon(spec: string, ref: IconRef): HTMLImageElement {
@@ -591,7 +592,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
         typeof p === 'string'
           ? h('span', {}, p)
           : 'icon' in p
-            ? this.icon(`img.feed-icon${typeof p.icon === 'object' && 'gltf' in p.icon && p.icon.view === 'side' ? '.wide' : ''}`, p.icon)
+            ? this.icon(`img.feed-icon${typeof p.icon === 'object' && ('gltf' in p.icon || 'item' in p.icon) && p.icon.view === 'side' ? '.wide' : ''}`, p.icon)
             : h('span', { style: p.color ? { color: p.color } : {} }, p.text),
       ),
     );

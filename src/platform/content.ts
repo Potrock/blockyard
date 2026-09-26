@@ -1,5 +1,6 @@
-import type { AtlasPixels, EntityDefinition, ItemDefinition, SynthVoice, Vec3, ViewAnimation } from './api/types';
+import type { AtlasPixels, EntityDefinition, ItemDefinition, ItemLook, SynthVoice, Vec3, ViewAnimation } from './api/types';
 import { Blueprint } from './api/blueprint';
+import { lookOver } from './looks';
 import type { ContentDef } from './net/protocol';
 import { playRecorded, recordVoice } from './audio/voice';
 import type { WidgetWire } from './ui/markup';
@@ -20,8 +21,15 @@ export class Content {
   readonly animations = new Map<string, ViewAnimation>();
   /** Entity types: their models, for the client to draw. */
   readonly entities = new Map<string, EntityDefinition>();
-  /** Items: their icons and how they're held. */
+  /**
+   * Items as this side has them: the server's definitions, with their looks over them on a screen
+   * (`lookItem`: their icons, how they're held, their sounds), and an icon always (a placeholder
+   * when neither gives one).
+   */
   readonly items = new Map<string, ItemDefinition>();
+  /** The server's own item definitions, and the looks the game's client code gave (`client.items.look`). */
+  private served = new Map<string, ItemDefinition>();
+  private looks = new Map<string, ItemLook>();
   /** HUD widgets of the game's own (`hud.define`): markup and styles, for each screen to check and build. */
   readonly widgets = new Map<string, WidgetWire>();
   /** Prop models: a blueprint to mesh (`props.model`), or a glTF file (`props.gltf`). */
@@ -63,8 +71,19 @@ export class Content {
   }
 
   defineItem(id: string, def: ItemDefinition) {
-    this.items.set(id, def);
+    this.served.set(id, def);
+    this.items.set(id, lookOver(def, this.looks.get(id)));
     this.forward?.({ kind: 'item', name: id, def: wire(def) });
+  }
+
+  /**
+   * An item's look on this screen (`client.items.look`): over the server's definition, now and
+   * whenever the server defines the item (again).
+   */
+  lookItem(id: string, look: ItemLook) {
+    this.looks.set(id, look);
+    const def = this.served.get(id);
+    if (def) this.items.set(id, lookOver(def, look));
   }
 
   defineEntity(type: string, def: EntityDefinition) {

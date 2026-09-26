@@ -1,9 +1,12 @@
-import type { GameContext, SynthKit } from '@platform';
+import type { SynthKit } from '@platform';
+import type { Client } from '@platform/client';
 
 /**
- * Call of Blocky's sounds, all synthesised: each gun its own voice (a punch, a blast of noise, a
- * crack, a tail), the reloads, the katana, and the stingers: a surf-rock riff to start a match,
- * brass for a streak.
+ * Call of Blocky's sounds, all synthesised on each screen (`client.audio.define`: nothing is
+ * recorded or sent): each gun its own voice (a punch, a blast of noise, a crack, a tail), the
+ * reloads, the katana, the lethals, and the stingers: a surf-rock riff to start a match, brass for
+ * a streak. The weapons play theirs through their looks (`./looks`); the server plays the rest by
+ * name (`audio.play('streak')`).
  */
 
 /** A gunshot: a low punch, a blast of filtered noise, a supersonic crack and an echoing tail. */
@@ -37,8 +40,8 @@ function surf(s: SynthKit, notes: number[], step: number, picks: number) {
   });
 }
 
-export function defineSounds(game: GameContext) {
-  const a = game.audio;
+export function defineSounds(client: Client) {
+  const a = client.audio;
   a.define('shot_rifle', (s) => shot(s, { punch: 140, body: 0.2, bright: 5200, crack: 0.45, tail: 0.35 }));
   a.define('shot_smg', (s) => shot(s, { punch: 190, body: 0.11, bright: 7000, crack: 0.35, tail: 0.18, loud: 0.8 }));
   a.define('shot_shotgun', (s) => shot(s, { punch: 95, body: 0.42, bright: 3000, crack: 0.3, tail: 0.6, loud: 1.2 }));

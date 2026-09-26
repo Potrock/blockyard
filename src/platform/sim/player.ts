@@ -272,14 +272,15 @@ export class PlayerSim {
         carve: p.carve && ((point, dir, opts) => p.carve!(point, dir, opts, me.api)),
         shotSeen: (shot: ShotWire, sound: string, at: Vec3) => {
           present.message(null, '$shot', shot, this.id);
-          present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z } }], this.id);
+          // (The gun's own shot as each screen has it: its look's, else the server's `sound`.)
+          present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z }, item: { id: shot.item, sound: 'use' } }], this.id);
         },
         launch: (item, t, from, v, fuse, key, mine) => {
           p.throws.launch(item, t, from, v, fuse, key, this.api, mine);
           // Their figure swings its arm; everyone else hears it go (their own screen played it).
           this.swings++;
           const sound = t.def.sounds?.use ?? 'whoosh';
-          present.send(null, 'audio', 'play', [sound, { at: { x: from.x, y: from.y, z: from.z }, volume: 0.7 }], mine ? this.id : undefined);
+          present.send(null, 'audio', 'play', [sound, { at: { x: from.x, y: from.y, z: from.z }, volume: 0.7, item: { id: item, sound: 'use' } }], mine ? this.id : undefined);
         },
         refuse: (key) => p.throws.refuse(key, this.id),
         now: () => p.now(),

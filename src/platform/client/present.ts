@@ -1,4 +1,4 @@
-import type { LoopHandle, MenuHandle } from '../api/types';
+import type { ItemDefinition, ItemSoundRef, LoopHandle, MenuHandle, Vec3 } from '../api/types';
 import type { Sfx } from '../audio/sfx';
 import type { Effects } from '../fx/effects';
 import { isCallbackRef, type ClientMessage, type PresentCall } from '../net/protocol';
@@ -14,6 +14,23 @@ export interface PresenterParts {
   send: (m: ClientMessage) => void;
   /** Messages for the client code: the game's own (`clients.send`), and the platform's (`$` names). */
   message: (name: string, data: unknown) => void;
+  /** An item as this screen has it (its look over the server's definition): its own sounds, for `audio.play`'s `item`. */
+  item?: (id: string) => ItemDefinition | undefined;
+}
+
+/** `audio.play`'s options as they come: where, how loud, the pitch, and an item whose own sound it is. */
+type PlayWire = { at?: Vec3; volume?: number; pitch?: number; item?: ItemSoundRef };
+
+/**
+ * The sound an `audio.play` call plays on this screen: the item's own (as this screen has it: its
+ * look's, or the server's), at the pitch given for it, where it has one; else the name the call
+ * gave (none: nothing).
+ */
+export function soundOf(name: string, opts: PlayWire | undefined, item?: (id: string) => ItemDefinition | undefined): [string, { at?: Vec3; volume?: number; pitch?: number }] | null {
+  const { item: ref, ...rest } = opts ?? {};
+  const own = ref ? item?.(ref.id)?.sounds?.[ref.sound] : undefined;
+  if (own) return [own, ref!.pitch !== undefined ? { ...rest, pitch: ref!.pitch } : rest];
+  return name ? [name, rest] : null;
 }
 
 type Callable = Record<string, (...args: unknown[]) => unknown>;
@@ -108,8 +125,10 @@ export class Presenter {
   private audio(method: string, args: unknown[]) {
     const sfx = this.parts.sfx;
     switch (method) {
-      case 'play':
-        return sfx.play(args[0] as string, args[1] as Parameters<Sfx['play']>[1]);
+      case 'play': {
+        const s = soundOf(args[0] as string, args[1] as PlayWire | undefined, this.parts.item);
+        return s && sfx.play(s[0], s[1]);
+      }
       case 'loop': {
         const [id, name, opts] = args as [number, Parameters<Sfx['loop']>[0], Parameters<Sfx['loop']>[1]];
         this.loops.set(id, sfx.loop(name, opts));

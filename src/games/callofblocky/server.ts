@@ -4,9 +4,7 @@ import { ATLAS, defineArt, OUTFITS, skinOrigin } from './art';
 import { makeBots, type Bots } from './bots';
 import { MAP, type SpawnPoint } from './map';
 import { COLORS, fighterModel, shared } from './shared';
-import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
-import { GUNS } from './models';
 import { DOSSIER, streakPips } from './hud';
 
 /**
@@ -357,11 +355,10 @@ const BRIEFCASE_EVERY = 50;
 const BRIEFCASE_POINTS = 300;
 
 function defineBriefcase(game: GameContext) {
-  const model = GUNS.find((g) => g.id === 'briefcase')?.url;
+  // (Its model is each screen's: `client/looks.ts`.)
   game.items.define('briefcase', {
     kind: 'misc',
     name: 'The Briefcase',
-    icon: model ? { gltf: model } : { block: 'yellow_concrete' },
     onPickup: (g, _n, player) => {
       const f = fighters.get(player.id);
       if (!f || !player.alive) return false;
@@ -495,7 +492,7 @@ export default defineServer(shared, {
     defineArt(game);
     defineWeapons(game);
     defineBriefcase(game);
-    defineSounds(game);
+    // (Its voices are each screen's, `client/sounds.ts`: played here by name.)
     game.hud.define('dossier', DOSSIER);
     // The walking grid (built once the map's blocks are here, kept up with holes and breaks) and the bots on it.
     bots = makeBots(game, navGrid(game, { bounds: MAP.bounds }), MAP.hotspots);

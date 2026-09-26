@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { HeldModelSpec, IconRef, ItemDefinition, ModelPart, ModelSpec, SpriteRef } from '../api/types';
+import type { HeldModelSpec, ItemDefinition, ItemIcon, ModelPart, ModelSpec, SpriteRef } from '../api/types';
+import { PLACEHOLDER_ATLAS, PLACEHOLDER_ICON } from '../looks';
 import { Shaders } from './shaders';
 import type { SharedUniforms } from './pipeline';
 import { GltfLibrary, surfaceUniforms, type ItemMesh, type Surface } from '../client/gltf';
@@ -30,6 +31,32 @@ export interface Atlas {
   emissive: THREE.DataTexture;
 }
 
+/** The placeholder icon's pixels (16x16, sRGB RGBA): a grey tag with a question mark, for an item given no icon by either side. */
+function placeholderPixels(): Uint8Array {
+  const rows = [
+    '................',
+    '................',
+    '..############..',
+    '.#oooooooooooo#.',
+    '.#oooowwwwoooo#.',
+    '.#ooowwoowwooo#.',
+    '.#oooooowwoooo#.',
+    '.#ooooowwooooo#.',
+    '.#ooooowwooooo#.',
+    '.#oooooooooooo#.',
+    '.#ooooowwooooo#.',
+    '.#ooooowwooooo#.',
+    '.#ssssssssssss#.',
+    '..############..',
+    '................',
+    '................',
+  ];
+  const colors: Record<string, number[]> = { '#': [58, 63, 71, 255], o: [141, 148, 158, 255], s: [107, 114, 128, 255], w: [245, 245, 245, 255] };
+  const px = new Uint8Array(16 * 16 * 4);
+  rows.forEach((row, y) => [...row].forEach((c, x) => colors[c] && px.set(colors[c], (y * 16 + x) * 4)));
+  return px;
+}
+
 export function resolveSprite(ref: SpriteRef): { atlas: string; x: number; y: number } {
   if (typeof ref === 'string') {
     const p = BUILTIN_SPRITES[ref];
@@ -52,6 +79,7 @@ export class EntityGraphics {
 
   constructor(private shared: SharedUniforms) {
     this.gltf = new GltfLibrary(shared);
+    this.addAtlas(PLACEHOLDER_ATLAS, 16, 16, placeholderPixels());
   }
 
   /** A figure for an entity's model: boxes now, or glTF once its file is here (null till then). */
@@ -113,7 +141,7 @@ export class EntityGraphics {
    * like a block, or while its model's file is still coming (ask again: `gltf.version` counts up).
    */
   itemLook(def: ItemDefinition, drawn = false): (ItemMesh & { model?: HeldModelSpec }) | null {
-    const icon = drawn && def.kind === 'bow' ? def.drawIcon ?? def.icon : def.icon;
+    const icon = (drawn && def.kind === 'bow' ? def.drawIcon ?? def.icon : def.icon) ?? PLACEHOLDER_ICON;
     const model = def.hold?.model;
     if (model && !drawn) {
       if (model.gltf) {
@@ -136,8 +164,8 @@ export class EntityGraphics {
     return { geometry, albedo: a.albedo, emissive: a.emissive };
   }
 
-  /** An icon as a picture (data URL): a sprite, or a model's (empty until its file is here). Blocks are the caller's. */
-  icon(ref: Exclude<IconRef, { block: string }>, size = 48): string {
+  /** An icon as a picture (data URL): a sprite, or a model's (empty until its file is here). Blocks (and `{ item }`) are the caller's. */
+  icon(ref: Exclude<ItemIcon, { block: string }>, size = 48): string {
     return typeof ref === 'object' && 'gltf' in ref ? this.gltf.icon(ref.gltf, size, ref.view) : this.spriteIcon(ref, size);
   }
 

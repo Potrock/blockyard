@@ -59,7 +59,8 @@ export function throwables(): ClientKit {
       const cooking = me.cooking;
       show(
         client,
-        quick.map((q) => ({ icon: client.item(q.item)!.icon as IconRef, count: q.count, key: q.key.replace(/^Key|^Digit/, ''), cooking: cooking?.item === q.item })),
+        // (Each one's icon as this screen has it: its look's, over the server's.)
+        quick.map((q) => ({ icon: { item: q.item }, count: q.count, key: q.key.replace(/^Key|^Digit/, ''), cooking: cooking?.item === q.item })),
       );
       // The fuse, burning down round the crosshair while it's held.
       const burning = cooking && cooking.fuse > 0 ? 1 - cooking.held / cooking.fuse : null;

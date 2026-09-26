@@ -207,8 +207,8 @@ Today's behaviour, rebuilt only from the API above:
 | `setup`/`start`/`update` shipped to the browser | `server.ts`, on the server only |
 | `world`, `blocks`, movement, abilities, vehicles | `shared.ts` (both sides; prediction and terrain need them) |
 | Item stats | `shared.ts` (prediction reads rpm, spread, magazine) |
-| Item looks (icon, model, `hold`) sent from the server | `client.items.look(id, {...})` in `client.ts` |
-| Sounds recorded on the host and replayed | Defined in `client.ts` (real Web Audio; no recording) |
+| Item looks (icon, model, `hold`) sent from the server | `client.items.look(id, {...})` in `client.ts` (built, phase 3a; Call of Blocky moved) |
+| Sounds recorded on the host and replayed | Defined in `client.ts` (real Web Audio; no recording) (built, phase 3a; Call of Blocky moved) |
 | HUD widgets defined on the host | Defined in `client.ts`; the server sends data to them |
 | `hud.theme`, `player.model`, `firstPerson` fit | `client.ts` |
 | View model styles and humanoid stances in the engine | Kits |
@@ -261,11 +261,17 @@ build. Kits must reproduce today's looks exactly until a game chooses otherwise.
    - Recommended: yes. The server then never needs model urls or voices, and the record/replay
      machinery goes away.
    - Cost: kill-feed and HUD calls name items (`{ item: 'rifle' }`) instead of shipping icons.
+   - **Done (phase 3a)** in the platform (`client.items.look`, `{ item }` icons, item sounds by
+     name, `client.audio.define`) and in Call of Blocky. The record/replay machinery stays until
+     the other games move their voices.
 2. **Kits are listed explicitly per game.**
    - Recommended: yes, with no hidden defaults: a game shows what it uses.
    - Cost: every game's `client.ts` lists its kits, a few lines each.
+   - **Done for Call of Blocky (phase 3a)**; the other games still use `standardKits()`.
 3. **Server-side `hud.*`/`fx.*`/`audio.*` stay as a convenience.**
    - Recommended: yes. Simple games keep working without client code for UI.
+   - **Done**: they stay, and deliver to the same client services (`{ item }` icons and item
+     sounds work through them).
 4. **Phase 4 (simulation kinds as kits) is out of scope for now.**
    - Recommended: yes. It's the same principle, but a much larger change to gameplay code.
 
@@ -372,3 +378,39 @@ They report through `client.me` and `client.events`, and no longer draw anything
 - Every game's `client.ts` lists these kits, and every game looks and sounds pixel-identical.
 - A check fails on item-kind or style checks (`kind === 'gun'`, `'sword'`, `stance`, …) in the
   client presentation core (`render/`, `ui/`, `fx/`, `runtime.ts` outside the mechanics).
+
+---
+
+## Phase 3a: items' looks and sounds on the client
+
+Built (decisions 1 to 3 above). Docs: PLATFORM.md, "Items' looks and sounds in client code".
+
+- **`client.items.look(id, look)`**, in a game's client `setup`. An `ItemLook` is an item's
+  presentation: `icon`, `hold`, `sounds`, `tracer`, `trail`, `drawIcon`, the shown `name`.
+  - The screen's `Content` keeps the server's definitions and the looks apart, and its `items`
+    are the two merged: each look field over the server's, `sounds` sound by sound.
+  - So everything that reads an item gets the look: `client.item`, `client.items.get`,
+    `me.held.def`, the held model, the hotbar, pickups, figures, `scene.item`, the kits.
+  - The game's client code starts at the top of the first frame it's in the game, before the
+    gun controller, the hotbar or the figures read an item. `ItemBase.icon` is optional; an item
+    given no icon by either side shows a placeholder (the `$placeholder` atlas).
+- **`{ item: id, view? }` icons** (`IconRef`), resolved on each screen (`looks.ts`
+  `resolveIcon`): in feed lines, menu entries, result screens, `client.hud.icon`, and the
+  throwables kit's panel.
+- **Item sounds by name.** The simulation's own item sounds (others' shots, reloads, dry clicks,
+  throws, a molotov breaking, melee swings and hits, bows, consumables, a pin pulled) carry
+  `audio.play`'s `item: { id, sound, pitch? }`. Each screen plays the item's own sound as it has
+  it, else the name the server gave.
+- **Call of Blocky.**
+  - `weapons.ts` has only what its weapons do.
+  - `client/looks.ts` has their models, icons, first-person holds (`FP`, `FP_COMPACT`, `ADS`),
+    tracers, trail and sounds, and the briefcase's model.
+  - `client/sounds.ts` has its voices (`client.audio.define`).
+  - `client.ts` lists its kits.
+  - Its server reaches no weapon model file and defines no voice; `split.ts` checks both.
+  - The fighters (`setModel`) and the dossier widget stay on the server.
+- **Still to go.**
+  - The other games move their looks and voices the same way.
+  - Then the record/replay of server voices (`recordVoice`, `playRecorded`) and the
+    `server-assets` Vite plugin (it emits files that server-reached modules name by URL: Call of
+    Blocky's fighters, High Noon's weapons and blocks, the gallery's and sandbox's models) can go.

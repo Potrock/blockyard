@@ -15,11 +15,20 @@ const GAMES = resolve('src/games');
 const SERVER_ONLY: Record<string, string[]> = {
   arena: ['content.ts', 'sounds.ts'],
   bedwars: ['bots.ts', 'fireballs.ts', 'items.ts', 'nav.ts', 'shop.ts', 'sounds.ts', 'state.ts'],
-  callofblocky: ['bots.ts', 'hud.ts', 'sounds.ts', 'weapons.ts'],
+  callofblocky: ['bots.ts', 'hud.ts', 'weapons.ts'],
   highnoon: ['bots.ts', 'hud.ts', 'sounds.ts', 'weapons.ts'],
   obby: ['sounds.ts'],
   skyship: ['ship.ts'],
   starfighter: ['capital.ts', 'enemies.ts', 'pilot.ts', 'sounds.ts', 'weapons.ts'],
+};
+
+/**
+ * Modules only a game's client code may reach (its looks: the model files its items are drawn
+ * from, its voices), by folder: the game's client code reaches each, its server code and its
+ * shared code never do (the server names the items, and plays the voices by name).
+ */
+const CLIENT_ONLY: Record<string, string[]> = {
+  callofblocky: ['models/index.ts', 'client/looks.ts', 'client/sounds.ts'],
 };
 
 /** What a file imports (static, dynamic, re-exports and type-only alike), comments aside. */
@@ -56,7 +65,8 @@ function graph(entry: string): Set<string> {
 
 const isPart = (part: string) => (m: string) => new RegExp(`(^|\\.)${part}\\.ts$`).test(basename(m)) && m.startsWith(GAMES + '/') && dirname(m) !== GAMES;
 const isServer = isPart('server');
-const isClient = isPart('client');
+/** A game's client code: its `client.ts` (or `<preview>.client.ts`), and anything in a `client/` folder of its own. */
+const isClient = (m: string) => isPart('client')(m) || (m.startsWith(GAMES + '/') && relative(GAMES, m).split('/').slice(1, -1).includes('client'));
 const name = (m: string) => (m.startsWith('/') ? relative('.', m) : m);
 
 /** Every game's four parts: each `meta.ts` (or `<preview>.meta.ts`) in a game's folder, and its siblings. */
@@ -119,6 +129,19 @@ export default async function split() {
     const reached = new Set(all.filter((g) => g.folder === folder).flatMap((g) => [...graph(g.server)]));
     for (const f of list) check(reached.has(join(GAMES, folder, f)), `src/games/${folder}/${f} is listed as server-only but no server code of ${folder} reaches it`);
   }
+  let clientOnly = 0;
+  for (const [folder, list] of Object.entries(CLIENT_ONLY)) {
+    // The game itself (not its previews: Call of Blocky's gun gallery stands the models on pedestals, props its server places).
+    const games = all.filter((g) => g.server === join(GAMES, folder, 'server.ts'));
+    const onScreen = new Set(games.flatMap((g) => [...graph(g.client)]));
+    const elsewhere = new Set(games.flatMap((g) => [...graph(g.server), ...graph(g.shared)]));
+    for (const f of list) {
+      const m = join(GAMES, folder, f);
+      check(onScreen.has(m), `src/games/${folder}/${f} is listed as client-only but no client code of ${folder} reaches it`);
+      check(!elsewhere.has(m), `src/games/${folder}/${f} is client-only (its looks, its voices), but ${folder}'s server or shared code reaches it`);
+      clientOnly++;
+    }
+  }
 
   // The registries: the browser's catalog and the server's, the same games in the same order.
   const hosted: GameDefinition[] = [...server.games, ...(await server.devGames())];
@@ -133,5 +156,5 @@ export default async function split() {
     for (const [k, v] of Object.entries(shared)) check(def[k as keyof GameDefinition] === v, `${def.id}: the server's ${k} isn't the client's shared one`);
     for (const k of Object.keys(def)) check(k in shared || k === 'setup' || k === 'start' || k === 'update', `${def.id}: the server's definition has ${k}, which isn't shared or a rule`);
   }
-  console.log(`  ${all.length} games split (${server.games.length} listed, ${all.length - server.games.length} in development): meta alone, clients only on shared code, shared code clear of the rules (${walked.size} modules walked)`);
+  console.log(`  ${all.length} games split (${server.games.length} listed, ${all.length - server.games.length} in development): meta alone, clients only on shared code, shared code clear of the rules, ${clientOnly} looks-and-voices modules on screens only (${walked.size} modules walked)`);
 }

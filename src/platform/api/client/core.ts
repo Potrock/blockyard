@@ -1,5 +1,5 @@
 import type * as THREE from 'three';
-import type { ItemDefinition, SharedDefinition, SoundName, SynthVoice, Vec3 as PlainVec3 } from '../types';
+import type { ItemDefinition, ItemLook, SharedDefinition, SoundName, SynthVoice, Vec3 as PlainVec3 } from '../types';
 import type { ViewLayer } from './view';
 import type { ClientFigures } from './figures';
 import type { ClientHud } from './hud';
@@ -214,11 +214,31 @@ export interface ClientFx {
 export interface ClientAudio {
   play(name: SoundName, opts?: { at?: PlainVec3; volume?: number; pitch?: number }): void;
   /**
-   * A voice of the game's own (synthesised on each play), under a name `play` (here, or the
-   * server's `audio.play`) uses. A voice the game's server defines under the same name (its
-   * `audio.define`) takes precedence over one defined here.
+   * A voice of the game's own (synthesised on each play, with real Web Audio: nothing is recorded
+   * or sent), under a name `play` uses: here, the server's `audio.play`, and items' `sounds`. Define
+   * them in `setup` (a kit's, then the game's: a later one of the same name replaces the earlier).
+   * A voice the game's server defines under the same name (its `audio.define`) takes precedence
+   * over one defined here.
    */
   define(name: string, voice: SynthVoice): void;
+}
+
+/**
+ * Items on this screen: how they look and sound (the game's client code gives that), and their
+ * definitions as this screen reads them (the server's, with the looks over them).
+ */
+export interface ClientItems {
+  /**
+   * How an item looks and sounds on this screen (`ItemLook`: its icon, its hold and model, its
+   * sounds, a gun's tracer, a throwable's trail, its shown name). Each field given goes over the
+   * server's definition (`sounds` sound by sound) wherever this screen reads the item:
+   * `client.item(id)`, `me.held.def`, the model in hand, the hotbar, pickups on the ground, other
+   * players' figures, `{ item }` icons, and the kits. Call it in `setup`, before anything's shown;
+   * an item the server defines later takes its look when it comes.
+   */
+  look(id: string, look: ItemLook): void;
+  /** An item as this screen has it (the same as `client.item(id)`). */
+  get(id: string): ItemDefinition | undefined;
 }
 
 /** The controls, read for feel (the game acts on the controls on its server). */
@@ -266,6 +286,8 @@ export interface ClientServices {
   readonly camera: ClientCamera;
   readonly fx: ClientFx;
   readonly audio: ClientAudio;
+  /** Items' looks on this screen (`client.items.look`). */
+  readonly items: ClientItems;
   readonly input: ClientInput;
   readonly world: ClientWorld;
   // First person.
@@ -288,7 +310,7 @@ export interface Client extends ClientServices {
   readonly time: number;
   /** The game is under way (its server's `start` has run): what moves there moves here. */
   readonly running: boolean;
-  /** An item's definition as the server sent it. */
+  /** An item as this screen has it: the server's definition, with its look (`client.items.look`) over it. */
   item(id: string): ItemDefinition | undefined;
   /** The game's own messages from its server (`game.clients.send`). */
   on(name: string, fn: (data: unknown) => void): void;
