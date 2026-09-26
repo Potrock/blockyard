@@ -473,6 +473,8 @@ export function progressionHud(): ClientKit {
 /** Puts the XP HUD on this screen and listens for the server's word; returns what runs each frame. */
 function draw(client: Client): (dt: number) => void {
   const layer = client.hud.layer('xp');
+  // (A replay on screen, the kill cam: the XP HUD steps aside with the rest of the live HUD.)
+  let hiddenForReplay = false;
 
   // The bar and badge.
   const badgeNum = el('span.xp-badge-num', '1');
@@ -609,6 +611,11 @@ function draw(client: Client): (dt: number) => void {
   });
 
   return (dt: number) => {
+    const replaying = client.replay.playing;
+    if (replaying !== hiddenForReplay) {
+      hiddenForReplay = replaying;
+      layer.style.visibility = replaying ? 'hidden' : '';
+    }
     const now = client.time;
     // A level-up: on its own, or (at the end of a match) on the match's card.
     if (pending) {
