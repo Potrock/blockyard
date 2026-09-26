@@ -1,11 +1,15 @@
 # The humanoid rig
 
-A glTF figure built to this rig can be animated by the platform: it walks, runs, strafes,
-crouches, slides, jumps, looks, holds guns in both hands, swings, reloads and falls, all worked
-out in code from what the player does. No animation clips are needed, but a game can play the
-model's own over the rig's animation (see *Clips*), and set how it all looks (see *Poses*). The
-figure may be rigid parts or a skinned mesh, and its skeleton may be named and rest its own way
-(see *Other skeletons*).
+A glTF figure built to this rig is animated on each screen by the figures kit
+(`figures.humanoid()`, in `@platform/client/kits`): it walks, runs, strafes, crouches, slides,
+jumps, looks, holds guns in both hands, swings, reloads and falls, all worked out in code from
+what the player does. No animation clips are needed, but a game can play the model's own over the
+kit's pose (see *Clips*), set how it all looks (see *Poses*), or pose it its own way (see *Posing
+it yourself*). The figure may be rigid parts or a skinned mesh, and its skeleton may be named and
+rest its own way (see *Other skeletons*).
+
+The engine draws the figure and knows the rig (its joints, how they map onto the model's own
+skeleton, the model's clips); it doesn't know guns, swords or stances. Those are the kit's.
 
 ## Frame
 
@@ -71,7 +75,7 @@ Both hands are modelled as fists that hold something, since a fighter always doe
 
 `gripR` and `gripL` are empty nodes at the centre of each fist's hold. In the rest pose their
 axes line up with the world's: an item held there points forward (+z) with its up along +y. The
-platform lines up a gun's `grip` point with `gripR` and its `grip2` with `gripL`, and bends the
+figures kit lines up a gun's `grip` point with `gripR` and its `grip2` with `gripL`, and bends the
 arms to reach them.
 
 ## Materials
@@ -111,21 +115,29 @@ Such a skeleton may:
   points along its own +y, with a twist), under an armature node that's turned and scaled
   (Blender's exports sit under one scaled 0.01, the bones in centimetres).
 
-The rig works its poses out on a skeleton of its own: its joints where the model's are, but
+The rig is a skeleton of its own, which the kit poses: its joints where the model's are, but
 standing straight (each arm and leg swung to hang straight down from where it rests, the hand
-and foot with it; the body as it rests), unturned, each bone along its -y. Each of the model's
-joints then takes the rig joint's turn, times its own turn standing straight, in its parent's
-space; the hips are placed where the rig's are. So a model resting in a T-pose moves exactly as
-one built to this spec.
+and foot with it; the body as it rests), unturned, each bone along its -y. The engine then turns
+each of the model's joints to the rig joint's turn, times its own turn standing straight, in its
+parent's space; the hips are placed where the rig's are. So a model resting in a T-pose moves
+exactly as one built to this spec, and a kit poses every skeleton the same way.
 
 Without `gripR` / `gripL`, each fist holds a third of a forearm below the wrist, a little
 forward (the spec mannequin's grip), its axes the body's.
 
 ## Poses
 
-`poses` in `Models.gltf` (a `HumanoidPoses`) sets how the figure holds things and moves. Every
-value is optional; the default is the platform's own (the style Call of Blocky's fighters move in).
-Give each model of a game the same object for a game-wide style.
+`HumanoidPoses` are the figures kit's options: how a figure holds things and moves. Every value is
+optional; the default is the kit's own (the style Call of Blocky's fighters move in). They come in
+layers, each over the one before:
+
+1. `figures.humanoid({ poses })` in the game's `client.ts`: every figure the kit poses;
+2. `poses` in `Models.gltf(url, { rig: 'humanoid', poses })`: that model's figures (give each
+   model of a game the same object for a game-wide style);
+3. an item's `hold.poses` while it's held (*Per item*, below).
+
+The kit's own values are `DEFAULT_POSES`, and `resolvePoses(poses, over)` lays one set over another
+(both in `@platform/client/kits`, as `figures.DEFAULT_POSES` and `figures.resolvePoses`).
 
 Offsets are metres in the figure's own frame before its scale (x its left, y up, z ahead). A held
 item's are from the middle of the shoulders (a centimetre above the shoulder joints), turned with
@@ -168,7 +180,8 @@ hold: { stance: 'pistol', gun: { hands: 1 }, poses: { reload: { turn: [-0.75, 0.
 
 ## Clips
 
-A game plays one of the model's own animation clips over the rig's animation, on every screen:
+A game plays one of the model's own animation clips over the kit's pose, on every screen (the
+engine plays them, whatever posed the figure):
 
 ```ts
 player.animate('wave', { layer: 'upper', loop: true });   // an emote while they walk
@@ -215,6 +228,43 @@ turn, roll, 'YXZ'))`). On this rig:
 High Noon's `src/games/highnoon/tools/build.mjs` writes its `tip_hat`, `victory` and `standoff`
 clips this way (`CLIPS`: keys of turns per joint). A skeleton resting another way (Mixamo's) needs
 clips in its own bones' rotations; `scripts/mannequin.mjs` turns rig-terms clips into those.
+
+## Posing it yourself
+
+The figures kit is ordinary client code, written only against the public client API
+(`@platform/client` and `@platform/client/math`), in `src/platform/client-kits/figures/`:
+`humanoid.ts` (the gait, stances, kick, sprint, reload, actions, the sword's chop, the throw, the
+fall, the look), `held.ts` (how an item is held: as a gun, a blade or in the fist, from its kind,
+its `hold` and its model's points) and `poses.ts` (`HumanoidPoses`, filled in). To change how a
+game's figures move, copy the folder into the game's `client/` folder, change it, and list it in
+`client.ts` in place of the platform's:
+
+```ts
+import { defineClient } from '@platform/client';
+import { effects, firstPerson, hud, sounds } from '@platform/client/kits';
+import { humanoid } from './client/figures';
+import { shared } from './shared';
+
+export default defineClient(shared, { kits: [...sounds.standard(), ...firstPerson.standard(), humanoid(), ...hud.standard(), ...effects.standard()] });
+```
+
+What a kit gets, each frame, is `client.figures.all`: every figure drawn, entities' and other
+players' (and our own in third person). A figure (`Figure`) has:
+
+| | |
+|---|---|
+| `id`, `player`, `type`, `spec` | Its entity id, the player it shows (or null), its entity type, its model (`Models.gltf(url, { rig: 'humanoid', poses })`). |
+| `root` | Where it stands and faces: the engine places it. |
+| `rig` | On the rig: `joints` (each of the rig's joints above, `hips` to `footR` and `gripL`, `gripR`: nodes to place and turn), `rest` (each joint's place and turn in its parent at rest: start there each frame), `straight` (each bone standing straight in the body: the shoulders' and ankles' heights), `body` (the model's own space: +y up, facing +z, the ground at 0) and `root` (the skeleton's). |
+| `state` | What it's doing, as the engine keeps it: `time`, `walkPhase`, `walkAmount`, `pace`, `speed`, `moveX` and `moveZ` (its own space), `air`, `posture` (0 standing, 1 crouching, 2 sliding, blended), `headYaw` and `headPitch`, `sprint`, `aim` and `sights` (its held item's mechanics aim it, and how far down its sights, blended), `reloading`, `shotT` (seconds since its item fired), `attackT` (since it attacked), `raised`, `casting`, `dying` (the fall, 0..1). |
+| `hand` | What a held item hangs from: the model's right hand. |
+| `held` | What's in its hand, once its model is here: `item` and `def` (its definition: kind, `hold`, `action`), `node` (its model, its origin at the model's), `mount` (what the model hangs from: on the hand until the kit moves it; the figures kit puts a gun on the chest and aims it), `form` (`model` or `sprite`), `points` (`grip`, `grip2`, `muzzle`, `sight`, `mag`: its spec's over its file's, in its own space), `bounds` and `length`. |
+| `posed` | Set it once the kit has posed the figure. The engine leaves its own animation out (box models and glTF figures with clips animate themselves otherwise); a figure on the rig has none: a rig nobody poses stands straight. |
+
+After the kits, the engine turns the model's own joints to the rig's (whatever skeleton the model
+has), and plays its clips over that; what's held goes with the right hand through a clip when its
+mount hangs from one of the rig's joints. The kit only ever touches the rig's joints and what's
+held.
 
 ## First-person arms
 

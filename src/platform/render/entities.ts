@@ -4,7 +4,8 @@ import { Shaders } from './shaders';
 import type { SharedUniforms } from './pipeline';
 import { GltfLibrary, surfaceUniforms, type ItemMesh, type Surface } from '../client/gltf';
 import type { ClipPlay } from '../client/clips';
-import type { HeldInfo } from '../client/humanoid';
+import type { HumanoidRig } from '../client/humanoid';
+import type { FigureState } from '../api/client/figures';
 
 /** The built-in starter sprites (16x16, `builtin` atlas, row at y = 64). Games bring the rest. */
 export const BUILTIN_SPRITES: Record<string, [number, number]> = {
@@ -371,38 +372,8 @@ function extrudeSprite(a: Atlas, sx: number, sy: number): THREE.BufferGeometry {
   return g;
 }
 
-export interface AnimState {
-  /** Walk cycle phase (radians) and amount (0..1). */
-  walkPhase: number;
-  walkAmount: number;
-  /** Speed over its usual walking speed (above ~1.3 it's running). */
-  pace: number;
-  /** Seconds since the last `attack` animation started (large = none). */
-  attackT: number;
-  /** Arms raised for a wind-up. */
-  raised: boolean;
-  casting: boolean;
-  /** Head look relative to body (radians). */
-  headYaw: number;
-  headPitch: number;
-  /** Death tilt 0..1. */
-  dying: number;
-  time: number;
-  /** Holding a gun up to aim where it looks, 0..1 (both arms forward). */
-  aim: number;
-  /** Standing 0, crouching 1, sliding 2 (blended). */
-  stance: number;
-  /** Ground speed (blocks a second), and which way it's going in its own space (+z ahead, +x its left). */
-  speed?: number;
-  moveX?: number;
-  moveZ?: number;
-  /** Off the ground; sprinting; reloading; aiming down the sights 0..1; seconds since its gun last fired. */
-  air?: boolean;
-  sprint?: boolean;
-  reloading?: boolean;
-  ads?: number;
-  shotT?: number;
-}
+/** What a figure is doing (the client API's `FigureState`): its animation's input. */
+export type AnimState = FigureState;
 
 /** A drawn figure: box model (`ModelInstance`) or glTF (`GltfFigure`). */
 export interface Figure {
@@ -411,9 +382,13 @@ export interface Figure {
   readonly pivots: Map<string, THREE.Object3D>;
   /** Its light, tint and fade uniforms (`uProbe`, `uTint`, `uOpacity`). */
   readonly material: THREE.RawShaderMaterial;
-  animate(s: AnimState): void;
-  /** Hold an item its own way (a humanoid: both hands on a gun); false to hang it from `armR`. */
-  hold?(mesh: THREE.Object3D | null, info: HeldInfo | null): boolean;
+  /** A figure on the humanoid rig (client code poses it). */
+  readonly rig?: HumanoidRig | null;
+  /**
+   * Its frame's animation, from what it's doing. On the rig: the pose client code gave it onto
+   * the model, and its clips over that (`held`: what it holds, which goes with the hand).
+   */
+  animate(s: AnimState, held?: THREE.Object3D | null): void;
   /** Play one of its model's clips over its animation (`animate`), or null: fade it out. */
   play?(clip: ClipPlay | null): void;
   dispose(): void;
@@ -454,8 +429,8 @@ export class ModelInstance implements Figure {
       }
       const sway = Math.sin(s.time * 1.7) * 0.05;
       // Crouching: down, legs apart front and back. Sliding: leaning back from the hips, legs out ahead.
-      const crouch = Math.min(1, s.stance);
-      const slide = Math.max(0, s.stance - 1);
+      const crouch = Math.min(1, s.posture);
+      const slide = Math.max(0, s.posture - 1);
       const lean = 0.6 * slide;
       const inner = this.root.children[0];
       if (inner) {

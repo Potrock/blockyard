@@ -949,21 +949,57 @@ game.items.define('cutlass', {
 - Others see each player as the model, walking, running, swinging and holding what's in their hand at the model's `hand` node; `player.setModel(model)` gives one player their own (null: back to the game's). With a `hand` node, the player's own first-person arm is that part of the model.
 - A held model should run along +z to its tip with its handle near the origin, like the built-in ones; `rotation` (degrees about X, Y, Z) and `scale` fix one that doesn't, and `grip` is the point in the fist (in pixels, a sixteenth of a block). It's drawn in first person with the item's hold style (`sword`, `axe`, …), in other players' hands, and lying on the ground.
 - `icon: { gltf: url }` draws the item's icon from the model (a small picture from above and to the side, like an inventory's); an item whose icon is a model and has no `hold.model` is held as that model.
-- **Humanoids.** A figure built on the platform's humanoid rig needs no animations. The rig is a joint per part named `hips`, `spine`, `chest`, `neck`, `head`, `upperArmR`, `lowerArmR`, `handR` and so on, with `gripR` and `gripL` marking where the fists hold (`docs/HUMANOID.md` has the joints and the rest pose). The platform animates it in code from what it's doing:
+- **Humanoids.** A figure built on the platform's humanoid rig needs no animations. The rig is a joint per part named `hips`, `spine`, `chest`, `neck`, `head`, `upperArmR`, `lowerArmR`, `handR` and so on, with `gripR` and `gripL` marking where the fists hold (`docs/HUMANOID.md` has the joints and the rest pose). The figures kit (`figures.humanoid()`, in every game's `standardKits()`; see *Figures* below) animates it in code from what it's doing:
   - Its feet stay planted and step the way it's going, walking, running, strafing or backpedalling, and its legs bend to reach them.
   - It crouches, slides, jumps and looks.
   - It holds a gun in both hands, aimed where it looks, with its fists on the gun's `grip` and `grip2`. It carries the gun low across its chest to sprint, tips it to reload while the support hand fetches a magazine, kicks with each shot, and works a `lever` or a `hammer`. A gun held in one hand (`hold.gun.hands: 1`) leaves the other free, in its stance's `offHand` pose, until a reload brings it to the gun.
   - It swings a sword two-handed and falls when it dies.
   - A player on such a model sees its own forearms and fists on the gun in first person. `firstPerson` fits them to the model: `Models.gltf(url, { rig: 'humanoid', firstPerson: { scale: 1.2, hands: 1, reach: [0.55, 0.72], bend: 0, support: [0.01, -0.012, 0] } })` (those are the defaults): `scale` times life size (a little bigger reads better round a gun), the fists' size times the arms' (`hands`: a figure with big stylized mitts, right at a distance, shows life-size hands on the gun with less, its forearms as thick as ever), how far the firing and support arms `reach` from the wrist to leave the screen (blocks), the elbows' `bend` (0, straight; see Guns), and where the `support` fist sits from the handguard's near side (the model's blocks, along the gun: out to the side we see, up, toward the muzzle). It goes with the model, so each player's (`player.setModel`) brings its own, and a gun's `hold.gun.arm` goes over it for that gun.
   - Give `rig: 'humanoid'` in `Models.gltf`, or leave out `clips` and a model with the joints is taken to be one. `tools/rig.html?model=<url>` (in development) shows a model in a row of poses (`&joints=mixamo`, `&style=<poses as JSON>`, and poses like `wave` and `cheer` that play a clip), with any item in its hand (`&item=<glb url>`, `&kind=melee` for a blade, `&hold=<JSON>` for how it holds a gun: `hands`, `stance`, `action`, `poses`) and any of its clips (`&clips=victory,tip_hat`, or `&clips=all`; `&layer=upper` over the legs' own motion), and `scripts/mannequin.mjs` builds plain ones to start from: rigid, skinned, and skinned on a Mixamo-style skeleton, the last two with `wave` and `cheer` clips.
-  - **Its style is the game's.** `poses` (`HumanoidPoses`) sets how it holds and moves: the rifle and pistol stances (from the hip and down the sights, and a one-handed gun's free hand), which guns are pistols (shorter than `pistolUnder`, or say so per item with `hold: { stance: 'pistol' }`), the kick, the sprint carry, the reload, a lever and a hammer worked, the sword and its swing, the fall on death (`death.backward`), the gait, and a held item's size (`heldScale`). What's left out is the platform's own (Call of Blocky's); give every model the same object for a game-wide style. An item's `hold.poses` goes over the figure's while it's held (the same keys, the parts about holding: `{ reload: { turn: [...], cycle: 0.42 } }` for a gun reloaded its own way). `docs/HUMANOID.md` lists every value.
-  - **Other skeletons.** `joints` maps the rig's joints onto a skeleton named its own way: `Models.gltf(url, { rig: 'humanoid', joints: HumanoidJoints.mixamo() })`. It may rest in any pose (a T-pose, each bone turned its own way, under a scaled armature, as Mixamo and Blender export them): the rig works out its poses on a skeleton of its own standing straight, and the model's bones follow it, each keeping its own turn.
+  - **Its style is the game's.** `poses` (`HumanoidPoses`, the figures kit's options: `figures.humanoid({ poses })` for every figure, a model's `poses` over those) sets how it holds and moves: the rifle and pistol stances (from the hip and down the sights, and a one-handed gun's free hand), which guns are pistols (shorter than `pistolUnder`, or say so per item with `hold: { stance: 'pistol' }`), the kick, the sprint carry, the reload, a lever and a hammer worked, the sword and its swing, the fall on death (`death.backward`), the gait, and a held item's size (`heldScale`). What's left out is the kit's own (Call of Blocky's); give every model the same object, or the kit, for a game-wide style. An item's `hold.poses` goes over the figure's while it's held (the same keys, the parts about holding: `{ reload: { turn: [...], cycle: 0.42 } }` for a gun reloaded its own way). `docs/HUMANOID.md` lists every value.
+  - **Other skeletons.** `joints` maps the rig's joints onto a skeleton named its own way: `Models.gltf(url, { rig: 'humanoid', joints: HumanoidJoints.mixamo() })`. It may rest in any pose (a T-pose, each bone turned its own way, under a scaled armature, as Mixamo and Blender export them): the kit poses a skeleton of the rig's own standing straight, and the engine turns the model's bones to follow it, each keeping its own turn.
   - **Skinned characters.** A skinned mesh (one mesh on a skeleton of bones) works like rigid parts: the rig turns the bones, and the platform's shading skins the mesh and its shadow on the GPU. A skinned player's first-person arms are cut from the skin into rigid pieces (each triangle goes with the bone that weighs most on it). One skinned mesh with one material (every part on its joint's bone, its colours in one texture) draws a whole figure in one call, and one more for its shadow: Call of Blocky's voxel fighters are built so (`src/games/callofblocky/tools/fighters/build.mjs`).
   - **Clips over the rig.** `player.animate('wave', { layer: 'upper', loop: true })` or `entity.animate('victory')` plays one of the model's clips over the rig's animation, on every screen (one that sees it late starts it part way through): over the `full` body (the default), the `upper` body (the spine and all on it: the legs keep walking), or a list of joints each with all that hangs from it (`['upperArmR']`); once or looping; faded in and out over `fade` seconds (0.2); at a `speed`. What's held goes with the right hand wherever a clip takes it. `player.animate(null)` or `entity.animate('none')` fades it out. Figures that aren't humanoids play clips the same way, over their idle and walk.
 - **Compressed files.** A file may be packed as `gltfpack` packs them: its vertices in fewer bytes (`KHR_mesh_quantization`: positions and normals as small integers, the node or bind matrices scaling them back) and its buffers compressed (`EXT_meshopt_compression`). Call of Blocky's fighters are both: a fighter of 7,000 triangles is about 70 KB.
 - **Materials.** glTF's metallic-roughness is honoured, as factors or a `metallicRoughnessTexture` (G roughness, B metalness). Metal and glossy parts catch the sun and reflect the sky, on figures, held items (only a held model's first material is used) and in the first-person hand. Fully rough non-metal materials, like Blockbench's defaults, look as they always have.
 - `tests/headless/_export-models.ts` writes Blockyard's own box models out as glTF files (a node per part, the skin, and their walk, run and swing as animations). Open one in Blockbench, change it, and load it back.
 - In development, `?game=gallery` shows a room of glTF props, figures, a player model and glTF items, and humanoids on the rig (rigid, skinned and a Mixamo-style skeleton) waving and cheering with clips (`src/games/gallery/`); `npm run server -- gallery` hosts it for several players.
+
+## Figures: `figures.humanoid()` and `client.figures`
+
+Players' and creatures' figures are posed on each screen by client code. The engine draws them:
+it places each figure and keeps what it's doing, loads what's in its hand and hangs it from the
+hand, maps the humanoid rig's joints onto the model's own skeleton, and plays the model's clips
+over the pose. It never decides how anything is held: a figures kit does.
+
+- **The kit.** `figures.humanoid()` (`@platform/client/kits`, in `standardKits()`) poses every
+  figure on the humanoid rig as the platform always has: the gait, crouching and sliding, the
+  look, a gun aimed in both hands (rifle or pistol by its length, `hold.stance` or `pistolUnder`),
+  one hand free on a one-handed gun, the kick, the sprint carry, the reload, a `lever` or a
+  `hammer` worked, a sword's chop, a throwable thrown overarm, the fall. Figures off the rig (box
+  models, glTF figures with clips) animate themselves; the kit only puts what they hold in their
+  fist.
+- **Its options.** `HumanoidPoses` (docs/HUMANOID.md lists them) are the kit's:
+  `figures.humanoid({ poses })` for every figure, a model's `Models.gltf(url, { poses })` over
+  those, and an item's `hold.poses` over the figure's while it's held.
+- **Your own.** The kit is ordinary client code (`src/platform/client-kits/figures/`, only
+  `@platform`, `@platform/client` and `@platform/client/math`). Copy the folder into your game's
+  `client/` folder, change it, and list yours in `client.ts` in place of the platform's
+  (`kits: [...firstPerson.standard(), humanoid(), ...hud.standard()]`).
+- **The API.** `client.figures.all` is every figure drawn this frame. Each has its `id`, the
+  `player` it shows (or null), its entity `type` and model `spec`; its `root` (placed by the
+  engine) and `hand`; its `state` (`time`, `walkPhase`, `walkAmount`, `pace`, `speed`, `moveX`,
+  `moveZ`, `air`, `posture`, `headYaw`, `headPitch`, `sprint`, `aim`, `sights`, `reloading`,
+  `shotT`, `attackT`, `raised`, `casting`, `dying`); on the rig, `rig` (`joints`: the rig's
+  standard joints as nodes to place and turn; `rest`: each joint's place and turn at rest;
+  `straight`: each bone's place standing straight, its heights; `body`: the model's own space);
+  and `held` once its model is here (`item`, `def`, `node`: the item's model; `mount`: what the
+  model hangs from, on the hand until a kit moves it; `form`, `points`, `bounds`, `length`). A kit
+  that poses a figure sets `posed`. docs/HUMANOID.md (*Posing it yourself*) has the details.
+- **Each frame.** The engine places the figures and updates their state; the kits run; then the
+  engine turns each model's skeleton to its rig's pose and plays its clips over that. A rig no kit
+  poses stands straight.
+- `tools/rig.html` runs the kit as a game's client does.
 
 ## Your own art and sound
 

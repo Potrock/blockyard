@@ -1,6 +1,7 @@
 /**
- * Development: a humanoid model (docs/HUMANOID.md) in a row of poses, animated by the platform's
- * own rig code, lit simply. `/tools/rig.html?model=<glb url>&t=<seconds>&view=front|side|34`
+ * Development: a humanoid model (docs/HUMANOID.md) in a row of poses, posed by the figures kit
+ * (`figures.humanoid()`) on the platform's rig as a game's are, lit simply.
+ * `/tools/rig.html?model=<glb url>&t=<seconds>&view=front|side|34`
  * `&poses=<names>` (`t` freezes time for a screenshot, the same every time; guns come from Call of
  * Blocky's models; `cycling` is a moment after a shot, while a lever or hammer is worked).
  * `joints=mixamo` (or a JSON joint map) for a skeleton named its own way; `style=<JSON>` for
@@ -13,7 +14,7 @@
  *   revolver: `item=/src/games/highnoon/models/revolver.glb`); `kind=melee` holds it as a blade,
  *   `kind=throw` in the fist as a throwable (the `throw` poses).
  * - `hold=<JSON>`: how the item holds a gun, as its `hold` and `hold.gun` say (`hands`, `stance`,
- *   `action`, `poses`): `hold={"hands":1,"action":"hammer","poses":{"reload":{"cycle":0.42}}}`.
+ *   `poses`) and its `action`: `hold={"hands":1,"action":"hammer","poses":{"reload":{"cycle":0.42}}}`.
  * - `clips=<names>` (or `clips=all`: every clip in the model) adds a figure playing each clip,
  *   looping, holding the item if one's given; `layer=upper` plays them over the legs' own motion.
  *   With `clips` and no `poses`, only the clips are shown.
@@ -24,8 +25,11 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { HumanoidJoints } from '../src/platform/api/models';
-import type { ClipOptions, HumanoidJoint, HumanoidPoses } from '../src/platform/api/types';
-import { HumanoidRig, type HeldInfo } from '../src/platform/client/humanoid';
+import type { Client } from '../src/platform/api/client';
+import type { ClipOptions, HumanoidJoint, HumanoidPoses, ItemDefinition, ItemPoses } from '../src/platform/api/types';
+import { humanoid } from '../src/platform/client-kits/figures';
+import { ShownFigure } from '../src/platform/client/figures';
+import { HumanoidRig } from '../src/platform/client/humanoid';
 import type { AnimState } from '../src/platform/render/entities';
 
 const q = new URLSearchParams(location.search);
@@ -33,8 +37,8 @@ const MODEL = q.get('model') ?? '/src/games/gallery/models/mannequin.glb';
 const FREEZE = q.has('t') ? Number(q.get('t')) : null;
 const VIEW = q.get('view') ?? '34';
 const GUNS = '/src/games/callofblocky/models/';
-/** How the item holds a gun (its `hold`: hands, stance, action, poses). */
-const HOLD: Partial<HeldInfo> = q.has('hold') ? JSON.parse(q.get('hold')!) : {};
+/** How the item holds a gun (its `hold`: hands, stance, poses; its action). */
+const HOLD: { hands?: 1 | 2; stance?: 'rifle' | 'pistol'; action?: string; poses?: ItemPoses } = q.has('hold') ? JSON.parse(q.get('hold')!) : {};
 const JOINTS: Partial<Record<HumanoidJoint, string>> | undefined = q.get('joints') === 'mixamo' ? HumanoidJoints.mixamo() : q.has('joints') ? JSON.parse(q.get('joints')!) : undefined;
 const STYLE: HumanoidPoses | undefined = q.has('style') ? JSON.parse(q.get('style')!) : undefined;
 const FLAT = q.get('flat');
@@ -46,7 +50,7 @@ if (FREEZE !== null) {
 }
 /** An item of any game's to hold instead of Call of Blocky's guns, and how it's held. */
 const ITEM = q.get('item');
-const KIND = q.get('kind') === 'melee' ? 'melee' : q.get('kind') === 'throw' ? 'other' : null;
+const KIND = q.get('kind') === 'melee' ? 'melee' : q.get('kind') === 'throw' ? 'throwable' : null;
 /** The held model for a pose's gun: the item given, else Call of Blocky's. */
 const gunUrl = (id: string) => ITEM ?? `${GUNS}${id}.glb`;
 
@@ -89,13 +93,13 @@ if (STUDIO) {
   for (const l of scene.children) if ((l as THREE.HemisphereLight).isHemisphereLight) (l as THREE.HemisphereLight).intensity = 0.35;
 }
 
-const base = (): AnimState => ({ walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 1, stance: 0, speed: 0, moveX: 0, moveZ: 1, ads: 0, shotT: 9 });
+const base = (): AnimState => ({ walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 1, posture: 0, speed: 0, moveX: 0, moveZ: 1, sights: 0, shotT: 9 });
 interface Pose { name: string; gun: string | null; state: (t: number) => Partial<AnimState>; clip?: { name: string } & ClipOptions }
 const POSES: Pose[] = [
   { name: 'stand', gun: null, state: () => ({ aim: 0 }) },
   { name: 'idle rifle', gun: 'rifle', state: () => ({}) },
   { name: 'look up', gun: 'rifle', state: () => ({ headPitch: -0.6 }) },
-  { name: 'aim (ADS)', gun: 'rifle', state: () => ({ ads: 1 }) },
+  { name: 'aim (ADS)', gun: 'rifle', state: () => ({ sights: 1 }) },
   { name: 'firing', gun: 'rifle', state: (t) => ({ shotT: t % 0.1 }) },
   { name: 'cycling', gun: 'rifle', state: () => ({ shotT: 0.3 }) },
   { name: 'throw', gun: 'rifle', state: (t) => ({ attackT: t % 0.8, aim: 0 }) },
@@ -106,15 +110,15 @@ const POSES: Pose[] = [
   { name: 'strafe left', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 5, moveX: 1, moveZ: 0 }) },
   { name: 'backpedal', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 4, moveX: 0, moveZ: -1 }) },
   { name: 'sprint', gun: 'rifle', state: () => ({ walkAmount: 1, speed: 8.4, sprint: true }) },
-  { name: 'crouch', gun: 'rifle', state: () => ({ stance: 1 }) },
-  { name: 'crouch walk', gun: 'rifle', state: () => ({ stance: 1, walkAmount: 1, speed: 2.5 }) },
-  { name: 'slide', gun: 'rifle', state: () => ({ stance: 2, walkAmount: 1, speed: 10 }) },
+  { name: 'crouch', gun: 'rifle', state: () => ({ posture: 1 }) },
+  { name: 'crouch walk', gun: 'rifle', state: () => ({ posture: 1, walkAmount: 1, speed: 2.5 }) },
+  { name: 'slide', gun: 'rifle', state: () => ({ posture: 2, walkAmount: 1, speed: 10 }) },
   { name: 'jump', gun: 'rifle', state: () => ({ air: true }) },
   { name: 'reload', gun: 'rifle', state: () => ({ reloading: true }) },
   { name: 'pistol', gun: 'pistol', state: () => ({}) },
   { name: 'pistol walk', gun: 'pistol', state: () => ({ walkAmount: 1, speed: 5 }) },
   { name: 'shotgun', gun: 'shotgun', state: () => ({}) },
-  { name: 'sniper ADS', gun: 'sniper', state: () => ({ ads: 1 }) },
+  { name: 'sniper ADS', gun: 'sniper', state: () => ({ sights: 1 }) },
   { name: 'katana', gun: 'katana', state: () => ({}) },
   { name: 'katana swing', gun: 'katana', state: (t) => ({ attackT: (t % 0.8) * 0.5 }) },
   { name: 'unarmed walk', gun: null, state: () => ({ walkAmount: 1, speed: 4, aim: 0 }) },
@@ -123,12 +127,15 @@ const POSES: Pose[] = [
   { name: 'walk wave', gun: null, state: () => ({ walkAmount: 1, speed: 4, aim: 0 }), clip: { name: 'wave', layer: 'upper', loop: true } },
   { name: 'rifle wave', gun: 'rifle', state: () => ({}), clip: { name: 'wave', layer: ['upperArmR'], loop: true } },
   { name: 'cheer', gun: null, state: () => ({ aim: 0 }), clip: { name: 'cheer', loop: true } },
-  { name: 'crouch cheer', gun: null, state: () => ({ stance: 1, aim: 0 }), clip: { name: 'cheer', layer: 'upper', loop: true } },
+  { name: 'crouch cheer', gun: null, state: () => ({ posture: 1, aim: 0 }), clip: { name: 'cheer', layer: 'upper', loop: true } },
 ];
 
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const load = (url: string) => loader.loadAsync(url);
-const figures: { rig: HumanoidRig; root: THREE.Object3D; pose: Pose; state: AnimState; label: HTMLElement }[] = [];
+const figures: { rig: HumanoidRig; fig: ShownFigure; mount: THREE.Object3D | null; root: THREE.Object3D; pose: Pose; state: AnimState; label: HTMLElement }[] = [];
+/** The kit that poses them, as a game's client runs it (it sees only `client.figures`). */
+const kit = humanoid();
+const client = { figures: { all: [] as ShownFigure[] } };
 
 async function main() {
   const model = await load(MODEL);
@@ -163,22 +170,32 @@ async function main() {
     // Turned to show the side (its right, the gun side), or three-quarters.
     root.rotation.y = VIEW === 'side' ? -Math.PI / 2 : VIEW === 'back' ? Math.PI : VIEW === '34' ? -0.6 : 0;
     scene.add(root);
-    const rig = new HumanoidRig(copy, { joints: JOINTS, poses: STYLE, clips: model.animations });
+    const rig = new HumanoidRig(copy, { joints: JOINTS, clips: model.animations });
     if (pose.clip) rig.play({ loop: false, fade: 0.2, layer: 'full', speed: 1, ...pose.clip, elapsed: 0 });
+    const state = base();
+    const hand = rig.joint('handR');
+    const fig = new ShownFigure(i, null, 'figure', { rig: 'gltf', parts: [], atlas: 'builtin', scale: 1, gltf: { url: MODEL, rig: 'humanoid', joints: JOINTS, poses: STYLE } }, { root, hand, rig }, state);
+    // What a held model hangs from, on the hand as the engine puts it there: the kit takes it from
+    // there. (Every figure has one, empty-handed or not, as it had a holder before the kit: the
+    // frozen random numbers, a fall's direction, come out as they always have.)
+    const mount = new THREE.Object3D();
+    hand.add(mount);
     if (pose.gun) {
       const g = guns.get(pose.gun)!.clone(true);
       g.traverse((o) => ((o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).castShadow = true) : null));
-      const point = (n: string) => g.getObjectByName(n)?.position.clone();
-      const box = new THREE.Box3().setFromObject(g);
+      const points = Object.fromEntries((['grip', 'grip2', 'muzzle', 'sight', 'mag'] as const).flatMap((n) => (g.getObjectByName(n) ? [[n, g.getObjectByName(n)!.position.clone()]] : [])));
+      const bounds = new THREE.Box3().setFromObject(g);
       const kind = KIND ?? (pose.gun === 'katana' && !ITEM ? 'melee' : 'gun');
-      const info: HeldInfo = { kind, grip: point('grip') ?? new THREE.Vector3(), grip2: point('grip2'), mag: point('mag'), length: box.max.z - box.min.z, throws: q.get('kind') === 'throw', ...(kind === 'gun' ? HOLD : {}) };
-      rig.hold(g, info);
+      const def = { kind, name: pose.gun, ...(kind === 'gun' ? { hold: { stance: HOLD.stance, gun: { hands: HOLD.hands }, poses: HOLD.poses }, action: HOLD.action } : {}) } as ItemDefinition;
+      mount.add(g);
+      fig.held = { item: pose.gun, def, node: g, mount, form: 'model', points, bounds, length: bounds.max.z - bounds.min.z };
     }
     const label = document.createElement('span');
     label.textContent = pose.name;
     document.getElementById('labels')!.append(label);
-    figures.push({ rig, root, pose, state: base(), label });
+    figures.push({ rig, fig, mount, root, pose, state, label });
   });
+  client.figures.all = figures.map((f) => f.fig);
   requestAnimationFrame(frame);
 }
 
@@ -199,8 +216,10 @@ function frame() {
     for (const f of figures) {
       Object.assign(f.state, base(), f.pose.state(time), { time });
       if (f.state.dying) f.state.time = time;
-      f.rig.animate(f.state);
     }
+    // The kit poses them; the engine's rig puts each pose onto its model, its clips over that.
+    kit.frame!(client as unknown as Client, 1 / 60);
+    for (const f of figures) f.rig.apply(f.state.time, f.mount);
   }
   renderer.render(scene, camera);
   for (const f of figures) {
