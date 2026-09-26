@@ -1,7 +1,7 @@
 # Redesign, part 2: item kinds as kits
 
-Status: **in progress**. 4a (the mechanism and the host halves) and 4b (the screen halves) are
-built; 4c to 4e are next.
+Status: **in progress**. 4a (the mechanism and the host halves), 4b (the screen halves) and 4c
+(open item types) are built; 4d and 4e are next.
 Started 2026-09-26, following REDESIGN-CLIENT-SERVER.md's "Later": the user asked to continue the
 refactor for the edges and overfits raised after phases 1 to 3.
 
@@ -255,6 +255,27 @@ Building it settled a few things the design left open:
     to run noise;
   - in a browser, every live bot shot came from its figure's muzzle, and in the kill cam the
     followed killer's shots were their own hand's, down their sight.
+
+## What 4c changed
+
+- **The item kinds' types left the core API.** `MeleeItem`, `BowItem`, `GunItem`, `GunAction`,
+  `GunOptions`, `AimAssist`, `ThrowableItem`, `ThrownInfo` and `ConsumableItem` are the kits'
+  shared parts' (`@platform/items`), with guards: `isGun`, `isThrowable`, `isMelee`, `isBow`,
+  `isConsumable`. `MiscItem` is gone: any kind no kit makes is one.
+- **`ItemDefinition` is `ItemBase & { kind: string }`** (no index signature: an interface such as
+  `GunItem` stays assignable to it). `items.define<D extends ItemDefinition>` takes a literal with
+  any kind's fields; games type theirs with their kit's (`satisfies ConsumableItem`,
+  `Record<string, GunItem | MeleeItem>`).
+- **`ItemLook`** takes any kit's look fields: `tracer`, `trail` and `drawIcon` are the kits' types'
+  now.
+- **`DamageCause`** is the platform's own causes plus any string (the kits' `'gun'`, `'fire'`), and
+  **`HoldStyle`** is open the same way.
+- **The first-person kit's** kind-to-style map is an option (`firstPerson.standard({ styles })`,
+  over `KIND_STYLES`).
+- **The last core branch on a kind** went: the renderer's bow check. An item's `drawIcon` shows
+  whenever its kit says it's drawn.
+- **Left for later:** `HoldSpec.gun` (`GunHold`) and the gun sounds in `ItemSounds`. They're data
+  the presentation kits read, not logic, but they're still gun vocabulary in the core types.
 
 ## Plan
 

@@ -1,4 +1,5 @@
-import type { ConsumableItem, ItemKind, ItemKit } from '@platform';
+import type { ItemKind, ItemKit } from '@platform';
+import type { ConsumableItem } from '@platform/items';
 
 /**
  * Consumables (`kind: 'consumable'`): the right mouse button uses the one in hand (its `use`, the

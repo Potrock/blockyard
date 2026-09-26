@@ -1,6 +1,6 @@
-import type { GunItem, GunOptions, Vec3 } from '@platform';
+import type { Vec3 } from '@platform';
 import type { Client, ClientKit } from '@platform/client';
-import { assistOf, gun as gunOf, gunMove, resolveGunRules, spreadDeg, type Assist, type Gun, type GunShown, type ShotWire } from '@platform/items';
+import { assistOf, gun as gunOf, gunMove, resolveGunRules, spreadDeg, type Assist, type Gun, type GunShown, type ShotWire, type GunItem, type GunOptions, isGun } from '@platform/items';
 import { GunController, type FiredShot } from './gunner';
 
 /**
@@ -85,7 +85,7 @@ export function guns(options: GunOptions = {}): ClientKit {
   const heldGun = (client: Client): { item: string; def: GunItem } | null => {
     const item = client.me.hand.item;
     const def = item ? client.item(item) : undefined;
-    return item && def?.kind === 'gun' ? { item, def } : null;
+    return item && isGun(def) ? { item, def } : null;
   };
   /** The body's movement, for the spread: a fraction of walking speed, in the air, crouched. */
   const bodyOf = (client: Client, sprinting: boolean) => {
@@ -107,7 +107,7 @@ export function guns(options: GunOptions = {}): ClientKit {
   /** A shot's bullets as the host had them: where each ended, what it hit, the walls it went through. */
   const bulletsOf = (client: Client, w: ShotWire): ClientBullet[] => {
     const def = client.item(w.item);
-    const gun = def?.kind === 'gun' ? def : null;
+    const gun = isGun(def) ? def : null;
     const v = (p: number[], i: number) => ({ x: p[i], y: p[i + 1], z: p[i + 2] });
     return w.ends.map(([x, y, z, kind], i): ClientBullet => {
       const at = { x, y, z };
@@ -224,9 +224,9 @@ export function guns(options: GunOptions = {}): ClientKit {
       replayShots = [];
       for (const w of theirs) client.emit({ t: 'bullets', item: w.item, by: w.by, mine: true, from: null, bullets: bulletsOf(client, w) });
     },
-    move: (def, controls) => (def.kind === 'gun' ? gunMove(def, controls.buttons, rules) : null),
+    move: (def, controls) => (isGun(def) ? gunMove(def, controls.buttons, rules) : null),
     heldState(client, item, def) {
-      if (def?.kind !== 'gun') return null;
+      if (!isGun(def)) return null;
       const g = gunOf(def);
       if (client.replay.playing) {
         // The followed player's gun as the replay's frame has it (its rounds, reload, how far it's aimed).

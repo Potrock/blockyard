@@ -1,6 +1,7 @@
 import type { HoldSpec, ItemPoses } from '@platform';
 import type { FigureHeld } from '@platform/client';
 import { Vec3 } from '@platform/client/math';
+import { isGun, isThrowable } from '@platform/items';
 
 /** What a humanoid holds, as it holds it (worked out from the item: its kind, its hold, its model's points). */
 export interface HeldInfo {
@@ -53,7 +54,7 @@ export const gunHands = (hold: HoldSpec | undefined): 1 | 2 => (hold?.gun?.hands
 export function heldInfo(held: FigureHeld): HeldInfo | null {
   if (held.form !== 'model') return null;
   const def = held.def;
-  const gun = def?.kind === 'gun' ? gunPoints(held) : null;
+  const gun = isGun(def) ? gunPoints(held) : null;
   const grip2 = gun ? gun.grip2 : held.points.grip2?.clone();
   return {
     kind: gun ? 'gun' : grip2 ? 'melee' : 'other',
@@ -64,8 +65,8 @@ export function heldInfo(held: FigureHeld): HeldInfo | null {
     stance: def?.hold?.stance,
     hands: gun ? gunHands(def?.hold) : undefined,
     poses: def?.hold?.poses,
-    action: def?.kind === 'gun' && typeof def.action === 'string' ? def.action : undefined,
-    throws: def?.kind === 'throwable',
+    action: isGun(def) && typeof def.action === 'string' ? def.action : undefined,
+    throws: isThrowable(def),
   };
 }
 
@@ -79,7 +80,7 @@ export function heldInfo(held: FigureHeld): HeldInfo | null {
 export function inFist(held: FigureHeld) {
   const mesh = held.node;
   const model = held.form === 'model';
-  const long = held.def?.kind === 'gun';
+  const long = isGun(held.def);
   const scale = long ? 0.7 : model ? 0.5 : 0.62;
   mesh.scale.setScalar(scale);
   if (long) mesh.rotation.set(Math.PI / 2, 0, 0);

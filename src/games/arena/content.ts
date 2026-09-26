@@ -1,4 +1,5 @@
 import { Behaviors, Models, type Behavior, type GameContext, type ModelPart, type ProjectileSpec } from '@platform';
+import type { ConsumableItem } from '@platform/items';
 import { FLOOR, GATES, GATE_SPAWN_RADIUS } from './structure';
 import { ARENA_ATLAS, Skin, Sprite, paintArenaAtlas } from './art';
 
@@ -40,7 +41,7 @@ export function defineItems(game: GameContext) {
       g.fx.burst(player.eye, { color: '#ff4f6d', count: 16, speed: 2, gravity: -3 });
       return true;
     },
-  });
+  } satisfies ConsumableItem);
   it.define('heart', {
     kind: 'misc',
     name: 'Heart',

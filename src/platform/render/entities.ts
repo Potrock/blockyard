@@ -141,7 +141,9 @@ export class EntityGraphics {
    * like a block, or while its model's file is still coming (ask again: `gltf.version` counts up).
    */
   itemLook(def: ItemDefinition, drawn = false): (ItemMesh & { model?: HeldModelSpec }) | null {
-    const icon = (drawn && def.kind === 'bow' ? def.drawIcon ?? def.icon : def.icon) ?? PLACEHOLDER_ICON;
+    // Drawn (a bow pulled: its kit says), its drawn look if it has one (`drawIcon`).
+    const drawIcon = (def as { drawIcon?: SpriteRef }).drawIcon;
+    const icon = (drawn ? (drawIcon ?? def.icon) : def.icon) ?? PLACEHOLDER_ICON;
     const model = def.hold?.model;
     if (model && !drawn) {
       if (model.gltf) {

@@ -1,5 +1,5 @@
-import type { GunItem, ItemDefinition, Vec3 } from '@platform';
-import { addBloom, canReload, DEFAULT_GUN_RULES, freshGun, gun, pelletDirs, RAISE, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunRules, type GunShown, type GunState } from '@platform/items';
+import type { ItemDefinition, Vec3 } from '@platform';
+import { addBloom, canReload, DEFAULT_GUN_RULES, freshGun, gun, pelletDirs, RAISE, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunRules, type GunShown, type GunState, type GunItem, isGun } from '@platform/items';
 
 /** The controls a gun reads this frame (the page's own input, as the snapshot will send it). */
 export interface GunControls {
@@ -69,7 +69,7 @@ export class GunController {
       this.kept.set(this.item, this.state);
     }
     this.item = item;
-    if (!item || def?.kind !== 'gun') {
+    if (!item || !isGun(def)) {
       this.def = null;
       this.g = null;
       this.state = null;

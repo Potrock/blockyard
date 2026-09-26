@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { LETHALS, WEAPONS } from '../../src/games/callofblocky/weapons';
-import { Blueprint, defineGame, type Bot, type GameDefinition, type GunItem, type Player, type ThrowableItem, type Vec3 } from '../../src/platform';
+import { Blueprint, defineGame, type Bot, type GameDefinition, type Player, type Vec3 } from '../../src/platform';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
 import { Headless } from '../../src/platform/host/headless';
 import { worldGenConfig } from '../../src/platform/workers/config';
 import type { HostEvent, PlayerInput } from '../../src/platform/net/protocol';
-import { flyFor, fuseSteps, newFlight, throwable, throwVelocity, type ShotWire } from '../../src/platform/items';
+import { flyFor, fuseSteps, newFlight, throwable, throwVelocity, type ShotWire, type GunItem, type ThrowableItem } from '../../src/platform/items';
 import { guns, melee, throwables } from '../../src/platform/kits';
 import { flightWorld } from '../../src/platform/sim/flight';
 import { blockIdOf, loadRegistry } from '../../src/platform/world/registry';

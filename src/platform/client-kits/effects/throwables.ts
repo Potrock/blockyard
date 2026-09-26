@@ -1,4 +1,5 @@
-import type { ThrowableItem, Vec3 } from '@platform';
+import type { Vec3 } from '@platform';
+import type { ThrowableItem } from '@platform/items';
 import type { Client, ClientKit, Node } from '@platform/client';
 import { thrownOn } from '../items/throwable';
 import type { ClientThrown } from '../items/thrower';

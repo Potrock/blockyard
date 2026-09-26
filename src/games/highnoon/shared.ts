@@ -1,4 +1,5 @@
-import { defineShared, Models, type GunOptions, type HumanoidPoses } from '@platform';
+import { defineShared, Models, type HumanoidPoses } from '@platform';
+import type { GunOptions } from '@platform/items';
 import { roll } from './abilities';
 import { BLOCKS } from './blocks';
 import hudCss from './hud.css?raw';

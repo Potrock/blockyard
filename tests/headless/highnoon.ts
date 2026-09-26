@@ -1,4 +1,5 @@
-import type { GunItem, IconRef, ItemLook, SynthVoice } from '../../src/platform';
+import type { IconRef, ItemLook, SynthVoice } from '../../src/platform';
+import type { GunItem } from '../../src/platform/items';
 import type { Client } from '../../src/platform/api/client';
 import { soundOf } from '../../src/platform/client/present';
 import { sounds } from '../../src/platform/client-kits';

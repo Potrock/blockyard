@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { defineGame, Models, type DamageEvent, type GameDefinition, type GunOptions, type HitscanOptions } from '../../src/platform';
+import { defineGame, Models, type DamageEvent, type GameDefinition, type HitscanOptions } from '../../src/platform';
 import { GameHost } from '../../src/platform/host/game';
 import type { PlayerInput } from '../../src/platform/net/protocol';
-import { assistOf, gun, gunMove, resolveGunRules } from '../../src/platform/items';
+import { assistOf, gun, gunMove, resolveGunRules, type GunOptions } from '../../src/platform/items';
 import { guns as gunKit, melee } from '../../src/platform/kits';
 import { resolveHitscan } from '../../src/platform/sim/hitboxes';
 import { check } from './_harness';

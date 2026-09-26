@@ -1,10 +1,139 @@
-import type { AimAssist, GunItem, GunOptions, ItemDefinition, ItemMove, Vec3 } from '@platform';
+import type { ItemBase, ItemMove, Vec3, ViewAnimation } from '@platform';
 
 /**
  * The gun kit's shared part: rules the host and the shooter's own screen both play, so both fire,
  * spread, reload and slow down the same way: the screen shows a shot the moment it's fired, and
  * the host (which decides what it hit) agrees about where it went.
  */
+
+/**
+ * A hitscan gun: each shot is a ray (a few for shotguns) that hits the first thing along it,
+ * checked against where targets were on the shooter's own screen (so what you aim at is what you
+ * hit, however far away the server is). Firing, recoil, aiming down the sights and reloading
+ * happen at once on the shooter's screen; the host decides the hits. Right-click aims, R
+ * reloads, and an empty gun reloads by itself.
+ */
+export interface GunItem extends ItemBase {
+  kind: 'gun';
+  /** Damage per bullet (per pellet): up close, and at `falloff[1]` blocks and beyond. */
+  damage: number | [near: number, far: number];
+  /** Where damage starts to fall off and where it bottoms out, in blocks. Default [20, 50]. */
+  falloff?: [number, number];
+  /** Damage multiplier for a head hit. Default 1.5. */
+  headshot?: number;
+  /** Rounds per minute. */
+  rpm: number;
+  /** Keeps firing while the trigger is held. Default false: a shot per click. */
+  auto?: boolean;
+  /** Rounds in a magazine, and spare rounds carried (default three magazines' worth). */
+  magazine: number;
+  reserve?: number;
+  /** Seconds to reload a magazine; with `shells`, seconds per round loaded (shotguns), and firing stops it. */
+  reload: number;
+  shells?: boolean;
+  /** Bullets per shot (shotguns). Default 1. */
+  pellets?: number;
+  /**
+   * The cone shots land in, in degrees (half angle): from the hip, aiming down the sights, and
+   * extra while moving or in the air; each shot adds `bloom`, which settles again quickly.
+   */
+  spread?: { hip?: number; aim?: number; move?: number; air?: number; bloom?: number };
+  /** Kick per shot in degrees: up, and at most sideways; `recover` (0..1) is how much of it the view settles back from. */
+  recoil?: { up?: number; side?: number; recover?: number };
+  /**
+   * Aiming down the sights (right mouse): `zoom` (the view's field of view divided by it; default
+   * 1.3), seconds to raise (0.2), speed while aiming (0.6), and what's seen: the gun's own
+   * `iron` sights (default); a red `dot` or a `holo` sight's ring and dot, glowing on the target
+   * through the optic's window (`color`, default red; model the optic with its window open and
+   * its `sight` point in the window's middle); or a `scope` (the view fills with the scope).
+   */
+  aim?: {
+    zoom?: number;
+    time?: number;
+    move?: number;
+    sight?: 'iron' | 'dot' | 'holo' | 'scope';
+    color?: string;
+    /**
+     * Aim assist for someone on a controller (0 none, 1 strong; default 0.6): the view slows
+     * over a player in sight and turns a little with them as they move. Mouse aim is never helped.
+     * A number is the strength; `AimAssist` gives its shape too (over the game's `guns.assist`).
+     */
+    assist?: number | AimAssist;
+  };
+  /** Blocks. Default 150. */
+  range?: number;
+  /** Movement speed while it's held (a heavy gun is slower). Default 1. */
+  mobility?: number;
+  /**
+   * Worked after each shot, a beat after it (0.08 s): a `pump` (the support hand back and forth),
+   * a `bolt` (the gun rolled over to work it), a `lever` (the gun rocked on the support hand, the
+   * firing hand swinging the lever down and back), a `hammer` cocked by the thumb (a
+   * single-action revolver: the gun canted in and tipped up), or a first-person animation of the
+   * game's own (`ViewAnimation`, the hand's motion; keep it shorter than the time between shots).
+   * A humanoid figure works a `lever` and a `hammer` too (`HumanoidPoses.lever`, `.hammer`).
+   */
+  action?: GunAction;
+  /** The tracer's colour, or false for none. Default a warm yellow. */
+  tracer?: string | false;
+  knockback?: number;
+  /**
+   * In a world with destructible blocks (`world.destructible`), what each bullet (each pellet)
+   * carves out where it hits one: a channel `radius` round and `depth` deep, in blocks (see
+   * `world.carve`). Each shot on the same spot goes about `depth + radius` further in (the next
+   * one lands at the bottom of the last one's pit). Default `{ radius: 0.1, depth: 0.05 }`: a
+   * pit a few pixels across, and about seven shots on one spot through a block. `false`: this
+   * gun doesn't carve.
+   */
+  carve?: { radius?: number; depth?: number } | false;
+  /**
+   * Wall-banging: bullets go through walls with up to `depth` blocks of material in them all told
+   * (a block-thick wall head on is 1, at a slant more; what's been shot out of it doesn't count),
+   * losing `damageLoss` of their damage for each block they go through (default 0.4; 1 would
+   * lose it all in a block). Bedrock and blocks that can't be broken stop them. They leave a hole
+   * where they go in and where they come out. Off by default.
+   */
+  penetration?: { depth: number; damageLoss?: number };
+}
+
+/** A gun's action, worked after each shot (`GunItem.action`). */
+export type GunAction = 'pump' | 'bolt' | 'lever' | 'hammer' | ViewAnimation;
+
+/** How guns play in a game: the gun kit's options (`guns(options)` on the host, and on each screen). */
+export interface GunOptions {
+  /** Aiming down the sights slows the holder to the gun's `aim.move`. Default true. */
+  aimSlows?: boolean;
+  /** Aiming down the sights stops a sprint, and so does holding the trigger. Both default true. */
+  aimStopsSprint?: boolean;
+  fireStopsSprint?: boolean;
+  /** An empty gun reloads by itself. Default true; off, it waits for R. */
+  autoReload?: boolean;
+  /**
+   * How many shots a screen may get ahead of its gun's rate (3, at least 1). Lag bunches shots
+   * up, so the host takes each one the gun could have fired give or take this many: lower is
+   * stricter with a cheat that fires too fast, higher kinder to a poor connection.
+   */
+  rateSlack?: number;
+  /** Aim assist's shape for every gun (see `AimAssist`); a gun's own `aim.assist` goes over it. */
+  assist?: AimAssist;
+}
+
+/**
+ * Aim assist's shape (controllers only). Over a target near the crosshair the stick turns slower,
+ * and while the sticks move the view turns a little with the target as it (or you) moves.
+ */
+export interface AimAssist {
+  /** 0 none, 1 strong. Default 0.6. */
+  strength?: number;
+  /**
+   * Who's near enough the crosshair: within `radius` blocks of its line (1.1, about a body's
+   * width round them), plus `angle` degrees more (about 1.43, so far-off targets get a little extra).
+   */
+  cone?: { radius?: number; angle?: number };
+  /** How much the stick slows over a target at full strength: from the hip (0.45) and aiming down the sights (0.6). It eases off toward the cone's edge. */
+  slow?: { hip?: number; aim?: number };
+  /** How much of a target's movement the view turns with, at full strength: from the hip (0.4) and aiming (0.6). */
+  follow?: { hip?: number; aim?: number };
+}
 
 export const DEG = Math.PI / 180;
 
@@ -77,7 +206,7 @@ export function gun(def: GunItem): Gun {
   return g;
 }
 
-export const isGun = (d: ItemDefinition | undefined): d is GunItem => d?.kind === 'gun';
+export const isGun = (d: { kind: string } | undefined): d is GunItem => d?.kind === 'gun';
 
 export function freshGun(def: GunItem): GunState {
   const g = gun(def);

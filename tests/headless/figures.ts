@@ -78,9 +78,9 @@ function heldIn(fig: Figure, def: Partial<ItemDefinition>, points: FigureHeld['p
  * (an item's poses over its figure's, a free hand, a reload's cycle, an action worked, a throw).
  */
 export default async function figures() {
-  // Only the public API: the kit's files import '@platform', '@platform/client', its math, and each other.
+  // Only the public API: the kit's files import '@platform', '@platform/client', its math, the item kits' shared parts (a gun's type), and each other.
   const dir = 'src/platform/client-kits/figures';
-  const allowed = new Set(['@platform', '@platform/client', '@platform/client/math']);
+  const allowed = new Set(['@platform', '@platform/client', '@platform/client/math', '@platform/items']);
   for (const f of readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
     const src = readFileSync(`${dir}/${f}`, 'utf8');
     const specs = [...src.matchAll(/(?:import|export)[^'"]*?from\s+'([^']+)'/g)].map((m) => m[1]);

@@ -1,4 +1,4 @@
-import type { ItemDefinition, ThrowableItem, Vec3 } from '@platform';
+import type { ItemBase, Player, Vec3 } from '@platform';
 
 /**
  * Throwables (`kind: 'throwable'`): how one flies, bounces, rolls and comes to rest, shared by the
@@ -10,6 +10,66 @@ import type { ItemDefinition, ThrowableItem, Vec3 } from '@platform';
  * blocks lands in the same place, step for step, however each machine's frames fall. Its fuse is
  * a number of steps, so it goes off where it's predicted to.
  */
+
+/**
+ * Something thrown: a grenade, a molotov. Hold its `key` (or, with it in hand, the fire button) to
+ * pull the pin, let go to throw it where you look, lobbed a little. It flies, bounces and rolls
+ * on the blocks, and goes off when its `fuse` is out (or, with `impact`, when it first hits
+ * something): a `blast` (damage falling off from its middle, a push, a crater in destructible
+ * walls) and/or a `fire` that burns a while.
+ *
+ * The thrower's own screen throws it at once and flies it there; the host flies it the same way
+ * (the flight is worked out step by step from the same blocks, so it lands in the same place) and
+ * decides when and where it goes off. Everyone else sees it fly too, and a live one near them
+ * gets a warning marker. `player.throw` throws one from code (bots).
+ */
+export interface ThrowableItem extends ItemBase {
+  kind: 'throwable';
+  /** Seconds from the pin to the blast (default 3). With `impact`, the longest it flies before it goes off anyway. */
+  fuse?: number;
+  /** The fuse burns while it's held (cooking it; held too long, it goes off in the hand). Default true, unless `impact`. */
+  cook?: boolean;
+  /** It goes off where it first hits a block or someone (a molotov), rather than bouncing until the fuse is out. */
+  impact?: boolean;
+  /** A key that throws it whatever's in hand (hold to cook, let go to throw), e.g. `'KeyG'`. In hand, the fire button throws it too. */
+  key?: string;
+  /** Blocks a second it leaves the hand at (default 20), lobbed `lift` degrees above where they look (default 7). */
+  speed?: number;
+  lift?: number;
+  /**
+   * How it flies and lands: `gravity` (blocks/s², default 24), `bounce` (0..1 of its speed off a
+   * block it hits head on, default 0.4), `friction` (0..1 of its speed along a surface it hits,
+   * lost; and rolling to a stop, default 0.35), `drag` (0.1), and its `radius` (0.1 blocks).
+   */
+  physics?: { gravity?: number; bounce?: number; friction?: number; drag?: number; radius?: number };
+  /** Seconds between throws (default 0.8). */
+  cooldown?: number;
+  /**
+   * The blast (see `world.explode`): `damage` (or `[middle, edge]`, falling off) to everyone within
+   * `radius` blocks and not behind a wall, the thrower too; `knockback` (default 1); a crater
+   * `carve` blocks round (a destructible world's walls bitten into; in any other, whole blocks
+   * blown out; default 0, none); and how big the explosion looks and sounds, `size` (1 a small
+   * bang; from 2 a shockwave and a big one; default from `radius`, up to 1.4).
+   */
+  blast?: { radius: number; damage: number | [middle: number, edge: number]; knockback?: number; carve?: number; size?: number };
+  /**
+   * Fire where it goes off (a molotov): flames on the ground `radius` blocks round for `duration`
+   * seconds, burning anyone standing in them for `damage` a second (not behind a wall). `color`
+   * tints the flames.
+   */
+  fire?: { radius: number; duration: number; damage: number; color?: string };
+  /** What it trails as it flies (a lit rag's flame, a fuse's sparks): a colour, or none (default). */
+  trail?: string;
+}
+
+/** A throwable in the air, as `items.thrown` lists it. */
+export interface ThrownInfo {
+  item: string;
+  position: Vec3;
+  by: Player;
+  radius: number;
+  left: number;
+}
 
 /** Seconds a flight step lasts. */
 export const STEP = 1 / 120;
@@ -64,7 +124,7 @@ export function throwable(def: ThrowableItem): Throwable {
   return t;
 }
 
-export const isThrowable = (d: ItemDefinition | undefined): d is ThrowableItem => d?.kind === 'throwable';
+export const isThrowable = (d: { kind: string } | undefined): d is ThrowableItem => d?.kind === 'throwable';
 
 /** One throwable in flight (or come to rest): plain numbers, the same on every machine that flies it. */
 export interface Flight {

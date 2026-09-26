@@ -1,6 +1,6 @@
-import type { Entity, ItemKind, ItemKit, ItemUse, MeleeItem, Player } from '@platform';
+import type { Entity, ItemKind, ItemKit, ItemUse, Player } from '@platform';
 import { math } from '@platform';
-import type { MeleeOwn } from '@platform/items';
+import type { MeleeItem, MeleeOwn } from '@platform/items';
 
 /** What a melee attack needs (the bare fist is one, with no item behind it). */
 export type Strike = Pick<MeleeItem, 'damage' | 'cooldown' | 'reach' | 'knockback' | 'sweep' | 'sounds'>;

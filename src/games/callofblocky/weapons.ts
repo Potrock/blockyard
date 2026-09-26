@@ -1,4 +1,5 @@
-import type { GameContext, GunItem, IconRef, ItemDefinition, MeleeItem, ThrowableItem } from '@platform';
+import type { GameContext, IconRef } from '@platform';
+import type { GunItem, MeleeItem, ThrowableItem } from '@platform/items';
 
 /**
  * The arsenal. Everyone carries a primary of their choosing, the Lucky 45 and the Hattori
@@ -21,7 +22,7 @@ import type { GameContext, GunItem, IconRef, ItemDefinition, MeleeItem, Throwabl
  * person, tracers, trails, their voices) is each screen's: `client/looks.ts`.
  */
 
-export const WEAPONS: Record<string, ItemDefinition> = {
+export const WEAPONS: Record<string, GunItem | MeleeItem> = {
   rifle: {
     kind: 'gun',
     name: 'Big Kahuna',

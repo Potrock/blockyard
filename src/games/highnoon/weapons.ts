@@ -1,4 +1,5 @@
-import type { GameContext, GunItem, IconRef } from '@platform';
+import type { GameContext, IconRef } from '@platform';
+import type { GunItem } from '@platform/items';
 
 /**
  * Two guns, and both are slow: every shot counts.

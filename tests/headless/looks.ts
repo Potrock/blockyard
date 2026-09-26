@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { defineGame, type GunItem, type IconRef, type ItemDefinition, type ItemLook, type SynthVoice } from '../../src/platform';
+import { defineGame, type IconRef, type ItemDefinition, type ItemLook, type SynthVoice } from '../../src/platform';
+import type { GunItem } from '../../src/platform/items';
 import type { Client } from '../../src/platform/api/client';
 import { ClientRuntime } from '../../src/platform/client/api/client';
 import { Presenter, soundOf } from '../../src/platform/client/present';
@@ -78,11 +79,11 @@ function merging() {
   const frag = screen.items.get('frag') as ItemDefinition & { trail?: string };
   check(frag.trail === '#fa0' && frag.sounds?.draw === 'pin' && (frag.icon as { gltf: string }).gltf === '/frag.glb', 'a look given before the item comes is waiting for it');
   // The server defines it again (a restart): the look stays.
-  screen.apply({ kind: 'item', name: 'rifle', def: { ...RIFLE, rpm: 700 } });
+  screen.apply({ kind: 'item', name: 'rifle', def: { ...RIFLE, rpm: 700 } as ItemDefinition });
   const again = screen.items.get('rifle') as GunItem;
   check(again.rpm === 700 && again.tracer === '#f0f' && again.hold?.gun?.ads === 0.4, 'a definition sent again takes the look again');
   // A server that still gives the look itself (a game that hasn't moved): as it was.
-  screen.apply({ kind: 'item', name: 'sword', def: { kind: 'melee', name: 'Sword', icon: 'iron_sword', damage: 5, cooldown: 0.5, sounds: { use: 'swing' } } });
+  screen.apply({ kind: 'item', name: 'sword', def: { kind: 'melee', name: 'Sword', icon: 'iron_sword', damage: 5, cooldown: 0.5, sounds: { use: 'swing' } } as ItemDefinition });
   check(screen.items.get('sword')!.icon === 'iron_sword' && screen.items.get('sword')!.sounds?.use === 'swing', "a server's own look is kept");
 
   // `{ item }` icons: the item's as this screen has it; a model's picture from the side on asking.
@@ -136,7 +137,7 @@ function serverNames() {
   // The item's own sound as the screen has it, at the pitch given for it; else the name given; none, nothing.
   const screen = new Content();
   screen.apply({ kind: 'item', name: 'rifle', def: RIFLE });
-  screen.apply({ kind: 'item', name: 'katana', def: { kind: 'melee', name: 'Katana', damage: 100, cooldown: 1 } });
+  screen.apply({ kind: 'item', name: 'katana', def: { kind: 'melee', name: 'Katana', damage: 100, cooldown: 1 } as ItemDefinition });
   screen.lookItem('rifle', { sounds: { use: 'bang', reload: 'mag' } });
   screen.lookItem('katana', { sounds: { hit: 'slice' } });
   const item = (id: string) => screen.items.get(id);

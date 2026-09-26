@@ -8,3 +8,4 @@ export * from './gun';
 export * from './throwable';
 export * from './melee';
 export * from './bow';
+export * from './consumable';

@@ -1,5 +1,5 @@
-import type { BowItem, IconRef, ItemKind, ItemKit, Player, SpriteRef } from '@platform';
-import type { BowOwn } from '@platform/items';
+import type { IconRef, ItemKind, ItemKit, Player, SpriteRef } from '@platform';
+import type { BowItem, BowOwn } from '@platform/items';
 
 /**
  * Bows (`kind: 'bow'`): hold the fire button to draw (over `drawTime`), let go to shoot an arrow

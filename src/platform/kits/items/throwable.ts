@@ -1,5 +1,5 @@
-import type { GameContext, ItemHost, ItemKind, ItemKit, ItemUse, Player, ThrowableItem, ThrownInfo, Vec3 } from '@platform';
-import { flyFor, fuseSteps, type ThrowOwn, isThrowable, lobView, newFlight, STEP, throwable, throwVelocity, type Flight, type FlightWorld, type Throwable } from '@platform/items';
+import type { GameContext, ItemHost, ItemKind, ItemKit, ItemUse, Player, Vec3 } from '@platform';
+import { flyFor, fuseSteps, type ThrowOwn, isThrowable, lobView, newFlight, STEP, throwable, throwVelocity, type Flight, type FlightWorld, type Throwable, type ThrowableItem, type ThrownInfo } from '@platform/items';
 
 /** A fire burning where a molotov broke (`fires`). */
 export interface FireInfo {

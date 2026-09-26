@@ -1,4 +1,5 @@
 import type { GameContext } from '@platform';
+import type { ConsumableItem } from '@platform/items';
 import type { Fireballs } from './fireballs';
 import { CURRENCIES, CURRENCY_NAME, SWORD, TEAM_STYLE, type Match } from './state';
 
@@ -49,7 +50,7 @@ export function defineItems(game: GameContext, m: Match, fireballs: Fireballs) {
       g.fx.burst(player.eye, { color: '#ffd84a', count: 14, speed: 2, gravity: -3, glow: 1 });
       return true;
     },
-  });
+  } satisfies ConsumableItem);
   it.define('fire_charge', {
     kind: 'consumable',
     name: 'Fireball',
@@ -63,7 +64,7 @@ export function defineItems(game: GameContext, m: Match, fireballs: Fireballs) {
       player.viewModel.play('swing');
       return true;
     },
-  });
+  } satisfies ConsumableItem);
 }
 
 /** Swords, plain and sharpened (a team with Sharpened Swords gets the `_sharp` kind: +1 damage). */

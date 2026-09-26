@@ -1,5 +1,5 @@
-import type { ItemDefinition, ItemStack, ThrowableItem, Vec3 } from '@platform';
-import { flyFor, isThrowable, newFlight, throwable, throwVelocity, type Flight, type FlightWorld, type Throwable } from '@platform/items';
+import type { ItemDefinition, ItemStack, Vec3 } from '@platform';
+import { flyFor, isThrowable, newFlight, throwable, throwVelocity, type Flight, type FlightWorld, type Throwable, type ThrowableItem } from '@platform/items';
 
 /**
  * Something thrown, in the air on this screen: flown here step by step as the server flies it

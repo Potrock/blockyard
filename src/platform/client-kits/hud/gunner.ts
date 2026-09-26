@@ -1,4 +1,4 @@
-import type { GunItem } from '@platform';
+import { isGun } from '@platform/items';
 import type { Client, ClientKit } from '@platform/client';
 import { el } from './dom';
 import { GUNNER_CSS } from './gunner.css';
@@ -114,7 +114,7 @@ export function gunner(): ClientKit {
       if (client.events.some((e) => e.t === 'reset')) showRounds(null);
       const me = client.me;
       const held = me.held;
-      const def = held?.def?.kind === 'gun' ? (held.def as GunItem) : null;
+      const def = isGun(held?.def) ? held!.def : null;
       const st = held?.state as { mag?: number; reserve?: number; reload?: number; aim?: number; spread?: number; sight?: string; color?: string } | undefined;
       if (!def || !st || typeof st.mag !== 'number' || me.dead || me.inVehicle) return hide(client);
       const aim = st.aim ?? 0;

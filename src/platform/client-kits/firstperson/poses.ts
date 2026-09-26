@@ -1,4 +1,5 @@
-import type { FirstPersonArms, GunAction, GunHold, HeldModelSpec, HoldSpec, HoldStyle } from '@platform';
+import type { FirstPersonArms, GunHold, HeldModelSpec, HoldSpec, HoldStyle } from '@platform';
+import type { GunAction } from '@platform/items';
 import { Euler, Mat4, Quat, Vec3 } from '@platform/client/math';
 import type { GunPoints } from './points';
 

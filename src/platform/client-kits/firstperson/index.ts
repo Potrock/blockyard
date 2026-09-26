@@ -1,5 +1,5 @@
 import type { ClientKit } from '@platform/client';
-import { FirstPersonKit } from './kit';
+import { FirstPersonKit, type FirstPersonOptions } from './kit';
 
 /**
  * The first-person view as the platform's games have it: what's in hand and the player's own
@@ -13,8 +13,8 @@ import { FirstPersonKit } from './kit';
  * To change it, copy this folder into the game's own (`src/games/<id>/client/firstperson/`), list
  * the copy in the game's `client.ts` in place of this one, and edit it.
  */
-export function standard(): ClientKit[] {
-  return [new FirstPersonKit()];
+export function standard(opts: FirstPersonOptions = {}): ClientKit[] {
+  return [new FirstPersonKit(opts)];
 }
 
-export { FirstPersonKit } from './kit';
+export { FirstPersonKit, KIND_STYLES, type FirstPersonOptions } from './kit';

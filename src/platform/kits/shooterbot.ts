@@ -1,4 +1,5 @@
-import type { Bot, GameContext, GunItem, MeleeItem, Player, Vec3 } from '@platform';
+import type { Bot, GameContext, Player, Vec3 } from '@platform';
+import { isGun, isMelee } from '@platform/items';
 import type { Guns, Throwables } from './items';
 import type { NavCell, NavGrid } from './navgrid';
 
@@ -426,8 +427,8 @@ class Brains implements ShooterBots {
     const inv = bot.inventory;
     const held = inv.held?.item ?? '';
     const item = game.items.get(held);
-    const gun = item?.kind === 'gun' ? (item as GunItem) : null;
-    const melee = item?.kind === 'melee' ? (item as MeleeItem) : null;
+    const gun = isGun(item) ? item : null;
+    const melee = isMelee(item) ? item : null;
     const w = this.weapon(held);
     const ammo = this.ammo(bot, held);
     const s = b.skill;
