@@ -13,6 +13,8 @@ export interface HeadlessOptions {
   radius?: number;
   /** Chat commands like `/give` (default on). */
   cheats?: boolean;
+  /** Which room it plays as (`game.room`): 'public' (the default), or a private room's code. */
+  room?: string;
   /**
    * Put every batch through the socket encoding (JSON, typed arrays as base64), the strictest way
    * to a client: a definition, call or frame that can't cross fails or shows here, in Node.
@@ -38,7 +40,7 @@ export class Headless {
   private wire: boolean;
 
   constructor(def: GameDefinition, o: HeadlessOptions) {
-    this.host = new GameHost(def, { engine: o.wasm, seed: o.seed ?? 1, radius: o.radius ?? 4, budget: Infinity, cheats: o.cheats ?? true });
+    this.host = new GameHost(def, { engine: o.wasm, seed: o.seed ?? 1, radius: o.radius ?? 4, budget: Infinity, cheats: o.cheats ?? true, room: o.room });
     this.wire = o.wire ?? false;
   }
 

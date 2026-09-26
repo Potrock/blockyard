@@ -133,4 +133,21 @@ export function defineSounds(client: Client) {
     s.tone({ wave: 'sine', from: 70, to: 45, duration: 0.12, volume: 0.6 });
     s.tone({ wave: 'sine', from: 64, to: 40, duration: 0.12, volume: 0.45, delay: 0.2 });
   });
+  // The Briefcase: its fuse ticking (a hard little beep, higher near the end), the latches
+  // snapping shut as it's armed, and the wire snipped as it's cracked.
+  a.define('case_beep', (s) => {
+    s.tone({ wave: 'square', from: 1960 * s.pitch, to: 1960 * s.pitch, duration: 0.07, volume: 0.22, lowpass: 5000 });
+    s.tone({ wave: 'sine', from: 980 * s.pitch, to: 980 * s.pitch, duration: 0.07, volume: 0.12 });
+  });
+  a.define('case_armed', (s) => {
+    click(s, 0, 1300, 0.45);
+    click(s, 0.09, 1500, 0.45);
+    s.tone({ wave: 'sawtooth', from: 233, to: 233, duration: 0.5, volume: 0.1, delay: 0.2, lowpass: 1600, vibrato: { rate: 7, depth: 6 } });
+    s.tone({ wave: 'sawtooth', from: 277, to: 277, duration: 0.5, volume: 0.08, delay: 0.2, lowpass: 1600 });
+  });
+  a.define('case_defused', (s) => {
+    s.noise({ duration: 0.05, filter: 'highpass', from: 5200, to: 3600, volume: 0.35 });
+    click(s, 0.02, 2200, 0.4);
+    s.tone({ wave: 'sine', from: 1200, to: 300, duration: 0.45, volume: 0.14, delay: 0.08 });
+  });
 }

@@ -1,7 +1,7 @@
 import { defineShared, Models } from '@platform';
 import { ATLAS, skinOrigin } from './art';
 import hudCss from './hud.css?raw';
-import { MAP } from './map';
+import { WORLD } from './map';
 import meta from './meta';
 import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
 import { FIGHTER_STYLE } from './style';
@@ -12,29 +12,31 @@ export const COLORS = { gold: '#ffcc00', red: '#e63946', ink: '#111111', cream: 
 export const fighterModel = (outfit: number) => Models.gltf(FIGHTER_MODELS[outfit % FIGHTER_MODELS.length].url, { rig: 'humanoid', ...FIGHTER_STYLE });
 
 /**
- * Jackrabbit Lane (every screen builds it, and shoots into it), how fighters move (each screen
- * predicts its own: sprint, slide, mantle), and the comic-book HUD.
+ * The maps (every screen builds them all, far apart in one world, and shoots into them: map.ts),
+ * how fighters move (each screen predicts its own: sprint, slide, mantle), and the comic-book HUD.
  */
 export const shared = defineShared({
   ...meta,
   world: {
-    seed: MAP.seed,
-    // No landscape to make: the lane and its backdrop stand on a plain ground over the void,
-    // deep enough for the storm drain, and nothing past the haze is loaded.
+    seed: WORLD.seed,
+    // No landscape to make: the maps and their backdrops stand on a plain ground over the void,
+    // deep enough for Jackrabbit Lane's storm drain, and nothing past the haze is loaded (so only
+    // the map being played is: the others are hundreds of blocks away).
     terrain: 'void',
-    ground: { y: MAP.floorY - 1, top: 'grass_block', fill: 'dirt', depth: 10 },
+    ground: { y: WORLD.floorY - 1, top: 'grass_block', fill: 'dirt', depth: 10 },
     maxViewDistance: 10,
-    structures: MAP.structures,
-    terraform: MAP.terraform,
-    // The home page looks down the street from the west end, toward the diner (fighters spawn at the map's spawns).
-    spawn: { x: -30.5, y: MAP.floorY + 0.05, z: 0.5 },
+    structures: WORLD.structures,
+    terraform: WORLD.terraform,
+    // The home page looks down Jackrabbit Lane from the west end, toward the diner (fighters
+    // spawn at their map's spawns).
+    spawn: { x: -30.5, y: WORLD.floorY + 0.05, z: 0.5 },
     spawnYaw: -Math.PI / 2,
-    time: MAP.time,
+    time: WORLD.time,
     freezeTime: true,
-    // Walls, roofs, the truck, the diner: shot into, pixel by pixel (each gun's `carve`). The
-    // ground layer under the street and everything below it (the storm drain) stay whole, so
-    // nobody shoots their way out of the map. A restart puts it all back.
-    destructible: { above: MAP.floorY - 1 },
+    // Walls, roofs, cars, the diner: shot into, pixel by pixel (each gun's `carve`). The ground
+    // layer and everything below it (the storm drain, the drained pool) stay whole, so nobody
+    // shoots their way out of a map. A restart puts it all back.
+    destructible: { above: WORLD.floorY - 1 },
   },
   player: {
     health: 100,

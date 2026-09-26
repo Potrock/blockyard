@@ -122,6 +122,8 @@ export interface GameHostOptions {
   remote?: boolean;
   /** The first player's id and name (default 'local', 'Player'). */
   player?: { id: string; name: string };
+  /** Which room this is (`game.room`): 'public' (the default), or a private room's code. */
+  room?: string;
   /**
    * What's kept across restarts: `game.store`, and for games that keep their world
    * (`world.persist`) its edits and each player's place, by name. Default: memory only.
@@ -264,6 +266,7 @@ export class GameHost {
       exit: () => this.events.push({ t: 'exit', client: this.acting }),
       cheats: o.cheats ?? false,
       player: o.player,
+      room: o.room,
       store,
       error: (err) => this.report(err),
     });

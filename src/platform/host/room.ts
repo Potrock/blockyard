@@ -95,6 +95,7 @@ export class RoomCore {
       remote: true,
       cheats: spec.cheats,
       dev: spec.dev,
+      room: spec.instance,
       player: { id: 'p1', name: 'Player' },
       radius: 8,
       store,

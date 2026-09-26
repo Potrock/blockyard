@@ -98,6 +98,8 @@ export interface SimOptions {
   player?: { id: string; name: string };
   /** Where `game.store` keeps its data (default: nowhere past this session). */
   store?: { data(): Map<string, unknown>; put(key: string, value: unknown): void };
+  /** `game.room`: 'public' (the default), or the code of a room a player started of their own. */
+  room?: string;
   /**
    * Game code threw (a timer, `update`, an entity's AI): report it and carry on with the tick,
    * so one bug doesn't stop the whole game. Without it, errors are thrown.
@@ -996,6 +998,7 @@ export class Sim {
       },
       rng: this.rng,
       commands: this.commands,
+      room: this.o.room ?? 'public',
       restart: () => sim.restart(),
       exit: () => sim.o.exit(),
     };

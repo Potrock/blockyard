@@ -441,6 +441,12 @@ export interface GameContext {
   readonly bots: BotApi;
   /** Messages to the game's own code on players' screens (see `ClientsApi`). */
   readonly clients: ClientsApi;
+  /**
+   * Which copy of the game this is: `'public'`, the game everyone joins, or the code of a game
+   * someone started of their own (`instances`: `?room=k3x9f2`), which its players may want to set
+   * up their way (a mode, a map). Tests and a server running one game are `'public'`.
+   */
+  readonly room: string;
   /** Clear entities, timers, pickups and HUD, revive the player at spawn, then call `start` again. */
   restart(): void;
   /** Return to the game launcher. */

@@ -1,19 +1,28 @@
 import type { WidgetDefinition } from '@platform';
 
 /**
- * Each fighter's corner of the screen (top right), a HUD widget of the game's own: their kills,
- * their place and the leader, their streak toward the UAV (three) and the Adrenaline Shot
- * (five), and how long those have left. The markup and styles are here; `personalHud` fills it
- * in every tick with `player.hud.widget('dossier', data)`, and only what changed goes to their
- * screen. It's inked on paper like the rest of the HUD, from the theme's colours.
+ * Each fighter's corner of the screen (top right), a HUD widget of the game's own: in a
+ * free-for-all their kills, their place and the leader; in a team mode their side, their kills
+ * and score (and the case, while they carry it); always their streak toward the UAV (three) and
+ * the Adrenaline Shot (five), and how long those have left. The markup and styles are here;
+ * `personalHud` fills it in every tick with `player.hud.widget('dossier', data)`, and only what
+ * changed goes to their screen. It's inked on paper like the rest of the HUD, from the theme's
+ * colours.
  */
 export const DOSSIER: WidgetDefinition = {
   at: 'top-right',
   html: `
-    <div class="chip"><span class="label">Kills</span><span class="value">{{kills}} / {{limit}}</span></div>
-    <div class="chip"><span class="label">Place</span><span class="value">{{place}} of {{fighters}}</span></div>
-    <div class="chip" data-if="leading"><span class="label">Leading by</span><span class="value">{{margin}}</span></div>
-    <div class="chip" data-if="!leading"><span class="label">Leader</span><span class="value">{{leader}} · {{leaderKills}}</span></div>
+    <div class="group" data-if="ffa">
+      <div class="chip"><span class="label">Kills</span><span class="value">{{kills}} / {{limit}}</span></div>
+      <div class="chip"><span class="label">Place</span><span class="value">{{place}} of {{fighters}}</span></div>
+      <div class="chip" data-if="leading"><span class="label">Leading by</span><span class="value">{{margin}}</span></div>
+      <div class="chip" data-if="!leading"><span class="label">Leader</span><span class="value">{{leader}} · {{leaderKills}}</span></div>
+    </div>
+    <div class="group" data-if="!ffa">
+      <div class="chip side" style="--c: {{teamColor}}"><span class="label">{{role}}</span><span class="value">{{teamName}}</span></div>
+      <div class="chip"><span class="label">Kills</span><span class="value">{{kills}}</span><span class="label">Score</span><span class="value">{{score}}</span></div>
+    </div>
+    <div class="perk case" data-if="carrier"><span class="perk-name">The case</span><span class="perk-time">{{carrier}}</span></div>
     <div class="chip streak">
       <span class="label">Streak</span>
       <span class="pips"><i data-each="pips" class="pip {{.}}"></i></span>
@@ -34,6 +43,12 @@ export const DOSSIER: WidgetDefinition = {
       align-items: flex-end;
       gap: 6px;
     }
+    .group {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
     .chip {
       display: flex;
       gap: 10px;
@@ -44,6 +59,10 @@ export const DOSSIER: WidgetDefinition = {
       border: 3px solid var(--hud-ink, #111);
       border-radius: 4px;
       box-shadow: 6px 6px 0 var(--hud-ink, #111);
+    }
+    /* Their side: a stripe of its colour down the left. */
+    .chip.side {
+      border-left: 12px solid var(--c);
     }
     .label {
       font: 600 10px var(--sans);
@@ -99,6 +118,10 @@ export const DOSSIER: WidgetDefinition = {
     .perk.uav {
       --c: #ff5c8a;
     }
+    /* Carrying the case: it glows. */
+    .perk.case {
+      animation: perk-in 320ms cubic-bezier(0.3, 1.8, 0.5, 1), case-glow 0.9s ease-in-out infinite alternate;
+    }
     .perk-name {
       font: 700 17px var(--pixel);
       letter-spacing: 0.04em;
@@ -123,11 +146,20 @@ export const DOSSIER: WidgetDefinition = {
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
+    .perk.case .perk-time {
+      font: 600 12px var(--sans);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
     @keyframes pip-in {
       from { transform: skewX(-10deg) scale(1.6); }
     }
     @keyframes perk-in {
       from { transform: scale(1.35); opacity: 0; }
+    }
+    @keyframes case-glow {
+      from { box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.35); }
+      to { box-shadow: 0 0 18px rgba(255, 204, 0, 0.9); }
     }`,
 };
 
@@ -135,3 +167,182 @@ export const DOSSIER: WidgetDefinition = {
 export function streakPips(streak: number): string[] {
   return [0, 1, 2, 3, 4].map((i) => `${i < streak ? 'on' : 'off'}${i === 2 ? ' uav' : i === 4 ? ' rush' : ''}`);
 }
+
+/**
+ * The team modes' bar across the top (a widget up on everyone's screen, `game.hud.widget`): each
+ * side's name, colour and score (Team Deathmatch: kills toward the limit; The Briefcase: rounds
+ * won, a card each, who's attacking, and who's still up), and between them the clock and what's
+ * happening. Everyone's copy says which side is theirs (`mine`, a player's own field), so theirs
+ * is marked YOU. During The Briefcase's fuse the clock goes red and pulses.
+ */
+export const MATCHBAR: WidgetDefinition = {
+  at: 'top',
+  html: `
+    <div class="bar {{mode}}">
+      <div class="team left {{a.role}}" style="--c: {{a.color}}">
+        <div class="head"><span class="you" data-if="mine == 0">You</span><span class="name">{{a.short}}</span><span class="role" data-if="a.role">{{a.role}}</span></div>
+        <div class="line">
+          <span class="score" data-if="!rounds">{{a.score}}</span>
+          <span class="cards" data-if="rounds"><i data-each="a.cards" class="card {{.}}"></i></span>
+          <span class="up" data-if="rounds"><i data-each="a.up" class="man {{.}}"></i></span>
+        </div>
+      </div>
+      <div class="mid {{state}}">
+        <span class="clock">{{clock}}</span>
+        <span class="note">{{note}}</span>
+      </div>
+      <div class="team right {{b.role}}" style="--c: {{b.color}}">
+        <div class="head"><span class="role" data-if="b.role">{{b.role}}</span><span class="name">{{b.short}}</span><span class="you" data-if="mine == 1">You</span></div>
+        <div class="line">
+          <span class="up" data-if="rounds"><i data-each="b.up" class="man {{.}}"></i></span>
+          <span class="cards" data-if="rounds"><i data-each="b.cards" class="card {{.}}"></i></span>
+          <span class="score" data-if="!rounds">{{b.score}}</span>
+        </div>
+      </div>
+    </div>`,
+  css: `
+    :scope {
+      margin-top: 10px;
+    }
+    .bar {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      filter: drop-shadow(6px 6px 0 var(--hud-ink, #111));
+    }
+    .team {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+      min-width: 150px;
+      padding: 5px 12px;
+      background: var(--hud-paper, #fdf1d6);
+      color: var(--hud-fg, #111);
+      border: 3px solid var(--hud-ink, #111);
+    }
+    .team.left {
+      border-right: 0;
+      border-left: 14px solid var(--c);
+      border-radius: 4px 0 0 4px;
+      align-items: flex-start;
+    }
+    .team.right {
+      border-left: 0;
+      border-right: 14px solid var(--c);
+      border-radius: 0 4px 4px 0;
+      align-items: flex-end;
+    }
+    .head {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+    }
+    .name {
+      font: 700 19px var(--pixel);
+      letter-spacing: 0.05em;
+      color: var(--hud-fg, #111);
+    }
+    .role {
+      font: 700 10px var(--sans);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      padding: 1px 5px;
+      background: var(--hud-ink, #111);
+      color: var(--c);
+      border-radius: 2px;
+    }
+    .you {
+      font: 700 10px var(--sans);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      padding: 1px 5px;
+      background: var(--hud-accent, #ffcc00);
+      color: var(--hud-ink, #111);
+      border: 2px solid var(--hud-ink, #111);
+      border-radius: 2px;
+    }
+    .line {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 26px;
+    }
+    .score {
+      font: 700 30px var(--pixel);
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      color: var(--c);
+      -webkit-text-stroke: 1.5px var(--hud-ink, #111);
+      paint-order: stroke fill;
+    }
+    /* Rounds won: a card each, filled in the side's colour. */
+    .cards {
+      display: flex;
+      gap: 4px;
+    }
+    .card {
+      width: 14px;
+      height: 20px;
+      border: 2px solid var(--hud-ink, #111);
+      transform: skewX(-10deg);
+      background: rgba(0, 0, 0, 0.08);
+    }
+    .card.won {
+      background: var(--c);
+      animation: card-in 300ms cubic-bezier(0.3, 1.8, 0.5, 1);
+    }
+    /* Who's still up: a little figure each, crossed out when they're down. */
+    .up {
+      display: flex;
+      gap: 3px;
+    }
+    .man {
+      width: 8px;
+      height: 14px;
+      border-radius: 4px 4px 1px 1px;
+      background: var(--hud-ink, #111);
+    }
+    .man.down {
+      opacity: 0.22;
+    }
+    .mid {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-width: 118px;
+      padding: 4px 12px;
+      background: var(--hud-ink, #111);
+      color: #fff;
+      border-top: 3px solid var(--hud-ink, #111);
+      border-bottom: 3px solid var(--hud-ink, #111);
+    }
+    .clock {
+      font: 700 28px var(--pixel);
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      color: var(--hud-accent, #ffcc00);
+    }
+    .note {
+      font: 600 10px var(--sans);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      opacity: 0.85;
+      white-space: nowrap;
+    }
+    /* The case is down: the fuse, red, pulsing. */
+    .mid.planted .clock {
+      color: var(--hud-danger, #e63946);
+      animation: fuse 0.5s ease-in-out infinite alternate;
+    }
+    .mid.planted {
+      background: #2a0306;
+    }
+    @keyframes fuse {
+      to { transform: scale(1.12); text-shadow: 0 0 12px rgba(230, 57, 70, 0.9); }
+    }
+    @keyframes card-in {
+      from { transform: skewX(-10deg) scale(1.7); }
+    }`,
+};

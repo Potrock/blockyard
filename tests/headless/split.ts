@@ -15,7 +15,7 @@ const GAMES = resolve('src/games');
 const SERVER_ONLY: Record<string, string[]> = {
   arena: ['content.ts'],
   bedwars: ['bots.ts', 'fireballs.ts', 'items.ts', 'nav.ts', 'shop.ts', 'state.ts'],
-  callofblocky: ['bots.ts', 'hud.ts', 'weapons.ts'],
+  callofblocky: ['bots.ts', 'briefcase.ts', 'hud.ts', 'match.ts', 'weapons.ts'],
   highnoon: ['bots.ts', 'hud.ts', 'weapons.ts'],
   skyship: ['ship.ts'],
   starfighter: ['capital.ts', 'enemies.ts', 'pilot.ts', 'weapons.ts'],
