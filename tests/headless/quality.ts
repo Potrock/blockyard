@@ -2,7 +2,7 @@ import { AutoQuality } from '../../src/platform/quality';
 import type { Settings } from '../../src/platform/settings';
 import { check } from './_harness';
 
-const MAX: Settings = { renderDistance: 12, shadows: 'ultra', msaa: true, bloom: true, godrays: true, ssr: true, clouds: true, renderScale: 1, fov: 75, sensitivity: 1, stickSensitivity: 1, invertY: false, vibration: true, aimAssist: true, viewBobbing: true, dayMinutes: 20, occlusion: true, autoQuality: true };
+const MAX: Settings = { renderDistance: 12, shadows: 'ultra', msaa: true, bloom: true, godrays: true, ssr: true, clouds: true, renderScale: 1, fov: 75, sensitivity: 1, stickSensitivity: 1, invertY: false, vibration: true, aimAssist: true, viewBobbing: true, dayMinutes: 20, occlusion: true, autoQuality: true, keys: {} };
 
 /** Play `seconds` of frames, each lasting what `ms(level)` says; returns the levels it went through. */
 function run(q: AutoQuality, seconds: number, ms: (level: number) => number): number[] {

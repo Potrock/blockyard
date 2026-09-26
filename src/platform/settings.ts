@@ -1,3 +1,4 @@
+import { sanitize, type KeyBindings } from './player/keys';
 import type { RenderSettings } from './render/pipeline';
 
 export type ShadowQuality = 'off' | 'low' | 'medium' | 'high' | 'ultra';
@@ -21,6 +22,8 @@ export interface Settings {
   viewBobbing: boolean;
   dayMinutes: number;
   occlusion: boolean;
+  /** Controls moved off their default keys (see `player/keys.ts`). */
+  keys: KeyBindings;
   /** Graphics lowered a notch at a time while frames are slow (these settings are the most it shows). */
   autoQuality: boolean;
 }
@@ -47,6 +50,7 @@ export function defaultSettings(): Settings {
     viewBobbing: true,
     dayMinutes: 20,
     occlusion: true,
+    keys: {},
     autoQuality: true,
   };
 }
@@ -55,7 +59,10 @@ export function loadSettings(): Settings {
   const d = defaultSettings();
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...d, ...JSON.parse(raw) };
+    if (raw) {
+      const saved = JSON.parse(raw);
+      return { ...d, ...saved, keys: sanitize(saved?.keys) };
+    }
   } catch {
     // Storage unavailable: use defaults.
   }
