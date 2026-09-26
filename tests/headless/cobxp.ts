@@ -205,10 +205,11 @@ function firstRoom(path: string): number {
     return { id: call.args[0] as number, entries: opts.sections.flatMap((x) => x.entries), sections: opts.sections.map((x) => x.title) };
   };
   let m = menu(b.id);
-  check(m.sections.join() === 'Primary,Lethal (G),Outfit', `the loadout's sections: ${m.sections}`);
+  check(m.sections.join() === 'Primary,Sidearm,Lethal (G),Outfit', `the loadout's sections: ${m.sections}`);
   const locked = m.entries.filter((e) => e.disabled).map((e) => `${e.label} ${e.detail}`);
-  check(['Mac-10 LV 2', "Zed's Pump LV 4", 'Honey Bunny LV 8', 'The Mia LV 6', 'The Bowler LV 3', 'The Boss LV 30'].every((x) => locked.includes(x)), `level 1's locked picks: ${locked}`);
-  check(!m.entries.find((e) => e.label === 'Big Kahuna')?.disabled && !m.entries.find((e) => e.label === 'The Pineapple')?.disabled, 'the rifle and the frag are there from level 1');
+  const later = ['Mac-10 LV 2', "Zed's Pump LV 4", 'The Wolf LV 5', 'Rock Salt LV 7', 'Honey Bunny LV 8', 'Bad Mother LV 9', 'Marsellus LV 11', 'Ezekiel LV 13', 'The Mia LV 6', 'The Bowler LV 3', 'The Boss LV 30'];
+  check(later.every((x) => locked.includes(x)), `level 1's locked picks: ${locked}`);
+  check(['Big Kahuna', 'Lucky 45', 'The Pineapple'].every((l) => !m.entries.find((e) => e.label === l)?.disabled), 'the rifle, the Lucky 45 and the frag are there from level 1');
   // Bob sends the sniper's pick anyway (a forged click, or a stale menu): refused.
   const sniper = m.entries.find((e) => e.label === 'Honey Bunny')!;
   check(sniper.onSelect, 'the locked entry is still a callback (checked when picked)');
@@ -222,6 +223,7 @@ function firstRoom(path: string): number {
   bob.damage(1000, { source: 'world', knockback: 0 });
   room.step(3.5);
   check(bob.alive && bob.inventory.count('sniper') === 0 && bob.inventory.count('rifle') === 1, `Bob still carries the rifle: sniper ${bob.inventory.count('sniper')}, rifle ${bob.inventory.count('rifle')}`);
+  check(bob.inventory.count('pistol') === 1 && bob.inventory.count('revolver') === 0, 'and the Lucky 45 at his side');
 
   // Ann's level-up reaches Ann's screen, not Bob's; at level 8 the sniper is hers to pick.
   room.clear();

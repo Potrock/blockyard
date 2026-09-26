@@ -13,7 +13,7 @@ import { sounds } from '../../src/platform/client-kits';
 import cob from '../../src/games/callofblocky/client';
 import { LOOKS } from '../../src/games/callofblocky/client/looks';
 import cobServer from '../../src/games/callofblocky/server';
-import { LETHALS, WEAPONS } from '../../src/games/callofblocky/weapons';
+import { LETHALS, PRIMARIES, SIDEARMS, WEAPONS } from '../../src/games/callofblocky/weapons';
 import { check } from './_harness';
 import type { SynthKit } from '../../src/platform/api/types';
 
@@ -242,7 +242,8 @@ function callOfBlocky() {
   for (const id of Object.keys(LOOKS)) {
     const d = item(id)!;
     check(d && typeof d.icon === 'object' && 'gltf' in d.icon && d.icon.gltf.includes('.glb'), `${id}'s icon is a picture of its model: ${JSON.stringify(d?.icon)}`);
-    if (id !== 'briefcase') check(d.hold?.model?.gltf?.url === (d.icon as { gltf: string }).gltf, `${id} is held as its model`);
+    // (The briefcase and the ammo can are only picked up.)
+    if (id !== 'briefcase' && id !== 'ammo') check(d.hold?.model?.gltf?.url === (d.icon as { gltf: string }).gltf, `${id} is held as its model`);
     for (const s of Object.values(d.sounds ?? {})) check(voices.has(s!) || ENGINE_SOUNDS.includes(s!), `${id}'s ${s} is a voice on the screen`);
   }
   const gun = (id: string) => item(id) as GunItem;
@@ -261,7 +262,7 @@ function callOfBlocky() {
   const menu = calls().find((c) => c.method === 'menu' && c.to === ann.player)!;
   const sections = (menu?.args[1] as { sections: { title: string; entries: { label: string; icon: IconRef }[] }[] }).sections;
   const entries = sections.filter((s) => s.title !== 'Outfit').flatMap((s) => s.entries);
-  check(entries.length === 6 && entries.every((e) => typeof e.icon === 'object' && 'item' in e.icon), `the loadout menu names its weapons: ${JSON.stringify(entries.map((e) => e.icon))}`);
+  check(entries.length === PRIMARIES.length + SIDEARMS.length + Object.keys(LETHALS).length && entries.every((e) => typeof e.icon === 'object' && 'item' in e.icon), `the loadout menu names its weapons: ${JSON.stringify(entries.map((e) => e.icon))}`);
   // Its outfits (progression.ts) by name too, each drawn as its fighter.
   const outfits = sections.find((s) => s.title === 'Outfit')?.entries ?? [];
   check(outfits.length === 10 && outfits.every((e) => typeof e.icon === 'object' && 'item' in e.icon && ((resolveIcon(e.icon, item) as { gltf?: string }).gltf ?? '').includes('.glb')), `the outfits, named and drawn: ${JSON.stringify(outfits.map((e) => e.icon))}`);

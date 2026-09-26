@@ -64,8 +64,11 @@ export interface PlayerFrame {
    * out from the vehicle's state, every frame).
    */
   camera: { p: [number, number, number]; q: [number, number, number, number]; fov: number; follow: boolean };
-  /** Their vehicle (`player.drive`): which one, its state (their client predicts from it), its model. */
-  vehicle: { name: string; state: object; prop: number | null } | null;
+  /**
+   * Their vehicle (`player.drive`): which one, its state (their client predicts from it), its
+   * model, and whether they steer it from afar (`remote`: their body stays on show where it was).
+   */
+  vehicle: { name: string; state: object; prop: number | null; remote?: boolean } | null;
   /** Creative building (`player.build`): the block hotbar. */
   creative: { hotbar: number[]; selected: number } | null;
   /** Physics is off (before play, dead, a game-driven camera). */
@@ -405,12 +408,12 @@ export class PlayerSim {
     v.def.pose(s, v.prop.position, v.prop.quaternion);
   }
 
-  /** The vehicle's model to where its state has it, and their (frozen) body with it. */
+  /** The vehicle's model to where its state has it, and their (frozen) body with it (unless they steer it from afar). */
   followBody() {
     const v = this.vehicle;
     if (!v) return;
     const at = v.place();
-    this.p.world.player_reset(this.slot, at.x, at.y, at.z);
+    if (!v.remote) this.p.world.player_reset(this.slot, at.x, at.y, at.z);
     this.p.world.set_frozen(this.slot, true);
     this.syncState();
   }
@@ -479,7 +482,7 @@ export class PlayerSim {
       hand: { state: this.itemMode ? this.items.shown() : null },
       ...(this.itemMode && { items: this.items.own() }),
       camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov, follow: this.followVehicle && !!this.vehicle },
-      vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null },
+      vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null, ...(this.vehicle.remote ? { remote: true } : {}) },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
       frozen: s.frozen,
       locked: this.weaponsLocked,
@@ -646,10 +649,10 @@ export class PlayerSim {
       get frozen() {
         return world.player_state(me.slot)[12] > 0.5;
       },
-      drive: <S extends object>(name: string, state: S, opts: { prop?: Prop } = {}) => {
+      drive: <S extends object>(name: string, state: S, opts: { prop?: Prop; remote?: boolean } = {}) => {
         const def = this.p.vehicles[name];
         if (!def) throw new Error(`player.drive: no vehicle "${name}" (add it to the game's \`vehicles\`)`);
-        this.vehicle = new VehicleSim(name, def, state, (opts.prop as PropState | undefined) ?? null);
+        this.vehicle = new VehicleSim(name, def, state, (opts.prop as PropState | undefined) ?? null, !!opts.remote);
         this.followVehicle = true;
         this.followBody();
         return this.vehicle as unknown as import('../api/types').Vehicle<S>;

@@ -932,6 +932,7 @@ export const shared = defineShared({
 - The state is plain data (numbers, booleans, short lists): it goes to the pilot's screen as is. Anything with consequences (shots, damage, sounds) is your `update`'s job, reading `player.vehicle.state` and `player.input`; the game may change the state too (a knock-back), and the pilot's screen catches up smoothly.
 - `step` must be pure and the same everywhere: the host and the pilot's screen run it on the same inputs and the same blocks, and the pilot's screen starts again from the host's state whenever it arrives. `world` offers `raycast`, `getBlock`, `blockName`, `lineOfSight`, `surfaceY` and `seaLevel`.
 - While driving, their body goes with the vehicle (so `player.position` is the vehicle's), and a walking player's figure is hidden. `player.camera.set(...)` takes the camera over (a cutscene, watching after being shot down); `player.camera.follow()` gives it back. `player.leaveVehicle()` gets out.
+- **Steered from afar**: `drive(name, state, { prop, remote: true })` is a guided missile, a drone, a turret's camera: their controls and camera go to the vehicle, but their body stays where it stood, frozen, and everyone still sees it there (it can be shot; markers and orbits that follow the player stay on the body). Lock their weapons while they fly (`freeze(true, { weapons: true })`), or a click fires their gun as well. Call of Blocky's Hellstorm and attack chopper are two (`src/games/callofblocky/streaks/`).
 
 **Without a vehicle**, drive the camera yourself: `game.camera.set(position, lookAt, up?)` or `setPose(position, quaternion)`, plus `fov`. On a server that camera arrives a round trip late, which is why anything the player steers should be a vehicle.
 
@@ -1284,7 +1285,7 @@ They work wherever a name does, beside the widget's own data: `{{$gun.mag}}`, `d
 
 **Safe to show.** A widget's markup and CSS come from the game's code, which may run on a server someone else runs, so each player's screen checks them again and builds them element by element (never as HTML). Left out: `<script>`, `<style>`, frames, forms and fields, SVG, links; `on…` attributes, `id`, `name` and `href`; pictures and `url()` except `data:` images and files on this site; CSS other than style rules, `@media`, `@supports`, `@container` and `@keyframes`, and values that load from elsewhere or could run code. `hud.define` says in the console what it left out. Data is only ever text.
 
-Call of Blocky's corner of the screen (kills, place, the leader, the streak toward the UAV and the Adrenaline Shot, their timers) is a widget: `src/games/callofblocky/hud.ts`.
+Call of Blocky's corner of the screen (kills, place, the leader, the streak toward the UAV, the Adrenaline Shot, the Hellstorm and the Attack Chopper, their timers, and a streak ready to call in) is a widget: `src/games/callofblocky/hud.ts`.
 
 ## Client code: HUD, effects, sounds and messages
 

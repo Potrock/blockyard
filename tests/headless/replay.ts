@@ -284,6 +284,8 @@ function leaving() {
   const bob = r.join('Bob');
   r.step(60);
   const annP = r.player(ann);
+  // (Bob kept out of harm's way: a bot's kill would give him a kill cam of his own.)
+  r.player(bob).protect(9999);
   annP.damage(1000, { source: r.player(bob), weapon: 'rifle', knockback: 0 });
   r.step(20);
   const got = r.replays(ann);
@@ -298,6 +300,7 @@ function leaving() {
   check(r.game.players.every((p) => p.id !== ann), 'Ann is gone');
   // Bob is killed by a bot: his own kill cam works on.
   const bot = r.game.players.find((p) => p.bot && p.alive)!;
+  r.player(bob).protect(0);
   r.player(bob).damage(1000, { source: bot, weapon: 'smg', knockback: 0 });
   r.step(20);
   check(r.replays(bob).length === 1, 'Bob gets his');

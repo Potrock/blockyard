@@ -691,6 +691,8 @@ export interface Vehicle<S extends object = any> {
   readonly state: S;
   /** Its model, kept at its pose (on the pilot's own screen, where prediction has it). */
   readonly prop: Prop | null;
+  /** Steered from afar (`drive`'s `remote`): the pilot's body stays where it was. */
+  readonly remote: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1118,8 +1120,12 @@ export interface PlayerApi {
    * lists: it goes to their screen as data). From now on their controls drive it (the vehicle's
    * `step`, on the host and, ahead of it, on their own screen), `prop` (its model) is kept at its
    * `pose` on every screen, their camera is the vehicle's, and their body goes where it goes.
+   *
+   * `remote`: they steer it from where they stand (a guided missile, a drone, a turret's camera):
+   * their body stays put, frozen, and everyone still sees it there (it can be shot, and a marker
+   * or an orbit that follows them stays on it), while their controls and camera go to the vehicle.
    */
-  drive<S extends object>(vehicle: string, state: S, opts?: { prop?: Prop }): Vehicle<S>;
+  drive<S extends object>(vehicle: string, state: S, opts?: { prop?: Prop; remote?: boolean }): Vehicle<S>;
   /** Out of their vehicle (their model stays where it was; remove it if it should go). */
   leaveVehicle(): void;
   /** The vehicle they're driving, if any. */

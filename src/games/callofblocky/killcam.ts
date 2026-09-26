@@ -1,4 +1,4 @@
-import type { GameContext, Player } from '@platform';
+import type { GameContext, Player, Vec3 } from '@platform';
 import { COLORS } from './shared';
 import { feedIcon, weaponName } from './weapons';
 
@@ -11,6 +11,9 @@ import { feedIcon, weaponName } from './weapons';
  * - 0 to 0.5 s: you fall (the death tilt) and KILLED BY comes up;
  * - 0.5 s: the kill cam starts, 4 s long (from 3.5 s before the death to 0.5 s after), at full speed;
  * - 4.5 s: it's over and you respawn (the respawn delay was 3 s: it stretches by 1.5 s).
+ *
+ * Killed by a killstreak (the Hellstorm, the chopper), it's seen from a camera standing near
+ * where you fell instead (`Streaks.killcamView`).
  *
  * Skipping it (click or Space, `client/killcam.ts`) respawns you at once if the old 3 s are up,
  * else when they are (watching whoever did it meanwhile). Bots get no kill cam, and respawn as before.
@@ -49,7 +52,7 @@ function orbit(victim: Player, killer: Player) {
  * A person was killed by someone: their kill cam starts in a moment (bots get none). The respawn
  * waits for it (`killcamHolds`).
  */
-export function killcam(game: GameContext, victim: Player, killer: Player, weapon: string | undefined, headshot: boolean, through: number) {
+export function killcam(game: GameContext, victim: Player, killer: Player, weapon: string | undefined, headshot: boolean, through: number, camera?: { at: Vec3; look: Vec3 } | null) {
   if (victim.bot) return;
   const w: Watch = { done: false, limit: game.clock.now + KILLCAM_DELAY + KILLCAM_BEFORE + KILLCAM_DELAY + 1.5 };
   watching.set(victim.id, w);
@@ -66,7 +69,8 @@ export function killcam(game: GameContext, victim: Player, killer: Player, weapo
     const shown = game.replay.show(victim, {
       from: KILLCAM_BEFORE + KILLCAM_DELAY,
       seconds: KILLCAM_BEFORE + KILLCAM_DELAY,
-      follow: killer,
+      // A killstreak's kill: from a camera of its own (the killer's eyes are on the ground).
+      ...(camera ? { camera } : { follow: killer }),
       label: 'killcam',
       data,
       onEnd: ({ skipped }) => {

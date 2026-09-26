@@ -22,7 +22,9 @@
  *   person) is +x.
  * - Origin (0,0,0): the centre of the firing hand's fist around the pistol grip (= `grip`).
  * - Sizes (overall length along z, px, within 5% of the hard-surface models): pistol 12, SMG 17,
- *   rifle 28, shotgun 29.5, sniper 33, katana 30. Receivers 1.9-2.5 px wide, pistol grips 1.9-2.5
+ *   rifle 28, shotgun 29.5, sniper 33, katana 30; and the ones added since: the Tommy gun 27, the
+ *   machine gun 33, the marksman rifle 32, the sawn-off 16, the revolver 15.5 (held as a pistol:
+ *   `stance` in its look). Receivers 1.9-2.5 px wide, pistol grips 1.9-2.5
  *   px wide and 5 tall, raked 15 degrees (the shotgun's wrist 25, the sniper's 18). A gun whose
  *   muzzle is less than 11 px ahead of the grip is held as a compact gun (the pistol and the SMG).
  * - Marker nodes: empty nodes (no mesh), children of the root, their translation in blocks:
@@ -44,6 +46,9 @@
  * - The briefcase (a pickup, not a weapon) has no markers: its origin is the centre of its bottom
  *   face, +y up, its front (latches, the lid ajar and glowing) toward +z; about 10 x 9.4 x 4.4 px
  *   with the handle.
+ * - The ammo can (a pickup the fallen drop) has no markers: it stands up along +z (the platform
+ *   stands a model up that way to drop it), its origin the middle of its bottom, about 6.9 x 4.4 x
+ *   5.6 px.
  * - The lethals (thrown) have one marker, `grip`, and their origin is the middle of the body, +y
  *   up. The frag (The Pineapple) is about 4.4 x 6.3 x 4.4 px, its pull ring in front (+z), the
  *   spoon down its right side (-x); `grip` the origin. The molotov (The Mia, a soda bottle
@@ -265,6 +270,20 @@ class Gun {
       for (let k = k0; k < k1; k++)
         for (let i = i0; i < i1; i++)
           if (Math.hypot(this.c(0, i) - x, this.c(2, k) - z) <= r + 1e-6) {
+            const col = f(i, j, k);
+            if (col === false) this.vox.del('body', i, j, k);
+            else if (col) this.vox.set('body', i, j, k, col);
+          }
+    return this;
+  }
+  /** A round section across x (a drum, a wheel): the cells whose centres are within `r` px of (y, z), `w` voxels across. */
+  wheel(r, [y, z], w, c) {
+    const f = typeof c === 'function' ? c : () => c;
+    const [i0, i1] = this.xs(w), [j0, j1] = this.span(1, y - r, y + r + 1e-6), [k0, k1] = this.span(2, z - r, z + r + 1e-6);
+    for (let j = j0; j < j1; j++)
+      for (let k = k0; k < k1; k++)
+        if (Math.hypot(this.c(1, j) - y, this.c(2, k) - z) <= r + 1e-6)
+          for (let i = i0; i < i1; i++) {
             const col = f(i, j, k);
             if (col === false) this.vox.del('body', i, j, k);
             else if (col) this.vox.set('body', i, j, k, col);
@@ -538,6 +557,203 @@ function sniper() {
   return g.mark('grip', [0, 0, 0]).mark('grip2', [0, 1.25, 10.625]).mark('muzzle', [0, 4.375, 21.875]).mark('sight', [0, SC, -3.125]).mark('mag', [0, 0.3125, 5.625]);
 }
 
+/** The Wolf: a Thompson in blued steel and walnut, a fifty-round drum with mint faces round a gold key, a finned barrel, the Cutts compensator, a mint holo. */
+function tommy() {
+  const g = new Gun('tommy', 'The Wolf', { offset: [0, 0, 0] }).colours({
+    blued: [0x39424f, 0.35, 0.7], bluedDark: [0x2c323c, 0.4, 0.7], walnut: [0x6e4329, 0.45], walnutLight: [0x8f6240, 0.45],
+    mint: [0x3fd6c0, 0.3], mintDark: [0x1f9f8c, 0.35], gold: [0xf2c055, 0.22, 1], anod: [0x2a2c31, 0.45, 0.4], port: [0x1a1a1a, 0.5, 0.5],
+  });
+  // The rear pistol grip and the stock, walnut, the stock dropping to a blued butt plate.
+  g.grip(4, [-3.125, 1.875], 1.29, 4, 15, 'walnut');
+  g.prof([[-2.5, 4.0], [-9.4, 3.75, 0.3], [-9.4, -1.55, 0.3], [-8.2, -1.6], [-3.3, 1.25], [-2.5, 1.9]], 4, (i, j, k) => (g.c(2, k) < -9 ? 'bluedDark' : j === 5 ? 'walnutLight' : 'walnut'));
+  // The receiver, its top edges rounded, the gold actuator knob in its slot; the frame under it
+  // from the grip to the magazine well.
+  g.pbox(4, [1.875, 4.375], [-2.5, 7.5], (i, j, k) => (j === 6 && (i === -2 || i === 1) ? false : j === 6 && k >= 4 && k <= 7 ? 'port' : 'blued'));
+  g.box([-1, 7, 6], [1, 8, 7], 'gold');
+  g.pbox(4, [1.25, 1.875], [-1.875, 10.0], 'blued');
+  // Trigger and guard.
+  g.pbox(2, [0, 0.625], [1.25, 4.375], 'blued');
+  g.pbox(2, [0, 1.25], [3.75, 4.375], 'blued');
+  g.pbox(2, [0.625, 1.25], [1.875, 2.5], 'gold');
+  // The drum, six voxels thick: its faces mint, a darker ring, the gold winding key; the rim blued.
+  const DY = -0.9375, DZ = 7.5, DR = 3.0;
+  g.wheel(DR, [DY, DZ], 6, (i, j, k) => {
+    const r = Math.hypot(g.c(1, j) - DY, g.c(2, k) - DZ);
+    return (i === -3 || i === 2) && r < DR - 0.55 ? (r < 0.5 ? 'gold' : r > 1.3 && r < 1.9 ? 'mintDark' : 'mint') : 'bluedDark';
+  });
+  g.box([3, g.cell(1, DY), g.cell(2, DZ) - 1], [4, g.cell(1, DY) + 1, g.cell(2, DZ) + 1], 'gold');
+  // The vertical foregrip, walnut, grooved for the fingers in front, rounded at the bottom.
+  g.pbox(4, [-3.125, 2.5], [11.25, 13.125], (i, j, k) => ((k === 20 && j % 2 === 0 && j < 3) || (j === -5 && (i === -2 || i === 1)) ? false : 'walnut'));
+  // The barrel, finned behind, plain ahead; the Cutts compensator, slotted on top.
+  g.pbox(2, [3.125, 4.375], [7.5, 15.0], 'blued');
+  g.pbox(4, [2.5, 5.0], [7.5, 12.5], (i, j, k) => (k % 2 === 0 ? ((j === 4 || j === 7) && (i === -2 || i === 1) ? false : 'bluedDark') : undefined));
+  g.pbox(4, [2.5, 4.375], [15.0, 17.5], (i, j, k) => ((j === 4 || j === 6) && (i === -2 || i === 1) ? false : j === 6 && k % 2 === 1 && k < 27 ? 'port' : 'blued'));
+  // The holo, its hood mint, on a plate on the back of the receiver.
+  g.pbox(4, [4.375, 5.0], [-2.5, 1.25], 'anod');
+  const sight = optic(g, { w: 4, h: 3, sill: 6.25, z: -1.25, frame: 'mint', body: 2, bodyW: 6, back: 1, len: 5, drop: 1, aheadW: 4 });
+  return g.mark('grip', [0, 0, 0]).mark('grip2', [0, -0.625, 12.1875]).mark('muzzle', [0, 3.75, 17.5]).mark('sight', sight).mark('mag', [0, DY, DZ]);
+}
+
+/** Marsellus: a belt-fed machine gun, black steel and olive furniture, a hundred brass rounds up from an olive box banded orange, an orange holo. */
+function lmg() {
+  const g = new Gun('lmg', 'Marsellus', { offset: [0, 0, 0] }).colours({
+    parker: [0x3a3c40, 0.6, 0.4], parkerDark: [0x2a2c30, 0.65, 0.4], steel: [0xa4a8ae, 0.3, 1], olive: [0x5d6b35, 0.6], oliveDark: [0x48532a, 0.65], oliveLight: [0x72823f, 0.6],
+    orange: [0xff7a1a, 0.3], brass: [0xd8aa55, 0.3, 1], copper: [0xc8733a, 0.3, 1], rubber: [0x1e1e1e, 0.9], polymer: [0x28292d, 0.65], anod: [0x2a2c31, 0.45, 0.4], port: [0x1a1a1a, 0.5, 0.5],
+  });
+  // The stock, olive, long and straight to a rubber pad; the pistol grip.
+  g.prof([[-3.125, 4.6], [-10.6, 4.3, 0.3], [-10.6, -1.3, 0.3], [-9.2, -1.4], [-3.8, 1.3], [-3.125, 1.9]], 4, (i, j, k) => (g.c(2, k) < -10 ? 'rubber' : j === 6 ? 'oliveLight' : 'olive'));
+  g.grip(4, [-3.125, 1.875], 1.29, 4, 15, 'polymer');
+  // The receiver, six voxels across, its top edges rounded; the feed cover on top.
+  g.pbox(6, [1.875, 5.0], [-3.125, 8.125], (i, j, k) => (j === 7 && (i === -3 || i === 2) ? false : 'parker'));
+  g.pbox(4, [5.0, 5.625], [-0.625, 6.875], (i, j, k) => (k === 10 ? 'steel' : 'parkerDark'));
+  // Trigger and guard, the trigger housing.
+  g.pbox(4, [1.25, 1.875], [-1.875, 5.0], 'parker');
+  g.pbox(2, [0, 0.625], [1.25, 4.375], 'parker');
+  g.pbox(2, [0, 1.25], [3.75, 4.375], 'parker');
+  g.pbox(2, [0.625, 1.25], [1.875, 2.5], 'steel');
+  // The ammo box on the left, olive banded orange, its lid and latch; the belt up from it into the
+  // feed tray, a round a row, brass with copper tips, links between.
+  g.pbox([3, 6], [-3.125, 1.875], [1.875, 6.875], (i, j, k) => (j === -2 || j === -1 ? 'orange' : j === 2 ? 'oliveDark' : 'olive'));
+  g.box([6, 1, 5], [7, 2, 7], 'steel');
+  g.box([3, 3, 4], [4, 8, 9], (i, j, k) => (j % 2 === 0 ? (k === 8 ? false : 'parkerDark') : k === 8 ? 'copper' : 'brass'));
+  // The handguard round the barrel, olive, ribbed down its sides; the barrel, the gas cylinder
+  // under it, the flash hider; the bipod folded under the front.
+  g.pbox(6, [1.25, 4.375], [8.125, 14.375], (i, j, k) => (j === 2 && (i === -3 || i === 2) ? false : (i === -3 || i === 2) && k % 2 ? 'oliveDark' : 'olive'));
+  g.pbox(2, [3.125, 4.375], [14.375, 21.25], 'parker');
+  g.pbox(2, [1.875, 3.125], [14.375, 19.375], 'parker');
+  g.pbox(4, [2.5, 4.375], [21.25, 22.5], (i, j, k) => ((j === 4 || j === 6) && (i === -2 || i === 1) ? false : j === 6 && k === 34 ? 'port' : 'parkerDark'));
+  g.pbox(4, [1.25, 4.375], [19.375, 20.0], (i, j) => (j === 6 && (i === -2 || i === 1) ? false : 'parkerDark'));
+  for (const i of [-2, 1]) g.box([i, 2, 23], [i + 1, 3, 31], (ii, j, k) => (k === 23 ? 'rubber' : 'parkerDark'));
+  // The holo, orange, on the feed cover.
+  const sight = optic(g, { w: 4, h: 3, sill: 6.875, z: 0, frame: 'orange', body: 2, bodyW: 6, back: 1, len: 5, drop: 1, aheadW: 4 });
+  return g.mark('grip', [0, 0, 0]).mark('grip2', [0, 1.25, 11.25]).mark('muzzle', [0, 3.75, 22.5]).mark('sight', sight).mark('mag', [2.8125, -0.625, 4.375]);
+}
+
+/** Ezekiel: a semi-automatic marksman rifle, a mahogany stock, blued steel, a cream scope trimmed in gold, its objective glinting teal. */
+function marksman() {
+  const g = new Gun('marksman', 'Ezekiel', { offset: [0, 0, 0] }).colours({
+    blued: [0x39424f, 0.35, 0.7], bluedDark: [0x2c323c, 0.4, 0.7], steel: [0xa4a8ae, 0.3, 1], mahogany: [0x7c3420, 0.4], mahoganyLight: [0x9a4a2c, 0.4],
+    cream: [0xece2c8, 0.35], gold: [0xf2c055, 0.22, 1], lens: [0x10161a, 0.05, 0.3], glint: [0x1fc4b0, 0.08, 0.2, 0.6], hot: [0xd8fff6, 0.1, 0, 1], rubber: [0x1e1e1e, 0.9], anod: [0x2a2c31, 0.45, 0.4],
+  });
+  const G = rake(18);
+  // The stock, one piece: the forend, the pistol grip, the butt with its comb; a rubber pad.
+  g.prof(
+    [
+      [13.1, 3.75], [13.25, 2.2, 0.55], [9.0, 1.6, 2.0], [5.8, 1.1, 1.5], [1.9, 1.0],
+      G(1.3, 0.9, 0.35), G(1.3, -2.35, 0.4), G(1.2, -3.02, 0.3), G(-1.5, -3.02, 0.3), G(-1.62, -2.4, 0.4), G(-1.5, -0.9, 0.7),
+      [-3.2, 0.2, 1.6], [-9.6, -0.9, 0.3], [-9.6, 4.6, 0.3], [-6.8, 4.95, 0.8], [-3.9, 4.95, 0.6], [-2.4, 3.95, 0.6], [-1.2, 3.75],
+    ],
+    4,
+    (i, j, k) => ((j === 7 && g.c(2, k) < -1.5) || (j === 5 && g.c(2, k) > 6) ? 'mahoganyLight' : 'mahogany'),
+  );
+  g.pbox(4, [-1.0, 4.7], [-10.2, -9.575], 'rubber');
+  // The receiver, sunk in the stock; the operating rod's handle out on the right; the upper
+  // handguard over the barrel; the barrel, its gas cylinder and band, the flash suppressor.
+  g.pbox(4, [3.125, 5.0], [-1.875, 6.875], (i, j) => (j === 7 && (i === -2 || i === 1) ? false : 'blued'));
+  g.box([-3, 6, 7], [-2, 7, 9], 'steel');
+  g.pbox(4, [4.375, 5.625], [6.875, 12.5], (i, j) => (j === 8 && (i === -2 || i === 1) ? false : 'mahoganyLight'));
+  g.pbox(2, [3.75, 5.0], [6.875, 20.0], 'blued');
+  g.pbox(2, [2.5, 3.75], [12.5, 15.625], 'blued');
+  g.pbox(4, [2.5, 5.0], [13.125, 13.75], (i, j) => ((j === 4 || j === 7) && (i === -2 || i === 1) ? false : 'steel'));
+  g.pbox(2, [3.75, 5.0], [20.0, 21.875], (i, j, k) => (k % 2 ? 'bluedDark' : 'blued'));
+  // The magazine, a short box; trigger and guard.
+  g.pbox(4, [-1.875, 1.25], [3.75, 6.25], (i, j) => (j === -3 ? 'steel' : 'bluedDark'));
+  g.pbox(2, [-0.625, 0], [1.25, 3.75], 'bluedDark');
+  g.pbox(2, [-0.625, 1.25], [3.125, 3.75], 'bluedDark');
+  g.pbox(2, [0, 1.25], [1.875, 2.5], 'gold');
+  // The scope, cream, on its base and rings: the tube, the eyepiece and the objective rimmed in
+  // gold, the rear lens, the teal glint ahead; the turrets gold.
+  const SC = 7.5;
+  g.pbox(2, [5.0, 5.625], [-1.25, 6.25], 'anod');
+  for (const z of [0, 4.375]) g.pbox(2, [5.625, 6.25], [z, z + 0.625], 'anod');
+  g.disc(0.7, [0, SC], [-0.625, 5.625], 'cream');
+  for (const z of [0, 4.375]) g.disc(1.25, [0, SC], [z, z + 0.625], 'anod');
+  g.disc(1.25, [0, SC], [-2.5, -0.625], (i, j, k) => (k === -4 ? (Math.hypot(g.c(0, i), g.c(1, j) - SC) < 0.7 ? 'lens' : 'gold') : 'cream'));
+  g.disc(1.75, [0, SC], [5.625, 8.125], (i, j, k) => {
+    if (k !== 12) return 'cream';
+    const r = Math.hypot(g.c(0, i), g.c(1, j) - SC);
+    return r > 1.3 ? 'gold' : r > 0.7 ? 'glint' : i === 0 && j === 12 ? 'hot' : 'lens';
+  });
+  g.pbox(2, [8.125, 8.75], [1.875, 3.125], 'gold');
+  g.box([1, 11, 3], [2, 13, 5], 'gold');
+  return g.mark('grip', [0, 0, 0]).mark('grip2', [0, 1.25, 9.375]).mark('muzzle', [0, 4.375, 21.875]).mark('sight', [0, SC, -2.5]).mark('mag', [0, -0.3125, 5.0]);
+}
+
+/** Rock Salt: a sawn-off side-by-side, two hammers, the action case-hardened (blue, violet and straw mottled), walnut, a brass bead, a mini red dot. */
+function sawnoff() {
+  const g = new Gun('sawnoff', 'Rock Salt', { offset: [0, 0, 0] }).colours({
+    blued: [0x39424f, 0.35, 0.7], bluedDark: [0x2c323c, 0.4, 0.7], bore: [0x121212, 0.6, 0.3], walnut: [0x6e4329, 0.45], walnutDark: [0x55331f, 0.5],
+    chBlue: [0x3d5a8a, 0.3, 0.9], chViolet: [0x6a4a8c, 0.3, 0.9], chStraw: [0xc9a24a, 0.3, 0.9], chSteel: [0x8e959e, 0.3, 1], brass: [0xd8aa55, 0.3, 1], gold: [0xf2c055, 0.22, 1],
+  });
+  const G = rake(25);
+  // Case hardening: blotches of colour a couple of voxels across.
+  const CH = ['chBlue', 'chSteel', 'chViolet', 'chBlue', 'chStraw', 'chSteel'];
+  const mottle = (i, j, k) => CH[((((i >> 1) * 73856093) ^ (j * 19349663) ^ ((k >> 1) * 83492791)) >>> 0) % CH.length];
+  // The grip, cut from the stock: the wrist behind the action curving down into a flared butt,
+  // checkered on its sides, a steel cap.
+  g.prof(
+    [[0.75, 4.35], [-2.8, 4.1, 1.4], [-3.1, 2.4, 1.0], G(-1.35, -0.6, 0.6), G(-1.45, -2.4, 0.35), G(-1.9, -3.1, 0.3), G(1.25, -2.95, 0.25), G(1.35, -1.2, 0.3), G(1.2, 0.95, 0.2), [0.75, 1.35]],
+    4,
+    (i, j, k) => (g.c(1, j) < -2.4 ? 'bluedDark' : (i === -2 || i === 1) && j < 2 && (j + k) % 2 ? 'walnutDark' : 'walnut'),
+  );
+  // The action; the hammers on each side of its back, gold.
+  g.pbox(6, [1.25, 4.375], [0.625, 4.375], (i, j, k) => (j === 6 && (i === -3 || i === 2) ? false : mottle(i, j, k)));
+  for (const x of [[-3, -2], [2, 3]]) g.prof([[0.6, 3.75], [0.4, 4.6], [-0.4, 5.4], [-1.1, 5.9], [-1.5, 5.6], [-0.9, 5.0], [-0.3, 3.75]], x, 'gold');
+  // The barrels side by side, three voxels round each (their outer corners off), dark bores at the
+  // muzzle; the rib between them on top, the brass bead on its end.
+  for (const [a, b] of [[-3, 0], [0, 3]])
+    g.box([a, 4, 7], [b, 7, 21], (i, j, k) => ((a < 0 ? i === -3 : i === 2) && (j === 4 || j === 6) ? false : k === 20 && i === a + 1 && j === 5 ? 'bore' : 'blued'));
+  g.box([-1, 7, 7], [1, 8, 21], 'bluedDark');
+  g.box([-1, 8, 20], [1, 9, 21], 'brass');
+  // The forend under the barrels, walnut; the triggers, gold, in their guard.
+  g.pbox(4, [1.25, 2.5], [4.375, 10.0], (i, j, k) => (j === 2 && (i === -2 || i === 1) ? false : k === 15 ? 'walnutDark' : 'walnut'));
+  g.pbox(2, [0, 0.625], [1.25, 4.375], 'bluedDark');
+  g.pbox(2, [0, 1.25], [3.75, 4.375], 'bluedDark');
+  g.pbox(2, [0.625, 1.25], [1.875, 2.5], 'gold');
+  g.pbox(2, [0.625, 1.25], [3.125, 3.75], 'gold');
+  // The mini red dot on a plate on the action, its frame brass, looking down the rib.
+  g.pbox(4, [4.375, 5.0], [1.25, 4.375], 'bluedDark');
+  const sight = optic(g, { w: 4, h: 2, sill: 6.25, z: 3.125, frame: 'brass', body: 2, bodyW: 6, back: 1, len: 3, drop: 1, aheadW: 4, colour: 'bluedDark' });
+  return g.mark('grip', [0, 0, 0]).mark('grip2', [0, 1.25, 7.1875]).mark('muzzle', [0, 3.4375, 13.125]).mark('sight', sight).mark('mag', [0, 3.4375, 4.375]);
+}
+
+/** Bad Mother: a .44 magnum in mirror chrome, a fluted cylinder, a vent rib, ebony grips with gold medallions, a gold hammer and trigger, a mini red dot hooded orange. */
+function revolver() {
+  const g = new Gun('revolver', 'Bad Mother', { offset: [-0.5, 0, 0] }).colours({
+    chrome: [0xeceef0, 0.12, 1], chromeDark: [0xb4b8be, 0.2, 1], flute: [0x6a6e76, 0.25, 1], ebony: [0x1e1b1b, 0.35], gold: [0xf2c055, 0.22, 1], orange: [0xff6a1a, 0.3], bore: [0x141414, 0.5, 0.3],
+  });
+  // The grip: ebony panels between chrome straps, a gold medallion on each side, a round chrome butt.
+  const medal = [g.cell(2, -0.9), g.cell(1, -1.2)];
+  g.grip(3, [-3.125, 1.25], 1.35, 5, 18, (i, j, k, back) =>
+    j === -5 ? (k === back ? false : 'chrome') : k === back || k === back + 4 ? 'chrome' : i !== 0 && k === medal[0] && j === medal[1] ? 'gold' : 'ebony',
+  );
+  // The frame: the recoil shield, the strap over the cylinder and the frame under it, the front
+  // round the barrel's breech; the cylinder latch on the left.
+  g.pbox(3, [1.25, 5.0], [-1.25, 0.625], 'chrome');
+  g.pbox(3, [4.375, 5.0], [-1.25, 5.0], 'chrome');
+  g.pbox(3, [1.25, 1.875], [-1.25, 5.0], 'chrome');
+  g.pbox(3, [1.875, 5.0], [3.75, 5.0], 'chrome');
+  g.box([2, 5, -1], [3, 6, 0], 'chromeDark');
+  // The cylinder, five voxels round, fluted between its ends.
+  const CY = 2.8125;
+  g.disc(1.6, [0, CY], [0.625, 3.75], (i, j, k) => {
+    const x = g.c(0, i), y = g.c(1, j) - CY;
+    return Math.hypot(x, y) > 0.9 && k > 1 && k < 5 && Math.round(Math.atan2(y, x) / (Math.PI / 6)) % 2 !== 0 ? 'flute' : 'chrome';
+  });
+  // The barrel with its full lug under, the vent rib on top; the bore.
+  g.pbox(3, [2.5, 4.375], [5.0, 13.125], (i, j, k) => (k === 20 && i === 0 && j === 5 ? 'bore' : 'chrome'));
+  g.pbox(3, [1.875, 2.5], [5.0, 11.875], (i, j, k) => (k === 18 && i !== 0 ? false : 'chromeDark'));
+  g.pbox(1, [4.375, 5.0], [5.0, 13.125], (i, j, k) => (k % 2 ? 'flute' : 'chrome'));
+  // The mini red dot on the strap over the cylinder, its hood orange.
+  const sight = optic(g, { w: 3, h: 2, sill: 6.25, z: -0.625, frame: 'orange', body: 2, bodyW: 5, back: 1, len: 4, drop: 1, aheadW: 3, colour: 'flute' });
+  // The hammer, cocked, and the trigger, gold; the guard.
+  g.prof([[-0.9, 4.4], [-1.2, 5.2], [-1.8, 5.8], [-2.5, 6.0], [-2.65, 5.6], [-2.0, 5.2], [-1.6, 4.4]], 1, 'gold');
+  g.pbox(1, [0, 0.625], [0.625, 3.75], 'chrome');
+  g.pbox(1, [0, 1.25], [3.125, 3.75], 'chrome');
+  g.pbox(1, [0.625, 1.25], [1.25, 1.875], 'gold');
+  return g.mark('grip', [0, 0, 0]).mark('grip2', [0, -2, 2]).mark('muzzle', [0, 3.4375, 13.125]).mark('sight', sight).mark('mag', [0, CY, 2.1875]);
+}
+
 /** Hattori Hanzo: a katana, a mirror blade with its hamon, a gold-rimmed iron tsuba, a yellow and black silk wrap. */
 function katana() {
   const g = new Gun('katana', 'Katana', { offset: [-0.5, -0.5, 0] }).colours({
@@ -583,6 +799,27 @@ function briefcase() {
   for (const i of [-4, 3]) g.box([i, 12, -1], [i + 1, 14, 0], (ii, j) => (j === 12 ? 'brass' : 'leather'));
   g.box([-4, 14, -1], [4, 15, 0], 'leather');
   for (const i of [-7, 6]) for (const k of [-2, 1]) g.box([i, 0, k], [i + 1, 1, k + 1], 'brass');
+  return g;
+}
+
+/**
+ * Ammo (a pickup, dropped by the fallen): an olive ammo can banded orange, its handle folded on the
+ * lid, a belt of brass rounds hanging out of it. It stands up along +z (the platform stands a
+ * model up that way to drop it), its front toward -y; no markers.
+ */
+function ammo() {
+  const g = new Gun('ammo', 'Ammo', { offset: [0, 0, 0] }).colours({
+    olive: [0x5d6b35, 0.6], oliveDark: [0x48532a, 0.65], orange: [0xff7a1a, 0.3, 0, 0.35], steel: [0xa4a8ae, 0.3, 1], brass: [0xd8aa55, 0.3, 1, 0.15], copper: [0xc8733a, 0.3, 1],
+    link: [0x2a2c30, 0.6, 0.4], polymer: [0x28292d, 0.65], yellow: [0xf2d046, 0.5],
+  });
+  // The can (x across, y front to back, z up), the orange band round it, the stencil on its back;
+  // the lid, the handle folded on it, the latch on its side.
+  g.box([-5, -3, 0], [5, 3, 7], (i, j, k) => (k === 2 ? 'orange' : j === 2 && k === 4 && i > -4 && i < 3 && i !== -1 ? 'yellow' : 'olive'));
+  g.box([-5, -3, 7], [5, 3, 8], 'oliveDark');
+  g.box([-2, -1, 8], [2, 1, 9], 'polymer');
+  g.box([5, -1, 4], [6, 1, 8], 'steel');
+  // The belt out from under the lid down its front: rounds across, copper tips, links between.
+  g.box([-4, -4, 3], [1, -3, 7], (i, j, k) => (k % 2 === 0 ? (i === -4 ? 'copper' : 'brass') : i > -4 ? 'link' : false));
   return g;
 }
 
@@ -694,7 +931,7 @@ function glb(g) {
 }
 
 /** Each model's size (px, x y z) as the hard-surface models these replaced drew it, to keep the holds tuned. */
-const SIZES = { pistol: [3.68, 12.38, 12.25], smg: [4.86, 20.33, 16.92], rifle: [5.96, 19.71, 28.06], shotgun: [5.96, 15.15, 30.05], sniper: [5.06, 13.22, 32.95], katana: [3.9, 4.6, 29.8], briefcase: [10.3, 9.15, 4.63], frag: [4.06, 6.1, 3.93], molotov: [3.84, 12.16, 3.84] };
+const SIZES = { pistol: [3.68, 12.38, 12.25], smg: [4.86, 20.33, 16.92], rifle: [5.96, 19.71, 28.06], shotgun: [5.96, 15.15, 30.05], sniper: [5.06, 13.22, 32.95], tommy: [4.4, 12.8, 27], lmg: [5.6, 13, 33], marksman: [3.75, 12.3, 32], sawnoff: [3.75, 11.25, 16.25], revolver: [3.13, 11.25, 15.63], katana: [3.9, 4.6, 29.8], briefcase: [10.3, 9.15, 4.63], ammo: [6.88, 4.38, 5.63], frag: [4.06, 6.1, 3.93], molotov: [3.84, 12.16, 3.84] };
 
 /** Clip a 2D polygon by a convex counter-clockwise one. */
 function clipConvex(poly, clip) {
@@ -844,7 +1081,7 @@ function show(g) {
   view(2, 0, 1, true, `above (z across, x up), from +y`);
 }
 
-const MODELS = { pistol, smg, rifle, shotgun, sniper, katana, briefcase, frag, molotov };
+const MODELS = { pistol, smg, rifle, shotgun, sniper, tommy, lmg, marksman, sawnoff, revolver, katana, briefcase, ammo, frag, molotov };
 const args = process.argv.slice(2);
 const only = args.filter((a) => !a.startsWith('--'));
 mkdirSync(OUT, { recursive: true });
