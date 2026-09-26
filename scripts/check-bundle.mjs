@@ -71,7 +71,7 @@ const report_ = (title, lines) => lines.length && problems.push(`${title}\n${lin
 // The server's own modules.
 const SERVER = ['src/platform/sim/sim.ts', 'src/games/server.ts', 'src/server.ts', 'src/serve.ts'].map(at);
 report_(
-  "The server's own code:",
+  "Server code (the host, the whole simulation, the server kits, the server's registry and entries):",
   [...shipped.keys()].filter((f) => under(f, at('src/platform/host')) || under(f, at('src/platform/kits')) || SERVER.includes(f)).map((f) => `${rel(f)}  (${where(f)})`),
 );
 if (nodeModules) problems.push(`Node modules: ${nodeModules} import(s) of a Node built-in were stubbed out for the browser (something of the server's is in it).`);
@@ -139,7 +139,7 @@ report_(
 
 const modules = shipped.size;
 if (problems.length) {
-  console.error(`Bundle check failed: the browser's build carries server code.\n\n  ${problems.join('\n\n  ')}\n`);
+  console.error(`Bundle check failed (the browser's build in ${rel(outDir)}):\n\n  ${problems.join('\n\n  ')}\n`);
   process.exit(1);
 }
 console.log(`Bundle OK: ${report.chunks.length} chunks, ${modules} modules of this project, none of them the server's; the ${named.size} files the server names by URL are there.`);
