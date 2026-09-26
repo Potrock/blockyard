@@ -700,21 +700,6 @@ input[type='range']::-moz-range-thumb {
   color: var(--muted);
   max-width: 520px;
 }
-.new-world {
-  display: flex;
-  gap: 8px;
-}
-.seed-input {
-  width: 170px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.25);
-  color: var(--text);
-  font: 13px var(--sans);
-  outline: none;
-  user-select: text;
-}
 
 /* ---------- Inventory ---------- */
 .inv-panel {

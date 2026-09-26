@@ -6,7 +6,7 @@ import { games } from './_harness';
 /** Probe: a room on a starved machine (the event loop blocked most of the time). Does it keep time? */
 export default async function starved() {
   const def = games.find((g) => g.id === 'starfighter')!;
-  const core = new RoomCore(def, { game: def.id, instance: 'public', tickRate: 30, cheats: true, saveEvery: 1e9 }, readFileSync('engine/pkg/voxel_engine_bg.wasm'), undefined, { send: () => {}, counts: () => {}, log: () => {} });
+  const core = new RoomCore(def, { game: def.id, instance: 'public', tickRate: 30, cheats: true, dev: false, saveEvery: 1e9 }, readFileSync('engine/pkg/voxel_engine_bg.wasm'), undefined, { send: () => {}, counts: () => {}, log: () => {} });
   core.connect('a');
   core.command('a', { t: 'start', name: 'Ann' });
   const idle: PlayerInput = { active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: -1 };

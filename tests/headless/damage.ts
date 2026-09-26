@@ -7,7 +7,7 @@ import { Predictor } from '../../src/platform/client/predict';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
 import { Headless } from '../../src/platform/host/headless';
 import { serveGame } from '../../src/platform/host/server';
-import { worldGenConfig } from '../../src/platform/host/spawn';
+import { worldGenConfig } from '../../src/platform/workers/config';
 import { decode, encode } from '../../src/platform/net/codec';
 import { FrameReader } from '../../src/platform/net/delta';
 import type { ClientCommand, HostBatch, HostEvent, PlayerInput, ServerWelcome, TimedBatch, WireBatch } from '../../src/platform/net/protocol';

@@ -1,9 +1,8 @@
 import * as THREE from 'three';
 import { engine, loadEngine } from './engine/wasm';
 import { WorkerPool } from './workers/pool';
-import { worldGenConfig } from './host/spawn';
-import { PageLink, SocketLink, WorkerLink, type SimLink } from './host/link';
-import { MemoryStore } from './host/store';
+import { worldGenConfig } from './workers/config';
+import { SocketLink } from './client/link';
 import { FrameBuffer } from './client/interp';
 import { Predictor } from './client/predict';
 import { GunController, type FiredShot } from './client/guns';
@@ -28,7 +27,7 @@ import { BlockHighlight } from './render/highlight';
 import { ViewModel } from './render/viewmodel';
 import { EntityGraphics } from './render/entities';
 import { ChunkManager } from './world/chunks';
-import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from './world/blocks';
+import { firstGameBlock, gameBlocks, useGameBlocks, type GameBlocks } from './world/blocks';
 import { blockIdOf, DEFAULT_TINT, destructibleIds, loadRegistry, variant, type Registry } from './world/registry';
 import { Input } from './player/input';
 import { padBindings, padHints, rumble } from './player/gamepad';
@@ -46,15 +45,16 @@ import { PlayerCamera } from './client/camera';
 import { EntityView } from './client/entities';
 import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
-import type { Sim, SimFrame } from './sim/sim';
+import type { SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
-import { newRoomCode, ROOM_CODE, type HostBatch, type PlayerInput, type SaveState, type TimedBatch } from './net/protocol';
+import { newRoomCode, ROOM_CODE, type DevReply, type HostBatch, type PlayerInput, type TimedBatch } from './net/protocol';
 import { clipFrame, type ClipFrame, type EntityFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
-import type { BlockRef, GameContext, GameDefinition, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, Vec3 } from './api/types';
+import type { BlockRef, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
+import type { GameEntry } from './api/client';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -79,31 +79,16 @@ function disposeTree(root: THREE.Object3D) {
   });
 }
 
-interface SaveData {
-  edits: string;
-  /** The game's own blocks' keys in id order: the edits are translated by name when they load. */
-  blocks?: string[];
-  player: [number, number, number, number, number];
-  flying: boolean;
-  time: number;
-}
-
-const toB64 = (u: Uint8Array) => {
-  let s = '';
-  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
-  return btoa(s);
-};
-const fromB64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-
 /** The screen's pixels per point, up to 2 (more costs a lot and shows little). */
 const deviceDpr = () => Math.min(window.devicePixelRatio || 1, 2);
 
 /**
  * The browser runtime: the client (renderer, streaming world, HUD, audio, input, first-person
- * view). The game itself runs in a `GameHost`, in a worker (or in this page with `?host=page`).
- * Each frame the client sends the player's controls as a tick and draws the newest `SimFrame`;
- * the host's content, presentation calls and block edits arrive in the same batches. One
- * `GameDefinition` runs per page.
+ * view). The game itself runs on a game server, in a `GameHost` there. Each frame the client
+ * sends the player's controls and draws the newest `SimFrame` (played back smoothly, its own
+ * player predicted ahead); the host's content, presentation calls and block edits arrive in the
+ * same batches. It runs one game at a time from the catalog (`GameEntry`), with that game's
+ * shared definition, loaded when it's picked.
  */
 export class Runtime {
   mode: Mode = 'title';
@@ -153,27 +138,22 @@ export class Runtime {
   /** The game's sounds, atlases, animations, entity and item types. */
   private content = new Content();
   private presenter!: Presenter;
-  /** Where the game runs (its rules, its world): a worker, or this page with `?host=page`. */
-  private link!: SimLink;
   /** The newest frame from the host. */
   private frameData: SimFrame | null = null;
-  /** A tick is on its way to the host; frame time adds up until it answers. */
-  private ticking = false;
-  private tickDt = 0;
   /** The host has set the game up and placed the player. */
   private hostReady = false;
   private requests = new Map<number, (value: unknown) => void>();
-  /** Which player in the frames is this client's (null: watching a server's game, not in it yet). */
+  /** Which player in the frames is this client's (null: watching the game, not in it yet). */
   private playerId: string | null;
-  /** A server's frames, played back smoothly (a server only). */
-  private playback: FrameBuffer | null = null;
-  /** This client's own movement, predicted ahead of the server (a server, walking games). */
+  /** The server's frames, played back smoothly. */
+  private playback!: FrameBuffer;
+  /** This client's own movement, predicted ahead of the server (walking games). */
   private predictor: Predictor | null = null;
-  /** The solid props prediction bumps into and stands on (a server, walking games). */
+  /** The solid props prediction bumps into and stands on (walking games). */
   private movers: ClientMovers | null = null;
   /** The prop this player rides and which way it was drawn facing: their view turns with it. */
   private rideHeading: { prop: number; heading: number } | null = null;
-  /** This client's own vehicle (`player.drive`): predicted on a server, its camera and model's pose. */
+  /** This client's own vehicle (`player.drive`): predicted, its camera and model's pose. */
   private vehicles!: VehicleView;
   /** Inputs sent to a server, numbered (prediction replays what the server hasn't applied). */
   private inputSeq = 0;
@@ -191,7 +171,6 @@ export class Runtime {
   private walker = true;
   private itemMode: boolean;
   private hudVisible = true;
-  private saveTimer = 0;
   private dir = new THREE.Vector3();
   private light = new THREE.Vector3();
   private probe = new THREE.Vector3(1, 1, 1);
@@ -201,13 +180,15 @@ export class Runtime {
   private shown = { health: '', hotbar: '', creative: '', held: '', arm: '', humanoid: '' };
   /** Development: treat input as active without pointer lock (headless tests). */
   debugActive = false;
-  /** On a server, in a room of a player's own: its code. */
+  /** In a room of a player's own: its code. */
   private room: string | null = null;
+  /** The world's seed (the server's). */
+  private seed: number;
   /** The held gun on this screen: it fires at once, and its shots go to the host with the controls. */
   private guns: GunController;
   /** The game's gun rules (`guns`), as the host plays them: movement, reloading, hitboxes. */
   private gunRules: GunRules;
-  /** Shots fired and not yet sent (a tick was still on its way to a worker). */
+  /** Shots fired and not yet sent (they go with the frame's controls). */
   private shotQueue: [number, number, number, number][] = [];
   /** Throwables: cooked and thrown on this screen at once; the throws not yet sent. */
   private throwsCtl!: ThrowController;
@@ -247,17 +228,19 @@ export class Runtime {
   private constructor(
     private canvas: HTMLCanvasElement,
     private ui: HTMLElement,
-    private def: GameDefinition,
-    private games: GameDefinition[],
-    private hidden: GameDefinition[],
-    private seed: number,
-    private makeWorker: (() => Worker) | null,
-    /** Joined a game server (`?server=`): the host is there, not here. */
-    private server: SocketLink | null = null,
+    /** The game: its shared definition (what this screen reads of it). */
+    private def: SharedDefinition,
+    private games: GameEntry[],
+    private hidden: GameEntry[],
+    /** The connection to the game's server, where the game runs. */
+    private link: SocketLink,
+    /** The home page (up already, showing the game loading). */
+    title: TitleScreen,
     /** What the previous game left for this one (switching in place). */
     private carried: Carry | null = null,
   ) {
-    this.playerId = server ? server.welcome.player : 'local';
+    this.playerId = link.welcome.player;
+    this.seed = link.welcome.seed;
     this.settings = loadSettings();
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.1, 400);
     this.camera.layers.enable(LAYER_CHUNKS);
@@ -270,46 +253,71 @@ export class Runtime {
     const padKeys = { jump: 'Space', crouch: this.tune.crouchKeys[0] ?? 'ShiftLeft', sprint: this.tune.sprintKeys[0] ?? 'ControlLeft' };
     this.input.padBindings = padBindings(def.gamepad);
     this.input.padKeysFor = padKeys;
-    // On a server, the title screen asks for a name and says who's on; a game with rooms of
-    // players' own offers one (or, in one, the link to it and the way back).
-    const room = server?.welcome.room && server.welcome.room !== 'public' ? server.welcome.room : null;
+    // The title screen asks for a name and says who's on; a game with rooms of players' own
+    // offers one (or, in one, the link to it and the way back).
+    const room = link.welcome.room && link.welcome.room !== 'public' ? link.welcome.room : null;
     this.room = room;
-    const online = server ? { server: new URL(server.url).origin, game: def.id, room, onRoom: def.instances ? (own: boolean) => this.switchGame(def.id, own ? newRoomCode() : null) : undefined } : null;
-    this.title = carried?.title ?? new TitleScreen(ui, games);
+    const online = { server: new URL(link.url).origin, game: def.id, room, onRoom: def.instances ? (own: boolean) => this.switchGame(def.id, own ? newRoomCode() : null) : undefined };
+    this.title = title;
     this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, padKeys), walks: this.walker, online });
   }
 
   /**
-   * Boot the game selected by `?game=` (default: the first registered game). A build with a game
-   * server (`VITE_GAME_SERVER`, e.g. wss://voxel-games.fly.dev) plays online only: it connects to
-   * that server's game at once, watching behind the title screen, and joins on Play; `?room=`
-   * picks a room of a player's own there instead of the public one (a game with `instances`).
-   * `?server=` picks a server for any build (`ws://localhost:8787`), or one game on one
-   * (`ws://localhost:8787/sandbox`). Otherwise the game runs here: in the app's worker
-   * (`worker`), or in this page (`?host=page`).
+   * Boot the game selected by `?game=` (default: the first in the catalog) on its game server:
+   * connect to it, watching behind the title screen, and join on Play. The server is `?server=`
+   * (`ws://localhost:8787`, or one game on one: `ws://localhost:8787/sandbox`), else the build's
+   * (`VITE_GAME_SERVER`, e.g. wss://voxel-games.fly.dev), else in development the local one that
+   * `npm run dev` runs. `?room=` picks a room of a player's own there instead of the public one (a
+   * game with `instances`). The game's client code (its own chunk) loads while the connection
+   * opens; the home page shows it loading meanwhile.
    */
-  static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[] = [], worker?: () => Worker, carried: Carry | null = null): Promise<Runtime> {
+  static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameEntry[], hidden: GameEntry[] = [], carried: Carry | null = null): Promise<Runtime> {
     const url = new URL(location.href);
-    const online = (import.meta.env.VITE_GAME_SERVER as string | undefined)?.replace(/\/+$/, '');
     const picked = url.searchParams.get('game');
     const given = url.searchParams.get('server');
     // A server (then as a build with one), or one game's address on it.
-    const base = given ? (Runtime.gameAddress(given) ? null : given.replace(/\/+$/, '')) : online;
-    // (A development game too, as a server names it: `?server=ws://host&game=highnoon`.)
-    const listed = [...games, ...hidden].find((g) => g.id === picked) ?? games[0];
+    const base = given ? (Runtime.gameAddress(given) ? null : given.replace(/\/+$/, '')) : Runtime.defaultServer();
+    // Development games open by id but aren't listed in the launcher (a server names one too:
+    // `?server=ws://host&game=highnoon`).
+    const find = (id: string | null) => [...games, ...hidden].find((g) => g.meta.id === id);
+    const listed = find(picked) ?? games[0];
     const room = url.searchParams.get('room');
-    const own = room && listed.instances && ROOM_CODE.test(room) ? room : null;
-    const address = base ? `${base}/${listed.id}${own ? `/${own}` : ''}` : given;
-    const server = address ? await SocketLink.connect(address) : null;
-    const id = server?.welcome.game ?? picked;
-    // Hidden games (dev previews) open by id but aren't listed in the launcher.
-    const def = [...games, ...hidden].find((g) => g.id === id) ?? games[0];
-    if (server && def.id !== server.welcome.game) throw new Error(`The server is running "${server.welcome.game}", which this client doesn't have.`);
-    const seed = server?.welcome.seed ?? Runtime.chooseSeed(def);
-    const rt = new Runtime(canvas, ui, def, games, hidden, seed, worker ?? null, server, carried);
+    const own = room && listed.meta.instances && ROOM_CODE.test(room) ? room : null;
+    const address = base ? `${base}/${listed.meta.id}${own ? `/${own}` : ''}` : given;
+    if (!address) throw new Error('No game server to play on: open with ?server=ws://host:port, or build with VITE_GAME_SERVER.');
+    // The home page at once, showing the game loading (it stays up when switching games).
+    const title = carried?.title ?? new TitleScreen(ui, games.map((g) => g.meta));
+    title.select(listed.meta.id);
+    // Its client code loads while the connection opens (a server's own address names the game
+    // only in its welcome).
+    const early = base ? listed.load() : null;
+    early?.catch(() => {});
+    const link = await SocketLink.connect(address);
+    let def: SharedDefinition;
+    try {
+      const entry = find(link.welcome.game);
+      if (!entry) throw new Error(`The server is running "${link.welcome.game}", which this client doesn't have.`);
+      def = (await (entry === listed && early ? early : entry.load())).shared;
+    } catch (err) {
+      link.close();
+      throw err;
+    }
+    const rt = new Runtime(canvas, ui, def, games, hidden, link, title, carried);
     await rt.init();
     Runtime.onStart?.(rt);
     return rt;
+  }
+
+  /**
+   * The server when the page doesn't name one: the build's (`VITE_GAME_SERVER`), else in
+   * development the local one `npm run dev` runs (on this page's host; `VITE_DEV_GAME_PORT`).
+   */
+  private static defaultServer(): string | null {
+    const built = (import.meta.env.VITE_GAME_SERVER as string | undefined)?.replace(/\/+$/, '');
+    if (built) return built;
+    if (!import.meta.env.DEV) return null;
+    const port = (import.meta.env.VITE_DEV_GAME_PORT as string | undefined) ?? '8787';
+    return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname || 'localhost'}:${port}`;
   }
 
   /** A `?server=` naming one game on a server (`ws://host/sandbox`), not the server. */
@@ -319,21 +327,6 @@ export class Runtime {
     } catch {
       return false;
     }
-  }
-
-  private static chooseSeed(def: GameDefinition): number {
-    if (def.world?.seed !== undefined) return def.world.seed >>> 0;
-    const p = new URL(location.href).searchParams.get('seed');
-    if (p !== null && p !== '' && Number.isFinite(Number(p))) return Number(p) >>> 0;
-    if (def.world?.persist) {
-      try {
-        const last = localStorage.getItem(`voxel.${def.id}.lastSeed`);
-        if (last) return Number(last) >>> 0;
-      } catch {
-        // ignore
-      }
-    }
-    return (Math.random() * 2 ** 32) >>> 0;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -350,19 +343,11 @@ export class Runtime {
     const module = await loadEngine();
     // The game's own blocks (with the ids a server gave them, if it said), before anything that
     // needs to know them: the registry, the terrain workers, the world.
-    this.blocks = gameBlocks(def, this.server?.welcome.blocks);
+    this.blocks = gameBlocks(def, this.link.welcome.blocks);
     useGameBlocks(this.blocks);
     this.registry = loadRegistry(this.blocks);
     const destructible = def.world?.destructible;
     this.carving = destructible ? { ids: destructibleIds(this.registry, destructible), above: destructible.above ?? -1 } : null;
-    if (def.world?.persist) {
-      try {
-        localStorage.setItem(`voxel.${def.id}.lastSeed`, String(this.seed));
-      } catch {
-        // ignore
-      }
-    }
-
     this.title.progress(0.06, 'Generating textures…');
     const worldCfg = worldGenConfig(def, (b) => this.blockId(b));
     const workers = Math.max(2, Math.min(8, (navigator.hardwareConcurrency || 4) - 2));
@@ -516,42 +501,17 @@ export class Runtime {
       client: (method, args) => this.clientCall(method, args),
     });
 
-    // The game's host: a server we joined, a worker by default, or this page for development and
-    // tests (`?host=page`). It sets the game up, places the player and sends batches.
-    const save = this.server ? null : this.load();
-    const opts = {
-      seed: this.seed,
-      save,
-      cheats: import.meta.env.DEV || !!def.cheats,
-      radius: this.hostRadius(this.settings),
-      dayLength: this.settings.dayMinutes * 60,
-      fov: this.settings.fov,
-    };
-    const inPage = new URL(location.href).searchParams.get('host') === 'page';
-    // `game.store` in single-player: this device's localStorage.
-    const kept = this.loadStore();
-    const keep = (key: string, value: unknown) => this.keepStore(kept, key, value);
-    if (this.server) {
-      this.link = this.server;
-      // Two steps behind the newest frame: smooth, and about 70 ms behind the server at 30 steps a second.
-      this.playback = new FrameBuffer(2 / this.server.welcome.tickRate);
-      this.server.onClose = () => this.disconnected();
-      if (this.walker) {
-        // Movement as the server moves them: the game's tuning, and what they hold (a heavy gun, aiming).
-        this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1, this.gunRules), worldQuery(this.chunks.world, this.registry));
-        this.movers = new ClientMovers(this.chunks.world, this.content, this.registry, (b) => this.blockId(b));
-      }
-    } else {
-      if (inPage || !this.makeWorker) {
-        this.link = new PageLink(def, { ...opts, engine: module, budget: 2, store: new MemoryStore(kept, keep) });
-      } else {
-        const link = new WorkerLink(this.makeWorker(), { t: 'init', module, game: def.id, ...opts, store: kept });
-        link.onStore = keep;
-        this.link = link;
-      }
+    // The game's host is on the server: it set the game up and placed the spawn, and sends batches.
+    // Two steps behind the newest frame: smooth, and about 70 ms behind the server at 30 steps a second.
+    this.playback = new FrameBuffer(2 / this.link.welcome.tickRate);
+    this.link.onClose = () => this.disconnected();
+    if (this.walker) {
+      // Movement as the server moves them: the game's tuning, and what they hold (a heavy gun, aiming).
+      this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1, this.gunRules), worldQuery(this.chunks.world, this.registry));
+      this.movers = new ClientMovers(this.chunks.world, this.content, this.registry, (b) => this.blockId(b));
     }
 
-    this.vehicles = new VehicleView(def.vehicles ?? {}, worldQuery(this.chunks.world, this.registry), !!this.server);
+    this.vehicles = new VehicleView(def.vehicles ?? {}, worldQuery(this.chunks.world, this.registry), true);
     this.link.onBatch = (b) => this.receive(b);
 
     if (def.player?.build) {
@@ -567,7 +527,6 @@ export class Runtime {
 
     this.pause = new PauseMenu(this.ui, this.settings, (s) => this.applySettings(s), () => this.input.lock());
     this.pause.onTime = (t) => this.link.send({ t: 'env', time: t });
-    this.pause.onNewWorld = (seed) => this.newWorld(seed);
     this.pause.onRestart = () => {
       this.pause.hide();
       this.restart();
@@ -602,14 +561,10 @@ export class Runtime {
       if (this.mode === 'paused' || unlockedPlay || (this.mode === 'title' && this.worldReady)) this.input.lock();
     }, life);
     window.addEventListener('resize', () => this.resize(), life);
-    window.addEventListener('beforeunload', () => this.save(), life);
-    document.addEventListener('visibilitychange', () => document.hidden && this.save(), life);
-    if (this.server) {
-      // Leaving the page: leave the game, even if the browser keeps the page to come back to (its
-      // connection would otherwise stay, and the player with it). Back again: a fresh start.
-      window.addEventListener('pagehide', () => this.link.close(), life);
-      window.addEventListener('pageshow', (e) => e.persisted && location.reload(), life);
-    }
+    // Leaving the page: leave the game, even if the browser keeps the page to come back to (its
+    // connection would otherwise stay, and the player with it). Back again: a fresh start.
+    window.addEventListener('pagehide', () => this.link.close(), life);
+    window.addEventListener('pageshow', (e) => e.persisted && location.reload(), life);
 
     this.commandBar = new CommandBar(this.ui);
     this.commandBar.complete = (line) => this.request<{ start: number; options: string[] }>({ t: 'complete', line });
@@ -759,10 +714,9 @@ export class Runtime {
     this.damageSeen = [];
     if (b.frame) {
       this.frameData = b.frame;
-      this.ticking = false;
       // In a room of a player's own, the home page says who's in it.
       if (this.room && this.mode === 'title') this.title.present(b.frame.players.map((p) => p.name));
-      this.playback?.push(b.frame, (b as TimedBatch).time);
+      this.playback.push(b.frame, (b as TimedBatch).time);
       const me = this.playerId !== null ? b.frame.players.find((p) => p.id === this.playerId) : undefined;
       // Prediction starts again from this frame: its solid props too.
       this.movers?.sync(b.frame.props, b.frame.clock);
@@ -797,13 +751,13 @@ export class Runtime {
   }
 
   /**
-   * This client's player in a frame. Watching a server's game before joining, a stand-in at the
-   * spawn, for the camera (circling above it on the title screen) and the terrain around it.
+   * This client's player in a frame. Watching the game before joining, a stand-in at the spawn,
+   * for the camera (circling above it on the title screen) and the terrain around it.
    */
   private mine(f: SimFrame | null): PlayerFrame | undefined {
     const me = f?.players.find((p) => p.id === this.playerId);
-    if (me || !f || !this.server || this.playerId) return me;
-    const sp = this.server.welcome.spawn;
+    if (me || !f || this.playerId) return me;
+    const sp = this.link.welcome.spawn;
     return {
       id: '',
       name: '',
@@ -931,7 +885,7 @@ export class Runtime {
   }
 
   /** Ask the host something; the answer comes in a later batch. */
-  private request<T>(cmd: { t: 'exec' | 'complete'; line: string }): Promise<T> {
+  private request<T>(cmd: { t: 'exec' | 'complete'; line: string } | { t: 'dev'; js: string }): Promise<T> {
     const id = this.nextRequest++;
     return new Promise<T>((resolve) => {
       this.requests.set(id, resolve as (v: unknown) => void);
@@ -951,17 +905,16 @@ export class Runtime {
   private switchGame(id: string, room: string | null = null) {
     if (this.switching) return;
     this.switching = true;
-    this.save();
     this.canvas.classList.add('fading');
     window.setTimeout(() => {
       const carry = this.shutdown();
-      Runtime.switchTo(id, room, this.canvas, this.ui, this.games, this.hidden, this.makeWorker, carry);
+      Runtime.switchTo(id, room, this.canvas, this.ui, this.games, this.hidden, carry);
     }, 260);
     this.title.select(id);
   }
 
   /** Start another game (or room) on the page the last one left (the home page stays up throughout). */
-  private static switchTo(id: string, room: string | null, canvas: HTMLCanvasElement, ui: HTMLElement, games: GameDefinition[], hidden: GameDefinition[], worker: (() => Worker) | null, carry: Carry) {
+  private static switchTo(id: string, room: string | null, canvas: HTMLCanvasElement, ui: HTMLElement, games: GameEntry[], hidden: GameEntry[], carry: Carry) {
     const url = new URL(location.href);
     url.searchParams.set('game', id);
     if (room) url.searchParams.set('room', room);
@@ -972,14 +925,14 @@ export class Runtime {
     if (server && Runtime.gameAddress(server)) url.searchParams.delete('server');
     history.replaceState(null, '', url);
     carry.title.select(id);
-    Runtime.start(canvas, ui, games, hidden, worker ?? undefined, carry).catch((err: unknown) => {
+    Runtime.start(canvas, ui, games, hidden, carry).catch((err: unknown) => {
       console.error(err);
-      carry.title.failed(err instanceof Error ? err.message : String(err), (next) => Runtime.switchTo(next, null, canvas, ui, games, hidden, worker, carry));
+      carry.title.failed(err instanceof Error ? err.message : String(err), (next) => Runtime.switchTo(next, null, canvas, ui, games, hidden, carry));
     });
   }
 
   /**
-   * This game is over: stop its loop, its host (worker, page or server connection), its terrain
+   * This game is over: stop its loop, its server connection, its terrain
    * workers, its listeners and sound; free its meshes, textures and HUD. The home page, renderer
    * and block textures go to the next game.
    */
@@ -1020,86 +973,8 @@ export class Runtime {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Persistence & spawn
+  // Loading
   // ---------------------------------------------------------------------------------------------
-
-  private get saveKey() {
-    return `voxel.${this.def.id}.world.${this.seed}`;
-  }
-
-  private get storeKey() {
-    return `voxel.${this.def.id}.store`;
-  }
-
-  /** What the game kept in `game.store` on this device. */
-  private loadStore(): Record<string, unknown> {
-    try {
-      return JSON.parse(localStorage.getItem(this.storeKey) ?? '{}') as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-
-  private keepStore(data: Record<string, unknown>, key: string, value: unknown) {
-    if (value === undefined) delete data[key];
-    else data[key] = value;
-    try {
-      localStorage.setItem(this.storeKey, JSON.stringify(data));
-    } catch {
-      // Full or blocked: the game carries on, unsaved.
-    }
-  }
-
-  /** The saved world, if the game keeps one. Its edits go into this client's world too. */
-  private load(): SaveState | null {
-    if (!this.def.world?.persist) return null;
-    let save: SaveData | null = null;
-    try {
-      const raw = localStorage.getItem(this.saveKey);
-      if (raw) save = JSON.parse(raw) as SaveData;
-    } catch {
-      save = null;
-    }
-    if (!save) return null;
-    let edits: Uint8Array = new Uint8Array(0);
-    try {
-      edits = remapEdits(fromB64(save.edits), save.blocks, this.blocks);
-      this.chunks.world.import_edits(edits);
-    } catch {
-      // Corrupt edits are ignored.
-      edits = new Uint8Array(0);
-    }
-    return { edits, blocks: this.blocks.keys, player: save.player, flying: save.flying, time: save.time };
-  }
-
-  private save() {
-    const f = this.frameData;
-    const s = this.mine(f);
-    // On a server, the server keeps the world.
-    if (!this.chunks || !this.def.world?.persist || this.server || !f || !s) return;
-    // This client's world has every edit the host made (mirrored), loaded or not.
-    const data: SaveData = {
-      edits: toB64(this.chunks.world.export_edits()),
-      blocks: this.blocks.keys,
-      player: [s.x, s.y, s.z, this.view.yaw, this.view.pitch],
-      flying: s.flying,
-      time: f.time,
-    };
-    try {
-      localStorage.setItem(this.saveKey, JSON.stringify(data));
-    } catch {
-      // Quota exceeded: keep playing without persistence.
-    }
-  }
-
-  private newWorld(seed: number | null) {
-    this.save();
-    const s = seed ?? (Math.random() * 2 ** 32) >>> 0;
-    const url = new URL(location.href);
-    url.searchParams.set('game', this.def.id);
-    url.searchParams.set('seed', String(s));
-    location.href = url.toString();
-  }
 
   /** The title screen's progress: the terrain around the player (the host placed them) meshed. */
   private updateReadiness() {
@@ -1130,8 +1005,8 @@ export class Runtime {
     this.gameHud.setVisible(this.hudVisible);
     this.held.scene.visible = this.hudVisible;
     this.mode = 'playing';
-    // On a server this is joining: as the name on the title screen.
-    this.link.send(this.server ? { t: 'start', name: this.title.name() } : { t: 'start' });
+    // Joining the game: as the name on the title screen.
+    this.link.send({ t: 'start', name: this.title.name() });
   }
 
   private onLockChange(locked: boolean) {
@@ -1143,7 +1018,6 @@ export class Runtime {
     } else if (this.mode === 'playing' && !this.gameHud.screenOpen) {
       this.mode = 'paused';
       this.pause.show(this.frameData?.time ?? 0);
-      this.save();
     }
   }
 
@@ -1478,7 +1352,6 @@ export class Runtime {
     document.body.classList.toggle('pad-playing', this.input.padCaptured);
     const playing = this.mode === 'playing';
     const started = this.frameData?.started ?? false;
-    const running = playing && started;
     const dead = this.mine(this.frameData)?.dead ?? false;
     const active = playing && (this.input.locked || this.debugActive) && !dead && !this.gameHud.screenOpen;
     this.sfx.hold(started && (this.mode === 'paused' || this.mode === 'console'));
@@ -1503,33 +1376,17 @@ export class Runtime {
     this.ownShots = latest ? this.gunFrame(dt, active && !latest.locked, latest) : [];
     if (latest) this.throwFrame(dt, active && !latest.locked, latest);
     for (const shot of this.ownShots) this.shotQueue.push([shot.serial, shot.yaw, shot.pitch, shot.spread]);
-    // A server keeps its own clock: it gets the controls every frame. Otherwise one tick at a time:
-    // while one is on its way, frame time (and input) adds up for the next. In this page the
-    // answer is immediate; from a worker it arrives before the next frame.
-    this.tickDt += dt;
-    if (this.server) {
-      const input = this.withShots(this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq));
-      // Numbered, with how long it lasted: walking and vehicles move at once here (prediction),
-      // and the server moves them input by input, the same way.
-      const seq = ++this.inputSeq;
-      this.inputTimes.set(seq, now / 1000);
-      this.inputTimes.delete(seq - 600);
-      this.predictor?.step(input, dt, seq);
-      this.vehicles.step(input, dt, seq);
-      this.link.send({ t: 'input', input, seq, dt });
-    } else if (!this.ticking) {
-      this.ticking = true;
-      const input = this.withShots(this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq));
-      const tickDt = Math.min(0.1, this.tickDt);
-      this.tickDt = 0;
-      try {
-        this.link.send({ t: 'tick', dt: tickDt, running, input });
-      } catch (err) {
-        this.ticking = false;
-        throw err;
-      }
-    }
-    const f = this.playback?.sample() ?? this.frameData;
+    // The server keeps its own clock: it gets the controls every frame, numbered, with how long
+    // they lasted: walking and vehicles move at once here (prediction), and the server moves them
+    // input by input, the same way.
+    const input = this.withShots(this.input.snapshot(active, this.view.yaw, this.view.pitch, this.view.viewSeq));
+    const seq = ++this.inputSeq;
+    this.inputTimes.set(seq, now / 1000);
+    this.inputTimes.delete(seq - 600);
+    this.predictor?.step(input, dt, seq);
+    this.vehicles.step(input, dt, seq);
+    this.link.send({ t: 'input', input, seq, dt });
+    const f = this.playback.sample() ?? this.frameData;
     if (f) this.shownT = f.t;
     this.updateReadiness();
     const played = this.mine(f);
@@ -1541,13 +1398,13 @@ export class Runtime {
       this.ownClip = clipFrame(Math.max(played?.clip?.seq ?? 0, this.ownClip?.seq ?? 0) + 1, c.name, c.opts, f.t);
     }
     if (this.ownClip && f && ((played?.clip?.seq ?? 0) >= this.ownClip.seq || f.t - this.ownClip.at > 3)) this.ownClip = null;
-    // Our own player where prediction has them (a server), else as the frame says.
+    // Our own player where prediction has them, else as the frame says.
     const predicted = this.predictor?.shown();
     let me = played && predicted ? { ...played, ...predicted } : played;
     if (f && me) me = this.onRide(f, me);
     if (!f || !me) {
       // The host is still starting: nothing to draw yet but the sky.
-      this.present(dt, playing, t0);
+      this.present(dt, t0);
       return;
     }
 
@@ -1568,7 +1425,7 @@ export class Runtime {
       this.camera.updateMatrixWorld();
     } else if (this.walker) {
       this.view.setOrbit(this.mode === 'title' ? null : me.orbit);
-      // A movement ability's camera: as prediction has it (a server), else the newest frame's.
+      // A movement ability's camera: as prediction has it, else the newest frame's.
       this.view.tilt = this.mode === 'title' || me.dead ? null : this.predictor ? this.predictor.tilt : (me.tilt ?? null);
       this.view.follow(dt, me, this.orbitPoint(f, me));
       if (this.mode === 'title') {
@@ -1588,14 +1445,14 @@ export class Runtime {
       this.camera.updateMatrixWorld();
       if (this.mode !== 'title') this.titleSpin = 0;
     }
-    // A server's game runs on while this client is paused: its figures keep walking.
+    // The game runs on while this client is paused: its figures keep walking.
     if (f.players.length < 2) this.targets = [];
-    this.entityView.sync(f.players.length > 1 || this.view.thirdPerson ? [...f.entities, ...this.avatars(f, me)] : f.entities, f.projectiles, dt, this.server ? started : running, f.t);
+    this.entityView.sync(f.players.length > 1 || this.view.thirdPerson ? [...f.entities, ...this.avatars(f, me)] : f.entities, f.projectiles, dt, started, f.t);
     // A controller rumbles when we're hurt.
     if (me.health < this.lastHealth && this.lastHealth > 0 && this.input.device === 'pad' && this.settings.vibration) rumble(0.55, 0.3, 170);
     this.lastHealth = me.health;
     this.pickupView.sync(f.pickups, dt);
-    this.flights.update(dt, this.server ? started : running, this.camera);
+    this.flights.update(dt, started, this.camera);
     // Our own vehicle's model where prediction has it, not where the (older) frame does.
     const own = this.vehicles.active && this.vehicles.prop !== null ? new Map([[this.vehicles.prop, this.vehicles.pose()]]) : undefined;
     this.propView.sync(f.props, dt, { clock: f.clock, me: this.playerId, inputTime: (seq) => this.inputTimes.get(seq) ?? null, now: now / 1000, camera: this.camera.position }, own);
@@ -1646,7 +1503,7 @@ export class Runtime {
     }
     this.camera.updateMatrixWorld();
     this.sfx.setListener(this.camera.position, this.walker ? this.view.yaw : Math.atan2(-this.dir.x, -this.dir.z));
-    this.present(dt, playing, t0);
+    this.present(dt, t0);
   }
 
   /**
@@ -2047,18 +1904,12 @@ export class Runtime {
     };
   }
 
-  /** Render, HUD, autosave, debug overlay, end of input frame. */
-  private present(dt: number, playing: boolean, t0: number) {
+  /** Render, HUD, debug overlay, end of input frame. */
+  private present(dt: number, t0: number) {
     const medium = this.camera.position.y < 256 ? this.eyeMedium() : 'air';
     this.hud.setMedium(medium);
     this.renderer.render(this.camera, this.env, this.hooks, medium === 'water' ? 1 : medium === 'lava' ? 2 : 0);
     this.gameHud.update(dt, this.camera, window.innerWidth, window.innerHeight);
-
-    this.saveTimer += dt;
-    if (this.saveTimer > 15 && playing) {
-      this.saveTimer = 0;
-      this.save();
-    }
     const cpu = performance.now() - t0;
     this.debug.tick(dt, cpu);
     if (this.debug.visible) this.updateDebug();
@@ -2097,7 +1948,7 @@ export class Runtime {
       `Facing   ${facing}   pitch ${((this.view.pitch * 180) / Math.PI).toFixed(1)}°`,
       `Motion   ${s.flying ? 'flying' : s.inWater ? 'swimming' : s.onGround ? 'grounded' : 'airborne'}   ${Math.hypot(s.vx, s.vz).toFixed(2)} m/s`,
       `Time     ${this.env.clock()}   game clock ${(this.frameData?.clock ?? 0).toFixed(1)} s`,
-      `Entities ${f.entities.length} alive   host ${this.server ? `server (${f.players.length} playing)` : this.link.local ? 'in page' : 'worker'}`,
+      `Entities ${f.entities.length} alive   server ${f.players.length} playing`,
       '',
       `Columns  ${c.loaded} loaded · ${c.meshed} meshed · ${c.pending} pending upload`,
       `Workers  ${this.pool.size} · gen ${c.generating} (${c.genMs.toFixed(2)} ms) · mesh ${c.meshing} (${c.meshMs.toFixed(2)} ms)`,
@@ -2112,20 +1963,26 @@ export class Runtime {
   // Development hooks (automated browser tests)
   // ---------------------------------------------------------------------------------------------
 
+  /** Join and play without the pointer lock a click would take (tests; with `debugActive`). */
   debugPlay() {
     this.beginPlay();
   }
 
-  /** The simulation, when the game runs in this page (`?host=page`). */
-  get sim(): Sim | undefined {
-    return this.link.local?.sim;
-  }
-
-  /** The game's context, when it runs in this page (`?host=page`). */
-  get context(): GameContext {
-    const sim = this.sim;
-    if (!sim) throw new Error('the game runs in a worker: open with ?host=page to reach its context');
-    return sim.ctx;
+  /**
+   * Development tools (`await __game.dev('game.players.length')`): run `js` in this game's room
+   * on its server, a function body (or one expression) with `game` (the room's `GameContext`) and
+   * `me` (this client's own `Player` there, null until it joins) in scope. Resolves with the
+   * result as JSON (a promise it returns is awaited), or rejects with the error. Only a
+   * development server (`npm run dev`) runs it; any other refuses.
+   */
+  dev(js: string): Promise<unknown> {
+    if (!import.meta.env.DEV) return Promise.reject(new Error('__game.dev is for development builds'));
+    const reply = this.request<DevReply>({ t: 'dev', js });
+    const late = new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error('__game.dev: no answer from the server in 10 s')), 10_000));
+    return Promise.race([reply, late]).then((r) => {
+      if (!r.ok) throw new Error(r.error);
+      return r.value;
+    });
   }
 
   /** The first-person view (tests steer it through `yaw` / `pitch`). */
@@ -2138,7 +1995,7 @@ export class Runtime {
       game: this.def.id,
       mode: this.mode,
       ready: this.worldReady,
-      host: this.server ? 'server' : this.link.local ? 'page' : 'worker',
+      host: 'server',
       player: this.playerId,
       state: this.mine(this.frameData) ?? null,
       health: this.mine(this.frameData)?.health ?? 0,

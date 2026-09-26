@@ -151,22 +151,22 @@ export default function gameblocks() {
   check(wrong({ x: { texture: 'stone', shape: 'stairs', full: 'stone' } }).includes('only a slab'), 'full is for slabs');
   check(wrong(Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`s${i}`, { texture: 'stone', shape: 'stairs' as const }]))).includes('too many'), 'too many variants');
 
-  // A save round trip, the way the browser keeps one: edits and the keys of the ids they used...
+  // A kept world's round trip (a server's store): edits and the keys of the ids they used...
   w.setBlock(9, FLOOR, 9, 'lamp');
-  const save = { edits: vw.export_edits(), blocks: [...h.host.blocks.keys], player: [0.5, FLOOR, 0.5, 0, 0] as [number, number, number, number, number], flying: false, time: 0.5 };
+  const save = { edits: vw.export_edits(), blocks: [...h.host.blocks.keys] };
+  const keptWorld = new MemoryStore();
+  keptWorld.saveWorld({ game: 'blocktest', seed: 3, edits: save.edits, blocks: save.blocks, time: 0.5 });
   // ...loaded by a later version of the game: blocks reordered, the lamp gone, a new one first.
   const { lamp: _gone, ...kept } = BLOCKS;
   const later = game({ glass_tile: { like: 'glass' }, ...Object.fromEntries(Object.entries(kept).reverse()) }, false);
-  const h2 = new Headless(later, { wasm, seed: 3, save });
-  h2.start();
-  h2.step(1 / 60);
-  const w2 = h2.ctx.world;
+  const h2 = new GameHost(later, { engine: wasm, seed: 3, budget: Infinity, store: keptWorld, remote: true });
+  const w2 = h2.sim.ctx.world;
   check(w2.blockId('crate') !== id('crate'), `the crate's id moved: ${id('crate')} to ${w2.blockId('crate')}`);
   check(w2.blockName(w2.getBlock(8, FLOOR, 5)) === 'crate', `a placed crate is still a crate: ${w2.blockName(w2.getBlock(8, FLOOR, 5))}`);
   check(w2.blockName(w2.getBlock(6, FLOOR, 6)) === 'marble' && w2.blockName(w2.getBlock(7, FLOOR, 5)) === 'sprout', 'and the marble, and the sprout');
   check(w2.blockName(w2.getBlock(5, FLOOR, 5)) === 'air', 'the broken crate stays broken');
   check(w2.blockName(w2.getBlock(9, FLOOR, 9)) === 'air', 'a block no longer defined is gone');
-  const glassTile = (JSON.parse(h2.host.blocks.json) as { name: string; layer: number; cull_self: boolean; opacity?: number }[])[0];
+  const glassTile = (JSON.parse(h2.blocks.json) as { name: string; layer: number; cull_self: boolean; opacity?: number }[])[0];
   check(glassTile.name === 'glass_tile' && glassTile.layer === 1 && glassTile.cull_self && glassTile.opacity === 0, `like: 'glass' is see-through like glass: ${JSON.stringify(glassTile)}`);
 
   // A kept world (a server's store): the keys go with the edits, and hotbars keep blocks by name.

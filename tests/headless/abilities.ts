@@ -4,7 +4,7 @@ import moves from '../../src/games/moves';
 import { roll } from '../../src/games/highnoon/abilities';
 import { Predictor } from '../../src/platform/client/predict';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
-import { worldGenConfig } from '../../src/platform/host/spawn';
+import { worldGenConfig } from '../../src/platform/workers/config';
 import { quantize } from '../../src/platform/net/delta';
 import type { HostBatch, PlayerInput } from '../../src/platform/net/protocol';
 import { SimInput } from '../../src/platform/sim/input';

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { GameDefinition } from '../../src/platform/api/types';
-import { devGames, games } from '../../src/games';
+import { devGames, games } from '../../src/games/server';
 import { Headless, type HeadlessOptions } from '../../src/platform/host/headless';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');

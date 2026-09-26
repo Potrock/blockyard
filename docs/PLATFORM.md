@@ -1,31 +1,49 @@
 # Building games on Blockyard
 
-The platform is a complete voxel engine: an endless procedural world, lighting, rendering, physics, streaming, entities, items, combat, audio and UI. You write the *game*: rules, content and moments. A game is one `defineGame({...})` object in `src/games/<name>/` that imports only from `@platform` (plus the optional `@platform/kits` and `@platform/art` libraries, which are themselves built only on `@platform`).
+The platform is a complete voxel engine: an endless procedural world, lighting, rendering, physics, streaming, entities, items, combat, audio and UI. You write the *game*: rules, content and moments. A game lives in `src/games/<name>/` and imports only from `@platform` (plus the optional `@platform/kits` and `@platform/art` libraries, which are themselves built only on `@platform`, and `@platform/client` in its client code).
+
+Every game is played on a game server: its rules run there, and each player's browser draws what it sends. So a game comes in parts, by where they run:
+
+| File | Made with | Runs | What goes in it |
+| --- | --- | --- | --- |
+| `meta.ts` | `defineMeta` | the launcher, and both sides | what the home page lists: `id`, `title`, `tagline`, `accent`, `controls`, `gamepad`, `instances`. Tiny, and it imports nothing but `@platform` |
+| `shared.ts` | `defineShared` | the server and every screen | what both sides must agree on: `world` (terrain, `structures`, `terraform`, `destructible`), `blocks` and their painters, `player` (movement, abilities, hotbar, skin, model), `guns`, `vehicles`, `hud`, `cheats`. Data, and pure functions both run the same way (structure builders, block painters, vehicles' and abilities' steps). It starts from the meta: `defineShared({ ...meta, world: { ... } })` |
+| `server.ts` | `defineServer(shared, { setup, start, update })` | the server only | the rules: items and entities, events, bots, scoring, the HUD calls. Never sent to a browser |
+| `client.ts` | `defineClient(shared, { ... })` (`@platform/client`) | each player's screen only | what the screen does of its own. For now it only names the shared definition (`defineClient(shared)`); the client API grows here (see docs/REDESIGN-CLIENT-SERVER.md) |
+
+Other files in the folder are helpers any part may import (maps, weapon tables, painters), except that `meta.ts` imports none, shared code and client code never reach `server.ts`, neither `server.ts` nor shared code reaches client code, and only server code uses `@platform/kits` (the kits are server rules). A `client/` folder holds client code. `npm run check:boundaries` enforces all of it, following imports through helpers; after a production build, `npm run build` also checks that no server-only module ended up in the browser's output (`scripts/check-bundle.mjs`). A folder holding several small games (previews) prefixes their parts: `previews/shipyard.meta.ts`, `previews/shipyard.server.ts`.
+
+Two registries list the games: `src/games/browser.ts` (each game's meta, and its client code loaded when someone picks it, as a chunk of its own: nothing else of a game reaches the page) and `src/games/server.ts` (each game's `server.ts`, which brings its shared code). Development games (previews, the model gallery, High Noon) are in both registries' `devGames`: they open by id (`?game=gallery`, not listed), only in a development build, on a development server.
+
+`defineGame({...})` still makes a whole game in one object (shared definition and rules together), for tests and scratch games a server runs directly (`launch(myGame)` in a headless test); a game in `src/games` is split.
 
 ```
 src/games/
-  index.ts              the list of registered games
-  heart-hunt/index.ts   ~70 lines: the tutorial below
-  sandbox/index.ts      ~30 lines: creative building, with a few blocks of its own
+  browser.ts            the browser's catalog: metas, and client code loaded on demand
+  server.ts             the server's registry: each game's rules and shared definition
+  heart-hunt/           ~70 lines: the tutorial below
+    meta.ts shared.ts server.ts client.ts
+  sandbox/              creative building, with a few blocks of its own (in shared.ts)
   arena/                waves of monsters, weapons, a boss
-    index.ts            rules: waves, rewards, win/lose
+    server.ts           rules: waves, rewards, win/lose
     content.ts          items, monsters, boss AI
-    structure.ts        the colosseum, as a Blueprint
+    structure.ts        the colosseum, as a Blueprint (shared.ts puts it in the world)
     art/                the mob skins and weapon sprites, painted in code into the 'arena' atlas
     sounds.ts           creature voices (audio.define)
   skyship/              an airship crewed together: a solid prop the players walk on as it sails
-    index.ts            the helm, sailing, beacons, overboard, the HUD
+    server.ts           the helm, sailing, beacons, overboard, the HUD
     ship.ts world.ts    the airship and the sky islands, as Blueprints
   starfighter/          a Star Fox-style dogfighter: no walking, the game flies the camera
-    index.ts            waves, HUD, win/lose
+    server.ts           waves, HUD, win/lose
+    shared.ts flight.ts the X-wing as a vehicle (its step runs on the pilot's screen too)
     ships.ts            the fighters, as Blueprints (meshed into movable props)
     destroyer.ts        the capital ship, as a world structure
-    craft.ts pilot.ts enemies.ts weapons.ts capital.ts   flight, collisions, AI, lasers, the boss
+    craft.ts pilot.ts enemies.ts weapons.ts capital.ts   collisions, AI, lasers, the boss
     sounds.ts           lasers, torpedoes, the TIE howl (audio.define)
     layout.ts           where the battle is
     previews/           dev-only previews of the ships and the capital ship
   bedwars/              Bed Wars against three bots: sky islands, mining, building, a shop
-    index.ts            rules: generators, beds, deaths and respawns, the timeline, win/lose
+    server.ts           rules: generators, beds, deaths and respawns, the timeline, win/lose
     map.ts              the islands, as Blueprints in a void world
     state.ts            teams, the match, block rules and mining times (for the building kit)
     bots.ts nav.ts      bot players: route-finding that bridges and digs, fighting, raiding
@@ -33,15 +51,16 @@ src/games/
     fireballs.ts        thrown fireballs that blast wool and wood
     art/ sounds.ts      team skins, item sprites, sounds
   callofblocky/         Call of Blocky: a pulp free-for-all shooter against bots and people
-    index.ts            rules: the match, spawns, kills, streaks, loadouts, the HUD
+    server.ts           rules: the match, spawns, kills, streaks, loadouts, the HUD
+    shared.ts           the street, movement, the fighters' models, the HUD theme
     weapons.ts          the guns (kind 'gun'), the katana, and the lethals (kind 'throwable')
-    bots.ts nav.ts      bot fighters (game.bots) and the walking grid they path-find on
+    bots.ts             bot fighters (game.bots) on the navGrid kit
     map.ts              Jackrabbit Lane, a Nuketown-style street, as Blueprints
     models/             the guns and fighters as GLB files (tools/ writes them)
     art.ts sounds.ts    the pulp wardrobe (skins painted in code), gunshots and stingers
     hud.css hud.ts      its HUD: the comic-book theme (hud.theme.css) and its own corner widget
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
-    index.ts            rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
+    server.ts           rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
     course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
     sounds.ts           checkpoint chime, pad boing, crumbling sand, cannons
   moves/                dev-only movement lab (`?game=moves`): a course for three movement abilities
@@ -50,27 +69,44 @@ src/games/
 
 ## Hello, game
 
-`src/games/heart-hunt/index.ts` is a complete game in about 70 lines. It builds a pedestal as a blueprint, flattens the land around it, scatters ten glowing hearts, counts pickups and shows a victory screen:
+`src/games/heart-hunt/` is a complete game in about 70 lines. It builds a pedestal as a blueprint, flattens the land around it, scatters ten glowing hearts, counts pickups and shows a victory screen. What the launcher shows (`meta.ts`):
 
 ```ts
-import { defineGame, Blueprint } from '@platform';
+import { defineMeta } from '@platform';
 
-let found = 0;
+export default defineMeta({ id: 'heart-hunt', title: 'Heart Hunt', tagline: 'A gentle hunt for ten hidden hearts', accent: '#ff5a7a' });
+```
+
+The world and the player, which the server and every screen read (`shared.ts`):
+
+```ts
+import { defineShared, Blueprint } from '@platform';
+import meta from './meta';
 
 const pedestal = new Blueprint({ x: -2, y: 70, z: -2 }, { x: 5, y: 3, z: 5 })
   .fill({ x: -2, y: 70, z: -2 }, { x: 2, y: 70, z: 2 }, 'stone_bricks')
   .set(0, 71, 0, 'glowstone');
 
-export default defineGame({
-  id: 'heart-hunt',
-  title: 'Heart Hunt',
+export const shared = defineShared({
+  ...meta,
   world: {
     structures: [pedestal],
     terraform: [{ x: 0, z: 0, radius: 12, blend: 16, height: 69.5 }],
     spawn: { x: 0.5, y: 72, z: 3.5 },
   },
   player: { health: 20, hotbar: 'items' },
+});
+```
 
+The rules, on the server (`server.ts`):
+
+```ts
+import { defineServer } from '@platform';
+import { shared } from './shared';
+
+let found = 0;
+
+export default defineServer(shared, {
   setup(game) {
     game.items.define('heart', {
       kind: 'misc', name: 'Heart', icon: 'heart',
@@ -94,9 +130,20 @@ export default defineGame({
 });
 ```
 
-Register it in `src/games/index.ts` and open `?game=heart-hunt`. The launcher lists every registered game.
+And each player's screen (`client.ts`), which for now only names the shared definition:
+
+```ts
+import { defineClient } from '@platform/client';
+import { shared } from './shared';
+
+export default defineClient(shared);
+```
+
+Register it in both registries: `src/games/browser.ts` (its meta, and `() => import('./heart-hunt/client')`) and `src/games/server.ts` (its `server.ts`). Then `npm run dev` and open `http://localhost:5173/?game=heart-hunt`. The launcher lists every game in `browser.ts`.
 
 ## Lifecycle
+
+The hooks are the rules in `server.ts` (`defineServer(shared, { setup, start, update })`):
 
 | Hook | When | Use it to |
 | --- | --- | --- |
@@ -148,7 +195,7 @@ bp.set(x + 1, y, z, 'red_bed[facing=east,part=head]');
 With `world.destructible`, every block is really a 16 x 16 x 16 grid of little voxels, one per pixel of its texture. A block nobody has hit is just a block (it costs nothing); a bullet that lands on one chips a pit out of it, pixel by pixel, and enough of them punch a hole right through. Players collide with what's left and walk through a hole big enough, bullets and line of sight go through holes, and a block carved to nothing is gone (with debris, and a `blockBreak`; a torch on it falls). Everyone sees the same holes: the host carves and each client takes the same change (a player who joins later gets them all), and a client predicting its own movement walks through a hole just as the host does.
 
 ```ts
-defineGame({
+defineShared({
   world: {
     destructible: {
       above: 63,                    // only blocks higher than this (keep the ground whole: nobody falls out of the world)
@@ -171,15 +218,15 @@ Only solid, opaque, full blocks carve: not glass, leaves, slabs, stairs, torches
 
 ### Blocks of your own
 
-A game adds blocks in its definition and uses them by name, like the built-in ones: in blueprints and `world.structures`, `setBlock`, `placeBlock`, `breakBlock`, `blockInfo`, and the creative block picker. They're defined here rather than in `setup` (like `vehicles`) because every player's screen generates its terrain, structures included, and draws it; so each screen has them from the start, on a server too, and saves keep them by name. Sandbox has four plain ones (and shapes, below):
+A game adds blocks in its shared definition and uses them by name, like the built-in ones: in blueprints and `world.structures`, `setBlock`, `placeBlock`, `breakBlock`, `blockInfo`, and the creative block picker. They're defined there rather than in `setup` (like `vehicles`) because every player's screen generates its terrain, structures included, and draws it; so each screen has them from the start, and a server's kept world keeps them by name. Sandbox has four plain ones (and shapes, below), in its `shared.ts`:
 
 ```ts
 import crate from './blocks/crate.png?url';
 
 const MARBLE = { color: '#d9dcdf', noise: 0.22, scale: 3 };
 
-export default defineGame({
-  id: 'sandbox',
+export const shared = defineShared({
+  ...meta,
   // ...
   blocks: {
     crate: { texture: crate, hardness: 1.2 },                            // a 16 x 16 PNG on every face
@@ -249,9 +296,9 @@ Fences and panes join where they stand, from what's beside them, so placing or b
 
 **What bots can read.** `blockInfo(block).shape` is `'air'`, `'cube'`, `'cross'`, `'liquid'`, `'slab'`, `'stairs'`, `'torch'`, `'bed'`, `'fence'`, `'pane'`, `'post'` or `'boxes'`; `height` is how high bodies collide with it (0 if it isn't solid, 0.5 a bottom slab, 1 a top slab, stairs or a full block, 9/16 a bed, 1.5 a fence); `boxes` those boxes, in blocks (a fence or pane's post alone: its arms depend on what's beside it); and `climbable`. `world.collisionHeight(x, y, z)` says it at a position: a fence as it's joined, a carved block as what's left of it (an unloaded chunk counts as 1). A walker steps up 0.6 without jumping and jumps about 1.25.
 
-A game has room for 68 block variants of its own (a slab is two, stairs are eight, a facing block four or six), with ids after the built-in ones (187 to 254), in the order they're defined: `world.blockId('crate')` tells you one. Names are lower case, digits and `_`, and not a built-in block's. Ids needn't stay put: a save records the names of the ids it used, so a save outlives definitions that are reordered, added to or taken from (a block no longer defined becomes air), and a server's welcome tells each joining player its ids, so a player whose copy of the game is older still agrees with it (a block their copy hasn't got shows as a magenta "missing" block). Hotbars kept on a server keep them by name too.
+A game has room for 68 block variants of its own (a slab is two, stairs are eight, a facing block four or six), with ids after the built-in ones (187 to 254), in the order they're defined: `world.blockId('crate')` tells you one. Names are lower case, digits and `_`, and not a built-in block's. Ids needn't stay put: a kept world records the names of the ids it used, so it outlives definitions that are reordered, added to or taken from (a block no longer defined becomes air), and a server's welcome tells each joining player its ids, so a player whose copy of the game is older still agrees with it (a block their copy hasn't got shows as a magenta "missing" block). Hotbars kept on a server keep them by name too.
 
-Under the hood `world/blocks.ts` turns the definitions into the engine's block variants (`engine.set_game_blocks`, in every engine instance: the host's, the page's, each terrain worker's) and into texture layers after the built-in ones, which `render/blocktextures.ts` paints on each screen (fetching the images). The built-in blocks keep their ids, so no existing world or save changes.
+Under the hood `world/blocks.ts` turns the definitions into the engine's block variants (`engine.set_game_blocks`, in every engine instance: the host's, each screen's, each terrain worker's) and into texture layers after the built-in ones, which `render/blocktextures.ts` paints on each screen (fetching the images). The built-in blocks keep their ids, so no existing world changes.
 
 ## Player
 
@@ -356,16 +403,16 @@ if (s.left > 0) {
 
 Games are written so the same code works with one player or many:
 
-- **`game.players`** lists everyone playing. A single-player game has exactly one, and **`game.player`** is that player, which is why single-player games can keep using `game.player`, `game.hud`, `game.input` and `game.camera` as they are.
+- **`game.players`** lists everyone playing. With one person playing it has exactly one, and **`game.player`** is that player (the first to join), which is why a game written for one player can keep using `game.player`, `game.hud`, `game.input` and `game.camera` as they are.
 - **Each player** has an `id`, a `name`, their own `inventory`, `health` and `viewModel`, and their own screen and controls: **`player.hud`** reaches only them (their wallet, their shop, their toasts), **`player.audio`** plays sounds only they hear, **`player.fx`** shakes and flashes only their screen (they were hit), `player.input` is their keyboard and mouse, `player.camera` their camera. **`game.hud`** is everyone's screen (banners, the scoreboard), `game.audio` everyone's speakers.
 - **How others see them.** Each player appears to the others as a figure that walks, swings and holds what's in their hand. `player.setSkin([u, v], atlas)` dresses it (a Minecraft-layout skin in one of your atlases; their own first-person arm wears it too), and `player.color` colours their name above it (team colours).
 - **Who did it.** Damage sources, killers and block events are an `Actor`: an `Entity`, a `Player`, or `'world'`. Tell them apart with `kind` (`'entity'` or `'player'`): `if (killer !== 'world' && killer?.kind === 'player') kills++`.
 - **Callbacks name the player**: `use(game, player)`, `onPickup(game, count, player)`, command `run(args, game, player)`, the `pickup`, `playerDamage` and `playerDeath` events, and the kits' handlers. Use that player rather than `game.player`, and a potion heals whoever drank it.
 - **Mobs pick their target**: `self.nearestPlayer()`, then `moveTo`, `lookAt`, `canSee`, `distanceTo`, `shoot` and `damage` it. The built-in `Behaviors` all hunt the nearest player.
-- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`, and the array stays up to date as players come and go. `playerReady` follows when a person's screen is in play: on a server, straight after their `playerJoin` (their browser joins when they press Play); in single-player, when they first press Play, after `start`. Bots have no screen and don't get one. Anything you put on their screen at `playerJoin` reaches it, but `playerReady` reads better for a welcome or a modal (an outfit picker, a team choice).
+- **Joining and leaving:** `playerJoin` and `playerLeave` events. Players already here when `start` runs are in `game.players`, and the array stays up to date as players come and go. `playerReady` follows when a person's screen is in play: straight after their `playerJoin` (their browser joins when they press Play). Bots have no screen and don't get one. Anything you put on their screen at `playerJoin` reaches it, but `playerReady` reads better for a welcome or a modal (an outfit picker, a team choice).
 - **Player against player.** With `player: { pvp: true }`, players' swords and arrows hit other players too (never the shooter); without it, players can't hurt each other. Monsters' shots always hit any player. Who hit whom arrives as usual: `playerDamage` and `playerDeath` name the attacker as `source`.
 
-**Playing together.** Any game can be hosted by the game server, and players join from their browsers:
+**Playing together.** Every game is played on a game server, one player or many, and players join from their browsers. In development `npm run dev` runs one for you (see Running and debugging); a server on its own:
 
 ```sh
 npm run server -- sandbox --port 8787          # add --cheats for /tp, /give…, --seed to pick a new world's seed
@@ -373,7 +420,7 @@ npm run server -- sandbox --port 8787          # add --cheats for /tp, /give…,
 http://localhost:5173/?server=ws://localhost:8787&game=sandbox
 ```
 
-With no games named, a server hosts every game in the launcher. Development games (the ones behind `?game=` alone, like High Noon, `moves` or the previews) are hosted only when named: `npm run server -- highnoon`, then `?server=ws://localhost:8787&game=highnoon`.
+With no games named, a server hosts every game in the launcher. Development games (the ones behind `?game=` alone, like High Noon, `moves` or the previews) are hosted only by a server in development mode (`npm run dev`, or `npm run server -- --dev`).
 
 The server runs the game at 30 steps a second whether or not anyone's watching a given frame. The first to join is `game.player`; everyone else arrives at the spawn and the game hears `playerJoin`. When the first player leaves, the next to join takes their place, so `game.player` always works. Everyone sees everyone else as a figure with their name above it, wearing the game's player skin (or their own, `player.setSkin`). Your own movement is predicted: it happens the moment you press a key, and the server's word only corrects it when something you couldn't know about happened (a knockback, a teleport). A restart (from any player's pause menu or a "Play again" button) restarts the game for everyone. `game.exit()` sends back to the launcher only the player whose button or command called it.
 
@@ -381,7 +428,7 @@ The server runs the game at 30 steps a second whether or not anyone's watching a
 
 **Games of one's own.** A match game can let players start a game of their own instead of joining the public one: set `instances: true` on the game (Bed Wars, the Arena and Starfighter do). Its home page on a server then has a second button, "Play on your own". It opens a separate copy of the game (its own world, its own match, the bots filling the empty places) at an address of its own (`?game=bedwars&room=k3x9f2`); "Copy invite link" hands that address to friends, and "Public game" goes back. Such a game keeps no world or places, but it shares the game's `game.store` with the public one, so all-time numbers count wherever they were earned. It stops a minute after the last player leaves. Each game on a server runs in a worker thread of its own, so the variables your game keeps in its module are its own in each copy; leave `instances` off for games that are one shared world (Sandbox). A server runs up to 8 games at once (`--rooms`, about 30 to 50 MB each), and one address may have 2 of its own going.
 
-How a single-player game behaves with company depends on how it's written: a game that only talks to `game.player` gives the others a world to walk around in, while one that uses `game.players`, `player.hud` and the named player in callbacks works for everyone.
+How a game written for one player behaves with company depends on how it's written: a game that only talks to `game.player` gives the others a world to walk around in, while one that uses `game.players`, `player.hud` and the named player in callbacks works for everyone.
 
 ## Items
 
@@ -479,7 +526,7 @@ gun: {
 **A game's gun rules.** `guns` in the game definition sets how every gun plays. The host and each shooter's own screen both play by it (a screen predicts its own movement and fires its own shots), so it's data. The defaults are Call of Blocky's:
 
 ```ts
-defineGame({
+defineShared({
   guns: {
     rewind: 0.35,                          // seconds a shot may look back for where its target was
     hitboxes: {                            // players' boxes for bullets, blocks up from the feet; give what you change
@@ -548,7 +595,7 @@ The platform's layout is a shooter's, and it suits building too:
 Next and previous skip empty slots in an `items` hotbar, as the mouse wheel does. A game changes buttons with `gamepad`. A button's job is a key code, `'LMB'`, `'MMB'` or `'RMB'`, one of `'jump'`, `'crouch'`, `'sprint'`, `'next'`, `'prev'`, `'pause'`, or `null` for nothing:
 
 ```ts
-defineGame({
+defineMeta({
   controls: [['L', 'loadout'], /* … */],
   gamepad: { Up: 'KeyL', R3: ['Digit3', 'katana'], Down: null },
 });
@@ -574,7 +621,7 @@ Set their controls in `update`; they apply from the next tick. `player.bot` tell
 
 ## Kits: ready-made systems, no special access
 
-Some gameplay systems are common enough that the platform ships them, but they aren't part of the core. A **kit** is an ordinary module under `src/platform/kits/`, written only against `@platform`, exactly like code in your game folder. `npm run check:boundaries` (part of `typecheck` and `build`) fails if a kit, or a game, imports anything else. Use a kit as is, copy it into your game and change it, or write your own: nothing a kit does needs access your game doesn't have. `Behaviors` for mobs follow the same idea.
+Some gameplay systems are common enough that the platform ships them, but they aren't part of the core. A **kit** is an ordinary module under `src/platform/kits/`, written only against `@platform`, exactly like code in your game folder. Kits are rules, so they run on the server: a game's server code (and its helpers) may import `@platform/kits`, its shared and client code may not. `npm run check:boundaries` (part of `typecheck` and `build`) fails if a kit, or a game, imports anything else. Use a kit as is, copy it into your game and change it, or write your own: nothing a kit does needs access your game doesn't have. `Behaviors` for mobs follow the same idea.
 
 | Kit | What it does |
 | --- | --- |
@@ -751,7 +798,7 @@ With `player: { controller: 'none' }` there's no walking body: the game decides 
 **Vehicles.** A ship, a car or a board is a vehicle: define it in the game's `vehicles`, and put a player in one with `player.drive(name, state, { prop })`. Its `step` moves it from their controls; the platform runs it input by input on the host, and on the player's own screen ahead of the host (client-side prediction, as walking has), so it answers at once however far away the server is. `pose` places its model (`prop`) on every screen, and `camera` gives the pilot a chase camera worked out on their screen every frame.
 
 ```ts
-export default defineGame({
+export const shared = defineShared({
   player: { controller: 'none' },
   vehicles: {
     ship: {
@@ -822,7 +869,7 @@ update(game, dt) {
 
 - **Riding.** Whoever stands on it rides it: walking, jumping, standing still or `freeze`d (a helmsman at the wheel, a cutscene). After a jump you land back on the same spot, even as it sails on. Jump or fall off and you keep its speed. `player.riding` and `entity.riding` say which prop someone is on. Put it somewhere far away in one go (8 blocks or more in a tick) and whoever rides it goes along.
 - **Online** it's predicted like walking: your own steps on deck answer at once, and you're drawn on the ship where your screen draws it, so the deck never slides under your feet. Your view turns as the ship turns.
-- **The world's blocks.** Set `position` / `quaternion` and it goes there, blocks or no blocks. `sweep(to)` moves it the way a walker moves: all the way if that doesn't put more of it into blocks than there is now, or else as far as it can (the turn alone, then one axis at a time, sliding along whatever is in the way). It returns true if it got all the way. It can always back off or turn away from what it's touching. For motion of your own (a ship with speed and turn rates to damp when it hits something), `overlap(at?)` says how many of its blocks would be in the world's blocks at a pose: 0 is clear. Skyship moves its airship in three parts that way: sailing, turning and rising (`sail` in `src/games/skyship/index.ts`).
+- **The world's blocks.** Set `position` / `quaternion` and it goes there, blocks or no blocks. `sweep(to)` moves it the way a walker moves: all the way if that doesn't put more of it into blocks than there is now, or else as far as it can (the turn alone, then one axis at a time, sliding along whatever is in the way). It returns true if it got all the way. It can always back off or turn away from what it's touching. For motion of your own (a ship with speed and turn rates to damp when it hits something), `overlap(at?)` says how many of its blocks would be in the world's blocks at a pose: 0 is clear. Skyship moves its airship in three parts that way: sailing, turning and rising (`sail` in `src/games/skyship/server.ts`).
 - **Points on it.** `prop.toWorld(local)` and `toLocal(world)` convert between its own space and the world, through any parent it rides and its scale. That's where a helm, a seat or a spawn point on deck is now.
 - **Shape.** Every solid block of the model collides; plants and liquids don't. Low lips and gentle slopes (a deck rolling a few degrees) are walked up without jumping. It stays solid while hidden (`visible = false`), which gives you an invisible wall. `prop.solid = false` turns it off. Only block models can be solid; glTF models can't.
 - **Parts.** Props attached to it (`attach`) ride with it too. A solid part attached to a solid ship is solid as well: a turret you can stand on, or a drawbridge that swings.
@@ -951,12 +998,12 @@ game.audio.define('laser', (s) => {
 - `s.tone` is an oscillator sweep with an envelope and optional lowpass, bandpass (which can sweep: `bandpass: { freq, to, q }`) or vibrato. Starfighter's TIE howl is three detuned, wavering sawtooths through a sweeping bandpass.
 - `s.noise` is filtered noise with a sweeping filter.
 - `s.pitch` is the play's pitch: multiply frequencies by it.
-- Your game runs away from the player's speakers (in a worker, or on a server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
+- Your game's rules run away from the player's speakers (on the server), so a voice is sent to them as the tones and noises it makes, recorded at two pitches. Build voices only from `s.tone` and `s.noise`; a little randomness in a voice is fixed at the recording.
 - The built-in sounds (`BuiltinSound`) are the generic ones the platform's own systems use (swing, hit, hurt, bow, pickup, explosion, UI stingers, a grenade's `bounce`, a bottle's `glass`, `fire`).
 
 ## Keeping data
 
-`game.store` keeps values across restarts: all-time stats, leaderboards, unlocks. On a game server it's in the server's database; in single-player, in the browser. Values are anything JSON can hold, and they're copies (changing an object you got doesn't change what's kept until you `set` it again). Keep per-player values under the player's name:
+`game.store` keeps values across restarts: all-time stats, leaderboards, unlocks. It's in the server's database. Values are anything JSON can hold, and they're copies (changing an object you got doesn't change what's kept until you `set` it again). Keep per-player values under the player's name:
 
 ```ts
 const key = `stats:${player.name}`;
@@ -1098,6 +1145,23 @@ They work wherever a name does, beside the widget's own data: `{{$gun.mag}}`, `d
 
 Call of Blocky's corner of the screen (kills, place, the leader, the streak toward the UAV and the Adrenaline Shot, their timers) is a widget: `src/games/callofblocky/hud.ts`.
 
+## Running and debugging
+
+```sh
+npm run dev                                         # http://localhost:5173/?game=<id>
+npm run dev -- --port 5173 --server-port 8787       # the ports (the defaults; a taken 8787 falls back to any)
+npm run dev -- callofblocky --seed 7 --new          # past the ports, the options are `npm run server`'s
+```
+
+`npm run dev` builds the engine, then runs a local game server in development mode and Vite together. The page connects to that server on its own (`ws://<the page's host>:<the server's port>`); `?server=ws://…` picks another, and a production build connects to the server it was built with (`VITE_GAME_SERVER`). A server in development mode has cheats on, hosts the development games when a page names one (`?game=gallery`), and answers `__game.dev`. It keeps each game's world and data in `data/` (`--data dir`) as any server does. Each room compiles its game's server code when it starts, so a change to it shows in the next room started (a game of one's own, or the public one once it has stopped); a change to client or shared code reloads the page as usual.
+
+In a development build, `window.__game` is the page's runtime, for the browser's console and for tests driving it:
+
+- `await __game.dev(js)` runs `js` in the game's room on the server, as a function body (or a single expression) with `game` (the room's `GameContext`) and `me` (this browser's own `Player` there, null until it joins) in scope, and resolves with the result as JSON (a promise it returns is awaited), or rejects with the error. `await __game.dev('game.players.length')`, `await __game.dev('me.teleport({ x: 0, y: 80, z: 0 }); return me.position')`, `await __game.dev('game.bots.all.map((b) => [b.name, b.health])')`. Only a server in development mode runs it; any other refuses, and a production build of the server has no way to.
+- `__game.debugPlay()` joins and plays without the click that takes the pointer; with `__game.debugActive = true` the controls count as active without pointer lock (headless browsers). `__game.debugInput()` is the input (press keys, move the mouse), `__game.controller` the first-person view (`yaw`, `pitch`) and `__game.debugView(yaw, pitch)` turns it, `__game.debugInfo()` says what's on screen (the game, the mode, whether the world's ready, this player's state, chunk and render stats).
+
+`console.log` from server code shows in the terminal running the server.
+
 ## Testing a game headless
 
 Your game can run in Node with no browser, no GPU and no rendering. A bot plays it at 100–200× real time, and the result is the same every run with the same seed. Tests live in `tests/headless/` and run with `npm run test:headless`:
@@ -1117,7 +1181,7 @@ export default function myGame() {
 }
 ```
 
-- `launch(id)` finds the launcher's games and the development ones (`launch('highnoon')`), or takes a game's definition itself (`launch(myGame)`).
+- `launch(id)` finds the server registry's games (`src/games/server.ts`) and the development ones (`launch('highnoon')`), or takes a game's definition itself (`launch(myGame)`, a `defineGame` or a `defineServer`).
 - `h.run(seconds, { pilot, until, dt })` steps the simulation at 60 ticks per second. `h.step(dt, input)` steps once.
 - `pilot` returns the local player's controls as a `PlayerInput`: `down` for keys held, `pressed` for keys pressed this tick, `clicked` for the buttons clicked this tick as a bitmask (1 = left), and `yaw` / `pitch` to aim. Return `{}` to stand still.
 - `h.calls` records every presentation call (banners, feeds, screens, sounds), and `h.find('hud', 'banner')` filters them. `lastScreen(h)` is the title of the last `hud.screen`.
@@ -1131,11 +1195,12 @@ For online play there are probes rather than tests: `tests/headless/_netprobe.ts
 
 ```
 ┌──────────── games (TypeScript, only @platform) ────────────┐
-│ rules · content · AI behaviours · HUD choreography          │
+│ meta · shared: world, blocks, movement, vehicles            │
+│ server: rules · content · AI behaviours · HUD choreography  │
 ├──────────── kits + art toolkit (optional, only @platform) ──┤
 │ survival building · interactions · pixel-art painter        │
 └──────────────────────── GameContext ───────────────────────┘
-┌──────────── host: GameHost (a Web Worker; Node; a server) ──┐
+┌──────────── host: GameHost (a game server; Node) ───────────┐
 │ Sim: players · entities · items · combat · props · commands │
 │ its own world, generated around the players                 │
 └──── PlayerInput in ▲   ▼ content · calls · edits · frame ───┘
@@ -1157,13 +1222,13 @@ Your game runs inside the **simulation**, and everything it does reaches players
 - **Presentation calls out.** `hud`, `fx`, `audio` and the view model are proxies. Each call becomes a `PresentCall` addressed to one player (`player.hud`) or to everyone (`game.hud`). Menu entries, buttons and other callbacks go out as ids and come back as `ClientMessage`s, which call your function inside the simulation.
 - **Content by name.** Sounds, atlases, animations, entity and item definitions, and prop models go into a shared `Content` registry, so a frame only has to name them.
 
-A `GameHost` runs the simulation on a world of its own, generated around the players (every player has a physics body in it, by slot), and answers each tick with a batch: the content your game defined since the last one, presentation calls, block edits, then the frame. In the browser the host runs in a Web Worker, so your game's logic never costs the renderer a frame. The page is only the client: it sends one tick per frame with the player's controls, draws the newest frame, and mirrors the host's block edits into its own world for meshing (and for saves). In Node, `Headless` (`src/platform/host/headless.ts`) wraps the same `GameHost` with no client at all; that's what the headless tests run on. The game server (`src/platform/host/server.ts`) hosts it too, for many clients over WebSockets, each game in a worker thread of its own (`host/room.ts`, `host/room-worker.ts`; the production bundle is also the worker): it keeps its own clock, merges each client's controls between steps, sends each client only the calls meant for everyone or for them, and catches late joiners up with the game's content, the world's edits and what's on everyone's screen. Over a socket each frame goes as a patch on the one before (`net/delta.ts`: only the fields and records that changed, numbers rounded to a tenth of a millimetre), and the sockets are compressed, so a game costs each player a few kilobytes a second. Clients play the server's frames back about two steps behind, blending positions, so movement is smooth although frames arrive unevenly. Their own player they predict instead: each input moves them at once, with the same movement step the server takes (`sim/movement.ts`), goes to the server numbered, and is moved again there input by input; frames say which input was applied last, so the client starts again from the server's state and replays the rest. Same code on the same blocks lands in the same place, so a correction only shows when the server did something the client couldn't know about. Vehicles are predicted the same way, with the game's own `step`. The server plays each client's inputs at the pace they were made, keeping a few in hand so ones that arrive late don't make the player lurch on everyone else's screen, and says how far each player's state trails the step (whole inputs rarely fill one exactly) so other screens draw them where they are. Game code that throws (a timer, `update`, an entity's AI) is reported to the players and the game carries on. Presentation calls that set something lasting (an objective, a stat, a marker, the block highlight) are only sent when they change, which is what keeps a game's traffic small. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
+A `GameHost` runs the simulation on a world of its own, generated around the players (every player has a physics body in it, by slot), and answers each tick with a batch: the content your game defined since the last one, presentation calls, block edits, then the frame. The host runs on a game server, never in the browser, so your game's rules never cost the renderer a frame and never reach the page. The page is only the client: it sends the player's controls every frame, draws the newest frame, and mirrors the host's block edits into its own world for meshing. In Node, `Headless` (`src/platform/host/headless.ts`) wraps the same `GameHost` with no client at all, driving its clock one tick at a time; that's what the headless tests run on. The game server (`src/platform/host/server.ts`) hosts it for many clients over WebSockets, each game in a worker thread of its own (`host/room.ts`, `host/room-worker.ts`; the production bundle is also the worker): it keeps its own clock, merges each client's controls between steps, sends each client only the calls meant for everyone or for them, and catches late joiners up with the game's content, the world's edits and what's on everyone's screen. Over a socket each frame goes as a patch on the one before (`net/delta.ts`: only the fields and records that changed, numbers rounded to a tenth of a millimetre), and the sockets are compressed, so a game costs each player a few kilobytes a second. Clients play the server's frames back about two steps behind, blending positions, so movement is smooth although frames arrive unevenly. Their own player they predict instead: each input moves them at once, with the same movement step the server takes (`sim/movement.ts`), goes to the server numbered, and is moved again there input by input; frames say which input was applied last, so the client starts again from the server's state and replays the rest. Same code on the same blocks lands in the same place, so a correction only shows when the server did something the client couldn't know about. Vehicles are predicted the same way, with the game's own `step`. The server plays each client's inputs at the pace they were made, keeping a few in hand so ones that arrive late don't make the player lurch on everyone else's screen, and says how far each player's state trails the step (whole inputs rarely fill one exactly) so other screens draw them where they are. Game code that throws (a timer, `update`, an entity's AI) is reported to the players and the game carries on. Presentation calls that set something lasting (an objective, a stat, a marker, the block highlight) are only sent when they change, which is what keeps a game's traffic small. Kits only talk to `GameContext` too, so they come along unchanged; that's another reason systems like building live in kits rather than inside the runtime.
 
 On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types. A native server can link the same crate and generate identical worlds from the same seed and blueprints. Entity state lives in flat `f64` buffers (layout documented in `entities.rs`) that serialise directly into snapshots. Rendering, chunk meshing, lighting and culling stay on the client.
 
 What this means when you write a game:
 
-- Your game runs in a worker: there is no `document` or `window`, and nothing to draw on directly. Keep state in the game module or on entities, and put things on screen only through `hud`, `fx`, `audio` and models. Paint atlases with `@platform/art` (pixels), not a canvas.
-- `console.log` from your game shows in the browser's console as usual. To poke at your game from the console, open it with `?host=page`: the host runs in the page and `__game.context` is your `GameContext`.
+- Your game's rules run on the server: there is no `document` or `window`, and nothing to draw on directly. Keep state in the game module or on entities, and put things on screen only through `hud`, `fx`, `audio` and models. Paint atlases with `@platform/art` (pixels), not a canvas.
+- `console.log` from your server code shows in the server's terminal. To poke at your game from the browser's console, use `await __game.dev(js)` (see Running and debugging).
 - Use `player.hud` for things only that player should see, such as a shop, a wallet or a death screen. Use `game.hud` for match-wide banners and objectives.
-- Write for any number of players: iterate `game.players`, target `entity.nearestPlayer()`, and use the `player` passed to callbacks and events. `game.player` is only a convenience for single-player games.
+- Write for any number of players: iterate `game.players`, target `entity.nearestPlayer()`, and use the `player` passed to callbacks and events. `game.player` is only a convenience for games played alone.
