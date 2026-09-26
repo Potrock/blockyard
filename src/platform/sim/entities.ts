@@ -1,6 +1,7 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type {
   AudioApi,
+  ClipOptions,
   DamageOptions,
   Entity,
   EntityApi,
@@ -17,6 +18,7 @@ import type {
 } from '../api/types';
 import type { Content } from '../content';
 import { wasmMemory } from '../engine/wasm';
+import { vetDamage } from './health';
 
 // Mirrors engine/src/entities.rs.
 const B = {
@@ -56,6 +58,27 @@ export interface EntityServices {
   guard(fn: () => void): void;
   /** Props by id (what entities ride). */
   prop(id: number): Prop | null;
+  /** Host time (`SimFrame.t`). */
+  now(): number;
+}
+
+/** A model animation clip a figure plays (`animate`), as its frames carry it to every screen. */
+export interface ClipFrame {
+  /** Counts up with each request: a screen starts the clip when it changes. */
+  seq: number;
+  name: string;
+  loop: boolean;
+  fade: number;
+  layer: 'full' | 'upper' | string[];
+  speed: number;
+  /** When it began (host time, `SimFrame.t`): a screen that sees it late starts it part way through. */
+  at: number;
+}
+
+/** A clip request (`player.animate`, `entity.animate`) as frames carry it, its options filled in. */
+export function clipFrame(seq: number, name: string, opts: ClipOptions | undefined, at: number): ClipFrame {
+  const layer = opts?.layer;
+  return { seq, name, loop: opts?.loop ?? false, fade: Math.max(0, opts?.fade ?? 0.2), layer: Array.isArray(layer) ? [...layer] : (layer ?? 'full'), speed: opts?.speed ?? 1, at };
 }
 
 /** One entity as the client needs to draw it. */
@@ -84,15 +107,8 @@ export interface EntityFrame {
   held?: string | null;
   /** Health, 0..1 (health bars over heads). */
   hp?: number;
-  /** Crouching (1) or sliding (2) (players' figures). */
-  stance?: number;
-  /** Aiming a gun where it looks, how far down the sights 0..1 (players' figures). */
-  aim?: number;
-  /** A player's figure (made on each screen from the players' frames): off the ground, sprinting, reloading, aiming down the sights 0..1. */
-  air?: boolean;
-  sprint?: boolean;
-  reloading?: boolean;
-  ads?: number;
+  /** A model animation clip it's playing (`animate`). */
+  clip?: ClipFrame;
 }
 
 /** One projectile in flight (or stuck in a wall). */
@@ -113,7 +129,8 @@ type Target = Player | Entity | Vec3;
 const isPlayer = (t: unknown): t is Player => typeof t === 'object' && t !== null && (t as { kind?: string }).kind === 'player';
 const isEntity = (t: unknown): t is Entity => typeof t === 'object' && t !== null && (t as { kind?: string }).kind === 'entity';
 
-type Internal = ProjectileSpec & { crit?: boolean };
+/** A projectile as fired: a charged shot's crit, and the item that fired it (a bow's id). */
+type Internal = ProjectileSpec & { crit?: boolean; weapon?: string };
 
 interface Projectile {
   id: number;
@@ -141,6 +158,9 @@ class EntityImpl implements Entity {
   raised = false;
   casting = false;
   glowColor: string | null = null;
+  /** A clip it's playing (`animate`), and how many it's been asked to play. */
+  clip: ClipFrame | null = null;
+  clipSeq = 0;
   ambientTimer = 2 + Math.random() * 6;
   speedMul = 1;
 
@@ -184,14 +204,17 @@ class EntityImpl implements Entity {
     return this.def.hitbox.height;
   }
 
-  damage(amount: number, opts: DamageOptions = {}) {
-    if (!this.alive || amount <= 0 || this.def.invulnerable) return;
-    amount *= 1 - Math.min(20, Math.max(0, this.armor)) * 0.04;
+  damage(amount: number, opts: DamageOptions = {}): boolean {
+    if (!this.alive || amount <= 0 || this.def.invulnerable) return false;
+    // The game may change or cancel it first.
+    const hit = vetDamage(this.m.s.emit, this, amount, opts);
+    if (!hit) return false;
+    amount = hit.amount * (1 - Math.min(20, Math.max(0, this.armor)) * 0.04);
     this.health = Math.max(0, this.health - amount);
     this.hurt = 1;
     const pos = this.position;
     const from = opts.from ?? (typeof opts.source === 'object' ? opts.source.position : null);
-    const kb = (opts.knockback ?? 1) * (1 - (this.def.knockbackResistance ?? 0));
+    const kb = hit.knockback * (1 - (this.def.knockbackResistance ?? 0));
     if (from && kb > 0) {
       const dx = pos.x - from.x;
       const dz = pos.z - from.z;
@@ -202,9 +225,10 @@ class EntityImpl implements Entity {
     this.m.s.fx.damageNumber({ x: top.x, y: top.y + 0.4, z: top.z }, amount, { crit: opts.crit });
     this.m.s.fx.burst({ x: pos.x, y: pos.y + this.height * 0.6, z: pos.z }, { color: this.def.bloodColor ?? '#b3261e', count: opts.crit ? 22 : 12, speed: 3.5, size: 0.08 });
     this.m.s.audio.play(this.def.sounds?.hurt ?? 'mob_hurt', { at: pos, pitch: 0.9 + Math.random() * 0.2 });
-    const how = { weapon: opts.weapon, headshot: opts.headshot };
+    const how = { weapon: opts.weapon, headshot: opts.headshot, ...(opts.through && { through: opts.through }) };
     this.m.s.emit('entityDamage', { entity: this, amount, source: opts.source, ...how });
     if (this.health <= 0) this.die(opts.source, how);
+    return true;
   }
 
   heal(amount: number) {
@@ -325,10 +349,15 @@ class EntityImpl implements Entity {
     return isPlayer(target) && this.m.bodies[this.o + B.PLAYER] === this.m.s.slotOf(target);
   }
 
-  animate(name: 'attack' | 'raise' | 'cast' | 'none') {
-    this.raised = name === 'raise';
-    this.casting = name === 'cast';
-    if (name === 'attack') this.attacks++;
+  animate(name: string, opts?: ClipOptions) {
+    if (name === 'attack' || name === 'raise' || name === 'cast' || name === 'none') {
+      this.raised = name === 'raise';
+      this.casting = name === 'cast';
+      if (name === 'attack') this.attacks++;
+      if (name === 'none') this.clip = null;
+      return;
+    }
+    this.clip = clipFrame(++this.clipSeq, name, opts, this.m.s.now());
   }
 
   setSpeed(multiplier: number) {
@@ -340,16 +369,17 @@ class EntityImpl implements Entity {
     this.glowColor = color;
   }
 
-  shoot(spec: ProjectileSpec, target: Target, opts: { spread?: number; lead?: boolean } = {}) {
+  shoot(spec: ProjectileSpec, target: Target, opts: { spread?: number; lead?: boolean | number } = {}) {
     const p = this.position;
     const from = { x: p.x, y: p.y + this.height * 0.82 * Math.min(1.4, this.def.model.scale), z: p.z };
     let tp = { ...this.m.aimPoint(target) };
     if (isPlayer(target)) tp.y -= 0.35;
     const dist = Math.hypot(tp.x - from.x, tp.y - from.y, tp.z - from.z);
     const t = dist / spec.speed;
-    if (opts.lead && (isPlayer(target) || isEntity(target))) {
+    const lead = opts.lead === true ? 0.8 : opts.lead || 0;
+    if (lead && (isPlayer(target) || isEntity(target))) {
       const v = target.velocity;
-      tp = { x: tp.x + v.x * t * 0.8, y: tp.y, z: tp.z + v.z * t * 0.8 };
+      tp = { x: tp.x + v.x * t * lead, y: tp.y, z: tp.z + v.z * t * lead };
     }
     const g = spec.gravity ?? 20;
     tp.y += 0.5 * g * t * t;
@@ -619,13 +649,13 @@ export class EntitySim implements EntityApi {
           }
         } else if (kind === 2) {
           const hit = this.s.bySlot(p[o + P.HIT_INDEX]);
-          if (hit?.alive) hit.damage(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5 });
+          if (hit?.alive) hit.damage(shot.spec.damage, { source: src, from: pos, knockback: shot.spec.knockback ?? 0.5, weapon: shot.spec.weapon, cause: 'projectile' });
           this.removeProjectile(shot);
           continue;
         } else if (kind === 3) {
           const target = this.byBody(p[o + P.HIT_INDEX]);
           if (target && target.alive) {
-            target.damage(shot.spec.damage, { source: src, from: { x: pos.x - p[o + P.VX] * 0.05, y: pos.y, z: pos.z - p[o + P.VZ] * 0.05 }, knockback: shot.spec.knockback ?? 0.4, crit: shot.spec.crit });
+            target.damage(shot.spec.damage, { source: src, from: { x: pos.x - p[o + P.VX] * 0.05, y: pos.y, z: pos.z - p[o + P.VZ] * 0.05 }, knockback: shot.spec.knockback ?? 0.4, crit: shot.spec.crit, weapon: shot.spec.weapon, cause: 'projectile' });
             this.s.audio.play('hit', { at: pos, pitch: 1.2 });
           }
           this.removeProjectile(shot);
@@ -687,6 +717,7 @@ export class EntitySim implements EntityApi {
         hurt: e.hurt,
         dying: e.alive ? -1 : e.dyingTime,
         hp: e.health / e.maxHealth,
+        clip: e.clip ?? undefined,
       });
     }
     const p = this.projectiles;

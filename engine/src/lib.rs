@@ -5,9 +5,11 @@ use wasm_bindgen::prelude::*;
 
 pub mod blocks;
 pub mod cull;
+pub mod damage;
 pub mod entities;
 pub mod entitytex;
 pub mod gen;
+pub mod json;
 pub mod mesher;
 pub mod movers;
 pub mod noise;
@@ -22,6 +24,21 @@ pub mod testutil;
 #[wasm_bindgen]
 pub fn block_registry_json() -> String {
     blocks::registry_json()
+}
+
+/// Use a game's own blocks from now on (in this engine instance): a JSON list of variants (see
+/// `blocks::set_game_blocks`), ids from `game_block_first()` in order; `[]` for none. Call it
+/// before making the generator, mesher or world that should know them. Returns how many; throws
+/// the reason if the list is wrong (the blocks in use don't change then).
+#[wasm_bindgen]
+pub fn set_game_blocks(json: &str) -> Result<u32, JsValue> {
+    blocks::set_game_blocks(json).map(|n| n as u32).map_err(|e| JsValue::from_str(&e))
+}
+
+/// The first id a game's own blocks get; they go up to 254.
+#[wasm_bindgen]
+pub fn game_block_first() -> u32 {
+    blocks::GAME_FIRST as u32
 }
 
 /// Albedo layers followed by material layers (see `texgen`).
@@ -100,6 +117,10 @@ impl TerrainGen {
 
     pub fn set_void(&mut self) {
         self.inner.set_void();
+    }
+
+    pub fn set_void_ground(&mut self, y: i32, top: u8, fill: u8, depth: u8) {
+        self.inner.set_void_ground(y, top, fill, depth);
     }
 
     /// [x, y, z] of a pleasant spawn column.
@@ -234,6 +255,85 @@ impl VoxelWorld {
         self.inner.edit_count() as u32
     }
 
+    // ---- Damage: blocks shot into, little voxel by little voxel (see `damage.rs`) ----
+
+    /// Which blocks `carve` can take bits out of: `ids` has 1 for each destructible block id (by
+    /// id; all 0 or empty turns carving off), and only blocks higher than `above`. Solid opaque
+    /// cubes only, whatever it says.
+    pub fn set_destructible(&mut self, above: i32, ids: &[u8]) {
+        if !ids.iter().any(|&b| b != 0) {
+            self.inner.destructible = None;
+            return;
+        }
+        let mut t = [false; 256];
+        for (i, &b) in ids.iter().take(256).enumerate() {
+            t[i] = b != 0;
+        }
+        self.inner.destructible = Some(Box::new(world::Destructible { above, ids: t }));
+    }
+
+    /// Take a capsule of little voxels out of the destructible blocks it reaches: from (x, y, z)
+    /// along (dx, dy, dz) for `depth` blocks, `radius` round. Returns [removed u32, n u32, then n
+    /// blocks left with nothing (air now, an edit) as x, y, z, the block it was (i32 each), then
+    /// the changes to the rest for other copies of the world (`apply_damage`)], little-endian.
+    #[allow(clippy::too_many_arguments)]
+    pub fn carve(&mut self, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, radius: f64, depth: f64) -> Vec<u8> {
+        carved_bytes(&self.inner.carve([x, y, z], [dx, dy, dz], radius, depth))
+    }
+
+    /// A blast's crater (`World::blast`): a ragged sphere of little voxels `radius` round (x, y, z),
+    /// its edge wandering by `roughness` of that (the same for the same `seed`), out of the
+    /// carvable blocks among `cells` (x, y, z triples). Returns what `carve` returns.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blast(&mut self, x: f64, y: f64, z: f64, radius: f64, roughness: f64, seed: u32, cells: &[i32]) -> Vec<u8> {
+        carved_bytes(&self.inner.blast([x, y, z], radius, roughness, seed, cells))
+    }
+
+    /// Whether `carve` and `blast` can take bits out of the block at (x, y, z).
+    pub fn carvable(&self, x: i32, y: i32, z: i32) -> bool {
+        self.inner.carvable_at(x, y, z)
+    }
+
+    /// Whether a point is inside solid material: a solid block's collision boxes, less what's been
+    /// shot out of it. Unloaded columns count as air.
+    pub fn point_solid(&self, x: f64, y: f64, z: f64) -> bool {
+        world::point_solid(&self.inner, [x, y, z])
+    }
+
+    /// A ray that went into material at (ox, oy, oz): [found, distance, nx, ny, nz], how far along
+    /// it comes out into the open and the face it comes out of (see `World::ray_exit`); found 0
+    /// when it's still in material after `max`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ray_exit(&self, ox: f64, oy: f64, oz: f64, dx: f64, dy: f64, dz: f64, max: f64) -> Vec<f64> {
+        match self.inner.ray_exit([ox, oy, oz], [dx, dy, dz], max) {
+            Some((t, n)) => vec![1.0, t, n[0] as f64, n[1] as f64, n[2] as f64],
+            None => vec![0.0; 5],
+        }
+    }
+
+    /// Damage from the simulation's copy of the world (`carve`'s changes, `export_damage`), here
+    /// too. Returns the loaded columns whose meshes change: [cx, cz, relight] triples, relight 1
+    /// where a block went altogether (remesh around it: its light changed).
+    pub fn apply_damage(&mut self, data: &[u8]) -> Vec<i32> {
+        self.inner.apply_damage(data)
+    }
+
+    /// All the damage, for `apply_damage` in a copy of the world that has none (a late joiner).
+    pub fn export_damage(&self) -> Vec<u8> {
+        self.inner.export_damage()
+    }
+
+    /// How many blocks are damaged.
+    pub fn damage_count(&self) -> u32 {
+        self.inner.damage_count() as u32
+    }
+
+    /// How many of a block's 4096 little voxels are left: fewer once it's been carved, 4096 for
+    /// a block that hasn't (whatever it is).
+    pub fn damage_left(&self, x: i32, y: i32, z: i32) -> u32 {
+        self.inner.damage_at(x, y, z).map_or(damage::CELLS, |d| d.left)
+    }
+
     /// [hit, bx, by, bz, nx, ny, nz, block, distance]
     #[allow(clippy::too_many_arguments)]
     pub fn raycast(&self, ox: f64, oy: f64, oz: f64, dx: f64, dy: f64, dz: f64, max_dist: f64) -> Vec<f64> {
@@ -307,13 +407,23 @@ impl VoxelWorld {
         };
     }
 
+    /// One step of a player's movement. `gravity` and `control` multiply the game's gravity and
+    /// how quickly speed follows the wish, for this step only (1, 1; movement abilities change them).
     #[allow(clippy::too_many_arguments)]
-    pub fn player_step(&mut self, i: u32, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, slide: bool, speed: f64, dt: f64) {
+    pub fn player_step(&mut self, i: u32, wish_x: f64, wish_z: f64, jump: bool, sneak: bool, sprint: bool, slide: bool, speed: f64, gravity: f64, control: f64, dt: f64) {
         let input = world::MoveInput { wish_x, wish_z, jump, sneak, sprint, slide, speed };
         let VoxelWorld { inner, players, .. } = self;
         if let Some(Some(p)) = players.get_mut(i as usize) {
+            p.gravity_scale = gravity;
+            p.control_scale = control;
             p.step(inner, &input, dt);
         }
+    }
+
+    /// Whether a player's body (0.6 x 1.8 x 0.6) fits with its feet at (x, y, z): no solid block,
+    /// block model or mover in the way (unloaded columns count as solid).
+    pub fn player_fits(&self, x: f64, y: f64, z: f64) -> bool {
+        !world::aabb_collides(&self.inner, [x, y, z], world::HALF_W, world::HEIGHT)
     }
 
     /// [x, y, z, vx, vy, vz, on_ground, in_water, eyes_in_water, in_lava, flying, bob, frozen,
@@ -526,8 +636,27 @@ impl VoxelWorld {
         entities::line_clear(&self.inner, [ax, ay, az], [bx, by, bz])
     }
 
+    /// How high the collision of the block at (x, y, z) reaches above the bottom of its cell, in
+    /// blocks: 0 if nothing there is solid, 1 for a full block, 0.5 for a bottom slab, 1.5 for a
+    /// fence; a fence as it's joined there, a carved block as what's left of it. Unloaded columns
+    /// count as solid.
+    pub fn collision_top(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.inner.collision_at(x, y, z, blocks::STONE).iter().map(|b| b[4]).max().unwrap_or(0) as f64 / 16.0
+    }
+
+    /// The boxes you aim at in the block at (x, y, z), 6 numbers each (1/16 of a block within its
+    /// cell): a fence or pane as it's joined there. Empty for air.
+    pub fn target_boxes(&self, x: i32, y: i32, z: i32) -> Vec<u8> {
+        let b = self.inner.get(x, y, z);
+        if b == blocks::AIR {
+            return Vec::new();
+        }
+        self.inner.target_at(x, y, z, b).concat()
+    }
+
     /// Whether block `id` at (x, y, z) would overlap any player's body (only its solid boxes:
-    /// a bottom slab leaves room above it).
+    /// a bottom slab leaves room above it). By id, not what's there: the block would be new, and
+    /// whole.
     pub fn player_overlaps(&self, x: i32, y: i32, z: i32, id: u8) -> bool {
         let k = 1.0 / 16.0;
         self.players.iter().flatten().any(|p| {
@@ -607,4 +736,22 @@ impl Default for Culler {
 #[wasm_bindgen]
 pub fn shadow_camera(to_sun: &[f64], center: &[f64], radius: f64, depth: f64, resolution: f64) -> Vec<f64> {
     cull::shadow_camera([to_sun[0], to_sun[1], to_sun[2]], [center[0], center[1], center[2]], radius, depth, resolution).to_vec()
+}
+
+/// What a carve or a blast changed, for the host: [removed u32, n u32, then n blocks left with
+/// nothing (air now, an edit) as x, y, z, the block it was (i32 each), then the changes to the rest
+/// for other copies of the world (`apply_damage`)], little-endian.
+fn carved_bytes(c: &world::Carved) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + c.emptied.len() * 16 + c.cells.len() * 64);
+    out.extend_from_slice(&c.removed.to_le_bytes());
+    out.extend_from_slice(&(c.emptied.len() as u32).to_le_bytes());
+    for (p, id) in &c.emptied {
+        for v in [p[0], p[1], p[2], *id as i32] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    for (cell, gone) in &c.cells {
+        damage::encode(&mut out, *cell, gone);
+    }
+    out
 }

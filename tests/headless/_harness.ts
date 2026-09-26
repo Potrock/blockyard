@@ -1,17 +1,22 @@
 import { readFileSync } from 'node:fs';
-import { games } from '../../src/games';
+import type { GameDefinition } from '../../src/platform/api/types';
+import { devGames, games } from '../../src/games/server';
 import { Headless, type HeadlessOptions } from '../../src/platform/host/headless';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
 
+/** The development games too (High Noon, the moves course, the previews): tests run as development does. */
+const dev = await devGames();
+
 /**
- * Start a registered game headless, as if the player had just clicked Play. `Math.random` is
- * seeded too (some games use it rather than `game.rng`), so a run with the same seed and the same
- * pilot plays out identically: a failure reproduces.
+ * Start a game headless, as if the player had just clicked Play: a registered game or a dev game
+ * by id (`launch('highnoon')`), or any definition. `Math.random` is seeded too (some games use it
+ * rather than `game.rng`), so a run with the same seed and the same pilot plays out identically: a
+ * failure reproduces.
  */
-export function launch(id: string, o: Partial<HeadlessOptions> = {}): Headless {
-  const def = games.find((g) => g.id === id);
-  if (!def) throw new Error(`no game "${id}"`);
+export function launch(game: string | GameDefinition, o: Partial<HeadlessOptions> = {}): Headless {
+  const def = typeof game === 'string' ? [...games, ...dev].find((g) => g.id === game) : game;
+  if (!def) throw new Error(`no game "${String(game)}" (games: ${[...games, ...dev].map((g) => g.id).join(', ')})`);
   Math.random = mulberry32((o.seed ?? 1) ^ 0x5bd1e995);
   const h = new Headless(def, { wasm, wire: true, ...o });
   h.start();

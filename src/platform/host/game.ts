@@ -2,26 +2,35 @@ import { TerrainGen, VoxelWorld } from '@engine/voxel_engine.js';
 import type { BlockRef, GameDefinition } from '../api/types';
 import { Content } from '../content';
 import { loadEngineSync } from '../engine/wasm';
-import { IDLE_INPUT, type ClientCommand, type HostBatch, type HostEvent, type PlayerInput, type SaveState } from '../net/protocol';
+import { FrameWriter } from '../net/delta';
+import { IDLE_INPUT, type ClientCommand, type DevReply, type HostBatch, type HostEvent, type PlayerInput } from '../net/protocol';
 import type { PlayerSim } from '../sim/player';
-import { Sim } from '../sim/sim';
+import { Sim, type SimFrame } from '../sim/sim';
 import type { WorldHost } from '../sim/world';
-import { applyWorldConfig } from '../workers/config';
+import { applyWorldConfig, worldGenConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
-import { blockIdOf, loadRegistry } from '../world/registry';
-import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
+import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from '../world/blocks';
+import { blockIdOf, destructibleIds, loadRegistry, type Registry } from '../world/registry';
+import { replayable, Replays } from './replay';
+import { groundSpawn, startSpawn } from './spawn';
 import { PresentState } from './state';
 import { MemoryStore, type SavedPlayer, type Store } from './store';
 
 /** Columns generated straight away around the spawn, before the first tick. */
 const CORE = 4;
-/** Columns kept past the radius before they're dropped (so walking back and forth is free). */
+/** Columns always kept past the radius (so walking back and forth is free). */
 const SLACK = 2;
+/**
+ * Columns kept once made, however far everyone goes, before the farthest are dropped (about 10 to
+ * 25 KB each). Generating is most of what a room costs, and fliers cross a battle's whole sky
+ * again and again: kept, a bounded map is made once (Starfighter's is about 4000).
+ */
+const KEEP = 4096;
 
 /**
  * The simulation's own copy of the world: columns generated on the spot around the players (no
- * workers, no meshes), nearest first and a few per tick, and dropped when everyone is far away.
- * Edits survive dropping (the engine keeps them per column).
+ * workers, no meshes), nearest first and a few per tick, and kept until there are too many, when
+ * the farthest from everyone go. Edits survive dropping (the engine keeps them per column).
  */
 export class GeneratedWorld {
   readonly world = new VoxelWorld();
@@ -43,9 +52,10 @@ export class GeneratedWorld {
 
   /**
    * Generate up to `budget` missing columns within `radius` of the given points, nearest first,
-   * and now and then drop those beyond reach. Returns how many were generated.
+   * and now and then, if there are more than `keep`, drop the farthest beyond reach. Returns how
+   * many were generated.
    */
-  update(points: { x: number; z: number }[], radius: number, budget: number): number {
+  update(points: { x: number; z: number }[], radius: number, budget: number, keep = KEEP): number {
     const centres = points.map((p) => [Math.floor(p.x / 16), Math.floor(p.z / 16)] as const);
     const key = `${radius}|${centres.join(';')}`;
     let n = 0;
@@ -71,12 +81,15 @@ export class GeneratedWorld {
       }
       if (!missing) this.settled = key;
     }
-    if (++this.sweep >= 120) {
+    if (++this.sweep >= 120 && this.loaded.size > keep) {
       this.sweep = 0;
-      for (const [k, [cx, cz]] of this.loaded) {
-        if (centres.some(([px, pz]) => Math.max(Math.abs(cx - px), Math.abs(cz - pz)) <= radius + SLACK)) continue;
-        this.world.remove_column(cx, cz);
-        this.loaded.delete(k);
+      const far = [...this.loaded]
+        .map(([k, [cx, cz]]) => ({ k, cx, cz, d: Math.min(...centres.map(([px, pz]) => Math.max(Math.abs(cx - px), Math.abs(cz - pz)))) }))
+        .filter((c) => c.d > radius + SLACK)
+        .sort((a, b) => b.d - a.d);
+      for (const c of far.slice(0, this.loaded.size - keep)) {
+        this.world.remove_column(c.cx, c.cz);
+        this.loaded.delete(c.k);
       }
     }
     return n;
@@ -84,13 +97,17 @@ export class GeneratedWorld {
 }
 
 export interface GameHostOptions {
-  /** The engine: its compiled module (a worker gets the page's) or the `.wasm` bytes (Node). */
+  /** The engine: its compiled module (a room's worker gets the server's) or the `.wasm` bytes. */
   engine: WebAssembly.Module | BufferSource;
   seed: number;
-  /** A saved world to continue. */
-  save?: SaveState | null;
   /** Chat commands like `/give`. */
   cheats?: boolean;
+  /**
+   * Development mode (`npm run dev`): clients' `dev` commands run here (`__game.dev(js)` in the
+   * browser: any code, with the game's context). Never on a public server. A production build
+   * of the server refuses them whatever this says.
+   */
+  dev?: boolean;
   /** Columns kept around each player (the client's view distance). */
   radius?: number;
   /** Columns generated per tick past the first few (`Infinity`: all at once, for tests). */
@@ -102,11 +119,13 @@ export interface GameHostOptions {
   /**
    * Clients connect and leave (`connect`, `disconnect`) and the host keeps its own clock
    * (`step`): a server. Otherwise one client, the first player, is there from the start and its
-   * ticks drive the clock (`handle`): a worker, the page, a test.
+   * ticks drive the clock (`handle`): a test.
    */
   remote?: boolean;
   /** The first player's id and name (default 'local', 'Player'). */
   player?: { id: string; name: string };
+  /** Which room this is (`game.room`): 'public' (the default), or a private room's code. */
+  room?: string;
   /**
    * What's kept across restarts: `game.store`, and for games that keep their world
    * (`world.persist`) its edits and each player's place, by name. Default: memory only.
@@ -142,8 +161,7 @@ const PRIME = 0.04;
 
 /**
  * Hosts one game: its simulation, on a world of its own, driven by `ClientCommand`s and
- * answering with `HostBatch`es. Where it runs is up to the transport: a worker in the page,
- * the page itself, Node for tests, a server.
+ * answering with `HostBatch`es. A server runs one per room (`RoomCore`); tests run one in Node.
  */
 export class GameHost {
   readonly sim: Sim;
@@ -152,7 +170,18 @@ export class GameHost {
   readonly seed: number;
   radius: number;
   readonly store: Store;
+  /** The game's own blocks (`def.blocks`): their ids, by key, are what saves and joining players get. */
+  readonly blocks: GameBlocks;
+  /**
+   * Each step's frame, rounded once, and its patch on the step before's worked out once: what a
+   * server sends (`RoomCore`), and what the replays' history keeps.
+   */
+  readonly frames = new FrameWriter<SimFrame>();
+  /** The room's last few seconds, and the replays playing on players' screens (`game.replay`). */
+  readonly replays: Replays;
+  private readonly registry: Registry;
   private onError?: (err: unknown) => void;
+  private dev: boolean;
   private budget: number;
   private events: HostEvent[] = [];
   private clients = new Map<string, Client>();
@@ -169,16 +198,22 @@ export class GameHost {
     o: GameHostOptions,
   ) {
     loadEngineSync(o.engine);
-    const registry = loadRegistry();
+    // The game's own blocks, before anything is made that needs to know them.
+    const blocks = (this.blocks = gameBlocks(def));
+    useGameBlocks(blocks);
+    const registry = (this.registry = loadRegistry(blocks));
     const seed = (this.seed = (def.world?.seed ?? o.seed) >>> 0);
     const store = (this.store = o.store ?? new MemoryStore());
     this.onError = o.onError;
+    this.dev = o.dev ?? false;
     this.radius = o.radius ?? 8;
     this.budget = o.budget ?? 4;
     const blockId = (b: BlockRef) => blockIdOf(registry, b);
     const cfg = worldGenConfig(def, blockId);
     const gw = (this.world = new GeneratedWorld(seed, cfg));
     const w = gw.world;
+    const destructible = def.world?.destructible;
+    if (destructible) w.set_destructible(destructible.above ?? -1, destructibleIds(registry, destructible));
     const edited = (cells: [number, number, number, number][]) => this.events.push({ t: 'edits', cells });
     const host: WorldHost = {
       world: w,
@@ -196,7 +231,33 @@ export class GameHost {
         this.events.push({ t: 'revert' });
         return w.revert_edits().length / 2;
       },
+      carve: (o, d, radius, depth) => carved(w.carve(o[0], o[1], o[2], d[0], d[1], d[2], radius, depth)),
+      blast: (c, radius, roughness, seed, cells) => carved(w.blast(c[0], c[1], c[2], radius, roughness, seed, cells)),
     };
+    /**
+     * What a carve or a blast changed (see `VoxelWorld.carve`): what's left of the blocks it
+     * chipped, as changes every client takes from its own copy (a tick's carves go together);
+     * the blocks it carved away, as edits.
+     */
+    const carved = (out: Uint8Array): { removed: number; emptied: [number, number, number, number][] } => {
+      const v = new DataView(out.buffer, out.byteOffset, out.byteLength);
+      const n = v.getUint32(4, true);
+      const emptied: [number, number, number, number][] = [];
+      for (let i = 0, at = 8; i < n; i++, at += 16) emptied.push([v.getInt32(at, true), v.getInt32(at + 4, true), v.getInt32(at + 8, true), v.getInt32(at + 12, true)]);
+      const changes = out.subarray(8 + n * 16);
+      if (changes.length) {
+        const last = this.events[this.events.length - 1];
+        if (last?.t === 'damage') {
+          const both = new Uint8Array(last.data.length + changes.length);
+          both.set(last.data);
+          both.set(changes, last.data.length);
+          last.data = both;
+        } else this.events.push({ t: 'damage', data: changes.slice() });
+      }
+      if (emptied.length) edited(emptied.map(([x, y, z]) => [x, y, z, 0]));
+      return { removed: v.getUint32(0, true), emptied };
+    };
+    this.replays = new Replays({ now: () => this.sim.time, push: (e) => this.events.push(e), guard: (fn) => this.guard(fn) });
     const content = new Content();
     content.forward = (def) => {
       const e: HostEvent = { t: 'content', def };
@@ -215,37 +276,28 @@ export class GameHost {
       exit: () => this.events.push({ t: 'exit', client: this.acting }),
       cheats: o.cheats ?? false,
       player: o.player,
+      room: o.room,
       store,
+      replay: this.replays,
       error: (err) => this.report(err),
     });
     if (o.dayLength && !def.world?.freezeTime) this.sim.env.dayLength = o.dayLength;
     this.sim.setup();
 
-    // A kept world picks up where it was: its builds, its time of day.
+    // A kept world picks up where it was: its builds (the game's own blocks by name), its time of day.
     const kept = this.keeps ? store.world() : null;
-    if (kept?.edits && !o.save) {
-      w.import_edits(kept.edits);
+    if (kept?.edits) {
+      w.import_edits(remapEdits(kept.edits, kept.blocks ?? undefined, blocks));
       this.sim.env.time = kept.time;
     }
 
-    // Where the player starts: the save, the game's spawn, or open ground near the generator's pick.
+    // Where players start: the game's spawn, or open ground near the generator's pick.
     const me = this.sim.local;
-    const save = o.save;
-    if (save) {
-      w.import_edits(save.edits);
-      const [x, y, z, yaw, pitch] = save.player;
-      this.sim.env.time = save.time;
-      this.sim.spawn = { x, y, z, yaw };
-      gw.update([{ x, z }], CORE, Infinity);
-      w.set_flying(me.slot, save.flying && (def.player?.fly ?? false));
-      me.place(x, y, z, yaw, pitch);
-    } else {
-      const { fixed, ...sp } = startSpawn(def, seed, cfg);
-      gw.update([sp], CORE, Infinity);
-      const ground = fixed ? null : groundSpawn(w, registry, (x, z) => this.sim.surfaceY(x, z), sp.x, sp.z);
-      this.sim.spawn = { ...sp, ...ground };
-      me.place(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z, sp.yaw);
-    }
+    const { fixed, ...sp } = startSpawn(def, seed, cfg);
+    gw.update([sp], CORE, Infinity);
+    const ground = fixed ? null : groundSpawn(w, registry, (x, z) => this.sim.surfaceY(x, z), sp.x, sp.z);
+    this.sim.spawn = { ...sp, ...ground };
+    me.place(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z, sp.yaw);
     if (o.fov) me.cam.fov = o.fov;
     w.set_frozen(me.slot, true);
     this.events.push({ t: 'ready' });
@@ -255,7 +307,7 @@ export class GameHost {
   }
 
   // -----------------------------------------------------------------------------------------------
-  // One client driving the clock (a worker, the page, tests)
+  // One client driving the clock (tests)
   // -----------------------------------------------------------------------------------------------
 
   /**
@@ -285,6 +337,7 @@ export class GameHost {
    * for `command`, `step`'s batches and `disconnect`.
    */
   connect(name?: string): { id: string; player: string | null; batch: HostBatch } {
+    useGameBlocks(this.blocks);
     const client: Client = { player: null, input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 };
     let id = `c${this.nextClient++}`;
     if (name !== undefined) {
@@ -295,7 +348,11 @@ export class GameHost {
     }
     this.clients.set(id, client);
     // Ready (the game's defaults applied) before what's on screen, which may change them (a skin).
-    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(this.world.world.export_edits()) }, { t: 'ready' }, ...this.flushFor(id)];
+    const w = this.world.world;
+    const events: HostEvent[] = [...this.contentLog, { t: 'edits', cells: decodeEdits(w.export_edits()) }];
+    // Blocks shot into so far: everything missing from each.
+    if (w.damage_count()) events.push({ t: 'damage', data: w.export_damage() });
+    events.push({ t: 'ready' }, ...this.flushFor(id));
     for (const call of this.state.snapshot(client.player?.id ?? '')) events.push({ t: 'call', call });
     return { id, player: client.player?.id ?? null, batch: { events, frame: this.sim.frame() } };
   }
@@ -308,16 +365,27 @@ export class GameHost {
     const taken = new Set(this.sim.players.filter((p) => !p.vacant).map((p) => p.name));
     let name = asked || 'Player';
     for (let n = 2; taken.has(name); n++) name = `${asked} ${n}`;
+    // Taking the first player's place: a new screen, whatever was shown to the last one there
+    // (else a widget up there before gets only changes, and a stat set the same again nothing).
+    const local = this.sim.local;
+    if (local.vacant) {
+      this.state.forget(local.id);
+      this.sim.presentation.forget(local.id);
+    }
+    // Their client learns who it is before anything the game does as they join (`playerJoin`
+    // putting a widget up on their screen, a toast): a screen drops calls for a player it
+    // doesn't know it is yet.
+    const at = this.events.length;
     const player = this.sim.join(name);
     const was = this.keeps ? this.store.player(name) : null;
     if (was) {
       this.world.update([was], 4, Infinity);
       this.world.world.set_flying(player.slot, was.flying && player.allowFlight);
       player.place(was.x, was.y, was.z, was.yaw, was.pitch);
-      if (was.hotbar && player.creative) player.creative.hotbar.splice(0, was.hotbar.length, ...was.hotbar);
+      if (was.hotbar && player.creative) player.creative.hotbar.splice(0, was.hotbar.length, ...was.hotbar.map((b) => this.hotbarId(b)));
     }
     client.player = player;
-    this.events.push({ t: 'joined', player: player.id, client: id });
+    this.events.splice(at, 0, { t: 'joined', player: player.id, client: id });
   }
 
   /** Events so far that concern only this client (its `joined`), taken out of the queue. */
@@ -330,12 +398,17 @@ export class GameHost {
   disconnect(id: string) {
     const c = this.clients.get(id);
     if (!c) return;
+    useGameBlocks(this.blocks);
     this.clients.delete(id);
     const p = c.player;
     if (!p) return;
+    this.replays.left(p.id);
     this.guard(() => this.keepPlayer(p));
     this.guard(() => this.sim.leave(p.id));
-    if (p !== this.sim.local) this.state.forget(p.id);
+    if (p !== this.sim.local) {
+      this.state.forget(p.id);
+      this.sim.presentation.forget(p.id);
+    }
   }
 
   /** Whether this game keeps its world (and players' places) across restarts. */
@@ -346,8 +419,21 @@ export class GameHost {
   private keepPlayer(p: PlayerSim) {
     if (!this.keeps || p.vacant) return;
     const s = p.state;
-    const saved: SavedPlayer = { x: s.x, y: s.y, z: s.z, yaw: p.yaw, pitch: p.pitch, flying: s.flying, hotbar: p.creative ? [...p.creative.hotbar] : undefined };
+    // The game's own blocks in the hotbar are kept by name: their ids follow the definitions.
+    const first = firstGameBlock();
+    const hotbar = p.creative?.hotbar.map((id) => (id >= first ? (this.registry.blocks[id]?.key ?? id) : id));
+    const saved: SavedPlayer = { x: s.x, y: s.y, z: s.z, yaw: p.yaw, pitch: p.pitch, flying: s.flying, hotbar };
     this.store.savePlayer(p.name, saved);
+  }
+
+  /** A kept hotbar slot's block: an id, or a game block's key (stone if it's no longer defined). */
+  private hotbarId(b: number | string): number {
+    if (typeof b === 'number') return b;
+    try {
+      return blockIdOf(this.registry, b);
+    } catch {
+      return 1;
+    }
   }
 
   /**
@@ -356,8 +442,9 @@ export class GameHost {
    * it stops.
    */
   persist() {
+    useGameBlocks(this.blocks);
     const w = this.world.world;
-    this.store.saveWorld({ game: this.def.id, seed: this.seed, edits: this.keeps ? w.export_edits() : null, time: this.sim.env.time });
+    this.store.saveWorld({ game: this.def.id, seed: this.seed, edits: this.keeps ? w.export_edits() : null, blocks: this.blocks.keys, time: this.sim.env.time });
     for (const c of this.clients.values()) if (c.player) this.keepPlayer(c.player);
     this.store.flush();
   }
@@ -371,6 +458,7 @@ export class GameHost {
   command(id: string, c: ClientCommand) {
     const client = this.clients.get(id);
     if (!client) return;
+    useGameBlocks(this.blocks);
     this.acting = id;
     this.guard(() => this.run(id, client, c));
     this.acting = undefined;
@@ -381,6 +469,8 @@ export class GameHost {
    * calls for everyone and for them, their replies, the rest, and the frame.
    */
   step(dt: number, running = true): Map<string, HostBatch> {
+    // (Hosts sharing a thread, a test server's rooms, each run with their own blocks.)
+    useGameBlocks(this.blocks);
     const sim = this.sim;
     this.guard(() => {
       this.world.update(
@@ -401,6 +491,8 @@ export class GameHost {
       }
       sim.tick(dt, running && sim.started, inputs, premoved);
     });
+    // Replays whose time is up end (their `onEnd` is the game's code).
+    this.replays.update(sim.time);
     // Presses and clicks were used; what's held stays held until the client says otherwise.
     for (const c of this.clients.values()) {
       const i = c.input;
@@ -410,9 +502,11 @@ export class GameHost {
       i.mouseX = 0;
       i.mouseY = 0;
       if (i.shots) i.shots = [];
+      if (i.throws) i.throws = [];
     }
     const events = this.flush();
     const frame = sim.frame();
+    this.record(events, frame);
     const out = new Map<string, HostBatch>();
     for (const [id, c] of this.clients) {
       const me = c.player?.id;
@@ -421,6 +515,7 @@ export class GameHost {
           if (e.t === 'call') return e.call.to === null ? e.call.skip === undefined || e.call.skip !== me : e.call.to === me;
           if (e.t === 'reply' || e.t === 'exit') return !e.client || e.client === id;
           if (e.t === 'joined') return e.client === id;
+          if (e.t === 'replay' || e.t === 'replayEnd') return e.player === me;
           return true;
         }),
         frame,
@@ -429,8 +524,21 @@ export class GameHost {
     return out;
   }
 
+  /**
+   * This step's frame, rounded and patched once (`frames`), and kept with what was shown in the
+   * step for replays. A restart forgets the past (and ends the replays playing).
+   */
+  private record(events: HostEvent[], frame: SimFrame) {
+    this.frames.next(frame);
+    if (events.some((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$reset')) this.replays.reset();
+    const h = this.replays.history;
+    if (h.keep > 0) h.record(frame.t, frame.clock, this.frames.current!, this.frames.patch, replayable(events));
+  }
+
   private run(id: string, client: Client, c: ClientCommand) {
     const sim = this.sim;
+    // (Watching or playing.)
+    if (c.t === 'dev') return this.devCommand(id, client, c);
     // Watching: they can join (`start`) and say how far they see, nothing else yet.
     if (c.t === 'start' && !client.player) this.join(id, client, c.name ?? 'Player');
     if (c.t === 'radius') {
@@ -458,6 +566,8 @@ export class GameHost {
         i.clicked |= n.clicked;
         // Shots add up until a step; a client that sends them (even none) fires its own from then on.
         if (n.shots) (i.shots ??= []).push(...n.shots);
+        // So do throws.
+        if (n.throws) (i.throws ??= []).push(...n.throws);
         if (n.seen !== undefined) i.seen = n.seen;
         i.wheel += n.wheel;
         i.mouseX += n.mouseX;
@@ -466,6 +576,8 @@ export class GameHost {
         return;
       }
       case 'message':
+        // Their screen ended a replay (`client.replay.skip()`).
+        if (c.msg.t === 'replaySkip') return this.replays.skip(me.id, c.msg.id);
         sim.receive({ ...c.msg, player: me.id });
         return;
       case 'start':
@@ -527,6 +639,33 @@ export class GameHost {
     p.aheadVehicle(c.bank);
   }
 
+  /**
+   * A development tool's snippet (`__game.dev(js)`): run as a function body (or, if it's one, an
+   * expression) with `game` and `me` (the client's player, null while watching), and answer with
+   * its result as JSON (awaited, if it's a promise), or the error. Only in development mode, and
+   * never in a production build.
+   */
+  private devCommand(id: string, client: Client, c: { id: number; js: string }) {
+    const reply = (value: DevReply) => this.events.push({ t: 'reply', id: c.id, client: id, value });
+    if (!this.dev || !import.meta.env.DEV) return reply({ ok: false, error: 'refused: development commands need a development server (npm run dev)' });
+    const failed = (err: unknown) => reply({ ok: false, error: err instanceof Error ? (err.stack ?? err.message) : String(err) });
+    let result: unknown;
+    try {
+      let run: (game: unknown, me: unknown) => unknown;
+      try {
+        run = new Function('game', 'me', `return (${c.js}\n);`) as typeof run;
+      } catch {
+        run = new Function('game', 'me', c.js) as typeof run;
+      }
+      useGameBlocks(this.blocks);
+      result = run(this.sim.ctx, client.player?.api ?? null);
+    } catch (err) {
+      return failed(err);
+    }
+    if (result instanceof Promise) result.then((v: unknown) => reply({ ok: true, value: plainJson(v) }), failed);
+    else reply({ ok: true, value: plainJson(result) });
+  }
+
   /** Run game code; if it throws, the clients hear about it and the host carries on. */
   private guard(fn: () => void) {
     try {
@@ -557,6 +696,26 @@ export class GameHost {
     this.events = [];
     return out;
   }
+}
+
+/**
+ * A value as JSON has it (what a `dev` reply can carry): functions dropped, an object met again
+ * (a loop) as '[repeated]', `undefined` as null, numbers JSON can't hold as text.
+ */
+function plainJson(v: unknown): unknown {
+  const seen = new WeakSet<object>();
+  const text = JSON.stringify(v, (_k, x: unknown) => {
+    if (typeof x === 'bigint') return String(x);
+    if (typeof x === 'number' && !Number.isFinite(x)) return String(x);
+    if (x instanceof Map) return Object.fromEntries(x);
+    if (x instanceof Set) return [...x];
+    if (typeof x === 'object' && x !== null) {
+      if (seen.has(x)) return '[repeated]';
+      seen.add(x);
+    }
+    return x;
+  });
+  return text === undefined ? null : JSON.parse(text);
 }
 
 /** The engine's exported edits ([cx, cz, count, (local, block)*]…) as cells. */

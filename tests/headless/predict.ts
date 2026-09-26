@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { BlockRef } from '../../src/platform/api/types';
 import { Predictor } from '../../src/platform/client/predict';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
-import { worldGenConfig } from '../../src/platform/host/spawn';
+import { worldGenConfig } from '../../src/platform/workers/config';
 import type { HostBatch, PlayerInput } from '../../src/platform/net/protocol';
 import { loadRegistry } from '../../src/platform/world/registry';
 import { check, games } from './_harness';

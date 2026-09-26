@@ -1,23 +1,41 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Content } from '../content';
+import type { ClientFigures } from '../api/client/figures';
 import type { AnimState, EntityGraphics, Figure } from '../render/entities';
 import { Shaders } from '../render/shaders';
-import { HELD_SCALE } from './humanoid';
 import type { EntityFrame, ProjectileFrame } from '../sim/entities';
+import { heldView, partsOf, ShownFigure } from './figures';
 
-let boltGeo: THREE.BufferGeometry[] | null = null;
+/**
+ * An entity's frame; or another player's figure's, made on this screen from their frame: whose it
+ * is, and what they're doing.
+ */
+export type FigureFrame = EntityFrame & {
+  player?: string;
+  /** Crouching (1) or sliding (2). */
+  posture?: number;
+  /** Their held item's mechanics aim it where they look (a gun), 0 or 1; how far down its sights they look, 0..1. */
+  aim?: number;
+  sights?: number;
+  /** Off the ground; sprinting; their held item's mechanics reloading it. */
+  air?: boolean;
+  sprint?: boolean;
+  reloading?: boolean;
+};
 
-/** Two crossed quads, 0.8 long along +X and 0.22 wide, with the bolt shader's UVs (v along the length). */
-function boltGeometry(): THREE.BufferGeometry[] {
-  if (!boltGeo) {
+let streakGeo: THREE.BufferGeometry[] | null = null;
+
+/** Two crossed quads, 0.8 long along +X and 0.22 wide, with the streak shader's UVs (v along the length). */
+function streakGeometry(): THREE.BufferGeometry[] {
+  if (!streakGeo) {
     const a = new THREE.PlaneGeometry(0.22, 0.8).rotateZ(-Math.PI / 2);
-    boltGeo = [a, a.clone().rotateX(Math.PI / 2)];
+    streakGeo = [a, a.clone().rotateX(Math.PI / 2)];
   }
-  return boltGeo;
+  return streakGeo;
 }
 
-function boltMaterial(color: string): THREE.RawShaderMaterial {
+function streakMaterial(color: string): THREE.RawShaderMaterial {
   return new THREE.RawShaderMaterial({
     vertexShader: Shaders.fx.vertex,
     fragmentShader: Shaders.fx.fragment,
@@ -41,6 +59,14 @@ interface Shown {
   /** The item in its hand, and the mesh showing it. */
   held: string | null;
   heldMesh: THREE.Mesh | null;
+  /** What the mesh hangs from: on the figure's hand until client code puts it elsewhere. */
+  mount: THREE.Object3D | null;
+  /** The clip it was last told to play (`ClipFrame.seq`; 0: none). */
+  clip: number;
+  /** This frame's (its clip is started or stopped once it's animated). */
+  frame: FigureFrame;
+  /** The figure as client code sees it. */
+  figure: ShownFigure;
 }
 
 interface Shot {
@@ -53,23 +79,45 @@ const tmpV = new THREE.Vector3();
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 
 /**
- * Draws the simulation's entities and projectiles: box models that turn to face where they look
- * or walk, walk cycles, attack swings, hurt flashes, glows and death fades.
+ * Draws the simulation's entities and projectiles: figures that turn to face where they look or
+ * walk, with what they're doing kept for their animation (walking, attacking, looking, falling),
+ * what's in their hands, hurt flashes, glows and death fades.
+ *
+ * Each frame: `sync` places the figures and keeps their state; client code poses them
+ * (`client.figures`: the figures kit poses the humanoid rig's); then `finish` animates them (a
+ * figure on the rig: its pose onto its model, its clips over that; others: their own animation,
+ * unless client code posed them).
  */
 export class EntityView {
   private shown = new Map<number, Shown>();
   private shots = new Map<number, Shot>();
   private time = 0;
+  /** This frame's figures, in the frame's order, and its host time. */
+  private drawn: Shown[] = [];
+  private list: ShownFigure[] = [];
+  private t = 0;
+  /** The figures, for client code. */
+  readonly figures: ClientFigures;
 
   constructor(
     private graphics: EntityGraphics,
     private scene: THREE.Scene,
     private world: VoxelWorld,
     private content: Content,
-  ) {}
+  ) {
+    const view = this;
+    this.figures = {
+      get all() {
+        return view.list;
+      },
+    };
+  }
 
-  sync(entities: EntityFrame[], projectiles: ProjectileFrame[], dt: number, running: boolean) {
+  /** `t`: the frame's host time (`SimFrame.t`), which clips are timed by. Then client code poses them, then `finish`. */
+  sync(entities: FigureFrame[], projectiles: ProjectileFrame[], dt: number, running: boolean, t = 0) {
     this.time += dt;
+    this.t = t;
+    this.drawn = [];
     const seen = new Set<number>();
     for (const f of entities) {
       seen.add(f.id);
@@ -81,9 +129,10 @@ export class EntityView {
         const model = this.graphics.figure(def.model);
         if (!model) continue;
         this.scene.add(model.root);
+        const anim: AnimState = { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, posture: 0, speed: 0, moveX: 0, moveZ: 1, sights: 0, shotT: 9 };
         v = {
           model,
-          anim: { walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0, speed: 0, moveX: 0, moveZ: 1, ads: 0, shotT: 9 },
+          anim,
           yaw: f.yaw,
           attacks: f.attacks,
           probeTimer: Math.random() * 0.2,
@@ -92,10 +141,16 @@ export class EntityView {
           speed: def.speed,
           held: null,
           heldMesh: null,
+          mount: null,
+          clip: 0,
+          frame: f,
+          figure: new ShownFigure(f.id, f.player ?? null, f.type, def.model, partsOf(model), anim),
         };
         this.shown.set(f.id, v);
       }
+      v.frame = f;
       this.draw(v, f, dt, running);
+      this.drawn.push(v);
     }
     for (const [id, v] of this.shown) {
       if (seen.has(id)) continue;
@@ -104,7 +159,26 @@ export class EntityView {
       v.model.dispose();
       this.shown.delete(id);
     }
+    this.list = this.drawn.map((v) => v.figure);
     this.syncShots(projectiles);
+  }
+
+  /**
+   * The frame's figures animated, once client code has posed them: a figure on the rig gets its
+   * pose onto its model (what it holds going with its hand through a clip); others animate
+   * themselves unless client code posed them. Then the clips the frame asks for start or stop.
+   */
+  finish() {
+    for (const v of this.drawn) {
+      if (v.model.rig || !v.figure.posed) v.model.animate(v.anim, v.heldMesh && v.mount);
+      v.figure.posed = false;
+      // A clip to play (on a screen that sees it late, part way through), or to stop.
+      const clip = v.frame.clip;
+      if ((clip?.seq ?? 0) !== v.clip) {
+        v.clip = clip?.seq ?? 0;
+        v.model.play?.(clip ? { name: clip.name, loop: clip.loop, fade: clip.fade, layer: clip.layer, speed: clip.speed, elapsed: this.t - clip.at } : null);
+      }
+    }
   }
 
   /** Its gun just fired (a figure kicks with it). */
@@ -132,7 +206,7 @@ export class EntityView {
     return true;
   }
 
-  private draw(v: Shown, f: EntityFrame, dt: number, running: boolean) {
+  private draw(v: Shown, f: FigureFrame, dt: number, running: boolean) {
     const root = v.model.root;
     root.position.set(f.x, f.y, f.z);
     const hs = Math.hypot(f.vx, f.vz);
@@ -154,7 +228,7 @@ export class EntityView {
     a.casting = f.casting;
     const k = Math.min(1, dt * 12);
     a.aim += ((f.aim ?? 0) - a.aim) * k;
-    a.stance += ((f.stance ?? 0) - a.stance) * k;
+    a.posture += ((f.posture ?? 0) - a.posture) * k;
     if (running) {
       a.time += dt;
       a.attackT += dt;
@@ -172,7 +246,7 @@ export class EntityView {
     a.air = f.air ?? false;
     a.sprint = f.sprint ?? false;
     a.reloading = f.reloading ?? false;
-    a.ads = (a.ads ?? 0) + ((f.ads ?? 0) - (a.ads ?? 0)) * k;
+    a.sights = (a.sights ?? 0) + ((f.sights ?? 0) - (a.sights ?? 0)) * k;
     a.walkAmount += (Math.min(1, hs / Math.max(1.2, v.speed * 0.7)) - a.walkAmount) * Math.min(1, dt * 8);
     a.pace = hs / Math.max(0.1, v.speed);
     if (f.look) {
@@ -217,21 +291,24 @@ export class EntityView {
       (hu.uProbe.value as THREE.Vector2).copy(u.uProbe.value as THREE.Vector2);
       (hu.uOpacity as { value: number }).value = (u.uOpacity as { value: number }).value;
     }
-    v.model.animate(a);
   }
 
-  /** Put an item in a figure's right hand (its model, or its sprite extruded), or empty it. */
+  /**
+   * Put an item in a figure's right hand (its model, or its sprite extruded), or empty it: it
+   * hangs from the hand as its model has it until client code places it (`client.figures`: the
+   * figures kit puts a humanoid's gun in both its hands, anything else in its fist).
+   */
   private hold(v: Shown, item: string | null) {
     v.held = item;
     if (v.heldMesh) {
       v.heldMesh.removeFromParent();
       (v.heldMesh.material as THREE.Material).dispose();
       v.heldMesh = null;
-      v.model.hold?.(null, null);
+      v.figure.held = null;
     }
     const def = item ? this.content.items.get(item) : undefined;
-    const arm = v.model.pivots.get('armR');
-    if (!def || !arm) return;
+    const hand = v.model.pivots.get('armR');
+    if (!item || !def || !hand) return;
     const look = this.graphics.itemLook(def);
     if (!look) {
       // A model whose file is still coming: try again next frame (a block-like item has none).
@@ -242,35 +319,11 @@ export class EntityView {
     const mesh = new THREE.Mesh(geometry, this.graphics.materialFor(look.albedo, look.emissive, look.surface));
     if (look.points?.muzzle) mesh.userData.muzzle = look.points.muzzle.clone();
     else if (model?.muzzle) mesh.userData.muzzle = new THREE.Vector3(...model.muzzle).divideScalar(16);
-    // A humanoid holds it its own way: a gun or a sword in both hands, anything else in the fist.
-    if (model && v.model.hold) {
-      geometry.computeBoundingBox();
-      const box = geometry.boundingBox!;
-      const kind = def.kind === 'gun' ? 'gun' : look.points?.grip2 ? 'melee' : 'other';
-      const info = { kind, grip: look.points?.grip?.clone() ?? new THREE.Vector3(), grip2: look.points?.grip2?.clone(), mag: look.points?.mag?.clone(), length: box.max.z - box.min.z, scale: kind === 'other' ? 0.5 : HELD_SCALE } as const;
-      if (v.model.hold(mesh, info)) {
-        v.heldMesh = mesh;
-        return;
-      }
-    }
-    // In the fist at the end of the hanging arm (the figure faces +z). A held model runs along
-    // +z already: tilt it up a little, its grip in the fist. A sprite stands on edge, turned so
-    // its handle-to-tip diagonal points forward and up, the handle (lower left) in the fist. A
-    // gun runs along the arm (raised to aim, it points where the figure looks).
-    const isGun = def.kind === 'gun';
-    const scale = isGun ? 0.7 : model ? 0.5 : 0.62;
-    mesh.scale.setScalar(scale);
-    if (isGun) mesh.rotation.set(Math.PI / 2, 0, 0);
-    else if (model) mesh.rotation.set(-0.3, 0, 0);
-    else mesh.rotation.set(0, -Math.PI / 2, 0);
-    if (look.points?.muzzle) mesh.userData.muzzle = look.points.muzzle.clone();
-    else if (model?.muzzle) mesh.userData.muzzle = new THREE.Vector3(...model.muzzle).divideScalar(16);
-    const gripPx = model?.grip ?? (look.points?.grip ? (look.points.grip.toArray().map((v) => v * 16) as [number, number, number]) : undefined);
-    const grip = model ? new THREE.Vector3(...(gripPx ?? [0, 0, 0])).divideScalar(16) : new THREE.Vector3(-0.28, -0.28, 0);
-    grip.multiplyScalar(scale).applyEuler(mesh.rotation);
-    mesh.position.set(0, -0.66, 0).sub(grip);
-    arm.add(mesh);
+    // What it hangs from: the hand, until client code moves it (it stays where it's put).
+    if (!v.mount) hand.add((v.mount = new THREE.Object3D()));
+    v.mount.add(mesh);
     v.heldMesh = mesh;
+    v.figure.held = heldView(item, def, mesh, v.mount, look);
   }
 
   private syncShots(frames: ProjectileFrame[]) {
@@ -302,8 +355,8 @@ export class EntityView {
     this.scene.add(group);
     if (!f.sprite) {
       // No sprite: a glowing bolt along +X (the direction of travel).
-      const material = boltMaterial(f.glow ?? '#ffffff');
-      for (const g of boltGeometry()) {
+      const material = streakMaterial(f.glow ?? '#ffffff');
+      for (const g of streakGeometry()) {
         const mesh = new THREE.Mesh(g, material);
         mesh.frustumCulled = false;
         group.add(mesh);
@@ -338,6 +391,8 @@ export class EntityView {
       v.model.dispose();
     }
     this.shown.clear();
+    this.drawn = [];
+    this.list = [];
     for (const s of this.shots.values()) {
       s.group.removeFromParent();
       s.material.dispose();

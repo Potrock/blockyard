@@ -1,16 +1,18 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { MovementOptions } from '../api/types';
+import type { MovementOptions, VehicleControls, VehicleWorld } from '../api/types';
+import { roundMemory, stepAbilities, statesFor, type Abilities, type AbilityCamera, type AbilityEvent, type AbilityStates } from './abilities';
 
-/** The part of a player's controls that moves them. */
-export interface MoveControls {
+/** The part of a player's controls that moves them (and that their movement abilities read). */
+export interface MoveControls extends VehicleControls {
   readonly active: boolean;
-  isDown(code: string): boolean;
-  pressed(code: string): boolean;
   /** A controller's stick ([right, forward]): it walks that way, as fast as it's pushed. */
   readonly move?: [number, number] | null;
 }
 
-/** What movement remembers between steps: taps (double-tap sprinting and flying) and a slide. */
+/**
+ * What movement remembers between steps: taps (double-tap sprinting and flying), a slide, and the
+ * game's movement abilities' states.
+ */
 export interface MoveMemory {
   time: number;
   lastJumpTap: number;
@@ -21,9 +23,21 @@ export interface MoveMemory {
   /** Seconds of slide left (0: not sliding), and until the next may start. */
   slide: number;
   slideCool: number;
+  /** Each of the game's `movement.abilities`' state, by name (made when first needed). */
+  abilities?: AbilityStates;
 }
 
 export const freshMemory = (): MoveMemory => ({ time: 0, lastJumpTap: -1, lastForwardTap: -1, sprintLatched: false, sprinting: false, slide: 0, slideCool: 0 });
+
+/** A copy of movement's memory that shares nothing with it (a frame's, a prediction's). */
+export function copyMemory(m: MoveMemory): MoveMemory {
+  return m.abilities ? { ...m, abilities: structuredClone(m.abilities) } : { ...m };
+}
+
+/** The abilities' states in this memory, each made from its starting state if it isn't there yet. */
+export function abilityStates(m: MoveMemory, tune: MoveTune): AbilityStates {
+  return (m.abilities = statesFor(m.abilities, tune.abilities));
+}
 
 /** A game's `player.movement`, resolved: the engine's numbers, the keys, the slide. */
 export interface MoveTune {
@@ -34,6 +48,8 @@ export interface MoveTune {
   doubleTapSprint: boolean;
   sprint: number;
   slide: { speed: number; time: number; cooldown: number } | null;
+  /** The game's movement abilities, in order (none: movement is the platform's alone). */
+  abilities: Abilities;
 }
 
 const MC = { walk: 4.317, sprint: 5.61, sneak: 1.31, gravity: 32, jumpSpeed: 9 };
@@ -51,6 +67,7 @@ export function resolveMovement(o: MovementOptions = {}): MoveTune {
     doubleTapSprint: o.doubleTapSprint ?? true,
     sprint,
     slide: slide && { speed: slide.speed ?? sprint * 1.45, time: slide.time ?? 0.75, cooldown: slide.cooldown ?? 0.5 },
+    abilities: Object.entries(o.abilities ?? {}),
   };
 }
 
@@ -69,9 +86,24 @@ export const NO_MODS: MoveMods = { speed: 1, noSprint: false };
 const any = (keys: string[], f: (k: string) => boolean) => keys.some(f);
 
 /**
+ * What a step of movement did: crouching, sprinting, sliding (as the body stands: an ability's
+ * `stance` shows here), what abilities triggered, and the camera they asked for.
+ */
+export interface MoveResult {
+  sneak: boolean;
+  sprint: boolean;
+  slide: boolean;
+  events: AbilityEvent[];
+  camera: AbilityCamera | null;
+}
+
+const NO_EVENTS: MoveResult['events'] = [];
+
+/**
  * One step of a player walking, sprinting, crouching, sliding, jumping, swimming or flying,
- * facing `yaw`. The server runs it for every player, and a client runs the very same step to
- * predict its own player before the server answers, so both land in the same place.
+ * facing `yaw` (and `pitch`), with the game's movement abilities (which may ask `query` about the
+ * world). The server runs it for every player, and a client runs the very same step to predict its
+ * own player before the server answers, so both land in the same place.
  */
 export function stepMovement(
   world: VoxelWorld,
@@ -83,7 +115,10 @@ export function stepMovement(
   dt: number,
   tune: MoveTune = DEFAULT_TUNE,
   mods: MoveMods = NO_MODS,
-): { sneak: boolean; sprint: boolean; slide: boolean } {
+  pitch = 0,
+  query: VehicleWorld | null = null,
+): MoveResult {
+  if (tune.abilities.length) roundMemory(m);
   m.time += dt;
   let f = 0;
   let s = 0;
@@ -164,6 +199,26 @@ export function stepMovement(
   }
   const sliding = m.slide > 0;
   m.sprinting = sprint;
-  world.player_step(slot, wx, wz, jump, crouch || sliding, sprint && !sliding, sliding, mods.speed, dt);
-  return { sneak: crouch || sliding, sprint: sprint && !sliding, slide: sliding };
+
+  // The game's own moves (a dash, a double jump, a wall-run): they can change the wish, the jump,
+  // the velocity, and this step's gravity and steering.
+  let speed = mods.speed;
+  let gravity = 1;
+  let control = 1;
+  let events = NO_EVENTS;
+  let camera: AbilityCamera | null = null;
+  // How low the body is: the platform's crouch and slide, unless an ability says otherwise. It's
+  // the hitbox, the eye and the figure's pose, not the physics (the engine's step is as it was).
+  let sneakOut = crouch || sliding;
+  let slideOut = sliding;
+  if (tune.abilities.length) {
+    if (!query) throw new Error('movement abilities need the world to ask');
+    const start = { yaw, pitch, wx, wz, jump, crouching: crouch || sliding, sprinting: sprint && !sliding, sliding, speed };
+    const r = stepAbilities(world, slot, c, tune.abilities, abilityStates(m, tune), m.time, dt, start, query);
+    ({ wx, wz, jump, gravity, control, speed, events, camera } = r);
+    sneakOut = r.stance !== 'stand';
+    slideOut = r.stance === 'low';
+  }
+  world.player_step(slot, wx, wz, jump, crouch || sliding, sprint && !sliding, sliding, speed, gravity, control, dt);
+  return { sneak: sneakOut, sprint: sprint && !slideOut, slide: slideOut, events, camera };
 }

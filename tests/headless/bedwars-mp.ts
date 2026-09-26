@@ -1,10 +1,23 @@
 import { readFileSync } from 'node:fs';
+import type { IconRef, ItemLook, SynthVoice } from '../../src/platform';
+import type { Client } from '../../src/platform/api/client';
+import { soundOf } from '../../src/platform/client/present';
+import { sounds } from '../../src/platform/client-kits';
+import { Content } from '../../src/platform/content';
 import { GameHost } from '../../src/platform/host/game';
+import { PLACEHOLDER_ICON, resolveIcon } from '../../src/platform/looks';
 import type { HostBatch, HostEvent, PlayerInput } from '../../src/platform/net/protocol';
+import bedwarsClient from '../../src/games/bedwars/client';
+import { BLOCK_ITEMS } from '../../src/games/bedwars/shared';
 import { check, games } from './_harness';
 
 type Vec = { x: number; y: number; z: number };
-type Team = { color: string; player: { name: string } | null; body: unknown; wallet: Record<string, number>; bed: boolean; eliminated: boolean; base: { spawn: Vec; bed: Vec[] } };
+type Team = { color: string; player: { name: string } | null; body: unknown; wallet: Record<string, number>; bed: boolean; eliminated: boolean; base: { spawn: Vec; bed: Vec[]; shop: Vec; shopYaw: number } };
+
+/** The fields of an item that are its look (`ItemLook`): Bed Wars' server gives none. */
+const LOOK_FIELDS = ['icon', 'hold', 'sounds', 'tracer', 'trail', 'drawIcon'] as const;
+/** The engine's own sounds (`audio/sfx.ts`): every screen has them without a definition. */
+const ENGINE_SOUNDS = ['hit', 'hurt', 'pickup', 'heal', 'wave', 'victory', 'defeat', 'spawn', 'click', 'countdown', 'lock', 'alarm'];
 
 /** Solo Bed Wars with people: seats, wallets, PvP, takeovers, beds and the end, per player. */
 export default function bedwarsMultiplayer() {
@@ -25,6 +38,7 @@ export default function bedwarsMultiplayer() {
   const feed = () => calls('p1', 'feed').map((a) => String(a[0]));
 
   const ann = host.connect('Ann');
+  const annFirst = ann.batch.events;
   const bob = host.connect('Bob');
   host.command(ann.id, { t: 'start' });
   host.command(bob.id, { t: 'start' });
@@ -41,8 +55,23 @@ export default function bedwarsMultiplayer() {
   check(red.wallet.iron >= 64 && blue.wallet.iron === 0, `Ann's wallet only: red ${red.wallet.iron}, blue ${blue.wallet.iron}`);
   check(calls(ann.id, 'stat').some((a) => a[0] === 'iron' && Number(a[2]) >= 64) && !calls(bob.id, 'stat').some((a) => a[0] === 'iron' && Number(a[2]) >= 64), 'each sees their own wallet');
 
-  // PvP: Bob stands in front of Ann; Ann swings until he's down.
   const [pa, pb] = host.sim.players;
+  // The shop: Ann right-clicks the red shopkeeper.
+  const keeper = red.base;
+  const facing = { x: -Math.sin(keeper.shopYaw), z: -Math.cos(keeper.shopYaw) };
+  pa.api.teleport({ x: keeper.shop.x + facing.x * 2.5, y: keeper.shop.y, z: keeper.shop.z + facing.z * 2.5 }, keeper.shopYaw + Math.PI, -0.15);
+  step(2);
+  const use = (clicked: number): PlayerInput => ({ active: true, down: [], pressed: [], buttons: clicked, clicked, mouseX: 0, mouseY: 0, wheel: 0, yaw: keeper.shopYaw + Math.PI, pitch: -0.15, viewSeq: pa.viewSeq });
+  host.command(ann.id, { t: 'input', input: use(4) });
+  step(1);
+  host.command(ann.id, { t: 'input', input: use(0) });
+  step(2);
+  const shop = calls(ann.id, 'menu')
+    .flatMap((a) => a)
+    .find((o): o is { title: string; sections: { title: string; entries: { label: string; icon?: IconRef }[] }[] } => typeof o === 'object' && o !== null && 'sections' in o);
+  check(shop?.title === 'Item Shop', `Ann's shop opened: ${JSON.stringify(calls(ann.id, 'menu')).slice(0, 200)}`);
+
+  // PvP: Bob stands in front of Ann; Ann swings until he's down.
   const s = red.base.spawn;
   pa.api.teleport({ x: s.x, y: s.y, z: s.z }, 0, 0);
   pb.api.teleport({ x: s.x, y: s.y, z: s.z - 1.6 }, Math.PI, 0);
@@ -90,4 +119,54 @@ export default function bedwarsMultiplayer() {
   const errors = (events.get(ann.id) ?? []).filter((e) => e.t === 'error');
   check(!errors.length, `the game threw: ${errors.map((e) => (e.t === 'error' ? e.text.slice(0, 300) : '')).join(' | ')}`);
   console.log(`  seats, wallets, PvP kill, takeover, leaving, beds and results per player · feed: ${feed().slice(-4).join(' | ')}`);
+  looks([...annFirst, ...(events.get(ann.id) ?? [])], shop!.sections);
+}
+
+/**
+ * How Ann's screen draws and plays Bed Wars (its client code: `client/looks.ts`, `client/sounds.ts`):
+ * the server sent no voices and no item looks; every item has its look, the shop's offers of items
+ * name them and show them as the screen has them, and every sound the server asked for is one the
+ * screen has.
+ */
+function looks(seen: HostEvent[], sections: { title: string; entries: { label: string; icon?: IconRef }[] }[]) {
+  const content = seen.flatMap((e) => (e.t === 'content' ? [e.def] : []));
+  check(!content.some((d) => (d.kind as string) === 'sound'), `the server defines no voices: ${content.flatMap((d) => ((d.kind as string) === 'sound' ? [(d as { name?: string }).name] : []))}`);
+  const served = [...new Map(content.flatMap((d) => (d.kind === 'item' ? [[d.name, d] as const] : []))).values()];
+  const lookish = served.filter((d) => LOOK_FIELDS.some((k) => k in d.def));
+  check(served.length >= 25 && !lookish.length, `nor any item's look (${served.length} items): ${lookish.map((d) => `${d.name}: ${Object.keys(d.def)}`).join('; ')}`);
+  check(served.find((d) => d.name === 'bow')?.def.kind === 'bow' && (served.find((d) => d.name === 'bow')!.def as { projectile?: string }).projectile === 'arrow', 'the bow shoots arrows the server draws');
+
+  // The screen: the server's definitions, then the game's client code (after the standard voices, as its kits run first).
+  const screen = new Content();
+  for (const d of content) screen.apply(d);
+  const voices = new Map<string, SynthVoice>();
+  const client = {
+    audio: { play() {}, define: (n: string, v: SynthVoice) => voices.set(n, v) },
+    items: { look: (id: string, l: ItemLook) => screen.lookItem(id, l), get: (id: string) => screen.items.get(id) },
+  } as unknown as Client;
+  for (const k of sounds.standard()) k.setup?.(client);
+  bedwarsClient.client.setup!(client);
+  const item = (id: string) => screen.items.get(id);
+  const bare = served.filter((d) => item(d.name)?.icon === PLACEHOLDER_ICON);
+  check(!bare.length, `items with no look on the screen: ${bare.map((d) => d.name).join(', ')}`);
+  for (const [id, block] of Object.entries(BLOCK_ITEMS)) check(JSON.stringify(item(id)?.icon) === JSON.stringify({ block }), `${id} looks like the ${block} it places: ${JSON.stringify(item(id)?.icon)}`);
+  check(item('iron_sword_sharp')?.hold?.model === item('iron_sword')?.hold?.model && item('iron_sword')?.hold?.model, 'a sharpened sword looks like its plain one, held as its model');
+  check((item('bow') as { drawIcon?: string }).drawIcon === 'bow_pulling', 'the bow draws');
+
+  // The shop: its items by name, drawn as the screen has them; armour and the team upgrades as sprites of their own.
+  const entries = sections.flatMap((s) => s.entries.map((e) => ({ ...e, section: s.title })));
+  const byName = entries.filter((e) => typeof e.icon === 'object' && 'item' in e.icon);
+  check(entries.filter((e) => e.section !== 'Team upgrades' && !e.label.includes('Armor')).every((e) => byName.includes(e)), `the shop names its items: ${JSON.stringify(entries.map((e) => [e.label, e.icon]))}`);
+  for (const e of entries) {
+    const drawn = resolveIcon(e.icon!, item);
+    check(drawn && drawn !== PLACEHOLDER_ICON, `the shop's ${e.label} is drawn: ${JSON.stringify(e.icon)}`);
+  }
+
+  // Every sound asked for is one the screen has.
+  const asked = seen.flatMap((e) => (e.t === 'call' && e.call.target === 'audio' && e.call.method === 'play' ? [e.call] : []));
+  const heard = new Set(asked.flatMap((c) => soundOf(c.args[0] as string, c.args[1] as never, item)?.[0] ?? []));
+  const missing = [...heard].filter((n) => !voices.has(n) && !ENGINE_SOUNDS.includes(n));
+  check(heard.has('bed_break') && !missing.length, `sounds the screen doesn't have: ${missing.join(', ')} (heard ${[...heard].join(', ')})`);
+  check(['bed_break', 'buy', 'eat', 'final_kill', 'fireball'].every((n) => voices.has(n)), `the game's own voices on the screen: ${[...voices.keys()].join(', ')}`);
+  console.log(`  on Ann's screen: ${served.length} items, each with its look; ${voices.size} voices; the shop's ${byName.length} items by name (of ${entries.length} offers); ${heard.size} sounds asked for, all there`);
 }

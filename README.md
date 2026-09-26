@@ -1,6 +1,6 @@
 # Blockyard
 
-A voxel game platform that runs in the browser. The engine gives you a Minecraft-style world that is already built: an endless procedural world, lighting, a shader pipeline, physics, entities, items, combat, audio and UI. A game on top of it is a single TypeScript module that only describes rules and content.
+A voxel game platform that runs in the browser. The engine gives you a Minecraft-style world that is already built: an endless procedural world, lighting, a shader pipeline, physics, entities, items, combat, audio and UI. A game on top of it is a few small TypeScript files that only describe rules and content: what the launcher shows, what the server and every screen share (the world, blocks, movement), the rules (which run only on the game server), and what each player's screen does.
 
 The compute-heavy work (terrain generation, lighting, meshing, physics, path-finding, projectiles, raycasting, visibility culling and shadow-camera math) is Rust compiled to WebAssembly. three.js on WebGL2 does the rendering, through a custom shader pipeline.
 
@@ -30,24 +30,28 @@ The compute-heavy work (terrain generation, lighting, meshing, physics, path-fin
 | **Skyship** | `?game=skyship` | Crew an airship across the sky islands and light the five beacons. The airship is a solid prop that sails, turns, banks and bobs, and everyone walks its decks while it does: up to the roof, into the cabin, off onto an island and back aboard. Whoever takes the helm (E at the wheel) steers with W/S, A/D and Space/Shift, and can scroll out to steer from outside. Online, the whole party is the crew. |
 | **Bed Wars** | `?game=bedwars` | Hypixel-style Bed Wars on sky islands, against bots or up to three friends (`npm run server -- bedwars`): each player gets their own team, bots play the rest, and someone joining mid-match takes over a bot's team. Collect iron and gold from your generator (diamonds and emeralds on the outer and middle islands), buy blocks, swords, armour, tools, fireballs and team upgrades from the shopkeeper, bridge across the void and break the other beds. You respawn only while your bed stands. The bots fortify, shop, bridge, dig through defences and fight each other as well as you. |
 | **Sky Obby** | `?game=obby` | A parkour course of ten stages floating in the sky: stepping stones, a climb, balance beams, posts in a lava lake, crumbling sand, launch pads, red/blue blinking platforms, a spiral tower, a cannon-swept walkway and a leap of faith to the finish. Each player runs on their own clock (it starts when you leave the start island); falling puts you back at your last checkpoint (R does too), and best times go on a leaderboard. The course checks every jump against the player physics as it builds, and a headless bot runs it start to finish. |
-| **Sandbox** | `?game=sandbox` | Creative building in an endless world. Edits are saved per seed. 17 lines. |
+| **Sandbox** | `?game=sandbox` | Creative building in an endless world, which the server keeps. |
 | **Heart Hunt** | `?game=heart-hunt` | A gentle hunt for ten hidden hearts, and the tutorial game (about 70 lines; see docs/PLATFORM.md). |
 
-The title screen lists every registered game. The pause menu offers restart and exit.
+The title screen lists every game in `src/games/browser.ts`. The pause menu offers restart and exit.
 
-**To write your own game, read [docs/PLATFORM.md](docs/PLATFORM.md).** In short:
+**To write your own game, read [docs/PLATFORM.md](docs/PLATFORM.md).** In short, a game is a folder of four parts:
 
 ```ts
-import { defineGame, Blueprint, HeldModels, Models, Skins, Behaviors } from '@platform';
+// meta.ts: what the launcher lists
+import { defineMeta } from '@platform';
+export default defineMeta({ id: 'my-game', title: 'My Game' });
+
+// shared.ts: what the server and every screen read (each screen generates the terrain and predicts its own movement)
+import { defineShared, Blueprint } from '@platform';
+import meta from './meta';
 
 // A ring wall, stamped into the world during generation.
 const ring = new Blueprint({ x: -12, y: 70, z: -12 }, { x: 25, y: 4, z: 25 });
 ring.columns(0, 0, 12, (x, z, d) => d > 11 && ring.fill({ x, y: 70, z }, { x, y: 73, z }, 'stone_bricks'));
-let won = false;
 
-export default defineGame({
-  id: 'my-game',
-  title: 'My Game',
+export const shared = defineShared({
+  ...meta,
   world: {
     structures: [ring],
     terraform: [{ x: 0, z: 0, radius: 14, blend: 16, height: 69.5 }],
@@ -55,6 +59,14 @@ export default defineGame({
     spawnYaw: -Math.PI / 2, // face +x
   },
   player: { health: 20, hotbar: 'items' },
+});
+
+// server.ts: the rules, which run only on the game server
+import { defineServer, HeldModels, Models, Skins, Behaviors } from '@platform';
+import { shared } from './shared';
+let won = false;
+
+export default defineServer(shared, {
   setup(game) {
     game.items.define('iron_sword', {
       kind: 'melee', name: 'Iron Sword', icon: 'iron_sword', damage: 6.5, cooldown: 0.42, hold: { model: HeldModels.ironSword },
@@ -77,7 +89,14 @@ export default defineGame({
     }
   },
 });
+
+// client.ts: each player's screen
+import { defineClient } from '@platform/client';
+import { shared } from './shared';
+export default defineClient(shared);
 ```
+
+Then list it in `src/games/browser.ts` (its meta, and its client loaded on demand) and `src/games/server.ts` (its server part).
 
 ## Run it
 
@@ -86,25 +105,27 @@ Prerequisites: Rust (stable) with the `wasm32-unknown-unknown` target, and Node 
 ```sh
 rustup target add wasm32-unknown-unknown
 npm install
-npm run dev        # builds the wasm engine, then starts Vite on http://localhost:5173
+npm run dev        # builds the wasm engine, then runs a local game server and Vite on http://localhost:5173
 ```
+
+Every game is played on a game server, alone or together. `npm run dev` runs one in development mode next to Vite (on port 8787, `--server-port` to change it; `--port` for Vite's), and the page connects to it: cheats are on, the development games open by id (`?game=gallery`), and in the browser's console `await __game.dev('game.players.length')` runs code in the game's room on the server (`game` is its `GameContext`, `me` your own player). See [Running and debugging](docs/PLATFORM.md#running-and-debugging).
 
 Other scripts:
 
 | Script | What it does |
 | --- | --- |
-| `npm run build` | Release wasm build, type-check, and a production bundle in `dist/` |
+| `npm run build` | Release wasm build, type-check, the boundary check, a production bundle in `dist/`, and the bundle check (no server code in it). Set `VITE_GAME_SERVER=wss://…` for the server the site plays on |
 | `npm run preview` | Serve the production bundle |
 | `npm run wasm` | Rebuild only the Rust engine (`engine/pkg`) |
-| `npm run typecheck` | TypeScript only |
+| `npm run typecheck` | TypeScript and the boundary check (`npm run check:boundaries`: games, kits and each side of the client / server split keep to their imports) |
 | `npm run test:engine` | Rust unit tests: generation, blueprints, meshing, lighting, culling, physics, entities, path-finding, textures |
 | `npm run test:headless` | Games in Node, no browser (`tests/headless`): every game runs 30 s, a bot beats the Arena, bots play out a Bed Wars match, several players share a host and a real server. About 8 s in total |
-| `npm run server -- [games…] --port 8787` | Host games for several players (all of them by default, each at `ws://localhost:8787/<game>`); they open `/?server=ws://localhost:8787&game=sandbox`. Match games (Bed Wars, Arena, Starfighter) also offer a game of your own (`&room=<code>`), each game running in a worker thread of its own (`--rooms 8` at once). Each game's world, players' places and data are kept in `data/<game>.sqlite` (`--data dir`, `--new` for fresh worlds, `--cheats` for developer commands) |
+| `npm run server -- [games…] --port 8787` | Host games (all of them by default, each at `ws://localhost:8787/<game>`); players open `/?server=ws://localhost:8787&game=sandbox`. `--dev` is development mode, as `npm run dev` runs it. Match games (Bed Wars, Arena, Starfighter) also offer a game of your own (`&room=<code>`), each game running in a worker thread of its own (`--rooms 8` at once). Each game's world, players' places and data are kept in `data/<game>.sqlite` (`--data dir`, `--new` for fresh worlds, `--cheats` for developer commands) |
 | `npm run build:server` / `npm start` | Bundle the game server (games included) into `dist-server/` / run it with plain Node |
 | `npm run deploy:server` | Deploy the game server to Fly.io (`fly.toml`, `Dockerfile`) |
 | `npm run deploy:site` | Build the site pointed at the game server (`GAME_SERVER`, default the Fly app) and deploy it to Vercel |
 
-URL parameters: `?game=<id>` picks a game, and `?seed=1234` picks a world for games that don't fix their own seed. `?server=ws://host:port` joins a game server instead (`&room=<code>`: a game of one's own on it). `?host=page` runs the game in the page rather than a worker (for debugging).
+URL parameters: `?game=<id>` picks a game. `?server=ws://host:port` picks the game server (by default the one the site was built with, or in development the local one), and `&room=<code>` a game of one's own on it. The server picks the world's seed (`npm run server -- --seed 1234`).
 
 ## Online
 
@@ -141,6 +162,7 @@ Moving, jumping, sneaking and sprinting can be rebound under **Keyboard** in the
 ```
 ┌──────────── games (TypeScript, import only @platform) ─────┐
 │ src/games/arena · starfighter · bedwars · sandbox · …       │
+│ each: meta · shared · server (rules) · client               │
 ├──────────── kits (optional, also only @platform) ──────────┤
 │ src/platform/kits   survival building, interactions         │
 │ src/platform/art    pixel-art painter for game atlases      │
@@ -151,10 +173,10 @@ Moving, jumping, sneaking and sprinting can be rebound under **Keyboard** in the
 │ src/platform/sim        Sim: players, entities, items,      │
 │                         combat, props, commands, rules      │
 │ src/platform/net        protocol: inputs, frames, calls     │
-│ src/platform/host       GameHost; in a worker, the page,    │
-│                         or Node (headless tests)            │
+│ src/platform/host       GameHost, rooms, the game server;   │
+│                         Node only (never in the browser)    │
 ├──────────── platform client (TypeScript + three.js) ───────┤
-│ src/platform/runtime.ts the client: game loop, host link    │
+│ src/platform/runtime.ts the client: game loop, server link  │
 │ client/                   camera, entity/pickup/prop views, │
 │                           presenter (HUD/FX/audio calls)    │
 │ render/                   WebGL2 pipeline, first-person arm │
@@ -172,7 +194,7 @@ Moving, jumping, sneaking and sprinting can be rebound under **Keyboard** in the
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Simulation and client are separate.** The `Sim` (`src/platform/sim`) runs the game: the game's own code, players, entities, items, combat and block edits. It touches no DOM and no WebGL, and talks to the client only in plain data. Each tick it takes a `PlayerInput` snapshot per player and produces a `SimFrame` (positions, poses, health, hotbars, pickups, props). HUD, effects and sound calls become `PresentCall` messages addressed to one player or to everyone. Menu and button callbacks become ids that come back as `ClientMessage`s. A `GameHost` (`src/platform/host`) runs the `Sim` on its own copy of the world, generated around the players, and answers each tick with a batch: content definitions, presentation calls, block edits, then the frame. In the browser it runs in a Web Worker (`src/sim.worker.ts`), so game logic, physics and path-finding never compete with rendering; the page is only the client (camera, views, presenter, rendering), and its world mirrors the host's edits. `?host=page` runs the host in the page instead, for debugging. In Node the same `GameHost` runs headless for tests, and the game server (`npm run server`) hosts it for several players over WebSockets. On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types, so a native build generates identical worlds from the same seed and blueprints. See [docs/PLATFORM.md](docs/PLATFORM.md#architecture-and-the-road-to-multiplayer).
+**Simulation and client are separate.** The `Sim` (`src/platform/sim`) runs the game: the game's own code, players, entities, items, combat and block edits. It touches no DOM and no WebGL, and talks to the client only in plain data. Each tick it takes a `PlayerInput` snapshot per player and produces a `SimFrame` (positions, poses, health, hotbars, pickups, props). HUD, effects and sound calls become `PresentCall` messages addressed to one player or to everyone. Menu and button callbacks become ids that come back as `ClientMessage`s. A `GameHost` (`src/platform/host`) runs the `Sim` on its own copy of the world, generated around the players, and answers each tick with a batch: content definitions, presentation calls, block edits, then the frame. It runs on the game server (`npm run server`, or `npm run dev` in development), for one player or many over WebSockets, so game logic, physics and path-finding never compete with rendering and a game's rules never reach the browser: the page is only the client (camera, views, presenter, rendering, and prediction of its own player), its world mirrors the host's edits, and it loads each game's client code only when that game is picked. In Node the same `GameHost` runs headless for tests. On the engine side, the simulation core (`gen.rs`, `world.rs`, `entities.rs`, `blocks.rs`) is plain Rust with no wasm-bindgen types, so a native build generates identical worlds from the same seed and blueprints. See [docs/PLATFORM.md](docs/PLATFORM.md#architecture-and-the-road-to-multiplayer).
 
 **Threads.** Terrain generation and meshing run in a pool of Web Workers (hardware threads minus two). They share one `WebAssembly.Module` that is compiled once on the main thread. The main thread keeps its own wasm instance holding the authoritative block data and entity state. Physics, raycasts, edits, entity simulation and per-frame culling all use it synchronously.
 

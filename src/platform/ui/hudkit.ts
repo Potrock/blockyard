@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { h } from './dom';
-import type { FeedPart, HudApi, HudTheme, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3 } from '../api/types';
+import { mergeData, plainRecord, scopeCss, type PlainData, type WidgetWire } from './markup';
+import { compileWidget, WidgetView, type CompiledWidget } from './widgets';
+import type { FeedPart, HudApi, HudTheme, IconRef, MarkerOptions, MenuEntry, MenuHandle, MenuOptions, ScreenOptions, Vec3, WidgetAnchor } from '../api/types';
 import type { AnchorRef, RadarWire } from '../net/protocol';
 
 interface Marker {
@@ -46,11 +48,18 @@ interface HurtArrow {
   age: number;
 }
 
+/** A game's widget up on this screen: its elements, and the screen it's in if it's modal. */
+interface ShownWidget {
+  view: WidgetView;
+  screen: HTMLElement | null;
+}
+
 /**
  * Game-facing HUD widgets layered over the base HUD. (Markers and the radar take anchors as they
- * come over the wire, and place what they follow every frame with `locate`.)
+ * come over the wire, and place what they follow every frame with `locate`.) The game's own
+ * widgets (`hud.define`) arrive as definitions, then as data: `widget`, `widgetSet`, `widgetRemove`.
  */
-export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> {
+export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' | 'define' | 'widget'> {
   readonly root: HTMLElement;
   private hearts: HTMLElement;
   private heartEls: HTMLElement[] = [];
@@ -109,12 +118,27 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
   private barFill: HTMLElement;
   private barLag: HTMLElement;
   private barText: HTMLElement;
-  private ammoEl: HTMLElement;
-  private ammoKey = '';
+  /** Client code's own layers with the panels (see `layer`), by name. */
+  private layers = new Map<string, HTMLElement>();
   /** An open menu's key listener, removed when it closes, however it closes. */
   private unhooks = new Map<HTMLElement, () => void>();
   /** Each open menu's close (B on a controller backs out of the top one). */
   private menuClosers = new Map<HTMLElement, () => void>();
+  /** The game's widgets: a layer of its own (its stacking kept inside), a place for each anchor, their CSS. */
+  private widgetLayer: HTMLElement;
+  private widgetSheet: HTMLStyleElement;
+  private widgetSlots = new Map<WidgetAnchor, HTMLElement>();
+  private widgetDefs = new Map<string, CompiledWidget>();
+  private widgetsUp = new Map<string, ShownWidget>();
+  /**
+   * This screen's own state, for widgets' `$` names (`{{$gun.mag}}`, `{{$ability.dash.cool}}`):
+   * one record every widget reads, changed in place (`setLocal`).
+   */
+  private local: PlainData = {};
+  private localKey = '';
+  /** A button in a widget was pressed; a modal widget was closed by the player (the presenter tells the host). */
+  onWidgetAction: ((widget: string, action: string, value: string) => void) | null = null;
+  onWidgetClosed: ((widget: string) => void) | null = null;
 
   constructor(parent: HTMLElement, private iconFor: (ref: IconRef) => string) {
     this.hearts = h('div.hearts');
@@ -141,8 +165,8 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     this.barText = h('span.healthbar-text');
     this.barEl = h('div.healthbar', {}, h('div.healthbar-track', {}, this.barLag, this.barFill), this.barText);
     this.barEl.style.display = 'none';
-    this.ammoEl = h('div.ammo');
-    this.ammoEl.style.display = 'none';
+    this.widgetSheet = h('style') as HTMLStyleElement;
+    this.widgetLayer = h('div.gw-layer', {}, this.widgetSheet);
     this.root = h(
       'div.gamehud',
       {},
@@ -161,7 +185,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
       this.radarCanvas,
       this.popEl,
       this.barEl,
-      this.ammoEl,
+      this.widgetLayer,
       this.boardEl,
     );
     parent.append(this.root);
@@ -239,35 +263,26 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     }
   }
 
-  /** The held gun's rounds (bottom right): the magazine big, the spare beside it; null hides it. */
-  ammo(a: { mag: number; reserve: number; size: number; name: string; reloading: boolean } | null) {
-    const key = a ? `${a.mag}|${a.reserve}|${a.size}|${a.name}|${a.reloading}` : '';
-    if (key === this.ammoKey) return;
-    const prev = this.ammoKey.split('|');
-    this.ammoKey = key;
-    this.ammoEl.style.display = a ? '' : 'none';
-    if (!a) return;
-    // One pip per round in the magazine (up to a drum's worth), spent ones hollow.
-    const pips = Math.min(a.size, 40);
-    const bullets = h('div.ammo-pips');
-    for (let i = 0; i < pips; i++) bullets.append(h(`span.ammo-pip${i < Math.round((a.mag / a.size) * pips) ? '' : '.spent'}`));
-    const note = a.reloading ? h('div.ammo-reload', {}, 'RELOADING') : a.mag === 0 && a.reserve === 0 ? h('div.ammo-reload.out', {}, 'NO AMMO') : a.mag <= Math.ceil(a.size * 0.25) ? h('div.ammo-reload.low', {}, 'RELOAD') : null;
-    this.ammoEl.replaceChildren(
-      ...[h('div.ammo-name', {}, a.name), h('div.ammo-count', {}, h('span.ammo-mag', {}, String(a.mag)), h('span.ammo-sep', {}, '/'), h('span.ammo-reserve', {}, String(a.reserve))), bullets, note].filter((x): x is HTMLElement => x !== null),
-    );
-    this.ammoEl.classList.toggle('low', a.mag <= Math.ceil(a.size * 0.25));
-    if (prev[0] !== undefined && Number(prev[0]) > a.mag) {
-      this.ammoEl.classList.remove('fired');
-      void this.ammoEl.offsetWidth;
-      this.ammoEl.classList.add('fired');
-    }
+  /**
+   * A layer for client code's own panels, made the first time it's named: over the platform's
+   * panels, under the game's widgets and the scoreboard. Layers stack in the order they're made.
+   */
+  layer(name: string): HTMLElement {
+    let el = this.layers.get(name);
+    if (el) return el;
+    el = h('div.hud-layer');
+    el.dataset.layer = name;
+    this.root.insertBefore(el, this.widgetLayer);
+    this.layers.set(name, el);
+    return el;
   }
 
   /**
-   * An icon as an image. A picture of a model that hasn't loaded yet fills in once it has (it's
+   * An icon as an image: `{ item }` is that item's icon as this screen has it (its look). A picture
+   * of a model that hasn't loaded yet (or of an item not here yet) fills in once it has (it's
    * blank until then, never a broken image).
    */
-  private icon(spec: string, ref: IconRef): HTMLElement {
+  icon(spec: string, ref: IconRef): HTMLImageElement {
     const src = this.iconFor(ref);
     const img = h(spec, { alt: '' }) as HTMLImageElement;
     if (src) {
@@ -577,7 +592,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
         typeof p === 'string'
           ? h('span', {}, p)
           : 'icon' in p
-            ? this.icon(`img.feed-icon${typeof p.icon === 'object' && 'gltf' in p.icon && p.icon.view === 'side' ? '.wide' : ''}`, p.icon)
+            ? this.icon(`img.feed-icon${typeof p.icon === 'object' && ('gltf' in p.icon || 'item' in p.icon) && p.icon.view === 'side' ? '.wide' : ''}`, p.icon)
             : h('span', { style: p.color ? { color: p.color } : {} }, p.text),
       ),
     );
@@ -722,6 +737,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
   closeScreens() {
     for (const unhook of [...this.unhooks.values()]) unhook();
     this.menuClosers.clear();
+    for (const [name, up] of this.widgetsUp) if (up.screen) this.widgetsUp.delete(name);
     for (const s of this.screens) s.remove();
     if (this.screens.length) this.onScreen?.(false);
     this.screens = [];
@@ -742,12 +758,12 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
   }
 
   /** A hit landed (`true`: a critical or head hit; `'kill'`: it killed). */
-  hitMarker(kind: boolean | 'kill') {
+  hitMarker(mark: boolean | 'kill') {
     this.hitEl.classList.remove('show', 'crit', 'kill');
     void this.hitEl.offsetWidth;
     this.hitEl.classList.add('show');
-    if (kind === 'kill') this.hitEl.classList.add('kill');
-    else if (kind) this.hitEl.classList.add('crit');
+    if (mark === 'kill') this.hitEl.classList.add('kill');
+    else if (mark) this.hitEl.classList.add('crit');
   }
 
   damageNumber(pos: THREE.Vector3, amount: number, crit: boolean, color?: string) {
@@ -820,17 +836,137 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard'> 
     for (const n of this.numbers) n.el.remove();
     this.numbers = [];
     this.scoreboard(null);
-    this.ammo(null);
     for (const a of this.hurts) a.el.remove();
     this.hurts = [];
     this.popEl.classList.remove('show');
+    for (const name of [...this.widgetsUp.keys()]) this.widgetRemove(name);
     this.closeScreens();
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // The game's own widgets
+  // -----------------------------------------------------------------------------------------------
+
+  /** A widget's definition (new, or changed: redrawn where it's up, with what it showed). */
+  defineWidget(name: string, wire: WidgetWire) {
+    const def = compileWidget(name, wire);
+    if (!def) return;
+    this.widgetDefs.set(name, def);
+    this.widgetSheet.textContent = [...this.widgetDefs.values()].map((d) => d.css).join('\n');
+    const up = this.widgetsUp.get(name);
+    if (up) this.widget(name, up.view.data);
+  }
+
+  /**
+   * Up on this screen (again, from scratch), filled in from `data`. A modal one that's up already
+   * is filled in again inside its own screen, so the screen (and the mouse it freed) stays.
+   */
+  widget(name: string, data: unknown) {
+    const def = this.widgetDefs.get(name);
+    if (!def) return;
+    const view = new WidgetView(def, mergeData({}, plainRecord(data)), (action, value) => this.onWidgetAction?.(name, action, value), this.local);
+    const was = this.widgetsUp.get(name);
+    if (def.modal && was?.screen) {
+      was.view.root.replaceWith(view.root);
+      was.view = view;
+      return;
+    }
+    this.widgetRemove(name);
+    const screen = def.modal ? this.widgetScreen(name, view) : null;
+    if (!screen) this.widgetSlot(def.at).append(view.root);
+    this.widgetsUp.set(name, { view, screen });
+  }
+
+  /** Whether a widget that's up reads this screen's own state (then it's worth working out each frame). */
+  get wantsLocal(): boolean {
+    for (const up of this.widgetsUp.values()) if (up.view.def.local) return true;
+    return false;
+  }
+
+  /**
+   * This screen's own state changed (its gun, abilities, health, as it predicts them): widgets
+   * that bind it (`{{$gun.mag}}`) show it at once, with no round trip to the host.
+   */
+  setLocal(state: PlainData) {
+    const key = JSON.stringify(state);
+    if (key === this.localKey) return;
+    this.localKey = key;
+    for (const k of Object.keys(this.local)) delete this.local[k];
+    Object.assign(this.local, state);
+    for (const up of this.widgetsUp.values()) if (up.view.def.local) up.view.update();
+  }
+
+  /** What it shows changes: merged in, and only what reads differently is touched. */
+  widgetSet(name: string, patch: unknown) {
+    const up = this.widgetsUp.get(name);
+    if (!up) return;
+    mergeData(up.view.data, plainRecord(patch));
+    up.view.update();
+  }
+
+  widgetRemove(name: string) {
+    const up = this.widgetsUp.get(name);
+    if (!up) return;
+    this.widgetsUp.delete(name);
+    if (up.screen) this.dropScreen(up.screen);
+    else up.view.root.remove();
+  }
+
+  /** The place for widgets at one anchor (they stack there). */
+  private widgetSlot(at: WidgetAnchor): HTMLElement {
+    let slot = this.widgetSlots.get(at);
+    if (!slot) {
+      slot = h(`div.gw-slot.gw-${at}`);
+      this.widgetSlots.set(at, slot);
+      this.widgetLayer.append(slot);
+    }
+    return slot;
+  }
+
+  /**
+   * A modal widget: in a screen of its own, like a menu. It frees the mouse, a controller moves
+   * between its buttons, and Esc, B or a click outside closes it (the host hears).
+   */
+  private widgetScreen(name: string, view: WidgetView): HTMLElement {
+    const el = h('div.screen.widget-screen', {}, view.root);
+    const close = () => {
+      if (this.widgetsUp.get(name)?.screen !== el) return;
+      this.widgetRemove(name);
+      this.onWidgetClosed?.(name);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.stopPropagation();
+      close();
+    };
+    el.onclick = (ev) => {
+      if (ev.target === el) close();
+    };
+    window.addEventListener('keydown', onKey, true);
+    this.unhooks.set(el, () => {
+      window.removeEventListener('keydown', onKey, true);
+      this.unhooks.delete(el);
+    });
+    this.menuClosers.set(el, close);
+    this.root.parentElement!.append(el);
+    this.screens.push(el);
+    this.onScreen?.(true);
+    return el;
+  }
+
+  private dropScreen(el: HTMLElement) {
+    this.menuClosers.delete(el);
+    this.unhooks.get(el)?.();
+    el.remove();
+    this.screens = this.screens.filter((x) => x !== el);
+    if (this.screens.length === 0) this.onScreen?.(false);
   }
 }
 
 /**
  * A game's HUD theme (`hud.theme`): fonts and colours as CSS variables on the HUD, menus and
- * result screens, the fonts fetched from Google Fonts, and the comic look as a class.
+ * result screens, the fonts fetched from Google Fonts, and the game's own stylesheet, kept to
+ * the HUD (see `scopeCss`).
  */
 export function applyTheme(ui: HTMLElement, theme: HudTheme | undefined): () => void {
   if (!theme) return () => {};
@@ -856,10 +992,18 @@ export function applyTheme(ui: HTMLElement, theme: HudTheme | undefined): () => 
   };
   for (const [k, v] of Object.entries(vars)) if (v) ui.style.setProperty(k, v);
   ui.classList.add('hud-themed');
-  if (theme.comic) ui.classList.add('hud-comic');
+  // After the platform's stylesheet, so the game's rules win where they're as specific.
+  let sheet: HTMLStyleElement | null = null;
+  if (theme.css) {
+    sheet = document.createElement('style');
+    sheet.dataset.hudTheme = '';
+    sheet.textContent = scopeCss(theme.css, { theme: true });
+    document.head.append(sheet);
+  }
   return () => {
     for (const k of Object.keys(vars)) ui.style.removeProperty(k);
-    ui.classList.remove('hud-themed', 'hud-comic');
+    ui.classList.remove('hud-themed');
     for (const l of links) l.remove();
+    sheet?.remove();
   };
 }

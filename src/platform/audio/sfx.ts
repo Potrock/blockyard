@@ -1,6 +1,9 @@
-import type { BuiltinSound, LoopHandle, LoopName, SoundName, SynthKit, SynthVoice, Vec3 } from '../api/types';
+import type { LoopHandle, LoopName, SoundName, SynthKit, SynthVoice, Vec3 } from '../api/types';
 
 type Voice = (ctx: AudioContext, out: AudioNode, t: number, p: number) => void;
+
+/** The sounds the engine keeps: its world's (blocks, pickups, getting hurt) and its screens' (jingles, clicks). */
+type EngineSound = 'hit' | 'hurt' | 'pickup' | 'heal' | 'wave' | 'victory' | 'defeat' | 'spawn' | 'click' | 'countdown' | 'lock' | 'alarm';
 
 /** Procedurally synthesised sound effects (no audio assets), positional relative to the camera. */
 export class Sfx {
@@ -55,26 +58,28 @@ export class Sfx {
     this.listener.rz = -Math.sin(yaw);
   }
 
+  /** Sounds client code defines (kits, the game's client code: `client.audio.define`). */
   private custom = new Map<string, SynthVoice>();
   private warned = new Set<string>();
 
-  /** Add or replace a sound (games bring their own; see `SynthKit`). */
+  /** Add or replace a sound client code defines (`client.audio.define`; see `SynthKit`). */
   define(name: string, voice: SynthVoice) {
     this.custom.set(name, voice);
   }
 
   play(name: SoundName, opts: { at?: Vec3; volume?: number; pitch?: number } = {}) {
+    // (Silent until the audio's running: the client code's sounds are defined by then.)
+    const ctx = this.ctx;
+    if (!ctx || !this.master || ctx.state !== 'running') return;
     const custom = this.custom.get(name);
     const builtin = (VOICES as Record<string, Voice | undefined>)[name];
     if (!custom && !builtin) {
       if (!this.warned.has(name)) {
         this.warned.add(name);
-        console.warn(`audio.play: unknown sound "${name}" (define it with audio.define)`);
+        console.warn(`audio.play: unknown sound "${name}" (define it in the game's client code: client.audio.define)`);
       }
       return;
     }
-    const ctx = this.ctx;
-    if (!ctx || !this.master || ctx.state !== 'running') return;
     // Throttle identical sounds within 30 ms (large waves hitting at once).
     const now = ctx.currentTime;
     if ((this.last.get(name) ?? -1) > now - 0.03) return;
@@ -213,41 +218,15 @@ function synthKit(self: Sfx, ctx: AudioContext, out: AudioNode, t: number, pitch
   };
 }
 
-const VOICES: Record<BuiltinSound, Voice> = {
-  swing(this: Sfx, ctx, out, t, p) {
-    noiseBurst(this, ctx, out, t, 0.16, 'bandpass', 700 * p, 2600 * p, 0.5, 1.2);
-  },
+/** The engine's own sounds: its world's and its screens' (the sounds kit, `sounds.standard()`, defines the rest). */
+const VOICES: Record<EngineSound, Voice> = {
   hit(this: Sfx, ctx, out, t, p) {
     tone(ctx, out, 'sine', 170 * p, 55, t, 0.14, 0.9);
     noiseBurst(this, ctx, out, t, 0.05, 'highpass', 2500, 1500, 0.35);
   },
-  crit(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sine', 190 * p, 50, t, 0.16, 1.0);
-    noiseBurst(this, ctx, out, t, 0.06, 'highpass', 3000, 2000, 0.4);
-    tone(ctx, out, 'triangle', 1500 * p, 1900 * p, t + 0.02, 0.12, 0.18);
-  },
   hurt(this: Sfx, ctx, out, t, p) {
     tone(ctx, out, 'sawtooth', 240 * p, 120 * p, t, 0.22, 0.35, 1200);
     noiseBurst(this, ctx, out, t, 0.12, 'lowpass', 1500, 400, 0.3);
-  },
-  mob_hurt(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'square', 190 * p, 110 * p, t, 0.16, 0.18, 900);
-    noiseBurst(this, ctx, out, t, 0.1, 'bandpass', 500, 300, 0.25, 2);
-  },
-  mob_death(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sawtooth', 300 * p, 55 * p, t, 0.6, 0.3, 900);
-    noiseBurst(this, ctx, out, t + 0.05, 0.4, 'lowpass', 1200, 200, 0.25);
-  },
-  bow_draw(this: Sfx, ctx, out, t, p) {
-    noiseBurst(this, ctx, out, t, 0.45, 'bandpass', 300 * p, 1100 * p, 0.12, 6);
-  },
-  bow_shoot(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'triangle', 190 * p, 85 * p, t, 0.16, 0.5);
-    noiseBurst(this, ctx, out, t, 0.18, 'bandpass', 1800, 700, 0.3);
-  },
-  arrow_hit(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sine', 240 * p, 90, t, 0.08, 0.5);
-    noiseBurst(this, ctx, out, t, 0.03, 'highpass', 2000, 1500, 0.25);
   },
   pickup(this: Sfx, ctx, out, t, p) {
     tone(ctx, out, 'sine', 880 * p, 880 * p, t, 0.07, 0.3);
@@ -281,64 +260,12 @@ const VOICES: Record<BuiltinSound, Voice> = {
   countdown(this: Sfx, ctx, out, t, p) {
     tone(ctx, out, 'square', 660 * p, 660 * p, t, 0.12, 0.18, 2500);
   },
-  explosion(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sine', 110 * p, 32, t, 0.55, 0.9);
-    noiseBurst(this, ctx, out, t, 0.9, 'lowpass', 2400 * p, 160, 0.8);
-    noiseBurst(this, ctx, out, t + 0.02, 0.25, 'highpass', 3000, 1200, 0.25);
-  },
-  explosion_big(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sine', 80 * p, 24, t, 1.4, 1.0);
-    noiseBurst(this, ctx, out, t, 2.2, 'lowpass', 1600 * p, 90, 0.9);
-    noiseBurst(this, ctx, out, t + 0.15, 1.6, 'lowpass', 700 * p, 70, 0.6);
-    noiseBurst(this, ctx, out, t, 0.3, 'highpass', 2500, 900, 0.3);
-  },
   lock(this: Sfx, ctx, out, t, p) {
     tone(ctx, out, 'square', 1480 * p, 1480 * p, t, 0.06, 0.14, 4000);
     tone(ctx, out, 'square', 1480 * p, 1480 * p, t + 0.09, 0.06, 0.14, 4000);
   },
   alarm(this: Sfx, ctx, out, t, p) {
     for (let i = 0; i < 3; i++) tone(ctx, out, 'square', (i % 2 ? 520 : 760) * p, (i % 2 ? 520 : 760) * p, t + i * 0.16, 0.14, 0.12, 2200);
-  },
-  // Fly-by.
-  whoosh(this: Sfx, ctx, out, t, p) {
-    noiseBurst(this, ctx, out, t, 0.6, 'bandpass', 500 * p, 1800 * p, 0.4, 1.5);
-  },
-  // A generic gunshot: a thump, a blast of noise and a crack on top.
-  gunshot(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sine', 150 * p, 42, t, 0.13, 0.9);
-    noiseBurst(this, ctx, out, t, 0.2, 'lowpass', 6000 * p, 500, 0.75);
-    noiseBurst(this, ctx, out, t, 0.035, 'highpass', 4000, 2500, 0.45);
-  },
-  // Magazine out, magazine in, the charging handle.
-  gun_reload(this: Sfx, ctx, out, t, p) {
-    noiseBurst(this, ctx, out, t + 0.05, 0.05, 'bandpass', 2200 * p, 1600 * p, 0.35, 3);
-    tone(ctx, out, 'square', 700 * p, 420 * p, t + 0.05, 0.04, 0.12, 2400);
-    noiseBurst(this, ctx, out, t + 0.55, 0.06, 'bandpass', 1800 * p, 1200 * p, 0.45, 3);
-    tone(ctx, out, 'square', 520 * p, 300 * p, t + 0.56, 0.05, 0.16, 2000);
-    noiseBurst(this, ctx, out, t + 0.85, 0.09, 'bandpass', 3000 * p, 1400 * p, 0.35, 2);
-  },
-  // Pulling the trigger on nothing.
-  gun_empty(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'square', 1900 * p, 1300 * p, t, 0.025, 0.15, 5000);
-    noiseBurst(this, ctx, out, t, 0.02, 'highpass', 4500, 3000, 0.2);
-  },
-  // A pump or bolt worked: back, forward.
-  gun_cycle(this: Sfx, ctx, out, t, p) {
-    noiseBurst(this, ctx, out, t + 0.08, 0.08, 'bandpass', 1400 * p, 900 * p, 0.35, 2);
-    tone(ctx, out, 'square', 480 * p, 300 * p, t + 0.12, 0.04, 0.12, 1800);
-    noiseBurst(this, ctx, out, t + 0.26, 0.07, 'bandpass', 1800 * p, 1200 * p, 0.35, 2);
-    tone(ctx, out, 'square', 620 * p, 420 * p, t + 0.3, 0.04, 0.14, 2000);
-  },
-  // A shot landed: a sharp little tick.
-  hitmarker(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'square', 2600 * p, 2100 * p, t, 0.035, 0.12, 6000);
-    noiseBurst(this, ctx, out, t, 0.025, 'highpass', 5000, 4000, 0.18);
-  },
-  // A kill: a bright double ding over a thump.
-  kill(this: Sfx, ctx, out, t, p) {
-    tone(ctx, out, 'sine', 180 * p, 60, t, 0.12, 0.5);
-    tone(ctx, out, 'triangle', 1320 * p, 1320 * p, t, 0.18, 0.22);
-    tone(ctx, out, 'triangle', 1760 * p, 1760 * p, t + 0.07, 0.3, 0.2);
   },
 };
 

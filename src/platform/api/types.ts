@@ -20,7 +20,11 @@ export interface Vec3 {
 // Game definition
 // ---------------------------------------------------------------------------------------------
 
-export interface GameDefinition {
+/**
+ * What the launcher lists about a game: small, and all a browser loads of a game until someone
+ * picks it (`src/games/<id>/meta.ts`).
+ */
+export interface GameMeta {
   /** Stable identifier, used in the URL (`?game=arena`) and for saves. */
   id: string;
   title: string;
@@ -40,12 +44,49 @@ export interface GameDefinition {
    */
   gamepad?: Partial<Record<PadButton, PadAction | [PadAction, string]>>;
   /**
+   * Players can start a game of their own on a server (just them, or friends they send the link
+   * to) instead of joining the public one: each such game is a separate copy with its own world,
+   * and the home page offers both. For match games (Bed Wars, the Arena); leave it off for one
+   * shared world everyone builds in (Sandbox).
+   */
+  instances?: boolean;
+}
+
+/**
+ * What a game's server and each player's screen both read (`src/games/<id>/shared.ts`): the world
+ * and its blocks (each screen generates the terrain and draws it), how players move (each screen
+ * predicts its own), vehicles, gun rules, the HUD's look. Data, and pure functions both sides run
+ * the same way (structure builders, block painters, vehicles' and abilities' steps).
+ */
+export interface SharedDefinition extends GameMeta {
+  /**
    * Allow the built-in cheat commands (`/give`, `/tp`, `/spawn`, `/kill`, `/heal`, `/time`, `/fly`)
    * in production builds. They're always available in development.
    */
   cheats?: boolean;
   world?: WorldOptions;
   player?: PlayerOptions;
+  /** How guns play in this game: rewind, hitboxes, what they do to movement, reloading, aim assist (see `GunOptions`). */
+  guns?: GunOptions;
+  /**
+   * Vehicles players can drive (`player.drive(name, state)`): ships, cars, boards. Defined here,
+   * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
+   */
+  vehicles?: Record<string, VehicleDefinition>;
+  /**
+   * Blocks of the game's own, by name: `{ crate: { texture: crateUrl }, lamp: { texture: { color:
+   * '#ffd27a' }, light: 15 } }` (see `BlockDefinition`). They're used like the built-in blocks, by
+   * name: `world.setBlock`, `Blueprint`s and `world.structures`, the creative block picker,
+   * `world.blockInfo`; saves keep them by name, and every player gets them. Defined here, not in
+   * `setup`, because each player's screen generates the terrain (structures too) and draws it.
+   */
+  blocks?: Record<string, BlockDefinition>;
+  /** How the HUD looks: the health display, health bars over heads, fonts and colours. */
+  hud?: HudOptions;
+}
+
+/** A game's rules (`src/games/<id>/server.ts`): they run only on the server. */
+export interface ServerDefinition {
   /**
    * Runs once after the engine has loaded and before the world streams in. Register entity
    * types, items and event handlers here.
@@ -55,21 +96,10 @@ export interface GameDefinition {
   start?(game: GameContext): void;
   /** Runs every frame while the game is running (not while paused). `dt` is in seconds. */
   update?(game: GameContext, dt: number): void;
-  /**
-   * Players can start a game of their own on a server (just them, or friends they send the link
-   * to) instead of joining the public one: each such game is a separate copy with its own world,
-   * and the home page offers both. For match games (Bed Wars, the Arena); leave it off for one
-   * shared world everyone builds in (Sandbox).
-   */
-  instances?: boolean;
-  /**
-   * Vehicles players can drive (`player.drive(name, state)`): ships, cars, boards. Defined here,
-   * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
-   */
-  vehicles?: Record<string, VehicleDefinition>;
-  /** How the HUD looks: the health display, health bars over heads, fonts and colours. */
-  hud?: HudOptions;
 }
+
+/** A whole game as the server runs it: its shared definition and its rules (`defineServer`). */
+export interface GameDefinition extends SharedDefinition, ServerDefinition {}
 
 /** The HUD's look for a game (read by each player's screen, so it's data). */
 export interface HudOptions {
@@ -98,20 +128,37 @@ export interface HudTheme {
    * backgrounds; `text`; `danger`: damage and low health; `good`: health and healing.
    */
   colors?: { accent?: string; ink?: string; paper?: string; text?: string; danger?: string; good?: string };
-  /** Comic-book style: hard offset shadows and outlines on text and panels. */
-  comic?: boolean;
+  /**
+   * The game's own stylesheet for its HUD: it restyles the platform's pieces by their classes
+   * (`.stat`, `.banner-title`, `.scoreboard`, `.menu-card`, `.hotbar`…), the menus and result
+   * screens, and the game's widgets. It reaches only those (not the home page or the pause menu)
+   * and each rule counts one class more than written, so `.stat { … }` wins over the platform's
+   * own `.stat`. Keep it in a file: `import css from './hud.css?raw'`. No `@import`, fonts (use
+   * `fonts`) or pictures from other sites.
+   */
+  css?: string;
 }
 
 export interface WorldOptions {
   /** Fixed seed. Default: `?seed=` from the URL, else random. */
   seed?: number;
-  /** `natural` (default) or a `flat` world at `flatHeight`. */
-  /** `natural` (default), `flat` (at `flatHeight`), or `void`: nothing but your structures (sky islands). */
+  /**
+   * `natural` (default: a whole generated landscape), `flat` (natural ground made flat at
+   * `flatHeight`, trees and all), or `void`: nothing but your structures (sky islands), or your
+   * structures on a plain `ground`, which costs next to nothing to make and draw (an arena's).
+   */
   terrain?: 'natural' | 'flat' | 'void';
   flatHeight?: number;
+  /**
+   * A `void` world's own ground: a plain slab under your structures, as far as anyone sees, its
+   * `top` block (default grass) at `y` over `depth - 1` of `fill` (dirt; default 4 deep in all),
+   * the void below. `terraform` raises or lowers it (a hill for a backdrop, a sunken yard). The
+   * sky's horizon then meets the ground, not an abyss.
+   */
+  ground?: { y: number; top?: BlockRef; fill?: BlockRef; depth?: number };
   /** Voxel structures stamped into the world while it generates (see `Blueprint`). */
   structures?: BlueprintLike[];
-  /** Flatten terrain around points: `radius` fully flat, blending back over `blend` blocks. */
+  /** Flatten terrain around points: `radius` fully flat at `height`, blending back over `blend` blocks (on a `ground`, `height` may raise a hill). */
   terraform?: { x: number; z: number; radius: number; blend: number; height: number }[];
   /** Player spawn point. `auto` picks pleasant land near the origin. */
   spawn?: Vec3 | 'auto';
@@ -122,8 +169,35 @@ export interface WorldOptions {
   freezeTime?: boolean;
   /** Minimum view distance in chunks (flight games see further); the player's setting wins if higher. Max 24. */
   viewDistance?: number;
+  /**
+   * Maximum view distance in chunks: the player's setting is held to it. For a game played in
+   * a small space (an arena, a street), there's nothing further to load, mesh and draw.
+   */
+  maxViewDistance?: number;
   /** Save block edits and the player position between sessions. Default false. */
   persist?: boolean;
+  /**
+   * Blocks you can shoot holes in. Each block is really a 16 x 16 x 16 grid of little voxels, one
+   * per pixel of its texture: guns chip them away where their bullets land (see `GunItem.carve`)
+   * and `world.carve` does it on purpose (a blast, a melee strike). Players collide with what's
+   * left, walk through a hole big enough, and see and shoot through one; a block carved to nothing
+   * is gone. Only solid, opaque, full blocks carve (not glass, slabs, stairs, plants or liquids).
+   *
+   * `above`: only blocks higher than this y (keep the ground you stand on whole, so nobody falls
+   * out of the world). `blocks`: which (by name, every variant; default `'all'`), less `except`.
+   * Off by default. Damage is undone with the rest of the world on `restart`, and isn't saved.
+   */
+  destructible?: DestructibleOptions;
+}
+
+/** Which blocks can be shot into (`WorldOptions.destructible`). */
+export interface DestructibleOptions {
+  /** Only blocks higher than this y. Default: every height. */
+  above?: number;
+  /** The blocks that carve, by name. Default `'all'`. */
+  blocks?: string[] | 'all';
+  /** Blocks that don't, by name. */
+  except?: string[];
 }
 
 export interface PlayerOptions {
@@ -169,8 +243,8 @@ export interface PlayerOptions {
 
 /**
  * How players move: speeds in blocks a second, and the extras a game can turn on. Movement runs on
- * each player's own screen as well as the host (prediction), so it's data, not code. Defaults are
- * Minecraft's.
+ * each player's own screen as well as the host (prediction), so it's data, and the moves a game
+ * adds (`abilities`) are pure functions. Defaults are Minecraft's.
  */
 export interface MovementOptions {
   /** Walking (4.3), sprinting (5.6) and crouching (1.3) speeds. */
@@ -199,6 +273,117 @@ export interface MovementOptions {
   slide?: boolean | { speed?: number; time?: number; friction?: number; cooldown?: number };
   /** Jumping into a ledge climbs onto it if its top is up to this far above the feet (blocks; `true` = 1). */
   mantle?: boolean | number;
+  /**
+   * Moves of the game's own, by name: a dash, a double jump, a wall-run, a grapple, a ground pound
+   * (see `MovementAbility`). They run inside every step of a player's movement, in the order
+   * given, on the host and on the player's own screen alike, so they answer at once online.
+   */
+  abilities?: Record<string, MovementAbility>;
+}
+
+/**
+ * A movement ability (`movement.abilities`): code of the game's own inside each step of a walking
+ * player's movement. Like a vehicle's `step`, it runs on the host for everyone and, ahead of the
+ * host, on each player's own screen (client-side prediction), which starts again from the host's
+ * state whenever it arrives and replays the inputs since. So `step` must be pure: it reads its
+ * state, the controls, the body and the world; it changes only its state and the body's step
+ * (`AbilityBody`); and it does the same with the same inputs wherever it runs (no `Math.random`,
+ * no clock but `body.time`, nothing kept outside its state). Anything with consequences (a sound,
+ * a trail, damage) is the game's: `body.trigger` tells the game (the `ability` event), and the
+ * state is there to read (`player.abilities`).
+ */
+export interface MovementAbility<S extends object = any> {
+  /**
+   * Its state when a player starts: plain data (numbers, booleans, strings, short lists), copied
+   * for each player. It goes to their screen with every frame, so keep it small.
+   */
+  state: S;
+  /** One step of `dt` seconds, before the body moves (see `AbilityBody`). */
+  step(state: S, controls: AbilityControls, body: AbilityBody, dt: number, world: VehicleWorld): void;
+}
+
+/**
+ * The controls of one step, as an ability reads them (one frame on the player's screen): held
+ * keys, this frame's presses, mouse buttons. `consume` claims one for the rest of the step, so the
+ * abilities after this one see it idle (a wall-jump's Space isn't also a double jump's).
+ */
+export type AbilityControls = Pick<InputApi, 'isDown' | 'pressed' | 'button' | 'buttonPressed' | 'consume' | 'mouseX' | 'mouseY' | 'wheel'>;
+
+/**
+ * A player's body as an ability's step begins, and what that step does. The platform has read the
+ * controls (`wish`, `jump`); the abilities can change them, change the velocity, and scale this
+ * step's gravity and steering; then the body moves.
+ */
+export interface AbilityBody {
+  /** Feet position and velocity (blocks, blocks a second), as they are now. */
+  readonly position: Vec3;
+  readonly velocity: Vec3;
+  readonly onGround: boolean;
+  readonly inWater: boolean;
+  readonly flying: boolean;
+  /** What the platform's movement is doing this step. */
+  readonly crouching: boolean;
+  readonly sprinting: boolean;
+  readonly sliding: boolean;
+  /** Where they look: `yaw` (0 looks toward -z), `pitch` (up is positive), and as a unit vector. */
+  readonly yaw: number;
+  readonly pitch: number;
+  readonly look: Vec3;
+  /** Seconds of movement so far: a clock that runs the same on the host and on their screen. */
+  readonly time: number;
+  /**
+   * Where the controls push them this step: a direction on the ground (world space, length 0..1),
+   * from the keys or the stick, turned by the view. Change it to steer the step; zero coasts.
+   */
+  wish: { x: number; z: number };
+  /** Jump is held (the body jumps if it's on the ground): `false` swallows it. */
+  jump: boolean;
+  /** Gravity this step, times the game's (1): 0 floats (a dash), 0.1 slides slowly down a wall. */
+  gravity: number;
+  /**
+   * How quickly speed follows `wish` this step, times the game's (1): 0 keeps the velocity as the
+   * ability left it, with no steering or friction (a dash, a grapple's swing).
+   */
+  control: number;
+  /** Multiplies walking, sprinting and crouching speed this step (1). */
+  speed: number;
+  /**
+   * How low the body is this step: `'stand'`, `'crouch'`, or `'low'` (a slide's height). It starts
+   * as the platform's movement has it (crouching, sliding); an ability can change it for this step
+   * (a dodge roll goes `'low'`). It's the body's hitbox for bullets, the height of their eyes (and
+   * their camera), and how their figure looks to others (crouched, or low as in a slide), and it's
+   * predicted on their screen like the rest. It isn't how the body moves: speeds stay the ability's.
+   */
+  stance: AbilityStance;
+  /**
+   * Their camera this step, on their own screen only (predicted, so it moves the moment they do):
+   * `roll` tilts it (radians, positive leans right, as a head tilts), `pitch` tips it (radians, up
+   * is positive; where they aim doesn't move), `dip` lowers it (blocks). All 0 at the start of each
+   * step: set them on every step they should show (a roll's tumble, a landing's dip).
+   */
+  camera: { roll: number; pitch: number; dip: number };
+  /** Set the velocity (the axes given), or add to it. Upward speed lifts them off the ground. */
+  setVelocity(v: Partial<Vec3>): void;
+  addVelocity(v: Partial<Vec3>): void;
+  /** Put their feet somewhere (a blink): check it's free with `fits` first. */
+  setPosition(p: Vec3): void;
+  /** Whether their body (0.6 x 1.8 x 0.6) would fit with its feet at `p`: no solid block or solid prop in the way. */
+  fits(p: Vec3): boolean;
+  /**
+   * Tell the game this ability did something (`'dash'`, `'jump'`, `'start'`): the host's `ability`
+   * event, heard once, after the step. (Their screen replays steps, so only the host's are heard.)
+   * With `clip`, their figure plays that clip of their model (as `player.animate` would, with its
+   * options): on their own screen at once, and on everyone else's from the host.
+   */
+  trigger(name: string, opts?: AbilityTriggerOptions): void;
+}
+
+/** How low a body is (`AbilityBody.stance`): standing, crouched, or as low as a slide. */
+export type AbilityStance = 'stand' | 'crouch' | 'low';
+
+/** `AbilityBody.trigger`'s options: a clip for their figure to play, and how (see `ClipOptions`). */
+export interface AbilityTriggerOptions extends ClipOptions {
+  clip?: string;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -254,6 +439,16 @@ export interface GameContext {
   readonly props: PropApi;
   /** Players driven by the game's code (see `BotApi`). */
   readonly bots: BotApi;
+  /** Messages to the game's own code on players' screens (see `ClientsApi`). */
+  readonly clients: ClientsApi;
+  /**
+   * Which copy of the game this is: `'public'`, the game everyone joins, or the code of a game
+   * someone started of their own (`instances`: `?room=k3x9f2`), which its players may want to set
+   * up their way (a mode, a map). Tests and a server running one game are `'public'`.
+   */
+  readonly room: string;
+  /** The last few seconds, played back on a player's screen (a kill cam, a goal again): see `ReplayApi`. */
+  readonly replay: ReplayApi;
   /** Clear entities, timers, pickups and HUD, revive the player at spawn, then call `start` again. */
   restart(): void;
   /** Return to the game launcher. */
@@ -553,8 +748,16 @@ export interface WorldApi {
   setBlock(x: number, y: number, z: number, block: BlockRef): boolean;
   blockId(name: string): number;
   blockName(id: number): string;
-  /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing. Null if unknown. */
+  /** What a block is (by id or name): solid, a liquid, a plant (instant to break, walk-through), replaceable by placing, its shape and collision. Null if unknown. */
   blockInfo(block: BlockRef): BlockInfo | null;
+  /**
+   * How high bodies collide with the block at a position, in blocks above the bottom of its
+   * cell: 0 for air, plants and anything else not solid, 1 for a full block, 0.5 for a bottom
+   * slab, 1.5 for a fence (nobody jumps it). A fence counts as it's joined there, and a carved
+   * block (`world.destructible`) as what's left of it. An unloaded chunk counts as 1. By block,
+   * `blockInfo(block).height` says the same for a whole one.
+   */
+  collisionHeight(x: number, y: number, z: number): number;
   /** First targetable block along a ray (blocks only: `props.raycast` finds solid props). */
   raycast(origin: Vec3, dir: Vec3, maxDistance: number): RayHit | null;
   /** True if nothing solid (a block, a solid prop) blocks the straight line between two points. */
@@ -564,11 +767,52 @@ export interface WorldApi {
   /** The water surface: the top of sea-level water is at `seaLevel + 1`. */
   readonly seaLevel: number;
   /**
+   * Where players come in (joining, `restart`) and what someone watching from the game's home page
+   * looks at: the definition's `world.spawn` to begin with. A game played in several places (the
+   * maps of one world) moves it to the one in play, so the home page shows where the action is to
+   * whoever opens it; anyone already watching keeps the view they came in with.
+   */
+  spawn: { x: number; y: number; z: number; yaw: number };
+  /**
    * Blow a ragged sphere out of the world (bedrock and liquids survive) with debris and an
    * explosion. `filter` decides which blocks go (e.g. only ones placed this match); `by` is
    * passed on to the `blockBreak` events. Returns blocks removed.
+   *
+   * In a world with destructible blocks (`world.destructible`) it blows a crater instead: the
+   * destructible blocks lose a ragged sphere of little voxels (a wall is bitten into, a thin one
+   * holed), glass and the like within `radius` break whole, and what isn't destructible (the
+   * ground under the line, `except`) stands. Returns the blocks removed altogether.
+   *
+   * With `damage` it hurts too: players and creatures within `reach` blocks (default twice the
+   * radius) take `damage` (or `[middle, edge]`: falling off from the middle to the edge of the
+   * reach), none behind a wall, and are thrown back by `knockback` (default 1, less further out).
+   * The hits' `cause` is `'explosion'`, from `by`, with `weapon`.
    */
-  explode(center: Vec3, radius: number, opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor }): number;
+  explode(
+    center: Vec3,
+    radius: number,
+    opts?: { effect?: boolean; filter?: (at: Vec3, block: string) => boolean; by?: Actor; damage?: number | [middle: number, edge: number]; reach?: number; knockback?: number; weapon?: string },
+  ): number;
+  /**
+   * Carve little voxels out of destructible blocks (`world.destructible`): a rounded channel
+   * from `point` along `dir`, `depth` blocks long (default 0.2) and `radius` round (default 0.1),
+   * through every block it reaches, like a bullet's (a big radius blows a hole, a long depth
+   * drills). Blocks it carves to nothing are gone (and fire `blockBreak`, from `by`). Everyone
+   * sees the same holes. Returns how many little voxels went (4096 make a block): 0 when there
+   * was nothing it could take, so doing it again changes nothing.
+   */
+  carve(point: Vec3, dir: Vec3, opts?: { radius?: number; depth?: number; by?: Actor }): number;
+  /**
+   * How much of the block at (x, y, z) has been carved away (`carve`, a gun's bullets): 0 for a
+   * whole block (and anything that can't be carved), up to 1. A block carved to nothing is air.
+   */
+  carved(x: number, y: number, z: number): number;
+  /**
+   * Whether a player's body (0.6 x 1.8 x 0.6) fits with its feet at `p`: no block, slab, what's
+   * left of a carved block, or solid prop in its way (unloaded chunks count as in the way). Where
+   * a hole goes through a wall, for one.
+   */
+  fits(p: Vec3): boolean;
   /**
    * Break a block with debris and a sound (and the plant on top), and fire `blockBreak`.
    * Bedrock and liquids don't break. Returns false if nothing was broken. (`setBlock` is the
@@ -583,9 +827,11 @@ export interface WorldApi {
    * Given by name (`'torch'`, `'oak_stairs'`), a block is turned the Minecraft way: `against`
    * (the face aimed at, a `raycast` hit) hangs a torch on the side of a block, puts a slab or
    * stairs in the upper half (aiming at a ceiling or high on a side) and lays a log along the
-   * axis aimed along; stairs and beds face `facing`, else the way `by` is looking. A bed takes
-   * two cells, its head beyond (x, y, z). A slab placed on the same kind of slab makes a full
-   * block. Given with a state (`'oak_stairs[facing=east]'`), it goes as it is.
+   * axis aimed along; stairs and beds face `facing`, else the way `by` is looking. A block of the
+   * game's own that faces (`BlockDefinition.facing`) faces `facing`, else out from the side of
+   * the block aimed at (a sign on a wall), else back at whoever places it. A bed takes two
+   * cells, its head beyond (x, y, z). A slab placed on the same kind of slab makes a full block.
+   * Given with a state (`'oak_stairs[facing=east]'`), it goes as it is.
    */
   placeBlock(x: number, y: number, z: number, block: BlockRef, opts?: { by?: Actor; against?: RayHit; facing?: Facing }): boolean;
 }
@@ -608,6 +854,163 @@ export interface BlockInfo {
   replaceable: boolean;
   /** Light it gives off, 0..15. */
   light: number;
+  /** Players and explosions can break it (not bedrock, not liquids, not a game block made unbreakable). */
+  breakable: boolean;
+  /** A game's own block: seconds to mine it by hand, if the game gave it (`BlockDefinition.hardness`). */
+  hardness?: number;
+  /** Its shape (`'fence'`, `'stairs'`...): see `BlockShape`. */
+  shape: BlockShape;
+  /**
+   * How high bodies collide with it, in blocks above the bottom of its cell: 0 if it isn't
+   * solid, 1 for a full block, 0.5 for a bottom slab (1 for a top one), 0.5625 for a bed, 1.5 for
+   * a fence. `world.collisionHeight` says it at a position (a fence joined, a block carved).
+   */
+  height: number;
+  /**
+   * The boxes bodies collide with, in blocks within its cell (`[x0, y0, z0, x1, y1, z1]`, 0 to 1,
+   * a fence's to 1.5); none if it isn't solid. A fence or pane is its post alone here: its arms
+   * depend on what's beside it.
+   */
+  boxes: number[][];
+  /** Bodies climb it: ladders, vines (`BlockDefinition.climbable`). */
+  climbable: boolean;
+}
+
+/**
+ * What shape a block is: `air`; `cube`, a full block; `cross`, a plant's two crossed planes;
+ * `liquid`; `slab` and `stairs` (built-in or a game's); `torch` (standing or on a wall); `bed`
+ * (half of one); and a game's own: `fence`, `pane`, `post`, `boxes`.
+ */
+export type BlockShape = 'air' | 'cube' | 'cross' | 'liquid' | 'slab' | 'stairs' | 'torch' | 'bed' | 'fence' | 'pane' | 'post' | 'boxes';
+
+/**
+ * A block of the game's own (`GameDefinition.blocks`). A texture (or a built-in block it's
+ * `like`) is all it needs: the rest defaults to a plain solid block, like stone.
+ */
+export interface BlockDefinition {
+  /** Its name for players (the block picker, `blockInfo`). Default: the name in words (`neon_sign` is "Neon Sign"). */
+  label?: string;
+  /**
+   * What it looks like: one texture on every face, or face by face (`{ top, bottom, side }`, see
+   * `BlockFaces`).
+   */
+  texture?: BlockTexture | BlockFaces;
+  /**
+   * Start from a built-in full block or plant (`'glass'`, `'neon_red'`, `'poppy'`): its textures,
+   * shape, light and the rest, which anything given here changes (`{ like: 'stone', breakable:
+   * false }`, `{ like: 'white_wool', tint: '#e0457b' }`).
+   */
+  like?: string;
+  /**
+   * `cube` (default); `cross`: two crossed planes, like flowers (walked through, broken at a
+   * touch, needs ground under it); `slab`: half a block (`name[type=top]` is the upper half);
+   * `stairs` (`name[facing=east,half=top]`). Slabs and stairs are placed the way the built-in ones
+   * are: in the half aimed at, climbing away from whoever places them.
+   *
+   * Thin things, which let light through: `fence`, a post with rails to the fences and solid
+   * blocks beside it, 1.5 blocks high to bodies so nobody jumps it (Minecraft's); `pane`, a wall
+   * 2/16 thick joining the panes and solid blocks beside it (glass panes, bars); `post`, a pillar
+   * 4/16 across (with `facing: 'axis'`, a beam lying along x or z). For a shape of your own give
+   * `boxes` instead.
+   */
+  shape?: 'cube' | 'cross' | 'slab' | 'stairs' | 'fence' | 'pane' | 'post';
+  /**
+   * A shape of its own: boxes on the block's 16 x 16 x 16 grid, `[x0, y0, z0, x1, y1, z1]` each (0
+   * to 16, up to 16 boxes), written as it faces north if it has a `facing`. Bodies collide with
+   * them (if it's `solid`), you aim at them, and each face shows the part of its texture it
+   * covers. A table: `[[0, 13, 0, 16, 16, 16], [1, 0, 1, 3, 13, 3], [13, 0, 1, 15, 13, 3], [1, 0,
+   * 13, 3, 13, 15], [13, 0, 13, 15, 13, 15]]`; a poster flat on the wall behind it: `[[1, 1, 15, 15,
+   * 15, 16]]`. It lets light through.
+   */
+  boxes?: [number, number, number, number, number, number][];
+  /**
+   * It faces a way, one variant per way (a cube, a `post` or `boxes`): `true` or `'horizontal'`,
+   * the four sides (`name[facing=east]`; furnaces, signs, ladders); `'all'`, up and down too
+   * (`name[facing=up]`); `'axis'`, lying along x, y or z like a log (`name[axis=x]`). Written
+   * (textures and boxes) as it faces north, or stands upright for `'axis'`; its `front` texture
+   * goes where it faces. Placed, it faces out from the side of the block aimed at (a sign on a
+   * wall), or up or down from the top or bottom for `'all'`, else back at whoever places it;
+   * `'axis'` lies along the axis aimed along.
+   */
+  facing?: boolean | 'horizontal' | 'all' | 'axis';
+  /**
+   * Bodies climb it (ladders, vines): standing in it, pushing into what's behind it (or its own
+   * boxes) or holding jump climbs, sneaking holds on, and otherwise they slide down slowly.
+   * Usually not `solid` (a vine) or thin (a ladder's `boxes`).
+   */
+  climbable?: boolean;
+  /** A slab: the block two of them make, one placed on the other (default: they don't join). */
+  full?: string;
+  /**
+   * How light and sight get through: `opaque` (default); `cutout`: through the clear pixels of
+   * its texture (grates, leaves, fences); `transparent`: like glass (clear pixels show through,
+   * and faces between two of it aren't drawn). A pixel is there or not: half-clear colours show
+   * solid.
+   */
+  transparency?: 'opaque' | 'cutout' | 'transparent';
+  /** Bodies collide with it. Default: true (a `cross` plant is walked through). */
+  solid?: boolean;
+  /** Light it gives off, 0..15 (a torch is 14, glowstone 15). Default 0. */
+  light?: number;
+  /**
+   * How much its textures glow, 0..1: lit by themselves in the dark, and blooming (neon, lamps).
+   * Default: `light / 15`, so a lamp looks lit.
+   */
+  glow?: number;
+  /**
+   * Multiply its textures by a colour (`'#e0457b'`: one grey texture, many colours), or by the
+   * grass colour of where it stands (`'grass'`, like grass and leaves).
+   */
+  tint?: string;
+  /** In the creative block picker (games with `player.build`). Default true. */
+  picker?: boolean;
+  /** Players and explosions can break it (`world.breakBlock`, `world.explode`, building). Default true. */
+  breakable?: boolean;
+  /** Seconds to mine it by hand with the `building` kit (`blockInfo().hardness`). Default: like stone. */
+  hardness?: number;
+  /** Placing a block into its cell replaces it (default: only `cross` plants). */
+  replaceable?: boolean;
+  /** Sounds when it's broken and placed (built-in or `audio.define`d). Default: the platform's. */
+  sounds?: { break?: SoundName; place?: SoundName };
+}
+
+/**
+ * One face's texture, 16 x 16 pixels:
+ * - an image: a PNG imported with `?url` (`import crate from './crate.png?url'`); other sizes are
+ *   scaled to fit, and a tall strip (animation frames) shows its top square;
+ * - a built-in block texture by name: `'oak_planks'`, `'glass'`, `'neon_red'`, `'grass_top'`;
+ * - a colour, mottled: `{ color: '#8a8f96', noise: 0.25 }`. `noise` 0..1 (default 0.12) is how
+ *   much it varies, `scale` the size of its blotches in pixels (default 2), `seed` another
+ *   pattern. Several colours (`['#5b3a1e', '#6e4827', '#82562f']`) are picked between by the
+ *   noise, pixel-art style;
+ * - pixel art: 16 rows of 16 characters, each a colour from `palette` (`.` or a character not in
+ *   it is clear);
+ * - painted by code: `paint(x, y)` gives each pixel's colour (`null`: clear), row 0 at the top.
+ */
+export type BlockTexture =
+  | string
+  | { color: string | string[]; noise?: number; scale?: number; seed?: number }
+  | { pixels: string[]; palette: Record<string, string> }
+  | { paint(x: number, y: number): string | null };
+
+/**
+ * A block's textures face by face: `top`, `bottom`, the four `side`s, or one side (`north`,
+ * `south`, `east`, `west`); `all` for any face not given. A block that faces a way
+ * (`BlockDefinition.facing`) is written facing north: its `front` (the north face) and `back`.
+ */
+export interface BlockFaces {
+  all?: BlockTexture;
+  top?: BlockTexture;
+  bottom?: BlockTexture;
+  side?: BlockTexture;
+  /** The face toward where it faces (as written, north). */
+  front?: BlockTexture;
+  /** The face opposite its front (as written, south). */
+  back?: BlockTexture;
+  north?: BlockTexture;
+  south?: BlockTexture;
+  east?: BlockTexture;
+  west?: BlockTexture;
 }
 
 /** Anything that can be packed into generator data (the `Blueprint` class). */
@@ -646,6 +1049,15 @@ export interface DamageOptions {
   weapon?: string;
   /** A head hit (guns). */
   headshot?: boolean;
+  /**
+   * What did it, for the `damage` event (see `DamageCause`). The platform says for its own
+   * guns, blades, arrows and falls; without it, a hit from someone is `melee` and anything else `world`.
+   */
+  cause?: DamageCause;
+  /** The part of the target hit, when it's known (a bullet knows). */
+  part?: 'head' | 'body';
+  /** Blocks of wall a bullet went through before it hit (wall-banging, a gun's `penetration`). */
+  through?: number;
 }
 
 export interface PlayerApi {
@@ -684,8 +1096,18 @@ export interface PlayerApi {
   /** Restore full health after death. */
   revive(): void;
   impulse(x: number, y: number, z: number): void;
-  /** Freeze movement (cutscenes, countdowns). */
-  freeze(frozen: boolean): void;
+  /**
+   * Freeze movement (cutscenes, countdowns), or let them go (`false`). With `weapons: true` their
+   * weapons are locked too while it lasts: no switching slots, aiming, reloading, firing or using
+   * items, and a shot their screen fires anyway is refused (no rounds spent). The lock ends with
+   * the freeze (`freeze(false)`, or a `revive`). A freeze before they're in play (at `playerJoin`)
+   * holds when they press Play.
+   */
+  freeze(frozen: boolean, opts?: { weapons?: boolean }): void;
+  /** Their body is frozen: `freeze`, dead, driving, or not in play yet. */
+  readonly frozen: boolean;
+  /** Reloading the gun they hold (rounds going in, one at a time or all at once). */
+  readonly reloading: boolean;
   /**
    * Put them in one of the game's `vehicles`, starting from `state` (plain numbers, booleans and
    * lists: it goes to their screen as data). From now on their controls drive it (the vehicle's
@@ -716,6 +1138,12 @@ export interface PlayerApi {
    * game's (`player.model`, else the skin). With a `hand` node, their first-person arm is that part.
    */
   setModel(model: ModelSpec | null): void;
+  /**
+   * Play one of their model's animation clips (by name) on their figure, on every screen: an
+   * emote, a victory pose, a reload of its own. It blends over the platform's own animation (the
+   * whole body, or a `layer`); null stops it, fading out. Only on glTF models with the clip.
+   */
+  animate(clip: string | null, opts?: ClipOptions): void;
   /** The colour of their name above their figure (team colours); null for white. */
   color: string | null;
   /** A bot (`game.bots`): driven by the game's code, not a person. */
@@ -727,8 +1155,21 @@ export interface PlayerApi {
   readonly aiming: boolean;
   /** Multiplies their movement speed (a power-up, a heavy load). Default 1. */
   speed: number;
+  /**
+   * Their movement abilities' states (`movement.abilities`), by name, live: read them for the HUD
+   * (a cooldown), or change them (reset a cooldown, unlock a move); their screen follows.
+   */
+  readonly abilities: Record<string, any>;
   /** Ignore damage for this long (spawn protection); 0 ends it. */
   protect(seconds: number): void;
+  /**
+   * Throw one of their throwables (`kind: 'throwable'`, see `ThrowableItem`) from their eyes, as if
+   * they'd thrown it themselves: along where they look (or `yaw` / `pitch`), or lobbed to land at
+   * `at` (the arc worked out for its speed; the lower one, or none if it can't reach). `cook` is
+   * seconds of its fuse already burnt. It takes one from their inventory; false if they have none,
+   * they're dead, or they threw one less than its `cooldown` ago. Bots throw this way.
+   */
+  throw(item: string, opts?: { at?: Vec3; yaw?: number; pitch?: number; cook?: number }): boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -786,8 +1227,9 @@ export interface BotControls {
  * - `polearm`: two-handed, low at the right with the tip just under the crosshair (pikes, spears).
  * - `gun`: two hands on a gun (guns' default): at the hip, up to the eye to aim down the sights,
  *   down and across the chest to sprint.
+ * - `throw`: a throwable (their default), up by the shoulder ready to throw; it's thrown with `toss`.
  */
-export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm' | 'gun';
+export type HoldStyle = 'sword' | 'axe' | 'bow' | 'item' | 'block' | 'polearm' | 'gun' | 'throw';
 
 /**
  * A 3D held item made of boxes, for things a 16x16 sprite can't do (pikes, staffs, shields).
@@ -841,10 +1283,101 @@ export interface HoldSpec {
   rotation?: [number, number, number];
   /** Extra offset in pixels (camera axes: x right, y up, z back). */
   translation?: [number, number, number];
-  /** Multiplies the style's scale (swords: 0.68). */
+  /** Multiplies the style's scale (swords: 0.68; guns: 0.42 of the model's own size). */
   scale?: number;
+  /** How a humanoid figure holds this gun (`HumanoidPoses`). Default: a pistol if it's short (`pistolUnder`), else a rifle. */
+  stance?: 'rifle' | 'pistol';
+  /**
+   * How a humanoid figure holds this item, over its model's `poses` (docs/HUMANOID.md): this gun's
+   * stance, its kick, its sprint carry, its reload (the pose and the hand's `cycle`), its action.
+   */
+  poses?: ItemPoses;
   /** Animation for attacking or using: built-in (`swing`, `punch`, `jab`, `drink`, `release`, `chop`, `stab`), registered with `viewModel.define`, or inline. */
   use?: string | ViewAnimation;
+  /** The `gun` style's poses for this gun: whatever it gives goes over the defaults (see `GunHold`). */
+  gun?: GunHold;
+}
+
+/**
+ * Where a gun sits in first person (the `gun` hold style), per gun. Camera space: x right, y up,
+ * z back (so ahead is -z), in blocks, written for the right hand and mirrored for the left. Every
+ * field is optional and goes over its default, so `{ ads: 0.36 }` changes only that.
+ */
+export interface GunHold {
+  /**
+   * The firing fist at the hip: [0.235, -0.255, -0.62], low at the right; a compact gun (a
+   * pistol's length or less ahead of the hand) [0.12, -0.19, -0.52], nearer the middle.
+   */
+  fist?: [number, number, number];
+  /** Which way the barrel points at the hip: nearly straight ahead, a touch inward and up ([-0.1, 0.045, -1]). */
+  barrel?: [number, number, number];
+  /** Cant about the barrel at the hip, radians (-0.22). */
+  roll?: number;
+  /** Sprinting: swung down and across the chest (radians: yaw 0.8, pitch -0.5, roll -0.45) and moved (blocks: [-0.08, -0.06, 0.08]). */
+  sprint?: { yaw?: number; pitch?: number; roll?: number; move?: [number, number, number] };
+  /** Sliding: leaning into it (roll, radians: 0.35) and moved (blocks: [-0.04, -0.03, 0.02]). */
+  slide?: { roll?: number; move?: [number, number, number] };
+  /**
+   * How far ahead of the eye the `sight` point sits when aiming down the sights, in blocks. By
+   * the gun's sight: iron sights 0.42, a `dot` or `holo` optic's window 0.3 (nearer, so it frames
+   * more), a scope 0.46.
+   */
+  ads?: number;
+  /**
+   * The firing forearm's direction, from the fist toward the elbow: at the hip ([0.32, -0.74, 0.6])
+   * and aiming ([0.22, -0.64, 0.74]). `forearm2` is the support arm's: [-0.52, -0.72, 0.48] and
+   * [-0.4, -0.72, 0.56]. They needn't be unit length.
+   */
+  forearm?: { hip?: [number, number, number]; ads?: [number, number, number] };
+  forearm2?: { hip?: [number, number, number]; ads?: [number, number, number] };
+  /** A shot's kick back (blocks, 0.075) and muzzle rise (degrees, 7), per unit of recoil. */
+  kick?: number;
+  rise?: number;
+  /**
+   * Hands on the gun: 2 (the default: the support hand on `grip2`), or 1, a gun fired one-handed
+   * (a revolver). With 1 the support hand is out of sight in first person, and comes up only to
+   * reload (to the `mag` point, and away); a humanoid figure's free hand takes its stance's
+   * `offHand` pose, and comes to the gun only to reload.
+   */
+  hands?: 1 | 2;
+  /** A humanoid player's own arms on this gun, over their model's `firstPerson` (see `FirstPersonArms`). */
+  arm?: FirstPersonArms;
+}
+
+/**
+ * A humanoid player's own arms in first person (`GltfSpec.firstPerson` for the model, and a gun's
+ * `hold.gun.arm` over that for one gun). Every value is optional.
+ */
+export interface FirstPersonArms {
+  /**
+   * Times life size: 1.2 (a little bigger, as shooters draw them, so the hands read round a gun).
+   * The arms' size doesn't change with the gun's (`hold.scale`).
+   */
+  scale?: number;
+  /**
+   * The fists' size, times the arms' (1). A figure drawn with big stylized mitts (right at a
+   * distance) can show life-size hands round the gun in first person with less, the forearms as
+   * thick as ever; the fist still closes on the grip, and the wrist comes in to meet it.
+   */
+  hands?: number;
+  /**
+   * How far the firing and the support arm run from the wrist to the shoulder, in blocks
+   * ([0.55, 0.72]), along the gun pose's `forearm` and `forearm2`: far enough that the shoulder is
+   * off the screen, as in any shooter.
+   */
+  reach?: [firing: number, support: number];
+  /**
+   * The elbow, radians: 0 (the default), a straight arm, forearm and upper arm in one line from
+   * the wrist to the shoulder. More bends it: the arm runs from the wrist to the same shoulder
+   * (`reach` along `forearm`) with the elbow bent this much at rest, dropped down and out, and
+   * the shoulder stays put as the hand moves (a reload, a kick), so the elbow bends and straightens
+   * to follow. One number for both arms, or [firing, support]. A one-handed gun aimed at the eye
+   * wants it (0.6 or so), with its `forearm.ads` running back toward the camera: the forearm then
+   * drops away under the gun instead of crossing the screen.
+   */
+  bend?: number | [firing: number, support: number];
+  /** Where the support fist sits from the handguard's near side, in the model's own blocks along the gun's axes (x out to the side we see, y up, z toward the muzzle; [0.01, -0.012, 0]). */
+  support?: [number, number, number];
 }
 
 /**
@@ -924,13 +1457,18 @@ export type BuiltinSprite =
 interface ItemBase {
   name: string;
   /**
-   * A sprite, or `{ block }`: an item that looks like a block is shown as the block in the
-   * hotbar, held as a little cube, and dropped as a spinning cube of it.
+   * A sprite, a picture of a glTF model, or `{ block }`: an item that looks like a block is shown
+   * as the block in the hotbar, held as a little cube, and dropped as a spinning cube of it.
+   * Optional: the game's client code can give it instead (`ItemLook`), and an item given one by
+   * neither side shows a placeholder.
    */
-  icon: IconRef;
-  /** How it is held and swung in first person. */
+  icon?: ItemIcon;
+  /** How it is held and swung in first person (or given by the game's client code: `ItemLook`). */
   hold?: HoldSpec;
-  /** Its own sounds (built-in or `audio.define`d); each defaults to the platform's generic one. */
+  /**
+   * Its own sounds (built-in or `audio.define`d); each defaults to the platform's generic one.
+   * Or given by the game's client code, with the voices defined there too (`ItemLook`).
+   */
   sounds?: ItemSounds;
   /** Max stack size. Default 1 for weapons, 64 otherwise. */
   stack?: number;
@@ -941,6 +1479,39 @@ interface ItemBase {
    * immediately (e.g. hearts) instead of adding it to the inventory; play your own sound then.
    */
   onPickup?(game: GameContext, count: number, player: Player): boolean;
+}
+
+/**
+ * How an item looks and sounds, given by the game's client code on each screen
+ * (`client.items.look(id, look)`, in its `setup`) rather than by its server: its icon, how it's
+ * held (its model, a gun's first-person poses), its sounds, a gun's tracer, a throwable's trail, a
+ * bow's drawn sprite, the name the hotbar shows. Each field given goes over the server's
+ * definition (`sounds` sound by sound) wherever the screen reads the item. The server then needs
+ * no model files or voices: it names items (`{ item }` icons, `audio.play`'s `item`), and each
+ * screen shows them as it has them.
+ */
+export interface ItemLook {
+  /** The name this screen shows (the hotbar's label); the server's own messages use its own. */
+  name?: string;
+  icon?: ItemIcon;
+  hold?: HoldSpec;
+  sounds?: ItemSounds;
+  /** Guns: the tracer's colour, or false for none (`GunItem.tracer`). */
+  tracer?: string | false;
+  /** Throwables: what it trails as it flies (`ThrowableItem.trail`). */
+  trail?: string;
+  /** Bows: the sprite shown while drawing (`BowItem.drawIcon`). */
+  drawIcon?: SpriteRef;
+}
+
+/**
+ * One of an item's own sounds, as each screen has it (`AudioApi.play`'s `item`): the item, which
+ * of its `sounds`, and the pitch to play that at (default the call's own).
+ */
+export interface ItemSoundRef {
+  id: string;
+  sound: keyof ItemSounds;
+  pitch?: number;
 }
 
 export interface ItemSounds {
@@ -954,6 +1525,10 @@ export interface ItemSounds {
   hit?: SoundName;
   /** Starting to draw a bow. Default `bow_draw`. */
   draw?: SoundName;
+  /**
+   * Throwables use `draw` for pulling the pin (none by default), `use` for the throw (`whoosh`)
+   * and `hit` for each bounce (`arrow_hit`, quiet); a molotov's `hit` is its bottle breaking.
+   */
 }
 
 export interface MeleeItem extends ItemBase {
@@ -1032,18 +1607,160 @@ export interface GunItem extends ItemBase {
     /**
      * Aim assist for someone on a controller (0 none, 1 strong; default 0.6): the view slows
      * over a player in sight and turns a little with them as they move. Mouse aim is never helped.
+     * A number is the strength; `AimAssist` gives its shape too (over the game's `guns.assist`).
      */
-    assist?: number;
+    assist?: number | AimAssist;
   };
   /** Blocks. Default 150. */
   range?: number;
   /** Movement speed while it's held (a heavy gun is slower). Default 1. */
   mobility?: number;
-  /** A pump or bolt worked after each shot (its animation plays before the next). */
-  action?: 'pump' | 'bolt';
+  /**
+   * Worked after each shot, a beat after it (0.08 s): a `pump` (the support hand back and forth),
+   * a `bolt` (the gun rolled over to work it), a `lever` (the gun rocked on the support hand, the
+   * firing hand swinging the lever down and back), a `hammer` cocked by the thumb (a
+   * single-action revolver: the gun canted in and tipped up), or a first-person animation of the
+   * game's own (`ViewAnimation`, the hand's motion; keep it shorter than the time between shots).
+   * A humanoid figure works a `lever` and a `hammer` too (`HumanoidPoses.lever`, `.hammer`).
+   */
+  action?: GunAction;
   /** The tracer's colour, or false for none. Default a warm yellow. */
   tracer?: string | false;
   knockback?: number;
+  /**
+   * In a world with destructible blocks (`world.destructible`), what each bullet (each pellet)
+   * carves out where it hits one: a channel `radius` round and `depth` deep, in blocks (see
+   * `world.carve`). Each shot on the same spot goes about `depth + radius` further in (the next
+   * one lands at the bottom of the last one's pit). Default `{ radius: 0.1, depth: 0.05 }`: a
+   * pit a few pixels across, and about seven shots on one spot through a block. `false`: this
+   * gun doesn't carve.
+   */
+  carve?: { radius?: number; depth?: number } | false;
+  /**
+   * Wall-banging: bullets go through walls with up to `depth` blocks of material in them all told
+   * (a block-thick wall head on is 1, at a slant more; what's been shot out of it doesn't count),
+   * losing `damageLoss` of their damage for each block they go through (default 0.4; 1 would
+   * lose it all in a block). Bedrock and blocks that can't be broken stop them. They leave a hole
+   * where they go in and where they come out. Off by default.
+   */
+  penetration?: { depth: number; damageLoss?: number };
+}
+
+/**
+ * Something thrown: a grenade, a molotov. Hold its `key` (or, with it in hand, the fire button) to
+ * pull the pin, let go to throw it where you look, lobbed a little. It flies, bounces and rolls
+ * on the blocks, and goes off when its `fuse` is out (or, with `impact`, when it first hits
+ * something): a `blast` (damage falling off from its middle, a push, a crater in destructible
+ * walls) and/or a `fire` that burns a while.
+ *
+ * The thrower's own screen throws it at once and flies it there; the host flies it the same way
+ * (the flight is worked out step by step from the same blocks, so it lands in the same place) and
+ * decides when and where it goes off. Everyone else sees it fly too, and a live one near them
+ * gets a warning marker. `player.throw` throws one from code (bots).
+ */
+export interface ThrowableItem extends ItemBase {
+  kind: 'throwable';
+  /** Seconds from the pin to the blast (default 3). With `impact`, the longest it flies before it goes off anyway. */
+  fuse?: number;
+  /** The fuse burns while it's held (cooking it; held too long, it goes off in the hand). Default true, unless `impact`. */
+  cook?: boolean;
+  /** It goes off where it first hits a block or someone (a molotov), rather than bouncing until the fuse is out. */
+  impact?: boolean;
+  /** A key that throws it whatever's in hand (hold to cook, let go to throw), e.g. `'KeyG'`. In hand, the fire button throws it too. */
+  key?: string;
+  /** Blocks a second it leaves the hand at (default 20), lobbed `lift` degrees above where they look (default 7). */
+  speed?: number;
+  lift?: number;
+  /**
+   * How it flies and lands: `gravity` (blocks/s², default 24), `bounce` (0..1 of its speed off a
+   * block it hits head on, default 0.4), `friction` (0..1 of its speed along a surface it hits,
+   * lost; and rolling to a stop, default 0.35), `drag` (0.1), and its `radius` (0.1 blocks).
+   */
+  physics?: { gravity?: number; bounce?: number; friction?: number; drag?: number; radius?: number };
+  /** Seconds between throws (default 0.8). */
+  cooldown?: number;
+  /**
+   * The blast (see `world.explode`): `damage` (or `[middle, edge]`, falling off) to everyone within
+   * `radius` blocks and not behind a wall, the thrower too; `knockback` (default 1); a crater
+   * `carve` blocks round (a destructible world's walls bitten into; in any other, whole blocks
+   * blown out; default 0, none); and how big the explosion looks and sounds, `size` (1 a small
+   * bang; from 2 a shockwave and a big one; default from `radius`, up to 1.4).
+   */
+  blast?: { radius: number; damage: number | [middle: number, edge: number]; knockback?: number; carve?: number; size?: number };
+  /**
+   * Fire where it goes off (a molotov): flames on the ground `radius` blocks round for `duration`
+   * seconds, burning anyone standing in them for `damage` a second (not behind a wall). `color`
+   * tints the flames.
+   */
+  fire?: { radius: number; duration: number; damage: number; color?: string };
+  /** What it trails as it flies (a lit rag's flame, a fuse's sparks): a colour, or none (default). */
+  trail?: string;
+}
+
+/** A gun's action, worked after each shot (`GunItem.action`). */
+export type GunAction = 'pump' | 'bolt' | 'lever' | 'hammer' | ViewAnimation;
+
+/**
+ * How guns play in a game (`GameDefinition.guns`). The host and each shooter's own screen both
+ * play by these (a screen predicts its own movement and fires its own shots), so they're data.
+ * Every field is optional; the defaults are what Call of Blocky plays by.
+ */
+export interface GunOptions {
+  /**
+   * The furthest back a shot looks for its target, in seconds (0.35). The host checks each shot
+   * against where people were on the shooter's screen, but no further back than this, so a laggy
+   * screen can't hit someone where they were a second ago.
+   */
+  rewind?: number;
+  /** Players' hitboxes for bullets, standing, crouching and sliding: what's given goes over each stance's default (see `PlayerHitbox`). */
+  hitboxes?: { stand?: Partial<PlayerHitbox>; crouch?: Partial<PlayerHitbox>; slide?: Partial<PlayerHitbox> };
+  /** Aiming down the sights slows the holder to the gun's `aim.move`. Default true. */
+  aimSlows?: boolean;
+  /** Aiming down the sights stops a sprint, and so does holding the trigger. Both default true. */
+  aimStopsSprint?: boolean;
+  fireStopsSprint?: boolean;
+  /** An empty gun reloads by itself. Default true; off, it waits for R. */
+  autoReload?: boolean;
+  /**
+   * How many shots a screen may get ahead of its gun's rate (3, at least 1). Lag bunches shots
+   * up, so the host takes each one the gun could have fired give or take this many: lower is
+   * stricter with a cheat that fires too fast, higher kinder to a poor connection.
+   */
+  rateSlack?: number;
+  /** Aim assist's shape for every gun (see `AimAssist`); a gun's own `aim.assist` goes over it. */
+  assist?: AimAssist;
+}
+
+/**
+ * A player's hitboxes in one stance, in blocks up from their feet: the body from the feet to
+ * `neck`, the head from there to `height`, `width` across the body and `headWidth` across the
+ * head (both square). Standing `{ height: 2, neck: 1.5, width: 0.72, headWidth: 0.56 }`;
+ * crouching 1.7, 1.2, 0.76, 0.6; sliding (leaning back from the hips: lower and wider) 1.4, 0.85,
+ * 0.9, 0.9. They match the figure everyone sees.
+ */
+export interface PlayerHitbox {
+  height: number;
+  neck: number;
+  width: number;
+  headWidth: number;
+}
+
+/**
+ * Aim assist's shape (controllers only). Over a target near the crosshair the stick turns slower,
+ * and while the sticks move the view turns a little with the target as it (or you) moves.
+ */
+export interface AimAssist {
+  /** 0 none, 1 strong. Default 0.6. */
+  strength?: number;
+  /**
+   * Who's near enough the crosshair: within `radius` blocks of its line (1.1, about a body's
+   * width round them), plus `angle` degrees more (about 1.43, so far-off targets get a little extra).
+   */
+  cone?: { radius?: number; angle?: number };
+  /** How much the stick slows over a target at full strength: from the hip (0.45) and aiming down the sights (0.6). It eases off toward the cone's edge. */
+  slow?: { hip?: number; aim?: number };
+  /** How much of a target's movement the view turns with, at full strength: from the hip (0.4) and aiming (0.6). */
+  follow?: { hip?: number; aim?: number };
 }
 
 export interface ConsumableItem extends ItemBase {
@@ -1056,14 +1773,22 @@ export interface MiscItem extends ItemBase {
   kind: 'misc';
 }
 
-export type ItemDefinition = MeleeItem | BowItem | GunItem | ConsumableItem | MiscItem;
+export type ItemDefinition = MeleeItem | BowItem | GunItem | ThrowableItem | ConsumableItem | MiscItem;
 
-/** An icon anywhere the HUD shows one: a sprite, or a block's own look. */
 /**
- * A sprite, a block's picture, or a picture of a glTF model (`{ gltf: url }`, drawn once it has
- * loaded; `view: 'side'` draws it from the side, the way kill feeds show guns).
+ * An item's own icon: a sprite, a block's picture, or a picture of a glTF model (`{ gltf: url }`,
+ * drawn once it has loaded; `view: 'side'` draws it from the side, the way kill feeds show guns).
  */
-export type IconRef = SpriteRef | { block: string } | { gltf: string; view?: 'iso' | 'side' };
+export type ItemIcon = SpriteRef | { block: string } | { gltf: string; view?: 'iso' | 'side' };
+
+/**
+ * An icon anywhere the HUD shows one (a feed line, a menu entry, a result screen, client code's
+ * `client.hud.icon`): any item icon, or `{ item: id }`, that item's icon as each screen has it
+ * (its look, from the game's client code: `client.items.look`), so a server names an item rather
+ * than sending a picture of it. `view: 'side'` draws a model's picture from the side
+ * (`{ item: 'rifle', view: 'side' }` in a kill feed).
+ */
+export type IconRef = ItemIcon | { item: string; view?: 'iso' | 'side' };
 
 export interface Pickup {
   readonly id: number;
@@ -1097,6 +1822,22 @@ export interface ItemApi {
   clearPickups(): void;
   /** Register a custom sprite / skin atlas from any canvas (e.g. drawn with Canvas 2D). */
   atlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels): void;
+  /**
+   * Throwables in the air (or come to rest, waiting to go off), and the fires they started: what
+   * a bot keeps away from. `radius` is how far one reaches (its blast's, or its fire's); `left`,
+   * seconds until it goes off (a fire: until it's out).
+   */
+  readonly thrown: readonly ThrownInfo[];
+  readonly fires: readonly { position: Vec3; radius: number; left: number; by: Player }[];
+}
+
+/** A throwable in the air, as `items.thrown` lists it. */
+export interface ThrownInfo {
+  item: string;
+  position: Vec3;
+  by: Player;
+  radius: number;
+  left: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1141,9 +1882,153 @@ export interface GltfSpec {
    * `humanoid`: the model is built on the platform's humanoid rig (docs/HUMANOID.md: joints named
    * `hips`, `spine`, `chest`, `head`, `upperArmR` …) and the platform animates it in code: walking,
    * running and strafing, crouching, sliding, jumping, looking, a gun in both hands, a sword, a fall
-   * on death. A model with those joints and no `clips` is taken to be one.
+   * on death. A model with those joints and no `clips` is taken to be one. Its parts may be rigid
+   * (a mesh on each joint) or skinned (one mesh on a skeleton of bones).
    */
   rig?: 'humanoid';
+  /**
+   * A humanoid player's own arms in first person (its forearms and fists on what they hold), for
+   * a model whose proportions want other numbers (see `FirstPersonArms`): `scale` times life size
+   * (1.2), how far each arm `reach`es to its shoulder, the elbow's `bend` (0, straight), where the
+   * `support` fist sits. A gun's `hold.gun.arm` goes over these for that gun.
+   */
+  firstPerson?: FirstPersonArms;
+  /**
+   * A skeleton named its own way (a Mixamo or Blender export) driving the humanoid rig: which of
+   * its nodes (bones or not) is each of the rig's joints, e.g. `HumanoidJoints.mixamo`. Joints
+   * left out go by the rig's own names. It may rest in any pose (a T-pose, bones turned every
+   * which way): the rig works from where its joints are.
+   */
+  joints?: Partial<Record<HumanoidJoint, string>>;
+  /** How a humanoid holds things and moves (`HumanoidPoses`); what's left out is the platform's own. */
+  poses?: HumanoidPoses;
+}
+
+/** The humanoid rig's joints (docs/HUMANOID.md), and the empties at the centre of each fist's hold. */
+export type HumanoidJoint =
+  | 'hips'
+  | 'spine'
+  | 'chest'
+  | 'neck'
+  | 'head'
+  | 'upperArmL'
+  | 'lowerArmL'
+  | 'handL'
+  | 'upperArmR'
+  | 'lowerArmR'
+  | 'handR'
+  | 'upperLegL'
+  | 'lowerLegL'
+  | 'footL'
+  | 'upperLegR'
+  | 'lowerLegR'
+  | 'footR'
+  | 'gripL'
+  | 'gripR';
+
+/**
+ * How a humanoid figure (`rig: 'humanoid'`) holds things and moves: `Models.gltf(url, { rig:
+ * 'humanoid', poses })`, per model (give every model of a game the same object for a game-wide
+ * look). Every value is optional and defaults to the platform's own (docs/HUMANOID.md lists them).
+ * Offsets are metres in the figure's own frame before its scale (x its left, y up, z ahead), held
+ * items' from the middle of its shoulders; turns are radians `[tip, turn, roll]`: about its x (a
+ * positive tip points the muzzle down), then its y (a positive turn is to its left), then along
+ * the muzzle.
+ */
+export interface HumanoidPoses {
+  /** A gun's or sword's size in the hands: world units per unit of its model. Default 0.52. */
+  heldScale?: number;
+  /** A gun at the shoulder, and a pistol held out in both hands. */
+  rifle?: GunStance;
+  pistol?: GunStance;
+  /** A gun without a `hold.stance` is held as a pistol when it's shorter than this (metres, as held). Default 0.45. */
+  pistolUnder?: number;
+  /** Each shot: the gun back (metres) and tipped up (radians), dying away at `decay` a second. Default 0.05, 0.14, 22. */
+  kick?: { back?: number; tip?: number; decay?: number };
+  /** Sprinting with a gun: carried low across the chest, the muzzle down and to the left. */
+  sprint?: HeldPose;
+  /** Reloading: the gun tipped to show its magazine, the support hand to the magazine and to `belt` (the hips' space) and back every `cycle` seconds. */
+  reload?: HeldPose & { cycle?: number; belt?: [number, number, number] };
+  /**
+   * Working a gun's action after each shot (`GunItem.action`): a `lever` (default: the gun dipped
+   * and its muzzle rocked up, offset [0, -0.035, 0.01], turn [-0.2, 0, 0]) or a `hammer` cocked
+   * (tipped up and canted in, offset [0, 0.01, 0], turn [-0.12, 0, 0.3]): the change to where the
+   * gun is at its height, `time` seconds in and out (0.45, 0.26), a beat (0.08 s) after the shot.
+   */
+  lever?: HeldPose & { time?: number };
+  hammer?: HeldPose & { time?: number };
+  /** A sword in both hands: low, the blade up and forward; a swing (the item's attack) lifts it for `windup` of `time` seconds and chops. */
+  sword?: HeldPose & { swing?: { time?: number; windup?: number; raise?: HeldPose; chop?: HeldPose } };
+  /** The fall on death: seconds to the ground, and how often it's backward (0..1). Default 0.65, 0.65. */
+  death?: { time?: number; backward?: number };
+  gait?: HumanoidGait;
+}
+
+/** Where a held gun is: from the hip, and aiming down the sights; the body's twist to it and the head's tilt to the sights. */
+export interface GunStance {
+  hip?: [number, number, number];
+  ads?: [number, number, number];
+  twist?: number;
+  cheek?: number;
+  /**
+   * A gun held in one hand (`hold.gun.hands: 1`): where the free hand is, its fist's place from
+   * the middle of the shoulders and its turn, both in the chest's frame (so it goes with the
+   * body's lean and twist). Default: hanging loose at the side, offset [0.21, -0.56, 0.04], turn
+   * [0, 0, 0]. A reload brings it to the gun.
+   */
+  offHand?: HeldPose;
+}
+
+/**
+ * How a humanoid figure holds one item (`hold.poses`): the parts of `HumanoidPoses` about holding
+ * things, over the figure's own for this item. Say only what differs: `{ reload: { cycle: 0.42 } }`
+ * changes that and keeps the rest of the figure's reload pose.
+ */
+export type ItemPoses = Pick<HumanoidPoses, 'rifle' | 'pistol' | 'kick' | 'sprint' | 'reload' | 'sword' | 'lever' | 'hammer'>;
+
+/** A held item's place (from the shoulders' middle) and turn (from the body's), or a change to them. */
+export interface HeldPose {
+  offset?: [number, number, number];
+  turn?: [number, number, number];
+}
+
+/**
+ * Walking and running. Pairs are `[walking, running]`: the figure goes from one to the other as
+ * its speed goes from `run[0]` to `run[1]` (blocks a second).
+ */
+export interface HumanoidGait {
+  /** Default [3.5, 7.5]. */
+  run?: [number, number];
+  /** Ground covered in a stride, metres: default [1.15, 2.4]. */
+  stride?: [number, number];
+  /** How far each foot reaches ahead and behind (default [0.22, 0.52]), and how high it lifts ([0.1, 0.22]). */
+  step?: [number, number];
+  lift?: [number, number];
+  /** The hips' bob (default [0.02, 0.055]) and the back's lean into it (radians, [0.04, 0.18]). */
+  bob?: [number, number];
+  lean?: [number, number];
+  /** Empty hands swinging (radians, default [0.45, 0.95]). */
+  armSwing?: [number, number];
+  /** The hips' sway from side to side walking (default 0.018), each foot's distance from the middle (0.1), how far the hips drop to crouch (0.33). */
+  sway?: number;
+  width?: number;
+  crouch?: number;
+}
+
+/** How a model's animation clip plays on a figure (`player.animate`, `entity.animate`). */
+export interface ClipOptions {
+  /** Keep playing it (until another, or `animate(null)`), or once. Default once. */
+  loop?: boolean;
+  /** Seconds to blend it in, and out when it ends or stops. Default 0.2. */
+  fade?: number;
+  /**
+   * What it moves: `full` (default: over everything the platform animates), `upper` (the spine
+   * and all on it: the legs keep walking), or a list of joints (the rig's names, or the model's
+   * own node names), each with all that hangs from it.
+   */
+  layer?: 'full' | 'upper' | string[];
+  /** Playback speed. Default 1. */
+  speed?: number;
 }
 
 export interface ModelPart {
@@ -1220,7 +2105,8 @@ export interface Entity {
   readonly age: number;
   /** Free-form per-entity state for behaviours and games. */
   readonly data: Record<string, unknown>;
-  damage(amount: number, opts?: DamageOptions): void;
+  /** Apply damage. Returns false if it didn't land (dead, invulnerable, or cancelled by a `damage` listener). */
+  damage(amount: number, opts?: DamageOptions): boolean;
   heal(amount: number): void;
   kill(): void;
   /** Remove without a death animation or drops. */
@@ -1239,13 +2125,22 @@ export interface Entity {
   /** A clear line from its eyes to them (to a player's eyes, an entity's middle, or a point). */
   canSee(target: Player | Entity | Vec3): boolean;
   distanceTo(target: Player | Entity | Vec3): number;
-  /** Play a model animation: `attack` swings arms, `raise` holds them up (wind-ups), `cast`. */
-  animate(name: 'attack' | 'raise' | 'cast' | 'none'): void;
+  /**
+   * Play a model animation: `attack` swings arms, `raise` holds them up (wind-ups), `cast`, and
+   * `none` ends those (and a clip). Any other name plays that clip of a glTF model, on every
+   * screen, as `opts` say (as `player.animate`).
+   */
+  animate(name: 'attack' | 'raise' | 'cast' | 'none' | (string & {}), opts?: ClipOptions): void;
   /** Speed multiplier on top of the type's speed. */
   setSpeed(multiplier: number): void;
   /** Tint the model (flash on wind-up). */
   glow(color: string | null): void;
-  shoot(spec: ProjectileSpec, target: Player | Entity | Vec3, opts?: { spread?: number; lead?: boolean }): void;
+  /**
+   * Fire a projectile at a target, arcing for its gravity. `spread`: radians of error either way.
+   * `lead`: allow for a moving target's motion while it flies (`true`: most of it, 0.8; or the
+   * fraction, 0 to 1).
+   */
+  shoot(spec: ProjectileSpec, target: Player | Entity | Vec3, opts?: { spread?: number; lead?: boolean | number }): void;
 }
 
 export interface EntityApi {
@@ -1312,7 +2207,8 @@ export interface ScreenOptions {
   title: string;
   subtitle?: string;
   tone?: 'victory' | 'defeat' | 'neutral';
-  icon?: SpriteRef;
+  /** A sprite, or any icon (`{ item: 'trophy' }`: the item's, as each screen has it). */
+  icon?: IconRef;
   stats?: [string, string][];
   buttons: { label: string; primary?: boolean; onClick: () => void }[];
 }
@@ -1330,7 +2226,8 @@ export interface HudApi {
   /**
    * A line in the message feed (top left): kill feeds, match events, chat. Lines stack, newest at
    * the bottom, and fade after a few seconds. `color` tints the line. A line can be parts: text,
-   * coloured text and icons (`['Ann', { icon: { gltf: rifle, view: 'side' } }, { text: 'Bob', color: '#f55' }]`).
+   * coloured text and icons (`['Ann', { icon: { item: 'rifle', view: 'side' } }, { text: 'Bob', color: '#f55' }]`:
+   * the rifle's icon as each screen has it, drawn from the side).
    */
   feed(text: string | FeedPart[], opts?: { color?: string }): void;
   /** A short pop-up under the crosshair ("+100", "Headshot!", "Double kill"): `big` for the big moments. */
@@ -1362,6 +2259,85 @@ export interface HudApi {
    * `progress` goes 0..1. `null` hides it. It stays until moved or hidden.
    */
   highlight(at: Vec3 | null, opts?: { progress?: number }): void;
+  /**
+   * Define a widget of the game's own: its markup, styles, place and buttons (see
+   * `WidgetDefinition`). Once, in `setup`, from `game.hud` or any player's (a widget is the
+   * game's, whoever shows it). Defining it again with other markup redraws it wherever it's up.
+   */
+  define(name: string, widget: WidgetDefinition): void;
+  /**
+   * Put a defined widget up on these screens (everyone's from `game.hud`, one player's from
+   * `player.hud`), filled in from `data`, and get its handle. Calling it again (every tick is
+   * fine) changes what it shows: only what changed goes to the screens.
+   */
+  widget(name: string, data?: WidgetData): WidgetHandle;
+}
+
+/**
+ * What a widget is filled in from: text, numbers, flags, and lists and records of them (anything
+ * else, a function say, is left out).
+ */
+export type WidgetData = { readonly [key: string]: unknown };
+
+/** Where a widget sits: a corner, the middle of an edge, or the centre (widgets in one place stack). */
+export type WidgetAnchor = 'top-left' | 'top' | 'top-right' | 'left' | 'center' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right';
+
+/**
+ * A HUD widget of the game's own: HTML and CSS, filled in from data on each player's screen.
+ *
+ * ```ts
+ * game.hud.define('streak', {
+ *   at: 'bottom-left',
+ *   html: `<div class="card" data-if="streak > 0">Streak <b>{{streak}}</b>
+ *            <span class="pip" data-each="pips" style="--c: {{color}}"></span></div>`,
+ *   css: `.card { background: #111c; padding: 6px 10px } .pip { background: var(--c) }`,
+ * });
+ * player.hud.widget('streak', { streak: 3, pips: [{ color: 'gold' }, { color: 'gold' }] });
+ * ```
+ *
+ * The markup's template: `{{name}}` in text and attributes (`me.kills`, `rows.0.name`; in a list,
+ * the item's fields, `.` for the item itself, `$i` / `$n` for its place from 0 / 1);
+ * `data-if="cond"` shows an element while `cond` holds (`uav`, `!uav`, `kills >= 3`,
+ * `state == 'low'`); `data-each="rows"` repeats an element for each item of a list (a
+ * scoreboard's rows). Bind CSS variables in `style` (`style="--fill: {{hp}}"`) to drive bars and
+ * colours from data. Scripts, `on…` attributes, links, frames, forms and pictures from other
+ * sites are left out; `id` and `name` too.
+ */
+export interface WidgetDefinition {
+  html: string;
+  /**
+   * Its styles, kept to it: `.row` is its own `.row`, `:scope` the widget itself. Its
+   * `@keyframes` are its own; `@media` and `@supports` work; `@import` and `@font-face` don't.
+   */
+  css?: string;
+  /** Where it sits (default `top-left`); its `:scope` CSS can nudge it from there (`margin-top`). */
+  at?: WidgetAnchor;
+  /**
+   * Takes the mouse while it's up, like a menu: the player can click its buttons (a controller's
+   * D-pad moves between them, A presses), and Esc, B or a click outside closes it.
+   */
+  modal?: boolean;
+  /**
+   * What its buttons do: `<button data-action="buy" data-value="{{id}}">` calls `buy(player,
+   * value)`, with the player who pressed it (only while it's on their screen). The value comes
+   * from their screen: check it like any input.
+   */
+  actions?: Record<string, (player: Player, value: string) => void>;
+  /** A `modal` widget closed by the player (it's off their screen now). */
+  onClose?(player: Player): void;
+}
+
+/** A widget on some screens (`hud.widget`): change it, or take it down. */
+export interface WidgetHandle {
+  readonly name: string;
+  /** Change what it shows (it's merged in, records field by field; `null` clears a field). Only what differs goes out. */
+  set(data: WidgetData): void;
+  /** Take it off these screens (`widget(name, data)` puts it back). */
+  remove(): void;
+  /** Whether it's up on these screens. */
+  readonly shown: boolean;
+  /** What it shows there now. */
+  readonly data: WidgetData;
 }
 
 /**
@@ -1445,7 +2421,10 @@ export type BuiltinSound =
   | 'gun_empty'
   | 'gun_cycle'
   | 'hitmarker'
-  | 'kill';
+  | 'kill'
+  | 'bounce'
+  | 'glass'
+  | 'fire';
 
 /** A built-in sound, or one a game added with `audio.define`. */
 export type SoundName = BuiltinSound | (string & {});
@@ -1492,9 +2471,12 @@ export interface SynthKit {
 export type SynthVoice = (s: SynthKit) => void;
 
 export interface AudioApi {
-  play(name: SoundName, opts?: { at?: Vec3; volume?: number; pitch?: number }): void;
-  /** Add (or replace) a sound, synthesised on each play. Call it in `setup`. */
-  define(name: string, voice: SynthVoice): void;
+  /**
+   * Play a sound: at a spot (fainter further off), or everywhere. `item` plays one of an item's own
+   * sounds instead, as each screen has them (the server's `sounds`, or its look's: `ItemLook`),
+   * where it has that one; `name` plays where it hasn't.
+   */
+  play(name: SoundName, opts?: { at?: Vec3; volume?: number; pitch?: number; item?: ItemSoundRef }): void;
   /** Start a continuous sound; keep the handle to change it and stop it. */
   loop(name: LoopName, opts?: { volume?: number; pitch?: number }): LoopHandle;
 }
@@ -1509,9 +2491,46 @@ export interface EnvApi {
 export interface HitDetails {
   weapon?: string;
   headshot?: boolean;
+  /** Blocks of wall the bullet went through first (wall-banging). */
+  through?: number;
+}
+
+/**
+ * What did some damage: a gun's bullet, a melee hit (a blade, a fist, a mob's swing), a projectile
+ * (an arrow, a fireball), an explosion (`world.explode` with `damage`, a grenade), fire (a molotov's
+ * flames), or the world (a fall, `'world'` damage).
+ */
+export type DamageCause = 'gun' | 'melee' | 'projectile' | 'explosion' | 'fire' | 'world';
+
+/**
+ * Damage about to land on a player or a creature (the `damage` event), before armour and before
+ * their health changes. A listener can change `amount` or `knockback`, or `cancel()` it (then it
+ * doesn't land at all: no hurt, no knockback, no `playerDamage` or `entityDamage`, and a gun's
+ * shooter gets no hit marker).
+ */
+export interface DamageEvent extends HitDetails {
+  readonly target: Player | Entity;
+  /** How much, before armour. Change it to deal more or less; 0 or less is the same as cancelling. */
+  amount: number;
+  knockback: number;
+  /** Who dealt it (an entity, a player, the world), if anyone said. */
+  readonly source: DamageOptions['source'];
+  readonly cause: DamageCause;
+  /** The part hit, when it's known (bullets: `head` or `body`). */
+  readonly part?: 'head' | 'body';
+  /** Where it came from, if anywhere. */
+  readonly from?: Vec3;
+  readonly crit: boolean;
+  readonly cancelled: boolean;
+  cancel(): void;
 }
 
 export interface GameEvents {
+  /**
+   * Any damage about to land, from anything (a gun, a blade, an arrow, a fall, your own `damage`
+   * call): change it or cancel it (see `DamageEvent`). Listeners run in the order they were added.
+   */
+  damage: DamageEvent;
   entityDamage: { entity: Entity; amount: number; source: DamageOptions['source'] } & HitDetails;
   entityDeath: { entity: Entity; killer: DamageOptions['source'] } & HitDetails;
   playerDamage: { player: Player; amount: number; source: DamageOptions['source'] } & HitDetails;
@@ -1521,11 +2540,118 @@ export interface GameEvents {
   pickup: { player: Player; item: string; count: number };
   /** A player joined a game in progress (multiplayer). */
   playerJoin: { player: Player };
+  /**
+   * A person's screen is in play: they pressed Play (after `start`, for the first). On a server
+   * that's right after their `playerJoin`; in single-player, the first click on Play. The place
+   * for what needs their screen (a modal widget, a welcome). Bots have no screen: not for them.
+   */
+  playerReady: { player: Player };
   /** A player left (multiplayer). They're no longer in `players`. */
   playerLeave: { player: Player };
   /** A block was broken by the player, an entity, an explosion or `world.breakBlock`. */
   blockBreak: { x: number; y: number; z: number; block: string; by: Actor };
   blockPlace: { x: number; y: number; z: number; block: string; by: Actor };
+  /**
+   * A block changed, however it happened: set, broken, placed, blown up, carved into (see
+   * `world.carved`), or put back whole by a restart. One per block, after the change; `block` is
+   * what's there now. For keeping something built from the world's blocks up to date (the
+   * `navGrid` kit's walking grid).
+   */
+  blockChange: { x: number; y: number; z: number; block: string };
+  /** A movement ability called `body.trigger(name)`: a dash began, a wall-jump (for sounds, effects). */
+  ability: { player: Player; ability: string; name: string };
+  /**
+   * A message from the game's code on a player's screen (`client.send(name, data)`): who sent it
+   * (the connection's player, whatever it says), its name, and its data (plain data, checked for
+   * size and shape already). What it asks for is the game's to check: any client can send anything.
+   */
+  clientMessage: { player: Player; name: string; data: unknown };
+}
+
+/**
+ * Messages to the game's own code on players' screens (`client.ts`): they arrive at
+ * `client.on(name, fn)` there, in order with the presentation calls. Bots have no screen.
+ */
+export interface ClientsApi {
+  /**
+   * To one player's screen, several players', or everyone's (`'all'`). `name`: a letter, then
+   * letters, digits, `_`, `-`, `.` or `:` (at most 64). `data`: plain data (strings, numbers,
+   * booleans, null, lists and records; functions and `undefined` are left out), at most 64 KB as
+   * JSON. A bad name or too much data throws.
+   */
+  send(to: Player | readonly Player[] | 'all', name: string, data?: unknown): void;
+}
+
+/**
+ * Replays (`game.replay`). The room keeps its last few seconds, step by step: everyone's places,
+ * looks, poses and what they hold, creatures, props and pickups (the frames, as they went out), and
+ * what was shown in each step (shots and what they hit, throws, effects, sounds, blocks shot into).
+ * `show` plays a stretch of it on one player's screen, through someone's eyes or from a camera,
+ * while the game goes on underneath: their own player stays where the game has them (dead,
+ * waiting). Their screen draws it with the same figures and interpolation as the live game, and
+ * its client code knows (`client.replay`: hide the HUD, say whose eyes these are).
+ *
+ * The world's blocks are shown as they are now: a block shot away during the replay is already
+ * gone at its start.
+ */
+export interface ReplayApi {
+  /** How many seconds back the room's history reaches now. */
+  readonly seconds: number;
+  /** Keep this many seconds (default 8, at most 30; 0 keeps none and turns recording off). */
+  keep(seconds: number): void;
+  /**
+   * Play a stretch of the last few seconds on this player's screen (not a bot's: they have none).
+   * A replay already playing there ends (its `onEnd` runs) and this one takes its place. Null:
+   * nothing kept yet to show.
+   */
+  show(player: Player, opts?: ReplayOptions): ReplayHandle | null;
+  /** End the player's replay now (its `onEnd` runs). */
+  stop(player: Player): void;
+  /** The replay playing on the player's screen, if any. */
+  playing(player: Player): ReplayHandle | null;
+}
+
+export interface ReplayOptions {
+  /**
+   * Where it starts: seconds ago (`from: 5`), or a moment by the game's clock
+   * (`{ at: game.clock.now - 5 }`). Default: as far back as the history goes.
+   */
+  from?: number | { at: number };
+  /** How long a stretch (seconds; default: up to now). It ends by now at the latest. */
+  seconds?: number;
+  /**
+   * Through this player's eyes: their view, their hands and what they hold (first person), their
+   * shots leaving their gun, and what their own screen showed (their effects and sounds).
+   */
+  follow?: Player;
+  /** Or from a camera standing still: where it is and what it looks at (its field of view, degrees). */
+  camera?: { at: Vec3; look: Vec3; fov?: number };
+  /** Played this many times as fast as it happened (default 1; 0.25 to 4). */
+  speed?: number;
+  /** A name for its client code (`client.replay.label`: 'killcam'), and plain data to go with it. */
+  label?: string;
+  data?: unknown;
+  /** The player may end it early (`client.replay.skip()`); default true. */
+  skippable?: boolean;
+  /**
+   * It ended: played out, skipped by the player (`skipped`), stopped, or replaced by another. Not
+   * called if the player leaves the game.
+   */
+  onEnd?(e: { player: Player; skipped: boolean }): void;
+}
+
+/** A replay playing on a player's screen. */
+export interface ReplayHandle {
+  readonly id: number;
+  /** Seconds it plays for (at its speed). */
+  readonly duration: number;
+  /** The stretch it shows, by the game's clock. */
+  readonly from: number;
+  readonly to: number;
+  /** Still playing. */
+  readonly playing: boolean;
+  /** End it now (its `onEnd` runs). */
+  stop(): void;
 }
 
 export interface EventApi {
@@ -1533,8 +2659,16 @@ export interface EventApi {
 }
 
 export interface ClockApi {
-  /** Seconds of game time since `start` (pauses with the game). */
+  /**
+   * Seconds of game time since `start`: the match's clock. It pauses with the game, and a
+   * `restart()` puts it back to 0 (with the timers, which it clears).
+   */
   readonly now: number;
+  /**
+   * Seconds of game time since the game first started, which a `restart()` doesn't reset: for
+   * what outlives a match (a cooldown across restarts, when someone joined). Pauses with the game.
+   */
+  readonly total: number;
   after(seconds: number, fn: () => void): () => void;
   every(seconds: number, fn: () => void): () => void;
 }

@@ -1,10 +1,13 @@
 import type { GameDefinition } from '../api/types';
 import { encode } from '../net/codec';
-import { FrameWriter, quantize } from '../net/delta';
+import { quantize } from '../net/delta';
 import type { ClientCommand, ServerWelcome, WireBatch } from '../net/protocol';
 import type { SimFrame } from '../sim/sim';
 import { GameHost } from './game';
 import type { SavedPlayer, SavedWorld, Store } from './store';
+
+/** Longest step a room takes (seconds): a stall longer than this is lost time. */
+const MAX_STEP = 0.1;
 
 /** Which room: a game, and its public game or one of its own ones (`instance`). */
 export interface RoomSpec {
@@ -13,6 +16,8 @@ export interface RoomSpec {
   instance: string;
   tickRate: number;
   cheats: boolean;
+  /** Development mode: clients' `dev` commands run (see `GameHostOptions.dev`). */
+  dev: boolean;
   /** A new world's seed (default random); the public room carries on a kept one. */
   seed?: number;
   /** Seconds between saves. */
@@ -69,7 +74,6 @@ export class RoomCore {
   private time = 0;
   private savedAt = 0;
   private timer: ReturnType<typeof setInterval>;
-  private frames = new FrameWriter<SimFrame>();
   /** The server's client ids and the host's, and the frame each client has. */
   private ids = new Map<string, string>();
   private had = new Map<string, SimFrame>();
@@ -89,6 +93,8 @@ export class RoomCore {
       seed,
       remote: true,
       cheats: spec.cheats,
+      dev: spec.dev,
+      room: spec.instance,
       player: { id: 'p1', name: 'Player' },
       radius: 8,
       store,
@@ -96,8 +102,17 @@ export class RoomCore {
     });
     if (store) this.host.persist();
     out.log(kept ? `started, carrying on the kept world (seed ${this.host.seed})` : `started a new world (seed ${this.host.seed})`);
+    // Each step as long as it's been since the last: a busy machine (or a slow tick) steps less
+    // often but keeps time, rather than the game slowing down while players' screens (predicting
+    // their own ships and walks on the wall clock) run on ahead of it. Past MAX_STEP, it loses time.
     const dt = 1 / spec.tickRate;
-    this.timer = setInterval(() => this.step(dt), 1000 * dt);
+    let last = performance.now();
+    this.timer = setInterval(() => {
+      const now = performance.now();
+      const elapsed = (now - last) / 1000;
+      last = now;
+      this.step(Math.min(MAX_STEP, elapsed));
+    }, 1000 * dt);
   }
 
   /** A client watching (they join with `start`): their welcome and a batch catching them up. */
@@ -106,6 +121,7 @@ export class RoomCore {
     this.ids.set(client, id);
     const sp = this.host.sim.spawn;
     const welcome: ServerWelcome = { t: 'welcome', game: this.def.id, room: this.spec.instance, seed: this.host.seed, player: null, spawn: { x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw }, tickRate: this.spec.tickRate };
+    if (this.host.blocks.keys.length) welcome.blocks = this.host.blocks.keys;
     this.out.send(client, encode(welcome));
     const frame = batch.frame ? quantize(batch.frame) : undefined;
     if (frame) this.had.set(client, frame);
@@ -138,15 +154,15 @@ export class RoomCore {
     if (!this.ids.size) return;
     this.time += dt;
     const batches = this.host.step(dt);
-    const frame = batches.values().next().value?.frame;
-    if (frame) this.frames.next(frame);
+    // (The host rounded the step's frame and worked out its patch once: `host.frames`.)
+    const frames = this.host.frames;
     for (const [client, id] of this.ids) {
       const b = batches.get(id);
       if (!b) continue;
       let f: unknown;
       if (b.frame) {
-        f = this.frames.patchFor(this.had.get(client));
-        this.had.set(client, this.frames.current!);
+        f = frames.patchFor(this.had.get(client));
+        this.had.set(client, frames.current!);
       }
       this.out.send(client, encode({ events: b.events, f, time: this.time } satisfies WireBatch));
     }

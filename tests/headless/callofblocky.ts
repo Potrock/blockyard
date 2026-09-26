@@ -3,7 +3,7 @@ import { check, launch } from './_harness';
 /**
  * Call of Blocky with the local player standing idle: the bots fill the street, find each other
  * along the walking grid, and shoot it out with the platform's guns (bots fire from the trigger,
- * the host casts every bullet).
+ * the host casts every bullet), and lob their lethals after whoever ducks out of sight.
  */
 export default function callofblocky() {
   const t0 = performance.now();
@@ -24,18 +24,25 @@ export default function callofblocky() {
   });
   // Where the bots go: they should cover the map, not stand at their spawns.
   const visited = new Set<string>();
+  // Lethals thrown (at least: each time more are in the air than a step before).
+  let thrown = 0;
+  let flying = 0;
   const simulated = h.run(90, {
     pilot: () => null,
     until: (hh) => {
       for (const p of hh.ctx.players) if (p.bot) visited.add(`${Math.floor(p.position.x / 4)},${Math.floor(p.position.z / 4)}`);
+      const now = hh.ctx.items.thrown.length;
+      if (now > flying) thrown += now - flying;
+      flying = now;
       return false;
     },
   });
   const wall = (performance.now() - t0) / 1000;
   const cases = h.find('hud', 'feed').filter((c) => JSON.stringify(c.args[0]).includes('has the briefcase')).length;
   const weapons = [...byWeapon].map(([w, n]) => `${w} ${n}`).join(', ');
-  console.log(`  ${simulated.toFixed(0)} s in ${wall.toFixed(1)} s: ${shots} shots, ${deaths} deaths (${mine} of them the idle player; ${heads} headshots; ${weapons}), bots visited ${visited.size} 4x4 cells, the briefcase taken ${cases}×`);
+  console.log(`  ${simulated.toFixed(0)} s in ${wall.toFixed(1)} s: ${shots} shots, ${deaths} deaths (${mine} of them the idle player; ${heads} headshots; ${weapons}), bots visited ${visited.size} 4x4 cells, ${thrown} lethals thrown, the briefcase taken ${cases}×`);
   check(shots > 40, `bots hardly fired (${shots} shots)`);
   check(deaths >= 3, `bots should kill each other (${deaths} deaths)`);
+  check(thrown >= 1, `bots should throw their lethals (${thrown} thrown)`);
   check(visited.size > 25, `bots should roam the map (${visited.size} cells)`);
 }

@@ -32,7 +32,7 @@ export const Behaviors = {
         if (s._wind <= 0) {
           s._wind = undefined;
           self.animate('attack');
-          if (d <= reach + 0.6 && self.canSee(target)) target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
+          if (d <= reach + 0.6 && self.canSee(target)) target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1, cause: 'melee' });
         }
         return;
       }
@@ -45,19 +45,28 @@ export const Behaviors = {
           self.animate('raise');
         } else {
           self.animate('attack');
-          target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1 });
+          target.damage(opts.damage, { source: self, knockback: opts.knockback ?? 1, cause: 'melee' });
         }
       }
     };
   },
 
-  /** Keep a preferred distance from the nearest player, strafe, and shoot when they're visible. */
-  ranged(opts: { projectile: ProjectileSpec; range?: number; preferred?: number; cooldown?: number }): Behavior {
+  /**
+   * Keep a preferred distance from the nearest player, strafe, and shoot when they're visible: a
+   * bow drawn for `draw` seconds (arms raised, the tell), then loosed at where they are, give or
+   * take `spread` (radians, either way), allowing for only a little of their motion (`lead`, the
+   * fraction). Like Minecraft's skeletons: standing still at ten blocks you're hit most of the
+   * time; strafing at fifteen, rarely.
+   */
+  ranged(opts: { projectile: ProjectileSpec; range?: number; preferred?: number; cooldown?: number; draw?: number; spread?: number; lead?: number }): Behavior {
     const range = opts.range ?? 18;
     const preferred = opts.preferred ?? 9;
     const cooldown = opts.cooldown ?? 2;
+    const draw = opts.draw ?? 0.5;
+    const spread = opts.spread ?? 0.05;
+    const lead = opts.lead ?? 0.3;
     return (self: Entity, game: GameContext, dt: number) => {
-      const s = self.data as { _cd?: number; _strafe?: number; _flip?: number };
+      const s = self.data as { _cd?: number; _strafe?: number; _flip?: number; _draw?: number };
       s._cd = (s._cd ?? cooldown * (0.5 + game.rng.next())) - dt;
       s._flip = (s._flip ?? 0) - dt;
       if (s._flip <= 0) {
@@ -65,14 +74,15 @@ export const Behaviors = {
         s._flip = game.rng.range(1.5, 3.5);
       }
       const target = self.nearestPlayer();
-      if (!target) {
-        self.stop();
-        self.lookAt(null);
-        return;
-      }
-      const d = self.distanceTo(target);
-      if (!self.canSee(target) || d > range) {
-        self.moveTo(target);
+      const d = target ? self.distanceTo(target) : Infinity;
+      if (!target || !self.canSee(target) || d > range) {
+        // Lost them: the bow comes down.
+        if (s._draw !== undefined) {
+          s._draw = undefined;
+          self.animate('none');
+        }
+        if (target) self.moveTo(target);
+        else self.stop();
         self.lookAt(null);
         return;
       }
@@ -87,10 +97,16 @@ export const Behaviors = {
       const away = d < preferred - 2 ? 1 : d > preferred + 3 ? -1 : 0;
       const st = (s._strafe ?? 1) * 0.7;
       self.moveDirection(nx * away - nz * st, nz * away + nx * st);
-      if (s._cd <= 0) {
+      if (s._draw !== undefined) {
+        s._draw -= dt;
+        if (s._draw > 0) return;
+        s._draw = undefined;
         s._cd = cooldown * game.rng.range(0.8, 1.2);
         self.animate('attack');
-        self.shoot(opts.projectile, target, { lead: true, spread: 0.035 });
+        self.shoot(opts.projectile, target, { lead, spread });
+      } else if (s._cd <= 0) {
+        s._draw = draw;
+        self.animate('raise');
       }
     };
   },
@@ -125,7 +141,7 @@ export const Behaviors = {
       if (d < 1.3 && s._hit <= 0) {
         s._hit = 0.9;
         self.animate('attack');
-        target.damage(opts.damage, { source: self, knockback: 0.8 });
+        target.damage(opts.damage, { source: self, knockback: 0.8, cause: 'melee' });
       }
     };
   },

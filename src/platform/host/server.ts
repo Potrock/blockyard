@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage } from 'node:http';
 import type { Worker } from 'node:worker_threads';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { GameDefinition } from '../api/types';
-import { decode } from '../net/codec';
-import { ROOM_CODE, type ClientCommand } from '../net/protocol';
+import { decode, encode } from '../net/codec';
+import { ROOM_CODE, type ClientCommand, type WireBatch } from '../net/protocol';
 import { sanitizeCommand } from '../net/validate';
 import type { GameHost } from './game';
 import { PrivateStore, RoomCore, type RoomSpec } from './room';
@@ -16,6 +16,11 @@ export interface ServeOptions {
    * at `/`), and a room of their own, for a game with `instances`, at `/<id>/<code>`.
    */
   games: GameDefinition[];
+  /**
+   * Games hosted when a client names one (`/<id>`), but not listed (`GET /games`): development
+   * games, on a development server.
+   */
+  hidden?: GameDefinition[];
   port: number;
   /** The engine's compiled `.wasm`. */
   wasm: BufferSource;
@@ -28,6 +33,11 @@ export interface ServeOptions {
    * restart the game or change the time of day. Off on a public server.
    */
   cheats?: boolean;
+  /**
+   * Development mode (`npm run dev`, never a public server): clients' `dev` commands
+   * (`__game.dev(js)`) run in their room, with the game's context. Without it they're refused.
+   */
+  dev?: boolean;
   /**
    * Start a room's worker thread: the app's room worker, which calls `serveRoomWorker`. Games keep
    * state in their modules, so two rooms of one game can only run side by side in threads of
@@ -141,7 +151,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
   const log = o.log ?? (() => {});
   const limits = { ...LIMITS, ...o.limits };
   const rate = o.tickRate ?? 30;
-  const defs = new Map(o.games.map((d) => [d.id, d]));
+  const defs = new Map([...(o.hidden ?? []), ...o.games].map((d) => [d.id, d]));
   const rooms = new Map<string, Room>();
   /** Stores opened in this thread: one per game, shared by its rooms here. */
   const stores = new Map<string, Store>();
@@ -155,7 +165,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
 
   /** Start a room's game: in a worker of its own, or here. */
   function start(room: Room): RoomLink {
-    const spec: RoomSpec = { game: room.def.id, instance: room.instance, tickRate: rate, cheats: o.cheats ?? false, seed: o.seed, saveEvery: o.saveEvery ?? 30 };
+    const spec: RoomSpec = { game: room.def.id, instance: room.instance, tickRate: rate, cheats: o.cheats ?? false, dev: o.dev ?? false, seed: o.seed, saveEvery: o.saveEvery ?? 30 };
     if (o.worker) return inWorker(room, spec, room.stopping ?? Promise.resolve());
     let shared = stores.get(room.def.id);
     if (!shared && o.store) stores.set(room.def.id, (shared = o.store(room.def.id)));
@@ -244,7 +254,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
   /** The room a connection asks for (`/<game>`, or `/<game>/<code>`), made if need be; or why not. */
   function roomFor(req: IncomingMessage, address: string): Room | { code: number; reason: string } {
     const parts = new URL(req.url ?? '/', 'http://server').pathname.split('/').filter(Boolean);
-    const def = parts.length ? defs.get(parts[0]) : defs.size === 1 ? [...defs.values()][0] : undefined;
+    const def = parts.length ? defs.get(parts[0]) : o.games.length === 1 ? o.games[0] : undefined;
     const code = parts[1];
     // Rooms of players' own need threads of their own (the games' module-level state).
     if (!def || parts.length > 2 || (code !== undefined && (!def.instances || !o.worker || !ROOM_CODE.test(code)))) return { code: CLOSE_UNKNOWN, reason: 'No such game on this server' };
@@ -344,6 +354,13 @@ export function serve(o: ServeOptions): Promise<GameServer> {
       // The server keeps the clock (a client's ticks mean nothing here); restarting everyone's
       // game and changing their time of day are for development servers.
       if (!cmd || cmd.t === 'tick' || (!o.cheats && (cmd.t === 'restart' || cmd.t === 'env'))) return;
+      // Running code in the room (development tools): only on a development server. Elsewhere
+      // it goes no further than here, and the client hears why.
+      if (cmd.t === 'dev' && !o.dev) {
+        const refused: WireBatch = { events: [{ t: 'reply', id: cmd.id, value: { ok: false, error: 'refused: this server is not in development mode (npm run dev)' } }], time: 0 };
+        if (ws.readyState === ws.OPEN) ws.send(encode(refused));
+        return;
+      }
       room.link?.command(id, cmd);
       if (cmd.t === 'start' && cmd.name) room.log(`${id} plays as ${cmd.name}`);
     });

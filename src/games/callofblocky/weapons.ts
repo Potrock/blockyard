@@ -1,25 +1,30 @@
-import { HeldModels, type GameContext, type GunItem, type ItemDefinition, type MeleeItem } from '@platform';
-import { GUNS } from './models';
+import type { GameContext, GunItem, IconRef, ItemDefinition, MeleeItem, ThrowableItem } from '@platform';
 
 /**
  * The arsenal. Everyone carries a primary of their choosing, the Lucky 45 and the Hattori
  * katana. Numbers are tuned for 100 health: most guns kill in three to five body shots, heads
  * take fewer, the katana and the Honey Bunny (up close) in one.
+ *
+ * Every bullet chips the walls (`carve`): a pit `radius` round, and each shot on the same spot
+ * goes about `radius + depth` further in. Through a block-thick wall that's about eight rifle or
+ * pistol shots, ten from the SMG, two from the Honey Bunny; the shotgun's pellets pepper it.
+ *
+ * The rifle, the pistol and the Honey Bunny wall-bang (`penetration`): the rifle through a
+ * block-thick wall head on (at about two thirds of its damage), the pistol only through thinner
+ * stuff (a wall already shot into, a slab, a door), the Honey Bunny through two blocks and still
+ * a kill up close.
+ *
+ * And a lethal (G): the Pineapple, a frag that bounces and rolls and blows a crater in a wall,
+ * or the Mia, a five-dollar shake bottle full of fuel that breaks where it lands and burns.
+ *
+ * This is what they do. How they look and sound (their models and icons, where they sit in first
+ * person, tracers, trails, their voices) is each screen's: `client/looks.ts`.
  */
-
-const url = (id: string) => GUNS.find((g) => g.id === id)?.url ?? '';
-
-/** How a gun sits and shows: its model, its side-on icon (kill feed), and a gun's hold. */
-const looks = (id: string): Pick<GunItem, 'icon' | 'hold'> => ({
-  icon: { gltf: url(id) },
-  hold: { style: 'gun', model: HeldModels.gltf(url(id)) },
-});
 
 export const WEAPONS: Record<string, ItemDefinition> = {
   rifle: {
     kind: 'gun',
     name: 'Big Kahuna',
-    ...looks('rifle'),
     auto: true,
     rpm: 640,
     damage: [30, 22],
@@ -32,12 +37,12 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 0.85, side: 0.35, recover: 0.7 },
     aim: { zoom: 1.35, time: 0.22, move: 0.62, sight: 'holo' },
     mobility: 0.95,
-    sounds: { use: 'shot_rifle', reload: 'reload_mag' },
+    carve: { radius: 0.09, depth: 0.04 },
+    penetration: { depth: 1.15, damageLoss: 0.32 },
   } satisfies GunItem,
   smg: {
     kind: 'gun',
     name: 'Mac-10',
-    ...looks('smg'),
     auto: true,
     rpm: 950,
     damage: [24, 14],
@@ -50,13 +55,11 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 0.5, side: 0.5, recover: 0.8 },
     aim: { zoom: 1.2, time: 0.15, move: 0.8, sight: 'holo' },
     mobility: 1.08,
-    tracer: '#ff9ec8',
-    sounds: { use: 'shot_smg', reload: 'reload_mag' },
+    carve: { radius: 0.1, depth: 0.025 },
   } satisfies GunItem,
   shotgun: {
     kind: 'gun',
     name: "Zed's Pump",
-    ...looks('shotgun'),
     rpm: 72,
     pellets: 9,
     damage: [15, 4],
@@ -71,13 +74,11 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 3.5, side: 1, recover: 0.8 },
     aim: { zoom: 1.15, time: 0.18, move: 0.75, sight: 'holo' },
     action: 'pump',
-    tracer: '#ffb36b',
-    sounds: { use: 'shot_shotgun', reload: 'reload_shell', cycle: 'pump' },
+    carve: { radius: 0.07, depth: 0.01 },
   } satisfies GunItem,
   sniper: {
     kind: 'gun',
     name: 'Honey Bunny',
-    ...looks('sniper'),
     rpm: 46,
     damage: [110, 90],
     falloff: [60, 120],
@@ -91,13 +92,12 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     aim: { zoom: 4, time: 0.32, move: 0.45, sight: 'scope' },
     action: 'bolt',
     mobility: 0.9,
-    tracer: '#fff1a8',
-    sounds: { use: 'shot_sniper', reload: 'reload_mag', cycle: 'bolt' },
+    carve: { radius: 0.12, depth: 0.42 },
+    penetration: { depth: 2.2, damageLoss: 0.18 },
   } satisfies GunItem,
   pistol: {
     kind: 'gun',
     name: 'Lucky 45',
-    ...looks('pistol'),
     rpm: 420,
     damage: [38, 26],
     falloff: [15, 35],
@@ -109,20 +109,60 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     recoil: { up: 1.4, side: 0.4, recover: 0.85 },
     aim: { zoom: 1.2, time: 0.14, move: 0.85, sight: 'dot' },
     mobility: 1.1,
-    sounds: { use: 'shot_pistol', reload: 'reload_pistol' },
+    carve: { radius: 0.09, depth: 0.04 },
+    penetration: { depth: 0.7, damageLoss: 0.45 },
   } satisfies GunItem,
   katana: {
     kind: 'melee',
     name: 'Hattori Katana',
-    icon: { gltf: url('katana') },
-    // Rolled onto its side: in the hand the flat of the blade (and its hamon) shows, not the edge.
-    hold: { style: 'sword', model: HeldModels.gltf(url('katana'), { rotation: [0, 0, 90] }) },
     damage: 101,
     cooldown: 0.65,
     reach: 3.6,
     knockback: 0.4,
-    sounds: { use: 'katana', hit: 'katana_hit' },
   } satisfies MeleeItem,
+};
+
+/** The lethals, thrown with G (hold to cook the Pineapple). */
+export const LETHALS: Record<string, ThrowableItem> = {
+  frag: {
+    kind: 'throwable',
+    name: 'The Pineapple',
+    key: 'KeyG',
+    fuse: 3.2,
+    speed: 21,
+    lift: 8,
+    // It doesn't bounce far off a wall, so it goes off by the wall it was thrown at.
+    physics: { gravity: 24, bounce: 0.18, friction: 0.55, radius: 0.1 },
+    // Lethal within about two and a half blocks, a scratch at five and a half; it blows through a
+    // wall a block thick from a block away.
+    blast: { radius: 5.5, damage: [165, 18], knockback: 1.2, carve: 2.4, size: 2.2 },
+    cooldown: 0.9,
+    stack: 2,
+  },
+  molotov: {
+    kind: 'throwable',
+    name: 'The Mia',
+    key: 'KeyG',
+    impact: true,
+    fuse: 4,
+    speed: 18,
+    lift: 10,
+    physics: { gravity: 24, bounce: 0.2, friction: 0.5, radius: 0.1 },
+    // A puddle of fire three blocks round for seven seconds: stand in it and it's about three.
+    fire: { radius: 3, duration: 7, damage: 34, color: '#ff8a2a' },
+    cooldown: 0.9,
+    stack: 1,
+  },
+};
+
+/** How many of each a fighter carries a life. */
+export const LETHAL_COUNT: Record<string, number> = { frag: 2, molotov: 1 };
+export type Lethal = keyof typeof LETHALS & string;
+
+/** One line about each, for the loadout menu. */
+export const LETHAL_BLURBS: Record<string, string> = {
+  frag: 'Frag ×2 · cook it, bank it, crater a wall',
+  molotov: 'Firebomb ×1 · breaks where it lands, burns a while',
 };
 
 /** The primaries on offer, in the order the loadout menu lists them. */
@@ -139,7 +179,14 @@ export const BLURBS: Record<Primary, string> = {
 
 export function defineWeapons(game: GameContext) {
   for (const [id, def] of Object.entries(WEAPONS)) game.items.define(id, def);
+  for (const [id, def] of Object.entries(LETHALS)) game.items.define(id, def);
 }
 
-/** The icon a weapon shows in the kill feed: side on. */
-export const feedIcon = (id: string) => (WEAPONS[id] && url(id) ? { gltf: url(id), view: 'side' as const } : null);
+/**
+ * The icon a weapon shows in the kill feed and the loadout menu: its own, as each screen has it
+ * (`client/looks.ts`), side on (a lethal as it is).
+ */
+export const feedIcon = (id: string): IconRef | null => (WEAPONS[id] ? { item: id, view: 'side' } : LETHALS[id] ? { item: id } : null);
+
+/** A weapon's name, for the kill feed. */
+export const weaponName = (id: string) => WEAPONS[id]?.name ?? LETHALS[id]?.name ?? id;

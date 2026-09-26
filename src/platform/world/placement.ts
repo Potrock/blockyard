@@ -21,6 +21,8 @@ export interface PlaceHow {
   against?: { x: number; y: number; z: number; normal: Vec3; point?: Vec3; block: number };
   /** Which way the placer is looking: stairs climb away from them, a bed's head points away. */
   look?: Vec3;
+  /** The way a game's facing block should face (`placeBlock`'s `facing`), whatever's aimed at. */
+  facing?: Facing;
 }
 
 /** Cells to set: [x, y, z, block id]. */
@@ -75,12 +77,13 @@ export function placement(
       return sturdy(x, y - 1, z, 2) ? one(variant(reg, def, { facing: undefined })) : null;
     }
     case 'slab': {
-      // Aimed at a slab of this kind from its open side: fill it in.
+      // Aimed at a slab of this kind from its open side: fill it in (if two make a block: a
+      // game's slab may not).
       const t = a && reg.blocks[a.block];
-      if (a && n && t?.name === def.name && ((t.state.type === 'bottom' && n.y > 0) || (t.state.type === 'top' && n.y < 0))) {
+      if (def.double && a && n && t?.name === def.name && ((t.state.type === 'bottom' && n.y > 0) || (t.state.type === 'top' && n.y < 0))) {
         return { cells: [[a.x, a.y, a.z, def.double]], join: true };
       }
-      if (block(x, y, z)?.name === def.name) return { cells: [[x, y, z, def.double]], join: true };
+      if (def.double && block(x, y, z)?.name === def.name) return { cells: [[x, y, z, def.double]], join: true };
       return exact ? one(def) : one(variant(reg, def, { type: upper() ? 'top' : 'bottom' }));
     }
     case 'stairs':
@@ -94,6 +97,19 @@ export function placement(
       if (!other) return null;
       return { cells: [[x, y, z, b.id], [x + dx * s, y, z + dz * s, other.id]] };
     }
+  }
+  // A game's block that faces a way (a sign, a furnace, a ladder): the way asked for; else out
+  // from the side of the block aimed at (a sign on a wall), up or down from a top or bottom if it
+  // turns that way; else back at whoever places it.
+  if (def.state.facing !== undefined && !exact) {
+    const vertical = n && n.y !== 0 ? (n.y > 0 ? 'up' : 'down') : null;
+    let f: string;
+    if (how.facing) f = how.facing;
+    else if (n && (n.x !== 0 || n.z !== 0)) f = facingOf(n.x, n.z);
+    else if (vertical && variant(reg, def, { facing: vertical })) f = vertical;
+    else if (how.look && (how.look.x !== 0 || how.look.z !== 0)) f = facingOf(-how.look.x, -how.look.z);
+    else f = def.state.facing;
+    return one(variant(reg, def, { facing: f }));
   }
   if (def.state.axis !== undefined && !exact && n) {
     return one(variant(reg, def, { axis: n.x !== 0 ? 'x' : n.z !== 0 ? 'z' : 'y' }));

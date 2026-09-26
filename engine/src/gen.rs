@@ -94,6 +94,15 @@ pub struct Terraform {
     pub height: f32,
 }
 
+/// A void world's plain ground (`Generator::set_void_ground`).
+#[derive(Clone, Copy)]
+struct Ground {
+    y: i32,
+    top: u8,
+    fill: u8,
+    depth: u8,
+}
+
 pub struct Generator {
     seed: u32,
     blueprints: Vec<Blueprint>,
@@ -101,6 +110,8 @@ pub struct Generator {
     flat: Option<f32>,
     /// No terrain at all: only game structures (sky islands over the void).
     void_world: bool,
+    /// A void world's own plain ground under its structures (an arena's), if it has one.
+    ground: Option<Ground>,
     n_cont: Noise,
     n_ero: Noise,
     n_pv: Noise,
@@ -150,6 +161,7 @@ impl Generator {
             terraforms: Vec::new(),
             flat: None,
             void_world: false,
+            ground: None,
             n_cont: Noise::new(s(1)),
             n_ero: Noise::new(s(2)),
             n_pv: Noise::new(s(3)),
@@ -192,6 +204,29 @@ impl Generator {
     /// No terrain, water or plants: only game structures, over the void.
     pub fn set_void(&mut self) {
         self.void_world = true;
+    }
+
+    /// A void world's ground: a plain slab, `top` at `y` over `depth - 1` of `fill`, everywhere
+    /// under the structures, raised or lowered by the terraforms (hills, a sunken yard). No noise,
+    /// caves, water or plants: an arena's surroundings for next to nothing.
+    pub fn set_void_ground(&mut self, y: i32, top: u8, fill: u8, depth: u8) {
+        self.ground = Some(Ground { y, top, fill, depth: depth.max(1) });
+    }
+
+    /// Lay the void ground in the chunk at (x0, z0).
+    fn lay_ground(&mut self, x0: i32, z0: i32, g: Ground) {
+        for lz in 0..W {
+            for lx in 0..W {
+                let (tw, th) = self.terraform_at((x0 + lx as i32) as f32, (z0 + lz as i32) as f32);
+                // The slab's top is y (+0.5, the middle of its block, as a terraform's height is given).
+                let h = lerp(g.y as f32 + 0.5, th, tw);
+                let top = h.floor() as i32;
+                let bottom = (top - g.depth as i32 + 1).max(0);
+                for y in bottom..=top.min(H as i32 - 1) {
+                    self.blocks[bidx(lx, y as usize, lz)] = if y == top { g.top } else { g.fill };
+                }
+            }
+        }
     }
 
     /// Weight (0..1) of terraforming at a column and the target height.
@@ -532,6 +567,9 @@ impl Generator {
 
         if self.void_world {
             self.blocks.fill(AIR);
+            if let Some(g) = self.ground {
+                self.lay_ground(x0, z0, g);
+            }
             self.stamp_blueprints(x0, z0);
             return self.pack(cx, cz);
         }
@@ -1104,11 +1142,12 @@ impl Generator {
     fn pack(&self, cx: i32, cz: i32) -> Vec<u8> {
         let mut mask: u16 = 0;
         let mut emit: u16 = 0;
+        let emits = &registry().emit;
         for s in 0..16 {
             let sec = &self.blocks[s * 4096..(s + 1) * 4096];
             if sec.iter().any(|&b| b != AIR) {
                 mask |= 1 << s;
-                if sec.iter().any(|&b| EMIT[b as usize] > 0) {
+                if sec.iter().any(|&b| emits[b as usize] > 0) {
                     emit |= 1 << s;
                 }
             }
@@ -1211,6 +1250,35 @@ mod tests {
         g.add_blueprint(Blueprint { origin: [2, 100, 3], size: [1, 1, 1], data: vec![STONE] });
         let data = g.generate(0, 0);
         assert_eq!(u16::from_le_bytes([data[0], data[1]]), 1 << (100 / 16));
+    }
+
+    #[test]
+    fn void_ground_is_a_plain_slab_shaped_by_terraforms() {
+        let mut g = Generator::new(7);
+        g.set_void();
+        g.set_void_ground(63, GRASS, DIRT, 4);
+        // A hill (its top at 80) off in one corner; a structure standing on the plain.
+        g.add_terraform(Terraform { cx: 40.0, cz: 40.0, radius: 4.0, blend: 20.0, height: 80.5 });
+        g.add_blueprint(Blueprint { origin: [2, 64, 3], size: [1, 1, 1], data: vec![STONE] });
+        let mut w = crate::world::World::new();
+        for cz in -1..4 {
+            for cx in -1..4 {
+                let d = g.generate(cx, cz);
+                w.insert_column(cx, cz, &d);
+            }
+        }
+        let top = |x: i32, z: i32| (0..256).rev().find(|&y| w.get(x, y, z) != AIR).unwrap_or(-1);
+        // Grass at 63 over three of dirt, the void below; the structure on it.
+        assert_eq!(w.get(0, 63, 0), GRASS);
+        assert_eq!(w.get(0, 60, 0), DIRT);
+        assert_eq!(w.get(0, 59, 0), AIR);
+        assert_eq!(w.get(-15, 63, -15), GRASS, "everywhere, not only near the origin");
+        assert_eq!(w.get(2, 64, 3), STONE);
+        // No water, trees or caves: flat far from the hill, the hill's top where it says.
+        assert_eq!(top(20, -10), 63);
+        assert_eq!(top(40, 40), 80, "the hill");
+        let slope = top(40, 55);
+        assert!(slope > 63 && slope < 80, "its slope: {slope}");
     }
 
     #[test]

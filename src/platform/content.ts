@@ -1,7 +1,8 @@
-import type { AtlasPixels, EntityDefinition, ItemDefinition, SynthVoice, Vec3, ViewAnimation } from './api/types';
+import type { AtlasPixels, EntityDefinition, ItemDefinition, ItemLook, Vec3, ViewAnimation } from './api/types';
 import { Blueprint } from './api/blueprint';
+import { lookOver } from './looks';
 import type { ContentDef } from './net/protocol';
-import { playRecorded, recordVoice } from './audio/voice';
+import type { WidgetWire } from './ui/markup';
 
 type Listener<T> = (name: string, value: T) => void;
 type AtlasSource = HTMLCanvasElement | OffscreenCanvas | AtlasPixels;
@@ -14,32 +15,30 @@ type AtlasSource = HTMLCanvasElement | OffscreenCanvas | AtlasPixels;
  * client's copy takes it in with `apply`.
  */
 export class Content {
-  readonly sounds = new Map<string, SynthVoice>();
   readonly atlases = new Map<string, AtlasSource>();
   readonly animations = new Map<string, ViewAnimation>();
   /** Entity types: their models, for the client to draw. */
   readonly entities = new Map<string, EntityDefinition>();
-  /** Items: their icons and how they're held. */
+  /**
+   * Items as this side has them: the server's definitions, with their looks over them on a screen
+   * (`lookItem`: their icons, how they're held, their sounds), and an icon always (a placeholder
+   * when neither gives one).
+   */
   readonly items = new Map<string, ItemDefinition>();
+  /** The server's own item definitions, and the looks the game's client code gave (`client.items.look`). */
+  private served = new Map<string, ItemDefinition>();
+  private looks = new Map<string, ItemLook>();
+  /** HUD widgets of the game's own (`hud.define`): markup and styles, for each screen to check and build. */
+  readonly widgets = new Map<string, WidgetWire>();
   /** Prop models: a blueprint to mesh (`props.model`), or a glTF file (`props.gltf`). */
   readonly models = new Map<number, { blueprint: Blueprint; opts: { scale?: number; pivot?: Vec3 } } | { url: string; opts: { scale?: number; animation?: string } }>();
   /** Set by a host: each definition, as data for its clients. */
   forward: ((def: ContentDef) => void) | null = null;
-  private soundListeners: Listener<SynthVoice>[] = [];
   private atlasListeners: Listener<AtlasSource>[] = [];
   private animationListeners: Listener<ViewAnimation>[] = [];
   private modelFileListeners: Listener<string>[] = [];
+  private widgetListeners: Listener<WidgetWire>[] = [];
   private inline = 0;
-
-  defineSound(name: string, voice: SynthVoice) {
-    this.sounds.set(name, voice);
-    for (const l of this.soundListeners) l(name, voice);
-    if (!this.forward) return;
-    // A voice is code: it goes as the layers it makes (see `recordVoice`).
-    const recorded = recordVoice(voice);
-    if (recorded) this.forward({ kind: 'sound', name, voice: recorded });
-    else console.warn(`audio.define: sound "${name}" uses Web Audio directly (s.ctx / s.out / s.t), so it can't be sent to players; use s.tone and s.noise`);
-  }
 
   defineAtlas(name: string, source: AtlasSource) {
     this.atlases.set(name, source);
@@ -59,8 +58,19 @@ export class Content {
   }
 
   defineItem(id: string, def: ItemDefinition) {
-    this.items.set(id, def);
+    this.served.set(id, def);
+    this.items.set(id, lookOver(def, this.looks.get(id)));
     this.forward?.({ kind: 'item', name: id, def: wire(def) });
+  }
+
+  /**
+   * An item's look on this screen (`client.items.look`): over the server's definition, now and
+   * whenever the server defines the item (again).
+   */
+  lookItem(id: string, look: ItemLook) {
+    this.looks.set(id, look);
+    const def = this.served.get(id);
+    if (def) this.items.set(id, lookOver(def, look));
   }
 
   defineEntity(type: string, def: EntityDefinition) {
@@ -76,6 +86,12 @@ export class Content {
     this.forward?.({ kind: 'animation', name, anim: 'sample' in anim ? bake(anim) : wire(anim) });
   }
 
+  defineWidget(name: string, def: WidgetWire) {
+    this.widgets.set(name, def);
+    for (const l of this.widgetListeners) l(name, def);
+    this.forward?.({ kind: 'widget', name, def });
+  }
+
   /** An animation passed inline to `viewModel.play`: stored under a generated name. */
   inlineAnimation(anim: ViewAnimation): string {
     const name = `inline:${++this.inline}`;
@@ -86,8 +102,6 @@ export class Content {
   /** A definition forwarded by the host. */
   apply(d: ContentDef) {
     switch (d.kind) {
-      case 'sound':
-        return this.defineSound(d.name, playRecorded(d.voice));
       case 'atlas':
         return this.defineAtlas(d.name, d.source);
       case 'animation':
@@ -100,15 +114,12 @@ export class Content {
         return this.defineModel(d.id, Blueprint.fromData(d.blueprint), d.opts);
       case 'gltf':
         return this.defineGltfModel(d.id, d.url, d.opts);
+      case 'widget':
+        return this.defineWidget(d.name, d.def);
     }
   }
 
   /** Get everything defined so far, then each new definition as it comes. */
-  onSound(fn: Listener<SynthVoice>) {
-    for (const [n, v] of this.sounds) fn(n, v);
-    this.soundListeners.push(fn);
-  }
-
   onAtlas(fn: Listener<AtlasSource>) {
     for (const [n, v] of this.atlases) fn(n, v);
     this.atlasListeners.push(fn);
@@ -124,6 +135,11 @@ export class Content {
   onAnimation(fn: Listener<ViewAnimation>) {
     for (const [n, v] of this.animations) fn(n, v);
     this.animationListeners.push(fn);
+  }
+
+  onWidget(fn: Listener<WidgetWire>) {
+    for (const [n, v] of this.widgets) fn(n, v);
+    this.widgetListeners.push(fn);
   }
 }
 

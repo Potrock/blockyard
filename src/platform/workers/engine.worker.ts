@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { initSync, TerrainGen, ChunkMesher } from '@engine/voxel_engine.js';
+import { initSync, set_game_blocks, TerrainGen, ChunkMesher } from '@engine/voxel_engine.js';
 import type { WorkerRequest, WorkerResponse } from './protocol';
 import { applyWorldConfig } from './config';
 
@@ -18,6 +18,8 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     switch (msg.type) {
       case 'init': {
         initSync({ module: msg.module });
+        // The game's own blocks first: the generator stamps them, the mesher draws them.
+        set_game_blocks(msg.blocks);
         gen = new TerrainGen(msg.seed >>> 0);
         applyWorldConfig(gen, msg.world);
         mesher = new ChunkMesher();

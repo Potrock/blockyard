@@ -1,6 +1,6 @@
 import type { GameContext, GameDefinition } from '../api/types';
 import { decode, encode } from '../net/codec';
-import type { ClientMessage, HostBatch, PlayerInput, PresentCall, SaveState } from '../net/protocol';
+import type { ClientMessage, HostBatch, PlayerInput, PresentCall } from '../net/protocol';
 import type { PlayerSim } from '../sim/player';
 import type { Sim } from '../sim/sim';
 import { GameHost, type GeneratedWorld } from './game';
@@ -13,8 +13,8 @@ export interface HeadlessOptions {
   radius?: number;
   /** Chat commands like `/give` (default on). */
   cheats?: boolean;
-  /** Continue a saved world. */
-  save?: SaveState;
+  /** Which room it plays as (`game.room`): 'public' (the default), or a private room's code. */
+  room?: string;
   /**
    * Put every batch through the socket encoding (JSON, typed arrays as base64), the strictest way
    * to a client: a definition, call or frame that can't cross fails or shows here, in Node.
@@ -40,7 +40,7 @@ export class Headless {
   private wire: boolean;
 
   constructor(def: GameDefinition, o: HeadlessOptions) {
-    this.host = new GameHost(def, { engine: o.wasm, seed: o.seed ?? 1, radius: o.radius ?? 4, budget: Infinity, cheats: o.cheats ?? true, save: o.save });
+    this.host = new GameHost(def, { engine: o.wasm, seed: o.seed ?? 1, radius: o.radius ?? 4, budget: Infinity, cheats: o.cheats ?? true, room: o.room });
     this.wire = o.wire ?? false;
   }
 

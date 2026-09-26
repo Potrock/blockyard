@@ -1,4 +1,5 @@
-import type { ClientCommand, ClientMessage, PlayerInput } from './protocol';
+import { plainData } from '../ui/markup';
+import { MESSAGE_MAX, MESSAGE_NAME, type ClientCommand, type ClientMessage, type PlayerInput } from './protocol';
 
 /**
  * A client's command as a server should take it: checked field by field, numbers finite and in
@@ -43,6 +44,12 @@ export function sanitizeCommand(raw: unknown): ClientCommand | null {
       const id = int(raw.id, 0, Number.MAX_SAFE_INTEGER);
       if (id === null || typeof raw.line !== 'string' || raw.line.length > 200) return null;
       return { t: raw.t, id, line: raw.line };
+    }
+    case 'dev': {
+      // (Only a development server runs it; any other answers that it won't.)
+      const id = int(raw.id, 0, Number.MAX_SAFE_INTEGER);
+      if (id === null || typeof raw.js !== 'string') return null;
+      return { t: 'dev', id, js: raw.js };
     }
     default:
       return null;
@@ -91,6 +98,21 @@ function sanitizeInput(raw: unknown): PlayerInput | null {
     }
     out.shots = shots;
   }
+  if (raw.throws !== undefined) {
+    // A throw or two an input at most.
+    if (!Array.isArray(raw.throws) || raw.throws.length > 4) return null;
+    const throws: NonNullable<PlayerInput['throws']> = [];
+    for (const s of raw.throws) {
+      if (!Array.isArray(s) || s.length !== 9 || typeof s[1] !== 'string' || s[1].length > 40) return null;
+      const serial = int(s[0], 0, Number.MAX_SAFE_INTEGER);
+      const n = [2, 3, 4, 5, 6, 7].map((i) => num(s[i], -1e6, 1e6));
+      const cook = num(s[8], 0, 60);
+      if (serial === null || cook === null || n.some((v) => v === null)) return null;
+      const [x, y, z, vx, vy, vz] = n as number[];
+      throws.push([serial, s[1], x, y, z, vx, vy, vz, cook]);
+    }
+    out.throws = throws;
+  }
   return out;
 }
 
@@ -109,7 +131,38 @@ function sanitizeMessage(raw: unknown): ClientMessage | null {
     const block = int(raw.block, 0, 254);
     return block === null ? null : { t: 'creativePick', player: '', block };
   }
+  // A widget's button: names as the game writes them, a value no longer than an attribute's.
+  const name = (v: unknown) => (typeof v === 'string' && /^[\w-]{1,40}$/.test(v) ? v : null);
+  if (raw.t === 'widgetAction') {
+    const widget = name(raw.widget);
+    const action = name(raw.action);
+    if (!widget || !action || (raw.value !== undefined && typeof raw.value !== 'string')) return null;
+    return { t: 'widgetAction', player: '', widget, action, value: String(raw.value ?? '').slice(0, 200) };
+  }
+  if (raw.t === 'widgetClosed') {
+    const widget = name(raw.widget);
+    return widget ? { t: 'widgetClosed', player: '', widget } : null;
+  }
+  if (raw.t === 'game') return sanitizeGameMessage(raw.name, raw.data);
+  if (raw.t === 'replaySkip') {
+    const id = int(raw.id, 0, Number.MAX_SAFE_INTEGER);
+    return id === null ? null : { t: 'replaySkip', player: '', id };
+  }
   return null;
+}
+
+/**
+ * A message from a game's client code (`client.send(name, data)`): a name as games write them
+ * (never the platform's `$` ones), and plain data (strings, finite numbers, booleans, null, lists
+ * and records, not too deep) of at most `MESSAGE_MAX.client` as JSON. The game checks what it says.
+ */
+export function sanitizeGameMessage(name: unknown, data: unknown): ClientMessage | null {
+  if (typeof name !== 'string' || !MESSAGE_NAME.test(name)) return null;
+  const clean = data === undefined ? null : plainData(data);
+  if (clean === undefined) return null;
+  const json = JSON.stringify(clean);
+  if (json.length > MESSAGE_MAX.client) return null;
+  return { t: 'game', player: '', name, data: clean };
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);

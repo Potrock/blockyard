@@ -3,17 +3,19 @@ import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Bot, BotControls, CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, OrbitOptions, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
 import { IDLE_INPUT, type PlayerInput } from '../net/protocol';
 import { Combat, type ShotWire } from './combat';
-import { moveMods, type Stance } from './guns';
-import type { BulletHit } from './hitscan';
-import type { EntitySim } from './entities';
+import { moveMods, type GunRules, type Stance } from './guns';
+import type { BulletHit, Penetration } from './hitscan';
+import { clipFrame, type ClipFrame, type EntitySim } from './entities';
 import { PlayerHealth } from './health';
 import { SimInput } from './input';
 import { Inventory, type ItemSim } from './items';
 import type { Presentation } from './present';
 import type { CreativeBuild } from './creative';
-import { freshMemory, resolveMovement, stepMovement, type MoveMemory, type MoveTune } from './movement';
+import { abilityStates, copyMemory, freshMemory, resolveMovement, stepMovement, type MoveMemory, type MoveTune } from './movement';
+import type { AbilityCamera, AbilityEvent } from './abilities';
 import type { PropState } from './props';
 import { VehicleSim } from './vehicle';
+import type { ThrowSim } from './throwing';
 
 const EYE = 1.62;
 const SNEAK_EYE = 1.27;
@@ -70,6 +72,13 @@ export interface PlayerFrame {
   creative: { hotbar: number[]; selected: number } | null;
   /** Physics is off (before play, dead, a game-driven camera). */
   frozen: boolean;
+  /** Their weapons are locked (`freeze(true, { weapons: true })`): their screen fires nothing. */
+  locked: boolean;
+  /**
+   * Their camera's tilt from a movement ability this step ([roll, pitch, dip], `AbilityBody.camera`),
+   * for their own screen when it doesn't predict (a predicting one works it out itself).
+   */
+  tilt?: [number, number, number];
   canFly: boolean;
   /** Swings and uses so far (a change swings the arm of their figure on other screens). */
   swings: number;
@@ -87,8 +96,12 @@ export interface PlayerFrame {
   model: ModelSpec | null;
   /** Their name's colour above their figure. */
   color: string | null;
+  /** A clip their figure plays (`player.animate`). */
+  clip?: ClipFrame | null;
   /** The solid prop they ride (`player.riding`), and where their feet are on it (its own space). */
   ride: { prop: number; p: [number, number, number] } | null;
+  /** Throwables: the last throw their screen made that the host has taken (or turned down). */
+  throws: number;
   /**
    * Third person (`camera.orbit`): what the camera circles (a prop or a player, by id), the point
    * on it, and the wheel's range. `seq` counts up each time the game sets it (their screen then
@@ -102,6 +115,8 @@ export interface PlayerSimParts {
   name: string;
   world: VoxelWorld;
   options: PlayerOptions;
+  /** The game's gun rules (`guns`). */
+  guns: GunRules;
   /** The game's vehicles, and the world as they see it. */
   vehicles: Record<string, VehicleDefinition>;
   query: VehicleWorld;
@@ -110,10 +125,16 @@ export interface PlayerSimParts {
   items: ItemSim;
   /** Props by id (what they ride). */
   props: { byId(id: number): Prop | null };
-  /** Guns: a bullet's path from this player (see `castBullet`). */
-  bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player): BulletHit;
+  /** Guns: a bullet's path from this player (see `castBullet`), through walls with `pen`. */
+  bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player, pen: Penetration | null): BulletHit;
+  /** Guns: carve where a bullet hit a block (`Sim.carve`); null when the world's blocks don't carve. */
+  carve: ((point: Vec3, dir: Vec3, opts: { radius: number; depth: number }, by: Player) => void) | null;
+  /** Throwables in the air (the host flies them and sets them off). */
+  throws: ThrowSim;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
+  /** Host time (`SimFrame.t`). */
+  now(): number;
 }
 
 /**
@@ -147,8 +168,16 @@ export class PlayerSim {
   /** The game's camera, for `controller: 'none'`. */
   readonly cam = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 70 };
   private seq = 0;
-  /** Double-tap state for sprinting and flying. */
+  /** Double-tap state for sprinting and flying, the slide, the game's movement abilities. */
   private memory = freshMemory();
+  /** What their movement abilities triggered since the game last heard. */
+  private abilityEvents: AbilityEvent[] = [];
+  /** The camera their movement abilities asked for on the last step (see `PlayerFrame.tilt`). */
+  private tilt: AbilityCamera | null = null;
+  /** The game froze them (`freeze(true)`): it holds when they press Play. */
+  held = false;
+  /** The game's freeze locks their weapons too (`freeze(true, { weapons: true })`). */
+  private lockWeapons = false;
   /** The last input applied, by the client's count (a predicting client replays what's after). */
   ack = -1;
   /** Seconds their state trails the step (see `PlayerFrame.lead`). */
@@ -158,6 +187,9 @@ export class PlayerSim {
   skin: { uv: [number, number]; atlas?: string } | null = null;
   model: ModelSpec | null = null;
   color: string | null = null;
+  /** A clip their figure plays (`animate`), and how many they've asked for. */
+  clip: ClipFrame | null = null;
+  private clipSeq = 0;
   readonly api: Player;
   /** Creative building's block hotbar and placing (games with `player.build`). */
   creative: CreativeBuild | null = null;
@@ -236,11 +268,22 @@ export class PlayerSim {
         get stance(): Stance {
           return me.sliding ? 2 : me.sneaking ? 1 : 0;
         },
-        bullet: (from, dir, range, seen) => p.bullet(from, dir, range, seen, me.api),
+        bullet: (from, dir, range, seen, pen) => p.bullet(from, dir, range, seen, me.api, pen),
+        carve: p.carve && ((point, dir, opts) => p.carve!(point, dir, opts, me.api)),
         shotSeen: (shot: ShotWire, sound: string, at: Vec3) => {
-          present.send(null, 'client', 'shot', [shot], this.id);
-          present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z } }], this.id);
+          present.message(null, '$shot', shot, this.id);
+          // (The gun's own shot as each screen has it: its look's, else the server's `sound`.)
+          present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z }, item: { id: shot.item, sound: 'use' } }], this.id);
         },
+        launch: (item, t, from, v, fuse, key, mine) => {
+          p.throws.launch(item, t, from, v, fuse, key, this.api, mine);
+          // Their figure swings its arm; everyone else hears it go (their own screen played it).
+          this.swings++;
+          const sound = t.def.sounds?.use ?? 'whoosh';
+          present.send(null, 'audio', 'play', [sound, { at: { x: from.x, y: from.y, z: from.z }, volume: 0.7, item: { id: item, sound: 'use' } }], mine ? this.id : undefined);
+        },
+        refuse: (key) => p.throws.refuse(key, this.id),
+        now: () => p.now(),
         emit: (k, e) => p.emit(k, e),
         view: (method, power) => {
           if (method === 'swing' || method === 'use') this.swings++;
@@ -254,6 +297,7 @@ export class PlayerSim {
       present.fx(null),
       p.ctx,
       o.pvp ?? false,
+      p.guns,
     );
     this.api = this.makeApi();
   }
@@ -310,13 +354,18 @@ export class PlayerSim {
     this.skin = null;
     this.model = null;
     this.color = null;
+    this.clip = null;
     this.orbit = null;
     this.ack = -1;
     this.lead = 0;
     this.swings = 0;
+    // Their screen counts its throws from the start.
+    this.combat.thrown = 0;
     this.speedMul = 1;
     this.sliding = false;
     this.memory = freshMemory();
+    this.abilityEvents = [];
+    this.tilt = null;
     this.input.set(IDLE_INPUT);
     this.place(x, y, z, yaw);
   }
@@ -365,12 +414,26 @@ export class PlayerSim {
       this.pitch = inp.pitch;
     }
     const held = this.inventory.held;
-    const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul);
-    const { sneak, sprint, slide } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods);
+    const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul, this.p.guns);
+    const { sneak, sprint, slide, events, camera } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods, this.pitch, this.p.query);
+    if (events.length) {
+      this.abilityEvents.push(...events);
+      // A clip an ability asked for plays on their figure (their own screen played it already).
+      for (const [, , clip] of events) if (clip) this.clip = clipFrame(++this.clipSeq, clip.name, clip.opts, this.p.now());
+    }
+    this.tilt = camera;
     this.syncState();
     this.sneaking = sneak;
     this.sliding = slide;
     this.sprinting = sprint && Math.hypot(this.state.vx, this.state.vz) > Math.min(4.5, this.tune.params[0] * 1.02);
+  }
+
+  /** The game hears what their movement abilities triggered since the last time (`ability` events). */
+  announceAbilities() {
+    if (!this.abilityEvents.length) return;
+    const events = this.abilityEvents;
+    this.abilityEvents = [];
+    for (const [ability, name] of events) this.p.emit('ability', { player: this.api, ability, name });
   }
 
   /**
@@ -404,11 +467,25 @@ export class PlayerSim {
 
   /** The built-in weapons and hotbar (after the game has had its say on the controls). */
   updateHands(dt: number, running: boolean) {
-    if (this.itemMode) this.combat.update(running ? dt : 0, this.input);
+    if (this.itemMode) this.combat.update(running ? dt : 0, this.input, this.weaponsLocked);
+  }
+
+  /** A weapons-locked freeze holds (it ends with the freeze: `freeze(false)`, a revive). */
+  get weaponsLocked(): boolean {
+    return this.lockWeapons && this.p.world.player_state(this.slot)[12] > 0.5;
+  }
+
+  /** `freeze`: their body, and with `weapons` their weapons too. */
+  freeze(frozen: boolean, weapons = false) {
+    this.p.world.set_frozen(this.slot, frozen);
+    this.held = frozen;
+    this.lockWeapons = frozen && weapons;
   }
 
   reset() {
     this.combat.reset();
+    this.held = false;
+    this.lockWeapons = false;
   }
 
   frame(): PlayerFrame {
@@ -452,16 +529,20 @@ export class PlayerSim {
       vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
       frozen: s.frozen,
+      locked: this.weaponsLocked,
+      ...(this.tilt && { tilt: this.tilt }),
       canFly: this.allowFlight,
       swings: this.swings,
       ack: this.ack,
-      move: { ...this.memory },
+      move: copyMemory(this.memory),
       lead: this.lead,
       skin: this.skin,
       model: this.model,
       color: this.color,
+      clip: this.clip,
       ride: s.ride ? { prop: s.ride, p: [s.rideX, s.rideY, s.rideZ] } : null,
       orbit: this.orbit,
+      throws: c.thrown,
     };
   }
 
@@ -543,6 +624,9 @@ export class PlayerSim {
       setModel: (model) => {
         me.model = model;
       },
+      animate: (clip, opts) => {
+        me.clip = clip ? clipFrame(++me.clipSeq, clip, opts, me.p.now()) : null;
+      },
       get color() {
         return me.color;
       },
@@ -606,7 +690,13 @@ export class PlayerSim {
       heal: (amount) => this.health.heal(amount),
       revive: () => this.health.revive(),
       impulse: (x, y, z) => world.player_impulse(this.slot, x, y, z),
-      freeze: (f) => world.set_frozen(this.slot, f),
+      freeze: (f, opts) => this.freeze(!!f, !!opts?.weapons),
+      get frozen() {
+        return world.player_state(me.slot)[12] > 0.5;
+      },
+      get reloading() {
+        return (me.combat.heldGun()?.state.reload ?? -1) >= 0;
+      },
       drive: <S extends object>(name: string, state: S, opts: { prop?: Prop } = {}) => {
         const def = this.p.vehicles[name];
         if (!def) throw new Error(`player.drive: no vehicle "${name}" (add it to the game's \`vehicles\`)`);
@@ -643,7 +733,11 @@ export class PlayerSim {
       set speed(v: number) {
         me.speedMul = Math.max(0, Math.min(5, Number.isFinite(v) ? v : 1));
       },
+      get abilities() {
+        return abilityStates(me.memory, me.tune);
+      },
       protect: (seconds) => this.health.protect(seconds),
+      throw: (item, opts) => this.combat.throwFromCode(item, opts),
     };
   }
 }

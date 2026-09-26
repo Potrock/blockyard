@@ -10,7 +10,7 @@ import waitress from './waitress.glb?url';
 import boss from './boss.glb?url';
 
 /**
- * The fighters (GLB, written by `scripts/fighters/build.mjs`; see its header and docs/HUMANOID.md
+ * The fighters (GLB, written by `src/games/callofblocky/tools/fighters/build.mjs`; see its header and docs/HUMANOID.md
  * for the rig: hips > spine > chest > neck > head, the arms and legs, `gripR` / `gripL`).
  */
 export interface FighterModel {

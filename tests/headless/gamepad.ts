@@ -4,7 +4,7 @@ import { GameHost } from '../../src/platform/host/game';
 import type { PlayerInput } from '../../src/platform/net/protocol';
 import { sanitizeCommand } from '../../src/platform/net/validate';
 import { padBindings, padHints } from '../../src/platform/player/gamepad';
-import { games } from '../../src/games';
+import { games } from '../../src/games/server';
 import { check } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
@@ -91,10 +91,10 @@ export default function gamepad() {
   // Call of Blocky's buttons, and the hints the home page shows for them.
   const cob = games.find((g) => g.id === 'callofblocky')!;
   const binds = padBindings(cob.gamepad);
-  check(binds.Up === 'KeyL' && binds.R3 === 'Digit3' && binds.Down === null && binds.RT === 'LMB', `the game's buttons over the platform's: ${JSON.stringify(binds)}`);
+  check(binds.Up === 'KeyL' && binds.R3 === 'Digit3' && binds.RB === 'KeyG' && binds.Down === 'KeyF' && binds.Right === 'KeyM' && binds.RT === 'LMB', `the game's buttons over the platform's: ${JSON.stringify(binds)}`);
   const hints = padHints(cob, true, { jump: 'Space', crouch: 'KeyC', sprint: 'ShiftLeft' });
   const said = Object.fromEntries(hints.map(([k, v]) => [v, k]));
-  const want: Record<string, string> = { fire: 'RT', aim: 'LT', jump: 'A', 'crouch · slide': 'B', sprint: 'L3', reload: 'X', switch: 'LB RB', katana: 'R3', loadout: 'D-pad ↑', scores: 'View', pause: 'Menu' };
+  const want: Record<string, string> = { fire: 'RT', aim: 'LT', jump: 'A', 'crouch · slide': 'B', sprint: 'L3', reload: 'X', switch: 'LB Y', lethal: 'RB', katana: 'R3', loadout: 'D-pad ↑', 'plant · crack': 'D-pad ↓', 'mode and map': 'D-pad →', scores: 'View', pause: 'Menu' };
   for (const [job, button] of Object.entries(want)) check(said[job] === button, `hint "${button} ${job}": ${JSON.stringify(hints)}`);
   console.log(`  stick ${(-full.dz).toFixed(2)} b/s (W ${(-keys.dz).toFixed(2)}), half ${(-half.dz).toFixed(2)}, sprint ${Math.hypot(sprint.dx, sprint.dz).toFixed(2)} · hotbar ${slots.join(' ')} · ${hints.map(([k, v]) => `${k} ${v}`).join(' · ')}`);
 }

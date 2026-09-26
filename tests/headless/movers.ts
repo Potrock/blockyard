@@ -5,7 +5,7 @@ import { ClientMovers } from '../../src/platform/client/movers';
 import { Predictor } from '../../src/platform/client/predict';
 import { Content } from '../../src/platform/content';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
-import { worldGenConfig } from '../../src/platform/host/spawn';
+import { worldGenConfig } from '../../src/platform/workers/config';
 import type { HostBatch, PlayerInput } from '../../src/platform/net/protocol';
 import { loadRegistry } from '../../src/platform/world/registry';
 import { check } from './_harness';
