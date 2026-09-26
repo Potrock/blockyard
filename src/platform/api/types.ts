@@ -20,7 +20,11 @@ export interface Vec3 {
 // Game definition
 // ---------------------------------------------------------------------------------------------
 
-export interface GameDefinition {
+/**
+ * What the launcher lists about a game: small, and all a browser loads of a game until someone
+ * picks it (`src/games/<id>/meta.ts`).
+ */
+export interface GameMeta {
   /** Stable identifier, used in the URL (`?game=arena`) and for saves. */
   id: string;
   title: string;
@@ -40,6 +44,22 @@ export interface GameDefinition {
    */
   gamepad?: Partial<Record<PadButton, PadAction | [PadAction, string]>>;
   /**
+   * Players can start a game of their own on a server (just them, or friends they send the link
+   * to) instead of joining the public one: each such game is a separate copy with its own world,
+   * and the home page offers both. For match games (Bed Wars, the Arena); leave it off for one
+   * shared world everyone builds in (Sandbox).
+   */
+  instances?: boolean;
+}
+
+/**
+ * What a game's server and each player's screen both read (`src/games/<id>/shared.ts`): the world
+ * and its blocks (each screen generates the terrain and draws it), how players move (each screen
+ * predicts its own), vehicles, gun rules, the HUD's look. Data, and pure functions both sides run
+ * the same way (structure builders, block painters, vehicles' and abilities' steps).
+ */
+export interface SharedDefinition extends GameMeta {
+  /**
    * Allow the built-in cheat commands (`/give`, `/tp`, `/spawn`, `/kill`, `/heal`, `/time`, `/fly`)
    * in production builds. They're always available in development.
    */
@@ -48,22 +68,6 @@ export interface GameDefinition {
   player?: PlayerOptions;
   /** How guns play in this game: rewind, hitboxes, what they do to movement, reloading, aim assist (see `GunOptions`). */
   guns?: GunOptions;
-  /**
-   * Runs once after the engine has loaded and before the world streams in. Register entity
-   * types, items and event handlers here.
-   */
-  setup?(game: GameContext): void;
-  /** Runs when play begins, and again after `game.restart()`. */
-  start?(game: GameContext): void;
-  /** Runs every frame while the game is running (not while paused). `dt` is in seconds. */
-  update?(game: GameContext, dt: number): void;
-  /**
-   * Players can start a game of their own on a server (just them, or friends they send the link
-   * to) instead of joining the public one: each such game is a separate copy with its own world,
-   * and the home page offers both. For match games (Bed Wars, the Arena); leave it off for one
-   * shared world everyone builds in (Sandbox).
-   */
-  instances?: boolean;
   /**
    * Vehicles players can drive (`player.drive(name, state)`): ships, cars, boards. Defined here,
    * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
@@ -80,6 +84,22 @@ export interface GameDefinition {
   /** How the HUD looks: the health display, health bars over heads, fonts and colours. */
   hud?: HudOptions;
 }
+
+/** A game's rules (`src/games/<id>/server.ts`): they run only on the server. */
+export interface ServerDefinition {
+  /**
+   * Runs once after the engine has loaded and before the world streams in. Register entity
+   * types, items and event handlers here.
+   */
+  setup?(game: GameContext): void;
+  /** Runs when play begins, and again after `game.restart()`. */
+  start?(game: GameContext): void;
+  /** Runs every frame while the game is running (not while paused). `dt` is in seconds. */
+  update?(game: GameContext, dt: number): void;
+}
+
+/** A whole game as the server runs it: its shared definition and its rules (`defineServer`). */
+export interface GameDefinition extends SharedDefinition, ServerDefinition {}
 
 /** The HUD's look for a game (read by each player's screen, so it's data). */
 export interface HudOptions {

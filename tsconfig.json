@@ -30,6 +30,9 @@
       "@platform/kits": [
         "./src/platform/kits/index.ts"
       ],
+      "@platform/client": [
+        "./src/platform/api/client.ts"
+      ],
       "@engine/*": [
         "./engine/pkg/*"
       ]

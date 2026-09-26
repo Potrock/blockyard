@@ -8,6 +8,7 @@ export default defineConfig({
     alias: [
       { find: /^@platform\/art$/, replacement: r('./src/platform/art/index.ts') },
       { find: /^@platform\/kits$/, replacement: r('./src/platform/kits/index.ts') },
+      { find: /^@platform\/client$/, replacement: r('./src/platform/api/client.ts') },
       { find: /^@platform$/, replacement: r('./src/platform/index.ts') },
       { find: /^@engine\//, replacement: r('./engine/pkg/') },
     ],
