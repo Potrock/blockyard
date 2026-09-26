@@ -1,6 +1,7 @@
 import type { HoldSpec, HoldStyle, ItemDefinition, ViewAnimation } from '@platform';
 import type { Client, ClientEvent, ClientKit, HeldItem, HumanoidViewArms, Node, ViewArm } from '@platform/client';
 import { Euler, MathUtils, Quat, Vec3 } from '@platform/client/math';
+import type { BowOwn, MeleeOwn } from '@platform/items';
 import { BUILTIN, compile, pyr, type Anim, type Motion } from './anims';
 import { ARM_FIT, fitArms, placeBent, placeStraight, upperFor, wristFor, type ArmFit } from './arms';
 import { gunPoints, isCompact, sameSpec, type GunPoints } from './points';
@@ -186,9 +187,11 @@ export class FirstPersonKit implements ClientKit {
       this.take(now);
     }
     // A bow drawn far enough shows its drawn look.
-    if (now?.def?.kind === 'bow') now.alternate(me.hand.drawing && me.hand.charge > 0.25);
+    // (The bow kit's word on the draw: `me.items.bow`.)
+    const bow = me.items.bow as BowOwn | undefined;
+    if (now?.def?.kind === 'bow') now.alternate(!!bow?.drawing && bow.charge > 0.25);
     const gun = me.held ? (me.held.state as unknown as GunView) : undefined;
-    this.draw = me.hand.drawing ? me.hand.charge : 0;
+    this.draw = bow?.drawing ? bow.charge : 0;
     this.update(dt, gun);
     // Aiming down the sights zooms the world's view.
     const zoom = me.held?.state.zoom;
@@ -742,7 +745,9 @@ export class FirstPersonKit implements ClientKit {
     const l = this.side;
 
     // Minecraft's hand height: dips to swap items, and after each hit as the attack recharges.
-    const target = this.pending ? 0 : Math.max(0, Math.min(1, me.hand.strength)) ** 3;
+    // (The melee kit's word on the swing's readiness: `me.items.melee`; full without one.)
+    const strength = (me.items.melee as MeleeOwn | undefined)?.strength ?? 1;
+    const target = this.pending ? 0 : Math.max(0, Math.min(1, strength)) ** 3;
     this.height += MathUtils.clamp(target - this.height, -8 * dt, 8 * dt);
     if (this.pending && this.height < 0.1) {
       this.apply(this.pending);

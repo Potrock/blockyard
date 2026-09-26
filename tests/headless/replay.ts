@@ -113,7 +113,7 @@ function history() {
     }
   }
   const calls = wire.steps.reduce((n, s) => n + (s.e?.filter((e) => e.t === 'call').length ?? 0), 0);
-  const shots = wire.steps.reduce((n, s) => n + (s.e?.filter((e) => e.t === 'call' && e.call.method === '$shot').length ?? 0), 0);
+  const shots = wire.steps.reduce((n, s) => n + (s.e?.filter((e) => e.t === 'call' && e.call.method === 'gun.shot').length ?? 0), 0);
   check(calls > 0, 'what was shown came along');
   check(wire.steps.every((s) => (s.e ?? []).every((e) => e.t !== 'call' || e.call.target !== 'hud')), 'no HUD calls in a replay');
 
@@ -221,7 +221,7 @@ function killcam() {
   if (natural) {
     const n = natural as ReplayWire;
     check(n.follow === by, 'a bot that got them: through its eyes');
-    const shots = n.steps.flatMap((s) => s.e ?? []).filter((e) => e.t === 'call' && e.call.method === '$shot' && (e.call.args[0] as { by: string }).by === by).length;
+    const shots = n.steps.flatMap((s) => s.e ?? []).filter((e) => e.t === 'call' && e.call.method === 'gun.shot' && (e.call.args[0] as { by: string }).by === by).length;
     console.log(`  a death in the match: through ${g.players.find((p) => p.id === by)?.name ?? by}'s eyes, their ${shots} shots in it`);
   } else console.log('  (no bot killed the idle player in 90 s)');
 }

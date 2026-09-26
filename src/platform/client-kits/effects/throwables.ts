@@ -1,5 +1,7 @@
 import type { ThrowableItem, Vec3 } from '@platform';
-import type { Client, ClientKit, ClientThrown, Node } from '@platform/client';
+import type { Client, ClientKit, Node } from '@platform/client';
+import { thrownOn } from '../items/throwable';
+import type { ClientThrown } from '../items/thrower';
 import { Color, Vec3 as V3 } from '@platform/client/math';
 
 /** Something thrown as it's drawn: its model (null until the item's model is here), spun about an axis. */
@@ -33,7 +35,7 @@ const X = new V3(1, 0, 0);
 const tmp = new V3();
 
 /**
- * Throwables in the world, from `client.thrown` and the events that come with it: each drawn
+ * Throwables in the world, from the throwable kit's (`thrownOn`) and the events that come with it: each drawn
  * spinning as it flies (ours leaving the hand, the rest from where the server said), trailing
  * what it trails, knocking as it bounces, and with a warning marker when one that can hurt is
  * near; and the fires they start, flames and smoke rising from the ground round them, crackling
@@ -148,7 +150,7 @@ export function throwables(): ClientKit {
       }
       const running = client.running;
       const cam = client.camera.position;
-      for (const t of client.thrown) {
+      for (const t of thrownOn(client)) {
         let d = drawn.get(t.key);
         if (!d) {
           add(client, t.key, t.mine);

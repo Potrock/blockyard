@@ -4,7 +4,7 @@ import { makeBots, type Bots } from './bots';
 import { CYLINDER, DUEL, OUTFITS, ROUNDBAR, WANTED } from './hud';
 import { MAP, type SpawnPoint } from './map';
 import { COWBOYS } from './models';
-import { COLORS, cowboyModel, shared } from './shared';
+import { COLORS, cowboyModel, GUN_RULES, shared } from './shared';
 import { defineWeapons, feedIcon, WEAPONS } from './weapons';
 
 /**
@@ -349,8 +349,8 @@ export const matchState = () => ({ phase, round });
 // -------------------------------------------------------------------------------------------------
 
 export default defineServer(shared, {
-  // Its kinds of item: guns, played by its rules (`shared.guns`), and the bare fist.
-  items: [guns(shared.guns), melee()],
+  // Its kinds of item: guns, played by its rules (`GUN_RULES`, as each screen plays them), and the bare fist.
+  items: [guns(GUN_RULES), melee()],
   setup(game) {
     slingers = new Map();
     running = false;

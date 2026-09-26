@@ -556,10 +556,17 @@ gun: {
 
 **Iron sights.** Aiming, the gun turns to point dead ahead and its `sight` point goes on the eye line, `ads` blocks ahead (iron sights 0.42 by default). The eye line then runs along the gun's own +z through the `sight` point, so model the sights on that line: the front post's tip at the `sight` point's height, the rear sight's notch open down to it, and put `sight` at the rear sight (or the front post). Nothing behind the `sight` point, between it and the eye (a hammer, the top of a receiver, a stock's comb), may rise above the line: it's drawn nearer the eye than the sights, and covers what they point at. The hands and arms are below the line too: a support hand far along the gun sits under the sights, and a firing hand close to the eye (a rifle whose sight is well ahead of its grip, with a short `ads`) looms large at the bottom of the view; a longer `ads` moves the whole gun away.
 
-**A game's gun rules.** The gun kit's options set how every gun plays. The host and each shooter's own screen both play by them (a screen predicts its own movement and fires its own shots), so they're data in the shared definition, handed to the kit on the host (`guns(shared.guns)`). Where bullets meet players is the platform's (`hitscan`: any kit's bullets use it). The defaults are Call of Blocky's:
+**A game's gun rules.** The gun kit's options set how every gun plays. The host and each shooter's own screen both play by them (a screen predicts its own movement and fires its own shots), so a game keeps them in its shared code and hands the same ones to both halves: `guns(GUN_RULES)` in `server.ts`, `items.guns(GUN_RULES)` in `client.ts` (High Noon's are in its `shared.ts`). Where bullets meet players is the platform's (`hitscan`, in the shared definition: any kit's bullets use it). The defaults are Call of Blocky's:
 
 ```ts
-defineShared({
+export const GUN_RULES: GunOptions = {
+  aimSlows: true,                          // aiming slows to the gun's aim.move
+  aimStopsSprint: true, fireStopsSprint: true,
+  autoReload: true,                        // an empty gun reloads by itself
+  rateSlack: 3,                            // shots a laggy screen may get ahead of the gun's rate (at least 1)
+  assist: { strength: 0.6, cone: { radius: 1.1, angle: 1.43 }, slow: { hip: 0.45, aim: 0.6 }, follow: { hip: 0.4, aim: 0.6 } },
+};
+export const shared = defineShared({
   hitscan: {
     rewind: 0.35,                          // seconds a shot may look back for where its target was
     hitboxes: {                            // players' boxes for bullets, blocks up from the feet; give what you change
@@ -567,13 +574,6 @@ defineShared({
       crouch: { height: 1.7, neck: 1.2, width: 0.76, headWidth: 0.6 },
       slide: { height: 1.4, neck: 0.85, width: 0.9, headWidth: 0.9 },
     },
-  },
-  guns: {
-    aimSlows: true,                        // aiming slows to the gun's aim.move
-    aimStopsSprint: true, fireStopsSprint: true,
-    autoReload: true,                      // an empty gun reloads by itself
-    rateSlack: 3,                          // shots a laggy screen may get ahead of the gun's rate (at least 1)
-    assist: { strength: 0.6, cone: { radius: 1.1, angle: 1.43 }, slow: { hip: 0.45, aim: 0.6 }, follow: { hip: 0.4, aim: 0.6 } },
   },
 });
 ```
@@ -616,7 +616,7 @@ player.inventory.give('frag', 2);
 
 ## Controllers
 
-Every game plays with a controller as well as the keyboard and mouse, with nothing to write: a controller presses the same keys and mouse buttons, so `input.isDown('KeyR')` and `button(0)` read it too. The left stick walks, the way it points and as fast as it's pushed (it also holds WASD, for games that read those), and the right stick looks, turning faster the longer it's held all the way over and slower aiming down the sights. Play and Resume pressed with the controller give it the game (no mouse capture needed); Menu pauses. In the menus (the home page, pause, `hud.menu`, `hud.screen`, the block picker) the D-pad or stick moves a highlight, A presses, B backs out, and sliders slide with left and right. With a gun there's aim assist: over a player in sight the stick turns slower, and while the sticks move the view turns a little with them as they move. The strength is the gun's `aim.assist` (0 to 1, default 0.6). It can give the shape too, as can the game's `guns.assist` for every gun: `cone` (who's near enough the crosshair: `radius` blocks round them, 1.1, plus `angle` degrees, about 1.43), `slow` (how much the stick slows over them at full strength, from the hip and aiming: 0.45 and 0.6) and `follow` (how much of their movement the view turns with: 0.4 and 0.6). Only controllers get it, never a mouse, and each player can turn it off, along with stick sensitivity, invert look and vibration, in the pause menu. The controller rumbles as guns fire and when you're hurt.
+Every game plays with a controller as well as the keyboard and mouse, with nothing to write: a controller presses the same keys and mouse buttons, so `input.isDown('KeyR')` and `button(0)` read it too. The left stick walks, the way it points and as fast as it's pushed (it also holds WASD, for games that read those), and the right stick looks, turning faster the longer it's held all the way over and slower aiming down the sights. Play and Resume pressed with the controller give it the game (no mouse capture needed); Menu pauses. In the menus (the home page, pause, `hud.menu`, `hud.screen`, the block picker) the D-pad or stick moves a highlight, A presses, B backs out, and sliders slide with left and right. With a gun there's aim assist: over a player in sight the stick turns slower, and while the sticks move the view turns a little with them as they move. The strength is the gun's `aim.assist` (0 to 1, default 0.6). It can give the shape too, as can the gun rules' `assist` for every gun: `cone` (who's near enough the crosshair: `radius` blocks round them, 1.1, plus `angle` degrees, about 1.43), `slow` (how much the stick slows over them at full strength, from the hip and aiming: 0.45 and 0.6) and `follow` (how much of their movement the view turns with: 0.4 and 0.6). Only controllers get it, never a mouse, and each player can turn it off, along with stick sensitivity, invert look and vibration, in the pause menu. The controller rumbles as guns fire and when you're hurt.
 
 The platform's layout is a shooter's, and it suits building too:
 
@@ -832,7 +832,7 @@ None of the above is the engine's. The engine draws a **first-person layer** and
 in it; everything this section describes (the styles, the Minecraft transforms, guns' poses,
 reloads and actions, the kick and the flash, the bob and the sway, the arms fitted to what's
 held) is a client kit, `firstPerson.standard()` from `@platform/client/kits`, written only against
-the public client API. Every game lists it (`standardKits()` includes it). A game that wants its
+the public client API. Every game lists it. A game that wants its
 first person another way copies the kit and changes the copy.
 
 **The view layer (`client.view`).** Drawn over the world with its own lens (its space is the
@@ -1053,7 +1053,7 @@ game.items.define('cutlass', {
 - Others see each player as the model, walking, running, swinging and holding what's in their hand at the model's `hand` node; `player.setModel(model)` gives one player their own (null: back to the game's). With a `hand` node, the player's own first-person arm is that part of the model.
 - A held model should run along +z to its tip with its handle near the origin, like the built-in ones; `rotation` (degrees about X, Y, Z) and `scale` fix one that doesn't, and `grip` is the point in the fist (in pixels, a sixteenth of a block). It's drawn in first person with the item's hold style (`sword`, `axe`, …), in other players' hands, and lying on the ground.
 - `icon: { gltf: url }` draws the item's icon from the model (a small picture from above and to the side, like an inventory's); an item whose icon is a model and has no `hold.model` is held as that model.
-- **Humanoids.** A figure built on the platform's humanoid rig needs no animations. The rig is a joint per part named `hips`, `spine`, `chest`, `neck`, `head`, `upperArmR`, `lowerArmR`, `handR` and so on, with `gripR` and `gripL` marking where the fists hold (`docs/HUMANOID.md` has the joints and the rest pose). The figures kit (`figures.humanoid()`, which every game lists, alone or in `standardKits()`; see *Figures* below) animates it in code from what it's doing:
+- **Humanoids.** A figure built on the platform's humanoid rig needs no animations. The rig is a joint per part named `hips`, `spine`, `chest`, `neck`, `head`, `upperArmR`, `lowerArmR`, `handR` and so on, with `gripR` and `gripL` marking where the fists hold (`docs/HUMANOID.md` has the joints and the rest pose). The figures kit (`figures.humanoid()`, which every game lists; see *Figures* below) animates it in code from what it's doing:
   - Its feet stay planted and step the way it's going, walking, running, strafing or backpedalling, and its legs bend to reach them.
   - It crouches, slides, jumps and looks.
   - It holds a gun in both hands, aimed where it looks, with its fists on the gun's `grip` and `grip2`. It carries the gun low across its chest to sprint, tips it to reload while the support hand fetches a magazine, kicks with each shot, and works a `lever` or a `hammer`. A gun held in one hand (`hold.gun.hands: 1`) leaves the other free, in its stance's `offHand` pose, until a reload brings it to the gun.
@@ -1076,7 +1076,7 @@ it places each figure and keeps what it's doing, loads what's in its hand and ha
 hand, maps the humanoid rig's joints onto the model's own skeleton, and plays the model's clips
 over the pose. It never decides how anything is held: a figures kit does.
 
-- **The kit.** `figures.humanoid()` (`@platform/client/kits`, in `standardKits()`) poses every
+- **The kit.** `figures.humanoid()` (`@platform/client/kits`) poses every
   figure on the humanoid rig as the platform always has: the gait, crouching and sliding, the
   look, a gun aimed in both hands (rifle or pistol by its length, `hold.stance` or `pistolUnder`),
   one hand free on a one-handed gun, the kick, the sprint carry, the reload, a `lever` or a
@@ -1291,14 +1291,25 @@ Call of Blocky's corner of the screen (kills, place, the leader, the streak towa
 A game's `client.ts` runs on each player's screen (`defineClient(shared, { kits, setup, frame, late })`, `@platform/client`). What the platform's games have always shown is built from the public client API as **kits** (`@platform/client/kits`), which a game lists, copies into its own folder and changes, or replaces. A game lists the kits it uses, in the order they run; Call of Blocky's:
 
 ```ts
-import { effects, figures, firstPerson, hud, sounds } from '@platform/client/kits';
+import { effects, figures, firstPerson, hud, items, sounds } from '@platform/client/kits';
 defineClient(shared, {
-  kits: [...sounds.standard(), ...firstPerson.standard(), figures.humanoid(), hud.gunner(), hud.throwables(), effects.gunfire(), effects.throwables()],
+  kits: [items.throwables(), items.guns(), ...sounds.standard(), ...firstPerson.standard(), figures.humanoid(), hud.gunner(), hud.throwables(), effects.gunfire(), effects.throwables()],
   setup(client) { defineLooks(client); defineSounds(client); },   // client/looks.ts, client/sounds.ts
 });
 ```
 
-(`standardKits()` is all of them, as the games that haven't listed theirs yet use.) Each frame the kits' `frame` runs in order, then the game's; then the world's effects move on by the frame's time; then the kits' and the game's `late` (for what's made at the very end, drawn where it starts: a shot fired this frame).
+Each frame the kits' `frame` runs in order, then the game's; then the world's effects move on by the frame's time; then the kits' and the game's `late` (for what's made at the very end, drawn where it starts: a shot fired this frame). An event a kit emits (`client.emit`) reaches the kits after it, and the game's code, that same frame.
+
+**Item kits' screen halves.** `items.guns(options)` and `items.throwables()` are the client halves of the gun and throwable kits (see "Items"), with the same options as their host halves: they fire and throw on this screen the moment the controls say so, and send what they did to the host with the controls; everything that shows it (first person, the HUD, effects) reads them. List them first, throwables before guns (a throwable being cooked takes the fire button). A kind of item of a game's own gets a client half the same way: a kit with a `kind`, whose hooks are:
+- `controls(client, c, dt)`: before this frame's controls go, with them (`c.button`, `clicked`, `isDown`, `pressed`, `consume`), the view now (`c.yaw`, `c.pitch`, `c.turn` for recoil), and `c.act(data)` to send an action of its kind (its host half's `use.acts`);
+- `move(def, controls)`: what holding one does to movement (the host half's `move`, for prediction);
+- `own(client, host)`: what client code sees of the kind (`client.me.items[kind]`), from the host's word;
+- `heldState(client, item, def)`: the held item's state (`client.me.held.state`);
+- `figureSignals(state, def)`: what one in a figure's hand makes it do (aimed where it looks, down the sights, reloading), from its state as the host shows it;
+- `stick(client)`: help for a controller's stick (aim assist: slower over a target, turning with it);
+- `handItem(client)`: an item it puts in the first-person hand in place of the hotbar's (a grenade cooked by its key).
+
+A kit's own events join `ClientEvent` by adding to `ClientEvents` (`declare module '@platform/client' { interface ClientEvents { 'shield.up': { strength: number } } }`), so `e.t === 'shield.up'` narrows in every kit.
 
 **The HUD (`client.hud`).** Plain DOM: client code is bundled with the game and trusted, so it builds its own elements (what the server sends stays sanitized).
 
@@ -1311,7 +1322,7 @@ defineClient(shared, {
 | `hud.theme` | The game's `hud.theme` |
 | `hud.progress`, `marker`, `banner`, `toast`, `pop`, `feed` | The server's HUD calls, on this screen only (a marker takes a point) |
 
-**What the kits read.** `client.me` is the local player as this screen predicts it: `held` (the item and its local state: a gun's `mag`, `reserve`, `reload` progress, `aim`, `spread` in degrees, `sight` and its `color`), `quick` (throwables with keys of their own they carry: how many, less throws the server hasn't taken, and the key) and `cooking` (one being held: for how long, its fuse). `client.thrown` lists what's in the air on this screen, flown as the server flies it (where, rolling, at rest, how old, how far its harm reaches). `client.events` has this frame's happenings: `bullets` (a shot's bullets: ours as fired here, or someone else's, each with where it ended, what it hit, the block's colour and face, whether it carved it, the walls it went through), `reload`, `empty`, `cook`, `thrown`, `bounce`, `thrownEnd`, `fire`, `reset`, and messages. `client.scene` puts things in the world (`scene.item(id)`: an item's look as a mesh), `client.fx` draws effects (`tracer`, `impact`, `flare`, `particles`, `burst`, …), `client.world.raycast` finds blocks, `client.camera` has the view's `position`, `fov` and `toWorld`, and `client.view.worldPoint('muzzle')` a held item's point in the world. While a replay plays (`client.replay`, see "Replays"), `client.me` and the events are the player it follows.
+**What the kits read.** `client.me` is the local player as this screen predicts it: `hand` (the hotbar's item, its count, and its state as the host shows it), `held` (the item and its state as its kind's kit has it: a gun's `mag`, `reserve`, `reload` progress, `aim`, `spread` in degrees, `sight` and its `color`), and `items` (each kind's word: `items.throwable.quick`, the throwables with keys of their own they carry, how many, less throws the server hasn't taken; `items.throwable.cooking`, one being held; `items.melee.strength`; `items.bow.drawing` and `charge`). The throwable kit's `thrownOn(client)` lists what's in the air on this screen, flown as the server flies it (where, rolling, at rest, how old, how far its harm reaches). `client.events` has this frame's happenings: the gun kit's `shot`, `bullets` (a shot's bullets: ours as fired here, or someone else's, each with where it ended, what it hit, the block's colour and face, whether it carved it, the walls it went through), `reload` and `empty`; the throwable kit's `cook`, `toss`, `thrown`, `bounce`, `thrownEnd` and `fire`; the platform's `use`, `swing`, `kick`, `land`, `reset`; and messages. `client.scene` puts things in the world (`scene.item(id)`: an item's look as a mesh), `client.fx` draws effects (`tracer`, `impact`, `flare`, `particles`, `burst`, …), `client.world.raycast` finds blocks, `client.camera` has the view's `position`, `fov` and `toWorld`, and `client.view.worldPoint('muzzle')` a held item's point in the world. While a replay plays (`client.replay`, see "Replays"), `client.me` and the events are the player it follows.
 
 **The kits.**
 
@@ -1364,7 +1375,7 @@ game.events.on('clientMessage', ({ player, name, data }) => {
 
 // client.ts
 defineClient(shared, {
-  kits: standardKits(),
+  kits: [...sounds.standard(), ...firstPerson.standard(), figures.humanoid()],
   setup(client) {
     client.on('hitConfirm', (data) => { /* … */ });
     client.send('emote', { id: 'wave' });

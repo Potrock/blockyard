@@ -181,7 +181,7 @@ function fire(use: ItemUse<GunItem, GunState>, id: string, g: Gun, st: GunState,
   host.emit('shot', { player: me, weapon: id, from: eye, dir: lookDir(yaw, pitch) });
   // What everyone else sees and hears (the shooter's own screen showed it already): the gun's own
   // shot as each screen has it (its look's), else the server's.
-  host.send('$shot', wire, { except: me });
+  host.send('gun.shot', wire, { except: me });
   host.audio({ except: me }).play(g.def.sounds?.use ?? 'gunshot', { at: { x: eye.x, y: eye.y, z: eye.z }, item: { id, sound: 'use' } });
   let marker: boolean | 'kill' | null = null;
   for (const [target, d] of damage) {

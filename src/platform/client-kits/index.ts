@@ -7,4 +7,4 @@ export * as figures from './figures';
 export * as hud from './hud';
 export * as effects from './effects';
 export * as sounds from './sounds';
-export { standardKits } from './standard';
+export * as items from './items';

@@ -11,7 +11,7 @@
 import type { GameMeta, SharedDefinition } from './types';
 import type { ClientDefinition, ClientGame } from './client/core';
 
-export type { Node, ClientKit, ClientDefinition, ClientGame, Client, ClientServices, ClientCamera, ClientFx, ClientAudio, ClientItems, ClientInput, ClientWorld, ClientScene, ClientThrown, ClientBullet, ClientReplay, Me, MeHeld, ClientEvent } from './client/core';
+export type { Node, ClientKit, ClientDefinition, ClientGame, Client, ClientServices, ClientCamera, ClientFx, ClientAudio, ClientItems, ClientInput, ClientWorld, ClientTrace, ClientScene, ClientReplay, Me, MeHeld, ClientEvent, ClientEvents, KitControls, FigureSignals } from './client/core';
 export type { ItemLook, ItemIcon, IconRef, ItemSounds, HoldSpec, GunHold, SynthVoice, SynthKit } from './types';
 export type { ViewLayer, ViewCamera, ViewSpriteOptions, HeldItem, ViewArms, HumanoidViewArms, ViewArm } from './client/view';
 export type { ClientFigures, Figure, FigureBone, FigureHeld, FigureNode, FigureRig, FigureState, HeldPoint } from './client/figures';

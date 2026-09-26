@@ -16,6 +16,8 @@ const ALIASES = [
   [/^@platform\/art$/, 'src/platform/art/index.ts'],
   [/^@platform\/kits$/, 'src/platform/kits/index.ts'],
   [/^@platform\/items$/, 'src/platform/items/index.ts'],
+  [/^@platform\/client\/kits$/, 'src/platform/client-kits/index.ts'],
+  [/^@platform\/client\/math$/, 'src/platform/api/client/math.ts'],
   [/^@platform\/client$/, 'src/platform/api/client.ts'],
   [/^@platform$/, 'src/platform/index.ts'],
   [/^@engine\/(.*)$/, 'engine/pkg/$1'],

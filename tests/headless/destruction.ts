@@ -153,13 +153,13 @@ export default function destruction() {
   step(3);
   host.command(ann.id, { t: 'input', input: input({ acts: { gun: [], throwable: [[1, 'frag', eye.x, eye.y, eye.z, v.x, v.y, v.z, cooked]] } }) });
   step();
-  const told = bobHears.filter((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$thrown');
-  check(A.api.inventory.count('frag') === 1 && told.length === 1 && said('$thrown').length === 0, 'the host took the throw (one frag left), and tells everyone but Ann (her screen flies it already)');
+  const told = bobHears.filter((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === 'throwable.thrown');
+  check(A.api.inventory.count('frag') === 1 && told.length === 1 && said('throwable.thrown').length === 0, 'the host took the throw (one frag left), and tells everyone but Ann (her screen flies it already)');
   const live = throwables.of(game)!.thrown();
   check(live.length === 1 && live[0].item === 'frag' && live[0].by === A.api && live[0].radius === frag.blast!.radius && Math.abs(live[0].left - (fuse - 2) / 120) < 0.02, `items.thrown lists it: ${JSON.stringify(live.map((l) => ({ ...l, by: l.by.name })))}`);
   const damageBefore = host.world.world.damage_count();
-  for (let i = 0; i < 30 * 5 && !said('$thrownEnd').length; i++) step();
-  const end = said('$thrownEnd')[0];
+  for (let i = 0; i < 30 * 5 && !said('throwable.end').length; i++) step();
+  const end = said('throwable.end')[0];
   check(end, 'it went off');
   const [ex, ey, ez] = end[1] as [number, number, number];
   const miss = dist({ x: ex, y: ey, z: ez }, predicted);
@@ -209,9 +209,9 @@ export default function destruction() {
   check(throwables.of(game)!.throw(lobber, 'frag', { at: spot }), 'throwables.throw: a bot lobs one at a spot');
   check(!throwables.of(game)!.throw(lobber, 'frag', { at: spot }) && lobber.inventory.count('frag') === 1, 'not again straight away (its cooldown); one used');
   step();
-  check(said('$thrown').length === 1, 'everyone sees it thrown (Ann too)');
-  for (let i = 0; i < 30 * 5 && !said('$thrownEnd').length; i++) step();
-  const lob = said('$thrownEnd')[0]?.[1] as [number, number, number] | undefined;
+  check(said('throwable.thrown').length === 1, 'everyone sees it thrown (Ann too)');
+  for (let i = 0; i < 30 * 5 && !said('throwable.end').length; i++) step();
+  const lob = said('throwable.end')[0]?.[1] as [number, number, number] | undefined;
   check(lob && Math.hypot(lob[0] - spot.x, lob[2] - spot.z) < 3, `it came down about where it was lobbed: ${lob?.map((n) => n.toFixed(2))}`);
   // Holding G (as a bot's controls do): the pin, a second's cook, let go.
   step(30);
@@ -219,10 +219,10 @@ export default function destruction() {
   lobber.controls.look(Math.PI * 0.75, 0.2);
   lobber.controls.hold('KeyG');
   step(30);
-  check(!said('$thrown').length && lobber.inventory.count('frag') === 1, 'held: cooking, not thrown yet');
+  check(!said('throwable.thrown').length && lobber.inventory.count('frag') === 1, 'held: cooking, not thrown yet');
   lobber.controls.hold('KeyG', false);
   step();
-  const cookedThrow = said('$thrown')[0];
+  const cookedThrow = said('throwable.thrown')[0];
   check(cookedThrow && lobber.inventory.count('frag') === 0, 'let go: thrown');
   const fuseLeft = (cookedThrow[9] as number) / 120;
   check(fuseLeft > 1.9 && fuseLeft < 2.3, `cooked about a second: ${fuseLeft.toFixed(2)} s of fuse left`);
@@ -247,7 +247,7 @@ export default function destruction() {
   host.command(ann.id, { t: 'input', input: input({ acts: { gun: [], throwable: [[2, 'molotov', meye.x, meye.y, meye.z, mv.x, mv.y, mv.z, 0]] } }) });
   events.length = 0;
   step(30 * 3);
-  const fire = said('$fire')[0];
+  const fire = said('throwable.fire')[0];
   check(fire && Math.hypot((fire[1] as number) - lands.x, (fire[3] as number) - lands.z) < 0.01, 'a fire where it broke');
   const burns = [...(hurt.get(inFire) ?? [])];
   const fires = throwables.of(game)!.fires();
@@ -256,7 +256,7 @@ export default function destruction() {
   check(!hurt.has(clear), 'the one outside it, not at all');
   const before = took(inFire);
   step(30 * 6);
-  check(took(inFire) > before && said('$fire').length === 1, 'it burns on for its while');
+  check(took(inFire) > before && said('throwable.fire').length === 1, 'it burns on for its while');
   const out = took(inFire);
   step(30 * 2);
   check(took(inFire) === out, `then goes out (${out.toFixed(0)} damage in all)`);
@@ -283,7 +283,7 @@ export default function destruction() {
     host.command(ann.id, { t: 'input', input: input({ yaw, pitch, acts: { gun: [[serial, yaw, pitch, 0]], throwable: [] }, seen: sim.time }) });
     step();
     // (What everyone else's screen draws: Ann's drew it herself.)
-    const shot = bobHears.find((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$shot');
+    const shot = bobHears.find((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === 'gun.shot');
     return shot?.t === 'call' ? (shot.call.args[0] as ShotWire) : undefined;
   };
   // Through the thin wall (a block of stone, head on).

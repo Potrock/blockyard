@@ -279,7 +279,7 @@ export interface GunShown {
   aim: number;
 }
 
-/** A shot as other screens draw it (the `$shot` message): who fired what, and where each bullet ended (and what it hit). */
+/** A shot as other screens draw it (the `gun.shot` message): who fired what, and where each bullet ended (and what it hit). */
 export interface ShotWire {
   by: string;
   item: string;

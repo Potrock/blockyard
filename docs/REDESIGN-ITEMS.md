@@ -1,6 +1,7 @@
 # Redesign, part 2: item kinds as kits
 
-Status: **in progress**. 4a (the mechanism and the host halves) is built; 4b to 4e are next.
+Status: **in progress**. 4a (the mechanism and the host halves) and 4b (the screen halves) are
+built; 4c to 4e are next.
 Started 2026-09-26, following REDESIGN-CLIENT-SERVER.md's "Later": the user asked to continue the
 refactor for the edges and overfits raised after phases 1 to 3.
 
@@ -206,6 +207,54 @@ Building it settled a few things the design left open:
   - the production build's bundle check passes;
   - in a browser against the real server, a rifle fires and spends its rounds, and a frag is
     thrown and taken.
+
+## What 4b changed from the design above
+
+- **The client halves are kits** in `@platform/client/kits` (`items.guns(options)`,
+  `items.throwables()`), listed first in a game's kits.
+  - The gun controller, client bullets, others' shots, the replay's gun and aim assist live in
+    the gun's half.
+  - The throw controller, the local flights and the throwable messages live in the throwable's.
+  - `runtime.ts` has no gun or throwable code left: it runs the kits' hooks and assembles `me`.
+- **`ClientKit` hooks:**
+  - `kind`;
+  - `controls(client, c, dt)`: the controls this frame, with `consume`, the view now (`yaw`,
+    `pitch`, `turn`) and `act`;
+  - `stick` (aim assist), `move`, `own` (`me.items[kind]`), `heldState` (`me.held.state`),
+    `figureSignals` (figures' aim, sights and reload), and `handItem` (the grenade in the hand).
+  - The names avoid members the first-person kit already had.
+- **`ClientEvents` is an interface kits augment** (`declare module '@platform/client'`). The core
+  declares only its own events: `use`, `swing`, `kick`, `land`, `equip`, `view.*`, `reset`,
+  `replay.*`, `message`. The gun kit adds `shot`, `bullets`, `reload` and `empty`; the throwable
+  kit adds `cook`, `toss`, `thrown`, `bounce`, `thrownEnd` and `fire`. `client.emit` is public, and
+  an event a kit emits reaches the kits after it in the same pass.
+- **`Me`:**
+  - gained `hand.state` (the host's word), `items` (each kind's), `hotbar` and `walkSpeed`;
+  - lost `quick`, `cooking` and the melee and bow fields, which moved to `items.throwable`,
+    `items.melee` and `items.bow`.
+- **New primitives:**
+  - `client.world`: `trace` (a bullet's path on this screen), `blockColor`, `carvable` and
+    `lineOfSight`;
+  - `client.input`: `assist`, `sticksMoving` and `rumble`;
+  - `client.hud.bind` (a widget's `$name`: the gun kit's `$gun`);
+  - `figure.used()` and `figure.point(name)`.
+- **Messages** are the kits' own names through `client.on`: `gun.shot`, `throwable.thrown`,
+  `throwable.end`, `throwable.fire`. In a replay the gun kit tells the followed player's own
+  shots from others'; the throwable kit clears its flights when a replay starts or ends, checking
+  the replay's id as each message arrives.
+- **Kit-owned options leave the shared definition.** `SharedDefinition.guns` went: High Noon's
+  `GUN_RULES` is in its `shared.ts`, handed to both halves. `standardKits()` went too, since every
+  game lists its kits.
+- **Checked:**
+  - all 52 headless test files pass, and the boundary and presentation checks pass;
+  - Call of Blocky's first-person scenario matches main pixel for pixel, apart from a few pixels
+    of anti-aliasing in the XP label's text. It covers the rifle at the hip and aimed, firing and
+    its impacts, the SMG empty, low and reloading, the scope, a frag cooked and thrown, and a
+    molotov burning;
+  - High Noon's first-person shots are identical to main, and its figure shots are within the run
+    to run noise;
+  - in a browser, every live bot shot came from its figure's muzzle, and in the kill cam the
+    followed killer's shots were their own hand's, down their sight.
 
 ## Plan
 

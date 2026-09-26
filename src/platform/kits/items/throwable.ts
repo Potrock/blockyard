@@ -111,7 +111,7 @@ function throwables1(host: ItemHost): Throwables {
   const launch = (by: Player, item: string, t: Throwable, from: Vec3, v: Vec3, fuse: number, key: string, mine: boolean) => {
     const f = newFlight(from, v, fuse);
     live.push({ key, item, t, f, acc: { t: 0 }, by, age: 0 });
-    host.send('$thrown', [key, item, by.id, f.x, f.y, f.z, f.vx, f.vy, f.vz, f.fuse], { except: mine ? by : undefined });
+    host.send('throwable.thrown', [key, item, by.id, f.x, f.y, f.z, f.vx, f.vy, f.vz, f.fuse], { except: mine ? by : undefined });
     // Their figure swings its arm; everyone else hears it go (their own screen played it).
     host.swing(by);
     host.audio({ except: mine ? by : undefined }).play(t.def.sounds?.use ?? 'whoosh', { at: { x: from.x, y: from.y, z: from.z }, volume: 0.7, item: { id: item, sound: 'use' } });
@@ -134,7 +134,7 @@ function throwables1(host: ItemHost): Throwables {
     const d = def(item);
     // A little slack on the cooldown: their screen's clock isn't ours.
     if (use.controls.locked || !isThrowable(d) || p.inventory.count(item) < 1 || use.now - h.lastThrow < throwable(d).cooldown * 0.6) {
-      host.send('$thrownEnd', [key, null], { to: p });
+      host.send('throwable.end', [key, null], { to: p });
       return;
     }
     const t = throwable(d);
@@ -163,7 +163,7 @@ function throwables1(host: ItemHost): Throwables {
     const h = host;
     const game = h.game;
     const at = { x: l.f.x, y: l.f.y, z: l.f.z };
-    h.send('$thrownEnd', [l.key, [at.x, at.y, at.z]]);
+    h.send('throwable.end', [l.key, [at.x, at.y, at.z]]);
     const b = l.t.blast;
     if (b) {
       h.guard(() => h.blast(at, { reach: b.radius, near: b.near, far: b.far, knockback: b.knockback, by: l.by, weapon: l.item }));
@@ -177,7 +177,7 @@ function throwables1(host: ItemHost): Throwables {
       const ground = { x: at.x, y: down ? at.y + 0.05 - down.t : at.y, z: at.z };
       const id = nextFire++;
       fires.push({ id, at: ground, radius: fire.radius, left: fire.duration, dps: fire.damage, by: l.by, weapon: l.item, next: 0.15 });
-      h.send('$fire', [id, ground.x, ground.y, ground.z, fire.radius, fire.duration, fire.color]);
+      h.send('throwable.fire', [id, ground.x, ground.y, ground.z, fire.radius, fire.duration, fire.color]);
       game.audio.play(l.t.def.sounds?.hit ?? 'glass', { at, item: { id: l.item, sound: 'hit' } });
       game.audio.play('fire', { at: ground });
     }

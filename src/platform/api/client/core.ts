@@ -1,4 +1,5 @@
 import type * as THREE from 'three';
+import type { ItemMove, ItemMoveControls, Penetration } from '../items';
 import type { ItemDefinition, ItemLook, SharedDefinition, SoundName, SynthVoice, Vec3 as PlainVec3 } from '../types';
 import type { ViewLayer } from './view';
 import type { ClientFigures } from './figures';
@@ -36,6 +37,82 @@ export interface ClientKit {
   late?(client: Client, dt: number): void;
   /** When the game's client stops (switching games). */
   dispose?(): void;
+  /**
+   * The kind of item this kit is the screen half of (`ItemKind.kind` on the host: `'gun'`). Its
+   * actions (`controls`' `act`) go to that kind's host half with the controls, and it says what
+   * client code sees of the kind (`own`, `heldState`, `figureSignals`).
+   */
+  readonly kind?: string;
+  /**
+   * Every frame before this frame's controls go to the host (after the look, before movement is
+   * predicted): act on them ahead of the host (a gun fires, a throwable's cooked and thrown). See
+   * `KitControls`: the controls, `consume`, `act`, turning the view.
+   */
+  controls?(client: Client, c: KitControls, dt: number): void;
+  /**
+   * A controller's stick, turning the view this frame (the player's aim assist setting on): slow
+   * it (over a target), and turn the view with what it follows (radians). Null: nothing.
+   */
+  stick?(client: Client): { slow?: number; yaw?: number; pitch?: number } | null;
+  /** What holding one of its kind does to movement: its host half's `move`, the same function (movement is predicted). */
+  move?(def: ItemDefinition, controls: ItemMoveControls): ItemMove | null;
+  /**
+   * What client code sees of its kind for the local player (`client.me.items[kind]`), given the
+   * host's word (its `own`, null before any): a throw's count less those still going, one being
+   * cooked. Default: the host's word.
+   */
+  own?(client: Client, host: object | null): object | null;
+  /**
+   * The held item's state for client code (`client.me.held.state`), when one of its kind is in
+   * hand: as this screen predicts it (a gun's rounds, aim, spread), or, in a replay, from
+   * `client.me.hand.state` (the host's word on the followed player's).
+   */
+  heldState?(client: Client, item: string, def: ItemDefinition | undefined): Record<string, unknown> | null;
+  /**
+   * An item this kit puts in the first-person hand in place of the hotbar's (a grenade being
+   * cooked by its key, and the throw's follow-through), or null.
+   */
+  handItem?(client: Client): string | null;
+  /**
+   * What an item of its kind in a figure's hand makes the figure do, from the item's state as
+   * the host shows it (its `shown`): aimed where it looks, how far down the sights, reloading.
+   */
+  figureSignals?(state: object | null, def: ItemDefinition): FigureSignals | null;
+}
+
+/** What a held item makes its figure do (`ClientKit.figureSignals`): see `FigureState`. */
+export interface FigureSignals {
+  /** It's aimed where the figure looks, 0..1. */
+  aim?: number;
+  /** Looking down its sights, 0..1. */
+  sights?: number;
+  /** Its mechanics are busy with it (a reload). */
+  reloading?: boolean;
+}
+
+/**
+ * The controls this frame, as a kit acting ahead of the host reads them (`ClientKit.controls`):
+ * idle while this screen doesn't have the controls (paused, dead, driving), and anything a kit
+ * `consume`s reads idle to the kits after it.
+ */
+export interface KitControls {
+  /** This screen has the controls (in play, alive, not driving). */
+  readonly active: boolean;
+  /** Where the view looks now (radians), this frame's look taken: what a shot fired now goes along. */
+  readonly yaw: number;
+  readonly pitch: number;
+  isDown(code: string): boolean;
+  /** A key that went down this frame. */
+  pressed(code: string): boolean;
+  /** A mouse button held (0 left, 1 middle, 2 right; a controller's triggers too), or clicked this frame. */
+  button(b: number): boolean;
+  clicked(b: number): boolean;
+  /** Claim a key or button for the rest of this frame: the kits after this one see it idle. */
+  consume(what: number | string): void;
+  /** Send an action of its kind to the host with these controls (its host half's `use.acts`): plain values (numbers, short strings, booleans). */
+  act(data: unknown[]): void;
+  /** Turn the view (radians; up is positive): a gun's recoil. */
+  turn(pitch: number, yaw: number): void;
 }
 
 /** What a game does on each player's screen, beyond its shared definition (`defineClient`). */
@@ -54,12 +131,7 @@ export interface ClientDefinition {
 export interface MeHeld {
   item: string;
   def: ItemDefinition | undefined;
-  /**
-   * The item's local state, as its mechanics keep it: a gun's `mag`, `reserve`, `reload`
-   * (progress 0..1, -1 when not reloading), `shells` (rounds still to load, one at a time),
-   * `aim` (0..1 down the sights), `sprint` (0..1 carried for sprinting), `slide` (0..1), `sight`,
-   * `action`, `zoom` (how much aiming all the way zooms the view).
-   */
+  /** The item's state for client code, as its kind's kit gives it (`ClientKit.heldState`: a gun's rounds, aim, spread). */
   state: Record<string, unknown>;
 }
 
@@ -83,108 +155,51 @@ export interface Me {
   readonly bob: { phase: number; amount: number };
   /** The camera is behind them (`camera.orbit`), not at their eyes. */
   readonly thirdPerson: boolean;
-  /** What's in hand: the hotbar's item and count; melee readiness (0..1); a bow's draw. */
-  readonly hand: { item: string | null; count: number; strength: number; drawing: boolean; charge: number };
+  /** How fast they walk (blocks a second): the game's movement's. */
+  readonly walkSpeed: number;
+  /** The hotbar (a game with items), as the host has it. */
+  readonly hotbar: { readonly slots: readonly ({ item: string; count: number } | null)[]; readonly selected: number } | null;
+  /** What's in hand: the hotbar's item and count, and its state as the host shows it (its kind's `shown`). */
+  readonly hand: { item: string | null; count: number; state: object | null };
+  /** The held item as its kind's kit has it on this screen (`ClientKit.heldState`), or null. */
   readonly held: MeHeld | null;
   readonly abilities: Record<string, Record<string, number | boolean>>;
-  /**
-   * Throwables with a key of their own that they carry (thrown whatever's in hand), in hotbar
-   * order: how many (less the throws the server hasn't taken yet), and the key (`'KeyG'`).
-   */
-  readonly quick: readonly { item: string; count: number; key: string }[];
-  /**
-   * A throwable being cooked (its pin out, held to throw): which, for how long (seconds), and the
-   * fuse it burns down (seconds; 0 when holding it doesn't burn it).
-   */
-  readonly cooking: { item: string; held: number; fuse: number } | null;
+  /** Each kind of item's word on the local player, by kind (`items.melee.strength`, `items.throwable.cooking`): its kit's `own`, else the host's. */
+  readonly items: Readonly<Record<string, any>>;
 }
 
 /**
- * One bullet of a shot, as this screen has it: where it ended and what it hit there (a block, with
- * its face and colour; someone; or nothing, at its range), and the walls it went through first.
+ * Something that happened this frame, on this screen or from the server: the kits react (an arm
+ * swings, a sound plays). Each event type is an entry of `ClientEvents`, which kits add to with
+ * their own (`declare module '@platform/client' { interface ClientEvents { … } }`): the gun kit's
+ * `shot` and `bullets`, the throwable kit's `thrown`. `client.emit` sends one to every kit.
  */
-export interface ClientBullet {
-  end: PlainVec3;
-  hit: 'block' | 'body' | null;
-  /** The face of the block it hit. */
-  normal: PlainVec3 | null;
-  /** The block's colour (linear RGB), for chips of it. */
-  color: [number, number, number] | null;
-  /** It took a bite out of the block (a world whose blocks carve): the pit is its mark. */
-  carved: boolean;
-  /**
-   * The walls it went through on the way (wall-banging): where it went in and came out, each
-   * face, the wall's colour, and whether each side was carved.
-   */
-  walls: { entry: PlainVec3; normal: PlainVec3; exit: PlainVec3; out: PlainVec3; color: [number, number, number]; carvedIn: boolean; carvedOut: boolean }[];
-}
+export type ClientEvent = { [K in keyof ClientEvents]: { t: K } & ClientEvents[K] }[keyof ClientEvents];
 
-/**
- * Something thrown, in the air on this screen: flown here step by step as the server flies it
- * (from the throw: ours at once, someone else's from the server's word), until the server says
- * it went off.
- */
-export interface ClientThrown {
-  readonly key: string;
-  readonly item: string;
-  /** Thrown from this screen (it left our hand here). */
-  readonly mine: boolean;
-  readonly position: PlainVec3;
-  /** Rolling or sliding along the ground; come to rest there. */
-  readonly grounded: boolean;
-  readonly resting: boolean;
-  /** Seconds since it was thrown (on this screen). */
-  readonly age: number;
-  /** How far round it harm reaches when it goes off: its blast's radius and its fire's, added (0 for neither). */
-  readonly reach: number;
-}
-
-/**
- * Something that happened this frame, on this screen or from the server: the kits react (a gun
- * kicks, a sword swings, a tracer flies). `view.*` are the server's calls to this player's view
- * (`player.viewModel.play`, the sim's own swings and kicks).
- */
-export type ClientEvent =
-  // Core.
-  | { t: 'message'; name: string; data: unknown }
-  // First person (its kit reacts: a gun kicks, a sword swings).
-  | { t: 'shot'; item: string; power: number }
-  | { t: 'use'; power: number }
-  | { t: 'swing'; power: number }
-  | { t: 'kick'; strength: number }
-  | { t: 'toss' }
-  | { t: 'equip'; item: string | null }
-  | { t: 'reload'; item: string }
-  | { t: 'land'; vy: number }
-  | { t: 'view.play'; anim: string; power: number; speed: number }
-  | { t: 'view.visible'; visible: boolean }
-  | { t: 'view.setSkin'; skin: [number, number] | null; atlas?: string }
-  // Figures.
-  // HUD and effects.
-  /**
-   * A shot's bullets: ours as this screen fired them (`mine`: the tracers leave our own hand's
-   * muzzle), or someone else's as the server had them (from `from`, their figure's muzzle).
-   */
-  | { t: 'bullets'; item: string; by: string | null; mine: boolean; from: PlainVec3 | null; bullets: ClientBullet[] }
-  /** The trigger on an empty gun. */
-  | { t: 'empty'; item: string }
-  /** A throwable's pin pulled: it's being cooked (`client.me.cooking`). */
-  | { t: 'cook'; item: string }
-  /** Something thrown: ours (it just left our hand), or someone else's. It flies in `client.thrown`. */
-  | { t: 'thrown'; key: string; item: string; mine: boolean }
-  /** Something thrown hit a block as it flew, at `speed` (blocks a second). */
-  | { t: 'bounce'; key: string; item: string; at: PlainVec3; speed: number }
-  /** It's gone: went off at `at`, or (null) the server turned it down or never said. */
-  | { t: 'thrownEnd'; key: string; item: string; at: PlainVec3 | null }
-  /** A fire started (a molotov broke): flames `radius` round `at` for `duration` seconds. */
-  | { t: 'fire'; id: number; at: PlainVec3; radius: number; duration: number; color: string }
+/** The events, by type (see `ClientEvent`): the platform's own; kits add theirs. */
+export interface ClientEvents {
+  /** A message from the game's server that client code hasn't taken with `on`. */
+  message: { name: string; data: unknown };
+  /** Their arm swings on this screen (the host's `swing`, `player.viewModel`): using what's in hand, or swinging. */
+  use: { power: number };
+  swing: { power: number };
+  /** The view's arm jolts (being hit). */
+  kick: { strength: number };
+  /** What's in hand changed. */
+  equip: { item: string | null };
+  /** They landed, falling this fast (blocks a second). */
+  land: { vy: number };
+  /** The server's calls to this player's view (`player.viewModel`). */
+  'view.play': { anim: string; power: number; speed: number };
+  'view.visible': { visible: boolean };
+  'view.setSkin': { skin: [number, number] | null; atlas?: string };
   /** The game restarted: what the kits put on screen goes. */
-  | { t: 'reset' }
-  // Replays.
+  reset: {};
   /** A replay started on this screen (`client.replay`): `client.me` is now whoever it follows. */
-  | { t: 'replay.start'; label: string; follow: string | null; data: unknown }
+  'replay.start': { label: string; follow: string | null; data: unknown };
   /** It ended: played out, ended by the server, or skipped here (`skipped`). `client.me` is this player again. */
-  | { t: 'replay.end'; label: string; skipped: boolean };
+  'replay.end': { label: string; skipped: boolean };
+}
 
 /**
  * A replay playing on this screen (the game's server showed one: `game.replay.show`): a stretch of
@@ -290,6 +305,12 @@ export interface ClientInput {
   button(b: number): boolean;
   /** What was used last. */
   readonly device: 'mouse' | 'pad';
+  /** The player's aim assist setting is on (it helps a controller's stick only: `ClientKit.stick`). */
+  readonly assist: boolean;
+  /** A controller's sticks are moving (tilted, or walking): aim assist follows a target only then. */
+  readonly sticksMoving: boolean;
+  /** Rumble a controller in use: its strong and weak motors (0..1 each), for `ms`; if the player's vibration setting is on. */
+  rumble(strong: number, weak: number, ms: number): void;
 }
 
 /** The world as this screen has it, to look at (never to change). */
@@ -298,6 +319,31 @@ export interface ClientWorld {
   blockAt(x: number, y: number, z: number): string;
   /** The first solid block along a ray (`dir` of length 1) within `max` blocks: how far, and the face it meets. */
   raycast(from: PlainVec3, dir: PlainVec3, max: number): { distance: number; normal: PlainVec3 } | null;
+  /** Nothing solid between two points (as the host's `world.lineOfSight`). */
+  lineOfSight(a: PlainVec3, b: PlainVec3): boolean;
+  /**
+   * A bullet's path on this screen, as the host casts it (`ItemUse.hitscan`): through foliage and,
+   * with `penetration`, walls, to the first block or player drawn in the way (by the game's
+   * hitboxes, `hitscan`), within `range`. `body`: the player it met.
+   */
+  trace(from: PlainVec3, dir: PlainVec3, range: number, opts?: { penetration?: Penetration | null }): ClientTrace;
+  /** A block's average colour (linear RGB), for chips of it. */
+  blockColor(block: number): [number, number, number];
+  /** A hit at `at` on `block` (its face `normal`) would carve it (a world whose blocks carve, `world.destructible`). */
+  carvable(block: number, at: PlainVec3, normal: PlainVec3 | null): boolean;
+}
+
+/** Where a traced bullet ended on this screen (`ClientWorld.trace`). */
+export interface ClientTrace {
+  point: PlainVec3;
+  /** The face it met (a block's), or null. */
+  normal: PlainVec3 | null;
+  /** The block it stopped at (-1: none). */
+  block: number;
+  /** The player it met (their id), or null. */
+  body: string | null;
+  /** The walls it went through first: where in, the face, where out, the face out, the block. */
+  walls: { entry: PlainVec3; normal: PlainVec3; exit: PlainVec3; out: PlainVec3; block: number }[];
 }
 
 /** Things this screen puts in the world itself (never on the server, never on anyone else's screen). */
@@ -337,8 +383,6 @@ export interface ClientServices {
   // HUD and effects.
   /** Things this screen puts in the world itself. */
   readonly scene: ClientScene;
-  /** Things thrown, in the air on this screen now (see `ClientThrown`). */
-  readonly thrown: readonly ClientThrown[];
   /** A replay playing on this screen (see `ClientReplay`). */
   readonly replay: ClientReplay;
 }
@@ -350,6 +394,8 @@ export interface Client extends ClientServices {
   readonly me: Me;
   /** This frame's events (cleared after the game's `frame`). */
   readonly events: readonly ClientEvent[];
+  /** An event for every kit and the game's code, this frame (a kit's own: `ClientEvents`). */
+  emit(event: ClientEvent): void;
   /** Seconds this screen has run the game. */
   readonly time: number;
   /** The game is under way (its server's `start` has run): what moves there moves here. */

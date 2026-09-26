@@ -1,8 +1,27 @@
-import type { ItemDefinition, ItemStack, ThrowableItem, Vec3 } from '../api/types';
-import type { ClientThrown } from '../api/client/core';
+import type { ItemDefinition, ItemStack, ThrowableItem, Vec3 } from '@platform';
 import { flyFor, isThrowable, newFlight, throwable, throwVelocity, type Flight, type FlightWorld, type Throwable } from '@platform/items';
 
-/** A throw this screen made: for the host (`PlayerInput.throws`), and to fly here at once. */
+/**
+ * Something thrown, in the air on this screen: flown here step by step as the server flies it
+ * (from the throw: ours at once, someone else's from the server's word), until the server says
+ * it went off (`thrownOn(client)`).
+ */
+export interface ClientThrown {
+  readonly key: string;
+  readonly item: string;
+  /** Thrown from this screen (it left our hand here). */
+  readonly mine: boolean;
+  readonly position: Vec3;
+  /** Rolling or sliding along the ground; come to rest there. */
+  readonly grounded: boolean;
+  readonly resting: boolean;
+  /** Seconds since it was thrown (on this screen). */
+  readonly age: number;
+  /** How far round it harm reaches when it goes off: its blast's radius and its fire's, added (0 for neither). */
+  readonly reach: number;
+}
+
+/** A throw this screen made: for the host (the kit's actions), and to fly here at once. */
 export interface ThrowMade {
   serial: number;
   item: string;
@@ -36,20 +55,20 @@ export class ThrowController {
   tossed: string | null = null;
   private keysWere = new Set<string>();
 
-  constructor(private items: Map<string, ItemDefinition>) {}
+  constructor(private items: (id: string) => ItemDefinition | undefined) {}
 
   /** How many of `item` they have, less the throws the host hasn't taken yet. */
-  count(slots: (ItemStack | null)[], item: string, taken: number): number {
+  count(slots: readonly (ItemStack | null)[], item: string, taken: number): number {
     let n = 0;
     for (const s of slots) if (s?.item === item) n += s.count;
     return Math.max(0, n - Math.max(0, this.serial - taken));
   }
 
   /** The throwables they carry with a key of their own (the HUD shows them), in hotbar order. */
-  quick(slots: (ItemStack | null)[]): string[] {
+  quick(slots: readonly (ItemStack | null)[]): string[] {
     const out: string[] = [];
     for (const s of slots) {
-      const d = s ? this.items.get(s.item) : undefined;
+      const d = s ? this.items(s.item) : undefined;
       if (s && isThrowable(d) && d.key && !out.includes(s.item)) out.push(s.item);
     }
     return out;
@@ -59,7 +78,7 @@ export class ThrowController {
    * A frame: start cooking, cook, throw. `eye` is where they are now (as this screen has them),
    * `yaw` / `pitch` the view; `cooking` hears of a pin pulled. Returns a throw made, if one was.
    */
-  update(dt: number, c: ThrowControls, slots: (ItemStack | null)[], held: string | null, taken: number, eye: Vec3, yaw: number, pitch: number, cooking: (item: string) => void): ThrowMade | null {
+  update(dt: number, c: ThrowControls, slots: readonly (ItemStack | null)[], held: string | null, taken: number, eye: Vec3, yaw: number, pitch: number, cooking: (item: string) => void): ThrowMade | null {
     this.sinceThrow += dt;
     // Gone from the hand as the toss follows through: the hand goes down for what's next.
     if (this.sinceThrow > 0.28) this.tossed = null;
@@ -91,14 +110,14 @@ export class ThrowController {
         return true;
       };
       for (const s of slots) {
-        const d = s ? this.items.get(s.item) : undefined;
+        const d = s ? this.items(s.item) : undefined;
         if (!s || !isThrowable(d) || !d.key) continue;
         if (c.isDown(d.key)) {
           down.add(d.key);
           if (!this.keysWere.has(d.key) && start(s.item, d, d.key)) break;
         }
       }
-      const d = held ? this.items.get(held) : undefined;
+      const d = held ? this.items(held) : undefined;
       if (!this.cooking && held && isThrowable(d) && c.fire && !this.fireWas) start(held, d, null);
     }
     this.fireWas = c.fire;
@@ -166,14 +185,14 @@ export class Flights {
   readonly list: ClientThrown[] = [];
 
   constructor(
-    private items: Map<string, ItemDefinition>,
+    private items: (id: string) => ItemDefinition | undefined,
     private world: FlightWorld,
     private news: FlightNews,
   ) {}
 
   /** One in the air: from `from` at `v`, going off `fuse` steps on; `mine` when this screen threw it. Whether it's new. */
   add(key: string, item: string, from: Vec3, v: Vec3, fuse: number, mine = false): boolean {
-    const def = this.items.get(item);
+    const def = this.items(item);
     if (!isThrowable(def) || this.shown.has(key)) return false;
     const s = new Flying(key, item, throwable(def), newFlight(from, v, fuse), mine);
     this.shown.set(key, s);

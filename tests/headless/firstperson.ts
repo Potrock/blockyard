@@ -157,11 +157,12 @@ function rig(): Rig {
     maxHealth: 20,
     bob: { phase: 0, amount: 0 },
     thirdPerson: false,
-    hand: { item: null, count: 0, strength: 1, drawing: false, charge: 0 },
+    walkSpeed: 4.3,
+    hotbar: null,
+    hand: { item: null, count: 0, state: null },
     held: null,
     abilities: {},
-    quick: [],
-    cooking: null,
+    items: { melee: { strength: 1 }, bow: { drawing: false, charge: 0 } },
   };
   const client = { view, me, events: [] as ClientEvent[], camera: { zoom: 1, fov: 75 }, time: 0 } as unknown as Rig['client'];
   const [kit] = firstPerson.standard();
@@ -348,11 +349,11 @@ export default async function firstperson() {
   const bowRig = rig();
   const bow = (bowRig.view.held = new FakeHeld('bow', { kind: 'bow', name: 'Bow', icon: 'bow' } as unknown as ItemDefinition, 'sprite', plain));
   run(bowRig, 1);
-  (bowRig.client.me.hand as { drawing: boolean; charge: number }).drawing = true;
-  (bowRig.client.me.hand as { drawing: boolean; charge: number }).charge = 0.6;
+  (bowRig.client.me.items.bow as { drawing: boolean; charge: number }).drawing = true;
+  (bowRig.client.me.items.bow as { drawing: boolean; charge: number }).charge = 0.6;
   run(bowRig, 1 / 60);
   check(bow.alt, 'a bow drawn: its drawn look');
-  (bowRig.client.me.hand as { drawing: boolean }).drawing = false;
+  (bowRig.client.me.items.bow as { drawing: boolean }).drawing = false;
   run(bowRig, 1 / 60);
   check(!bow.alt, 'loosed: its own again');
 

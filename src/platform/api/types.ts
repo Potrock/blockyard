@@ -70,11 +70,6 @@ export interface SharedDefinition extends GameMeta {
   /** Where bullets meet players: how far back the host looks for a shot's target, and the hitboxes (see `HitscanOptions`). */
   hitscan?: HitscanOptions;
   /**
-   * How guns play in this game (see `GunOptions`). For now the screens' gun prediction reads it
-   * here; the host's gun kit takes the same options (`guns(shared.guns)`).
-   */
-  guns?: GunOptions;
-  /**
    * Vehicles players can drive (`player.drive(name, state)`): ships, cars, boards. Defined here,
    * not in `setup`, because a pilot's own screen runs them too (see `VehicleDefinition`).
    */

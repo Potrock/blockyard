@@ -267,7 +267,7 @@ build. Kits must reproduce today's looks exactly until a game chooses otherwise.
 2. **Kits are listed explicitly per game.**
    - Recommended: yes, with no hidden defaults: a game shows what it uses.
    - Cost: every game's `client.ts` lists its kits, a few lines each.
-   - **Done for Call of Blocky (phase 3a)**; the other games still use `standardKits()`.
+   - **Done**: every game lists its kits (`standardKits()` went in REDESIGN-ITEMS 4b).
 3. **Server-side `hud.*`/`fx.*`/`audio.*` stay as a convenience.**
    - Recommended: yes. Simple games keep working without client code for UI.
    - **Done**: they stay, and deliver to the same client services (`{ item }` icons and item

@@ -21,7 +21,6 @@ const range = (rules?: Rules): GameDefinition => {
     world: { terrain: 'flat', flatHeight: 64, spawn: { x: 0.5, y: 65, z: 0.5 }, time: 0.5, freezeTime: true },
     player: { health: 100, hurtCooldown: 0, pvp: true, hotbar: 'items' },
     hitscan: { rewind, hitboxes },
-    guns,
     items: [gunKit(guns), melee()],
     setup(game) {
       game.items.define('rifle', {

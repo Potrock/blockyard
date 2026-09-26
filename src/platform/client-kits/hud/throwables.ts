@@ -1,5 +1,6 @@
 import type { IconRef } from '@platform';
 import type { Client, ClientKit } from '@platform/client';
+import type { ThrowView } from '../items/throwable';
 import { el } from './dom';
 import { THROWABLES_CSS } from './throwables.css';
 
@@ -55,8 +56,10 @@ export function throwables(): ClientKit {
     frame(client) {
       if (client.events.some((e) => e.t === 'reset')) show(client, null);
       const me = client.me;
-      const quick = me.dead || me.inVehicle ? [] : me.quick;
-      const cooking = me.cooking;
+      // The throwable kit's word (`me.items.throwable`).
+      const view = me.items.throwable as ThrowView | undefined;
+      const quick = me.dead || me.inVehicle || !view ? [] : view.quick;
+      const cooking = view?.cooking ?? null;
       show(
         client,
         // (Each one's icon as this screen has it: its look's, over the server's.)

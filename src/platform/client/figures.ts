@@ -40,11 +40,21 @@ export class ShownFigure implements ClientFigure {
     readonly spec: ModelSpec,
     parts: FigureParts,
     readonly state: AnimState,
+    /** Where its held item's marked point is drawn now (the engine's view of it). */
+    private pointOf: (name: HeldPoint) => THREE.Vector3 | null = () => null,
   ) {
     this.root = parts.root;
     this.hand = parts.hand;
     const rig = parts.rig;
     this.rig = rig ? { body: rig.body, root: rig.root, joints: rig.joints, rest: rig.rest, straight: rig.straight } : null;
+  }
+
+  used() {
+    this.state.shotT = 0;
+  }
+
+  point(name: HeldPoint): THREE.Vector3 | null {
+    return this.pointOf(name);
   }
 }
 

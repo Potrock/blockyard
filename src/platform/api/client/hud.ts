@@ -52,4 +52,9 @@ export interface ClientHud {
   toast(text: string): void;
   pop(text: string, opts?: { color?: string; big?: boolean; sub?: string }): void;
   feed(text: string | FeedPart[], opts?: { color?: string }): void;
+  /**
+   * A value of this screen's that the game's widgets bind as `$name` (`{{$gun.mag}}`,
+   * `data-if="$gun.reloading"`): the local player's own, as a kit has it this frame (null: none).
+   */
+  bind(name: string, value: Record<string, unknown> | null): void;
 }

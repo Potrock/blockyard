@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Content } from '../content';
-import type { ClientFigures } from '../api/client/figures';
+import type { ClientFigures, HeldPoint } from '../api/client/figures';
 import type { AnimState, EntityGraphics, Figure } from '../render/entities';
 import { Shaders } from '../render/shaders';
 import type { EntityFrame, ProjectileFrame } from '../sim/entities';
@@ -144,7 +144,7 @@ export class EntityView {
           mount: null,
           clip: 0,
           frame: f,
-          figure: new ShownFigure(f.id, f.player ?? null, f.type, def.model, partsOf(model), anim),
+          figure: new ShownFigure(f.id, f.player ?? null, f.type, def.model, partsOf(model), anim, (name) => this.point(f.id, name)),
         };
         this.shown.set(f.id, v);
       }
@@ -181,20 +181,14 @@ export class EntityView {
     }
   }
 
-  /** Its gun just fired (a figure kicks with it). */
-  kick(id: number) {
+  /** A point the item in a figure's hand marks (its `muzzle`), where it's drawn now; null if it holds none, or its model marks none. */
+  point(id: number, name: HeldPoint): THREE.Vector3 | null {
     const v = this.shown.get(id);
-    if (v) v.anim.shotT = 0;
-  }
-
-  /** The muzzle of the gun in a figure's hand, where it's drawn now; false if it holds none. */
-  muzzle(id: number, out: THREE.Vector3): boolean {
-    const m = this.shown.get(id)?.heldMesh;
-    const p = m?.userData.muzzle as THREE.Vector3 | undefined;
-    if (!m || !p || !m.parent) return false;
+    const m = v?.heldMesh;
+    const p = name === 'muzzle' ? (m?.userData.muzzle as THREE.Vector3 | undefined) : v?.figure.held?.points[name];
+    if (!m || !p || !m.parent) return null;
     m.updateWorldMatrix(true, false);
-    out.copy(p).applyMatrix4(m.matrixWorld);
-    return true;
+    return p.clone().applyMatrix4(m.matrixWorld);
   }
 
   /** Where an entity is drawn now (its feet), plus `offset`; false if it isn't drawn. */

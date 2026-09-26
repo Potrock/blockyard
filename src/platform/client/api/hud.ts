@@ -71,6 +71,13 @@ export class ClientHudService implements ClientHud {
     this.game.feed(text, opts);
   }
 
+  /** This screen's values for widgets' `$` names, by name (`bind`): the runtime puts them with its own. */
+  readonly bound: Record<string, Record<string, unknown> | null> = {};
+
+  bind(name: string, value: Record<string, unknown> | null) {
+    this.bound[name] = value;
+  }
+
   /** The game's over on this screen: its stylesheets go (its layers go with the HUD). */
   dispose() {
     for (const s of this.sheets) s.remove();

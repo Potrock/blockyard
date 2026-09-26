@@ -1,5 +1,6 @@
 import type { GunItem, Vec3 } from '@platform';
-import type { Client, ClientBullet, ClientEvent, ClientKit } from '@platform/client';
+import type { Client, ClientEvent, ClientKit } from '@platform/client';
+import type { ClientBullet } from '../items/gun';
 
 /** A shot's bullets (the `bullets` event). */
 type Bullets = Extract<ClientEvent, { t: 'bullets' }>;

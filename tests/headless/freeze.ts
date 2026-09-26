@@ -13,7 +13,6 @@ const yard = defineGame({
   title: 'Yard',
   world: { terrain: 'void', ground: { y: 40 }, spawn: { x: 0.5, y: 41, z: 0.5 }, time: 0.5, freezeTime: true },
   player: { health: 100, hotbar: 'items' },
-  guns: { autoReload: false },
   items: [throwables(), guns({ autoReload: false }), melee()],
   setup(game) {
     const still = { spread: { hip: 0, aim: 0, move: 0, air: 0, bloom: 0 }, recoil: { up: 0, side: 0 } };

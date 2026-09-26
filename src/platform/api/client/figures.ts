@@ -47,6 +47,10 @@ export interface Figure {
    * none: it stands straight unless a kit poses it). Cleared after each frame.
    */
   posed: boolean;
+  /** Its held item was just used (a shot fired): `state.shotT` starts again. */
+  used(): void;
+  /** Where a point its held item's model marks (`muzzle`) is now in the world; null if it holds nothing or its model marks none. */
+  point(name: HeldPoint): THREE.Vector3 | null;
 }
 
 /**

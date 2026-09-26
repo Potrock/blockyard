@@ -1,4 +1,4 @@
-import { defineShared, Models, type HumanoidPoses } from '@platform';
+import { defineShared, Models, type GunOptions, type HumanoidPoses } from '@platform';
 import { roll } from './abilities';
 import { BLOCKS } from './blocks';
 import hudCss from './hud.css?raw';
@@ -32,6 +32,15 @@ export const cowboyModel = (outfit: number) => Models.gltf(COWBOYS[outfit % COWB
  * Dry Gulch and its blocks (every screen builds the town), how gunslingers move (each screen
  * predicts its own, the dodge roll too), how guns play, and the Wild West HUD.
  */
+/** How its guns play: the gun kit's rules, the same on the host (`server.ts`) and on each screen (`client.ts`). */
+export const GUN_RULES: GunOptions = {
+  autoReload: false,
+  aimStopsSprint: true,
+  fireStopsSprint: true,
+  rateSlack: 2,
+  assist: { strength: 0.45 },
+};
+
 export const shared = defineShared({
   ...meta,
   blocks: BLOCKS,
@@ -72,14 +81,6 @@ export const shared = defineShared({
     rewind: 0.3,
     // Bigger heads: the hat counts (the head's zone starts lower and is wider).
     hitboxes: { stand: { neck: 1.42, headWidth: 0.66 }, crouch: { neck: 1.12, headWidth: 0.68 } },
-  },
-  // The gun kit's rules, the same on the host (`server.ts`) and on each screen.
-  guns: {
-    autoReload: false,
-    aimStopsSprint: true,
-    fireStopsSprint: true,
-    rateSlack: 2,
-    assist: { strength: 0.45 },
   },
   hud: {
     health: 'bar',
