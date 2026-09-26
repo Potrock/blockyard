@@ -229,4 +229,4 @@ wrists fairly straight.
 Each arm runs from the fist back to a shoulder off the screen's edge: straight by default, or,
 with `firstPerson.bend` (or a gun's `hold.gun.arm.bend`), bent at the elbow, the two bones reaching
 a shoulder that stays put in the view as the hand kicks and reloads. Their size is the model's
-(`firstPerson.scale`), not the gun's.
+(`firstPerson.scale`, and the fists `firstPerson.hands` times that), not the gun's.

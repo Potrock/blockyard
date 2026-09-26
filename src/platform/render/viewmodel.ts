@@ -1140,10 +1140,10 @@ export class ViewModel implements ViewModelApi {
     if (!(fit.bend[0] > 0 || fit.bend[1] > 0)) return;
     const k = (this.heldBase(r) / HELD_SCALE) * fit.scale;
     const dir = _fb.copy(r.armOffset).normalize().add(_fc.set(0.25 * this.side, 0.05, 0)).normalize();
-    this.shoulders[0].copy(wristFor(hum.R, r.grip, r.itemRot, k, _v)).addScaledVector(dir, fit.reach[0]);
+    this.shoulders[0].copy(wristFor(hum.R, r.grip, r.itemRot, k, _v, fit.hands)).addScaledVector(dir, fit.reach[0]);
     this.uppers[0] = upperFor(fit.reach[0], hum.R.arm.wrist.length() * k, hum.R.arm.elbow.length() * k, fit.bend[0]);
     const at = this.supportGrip(r, r.itemRot, k, _fa).add(r.grip);
-    this.shoulders[1].copy(wristFor(hum.L, at, r.itemRot, k, _v)).addScaledVector(_fb.subVectors(r.arm2Offset, r.grip2).normalize(), fit.reach[1]);
+    this.shoulders[1].copy(wristFor(hum.L, at, r.itemRot, k, _v, fit.hands)).addScaledVector(_fb.subVectors(r.arm2Offset, r.grip2).normalize(), fit.reach[1]);
     this.uppers[1] = upperFor(fit.reach[1], hum.L.arm.wrist.length() * k, hum.L.arm.elbow.length() * k, fit.bend[1]);
   }
 
@@ -1169,19 +1169,19 @@ export class ViewModel implements ViewModelApi {
     // A little bigger than life, as shooters draw them (the hands read around the gun), whatever the gun's size.
     const k = (this.heldBase(r) / HELD_SCALE) * fit.scale;
     const gun = this.styleName === 'gun' && !!this.gunPts;
-    if (gun && fit.bend[0] > 0) placeBent(hum.R, _fa.set(0, 0, 0), itemQ, this.inHand(this.shoulders[0], _fb), this.elbowPole(1, _fc), k, this.uppers[0]);
+    if (gun && fit.bend[0] > 0) placeBent(hum.R, _fa.set(0, 0, 0), itemQ, this.inHand(this.shoulders[0], _fb), this.elbowPole(1, _fc), k, this.uppers[0], fit.hands);
     else {
       // The firing arm out to the right of the stock, not behind it.
       const out = _fb.copy(r.armOffset).normalize().add(_fc.set(0.25, 0.05, 0)).normalize().clone();
-      placeStraight(hum.R, _fa.set(0, 0, 0).clone(), itemQ, out, k, fit.reach[0]);
+      placeStraight(hum.R, _fa.set(0, 0, 0).clone(), itemQ, out, k, fit.reach[0], fit.hands);
     }
     const two = r.twoHanded && this.supportShown > 0;
     const L = hum.L;
     L.fist.visible = L.forearm.visible = L.upper.visible = two;
     if (!two) return;
     const at = this.supportGrip(r, itemQ, k, _fc).clone();
-    if (gun && fit.bend[1] > 0) placeBent(hum.L, at, itemQ, this.inHand(this.shoulders[1], _fb), this.elbowPole(-1, _fa), k, this.uppers[1]);
-    else placeStraight(hum.L, at, itemQ, _fb.subVectors(r.arm2Offset, r.grip2).clone(), k, fit.reach[1]);
+    if (gun && fit.bend[1] > 0) placeBent(hum.L, at, itemQ, this.inHand(this.shoulders[1], _fb), this.elbowPole(-1, _fa), k, this.uppers[1], fit.hands);
+    else placeStraight(hum.L, at, itemQ, _fb.subVectors(r.arm2Offset, r.grip2).clone(), k, fit.reach[1], fit.hands);
   }
 
   define(name: string, anim: ViewAnimation) {

@@ -6,7 +6,8 @@ import { MAP, type SpawnPoint } from './map';
 import { defineSounds } from './sounds';
 import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
 import { GUNS } from './models';
-import { FIGHTERS as FIGHTER_MODELS, FIGHTER_STYLE } from './models/fighters';
+import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
+import { FIGHTER_STYLE } from './style';
 import hudCss from './hud.css?raw';
 import { DOSSIER, streakPips } from './hud';
 

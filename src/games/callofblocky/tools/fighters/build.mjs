@@ -47,8 +47,6 @@ const argv = process.argv.slice(2);
 const SCALE = Number(argv.find((a) => a.startsWith('--scale='))?.slice(8) ?? 24);
 const OUT = argv.find((a) => a.startsWith('--out='))?.slice(6) ?? join(HERE, '../../models/fighters');
 const DU = 1 / 24;
-/** The figures' first-person scale and gait width (written to index.ts as FIGHTER_STYLE). */
-const STYLE = { firstPerson: { scale: 0.5 }, poses: { gait: { width: 0.15 } } };
 const MAX_TRIS = 25000;
 const MAX_BYTES = 300 * 1024;
 
@@ -84,6 +82,8 @@ const BONES = JOINT_ORDER.filter((j) => !EMPTY.has(j));
 // Shapes (design units; a cell's centre is (i + 0.5, j + 0.5, k + 0.5))
 
 const C = (i) => i + 0.5;
+/** Below this row (design units), a skirt hangs from the thighs rather than the hips. */
+const SKIRT_SPLIT = 15;
 /** Inside a box (faces lo..hi) rounded by r (a number or one per axis) on its edges. */
 function inRound(p, lo, hi, r) {
   let d2 = 0;
@@ -629,13 +629,16 @@ function dress(vox, s) {
       for (const part of [`upperLeg${side}`, `lowerLeg${side}`]) vox.recolour(part, (i, j, k, c) => (i === mid && k === L.lz1 - 1 && c === 'pants' ? 'pantsShade' : undefined));
     }
   }
+  // A skirt's lower part hangs from the thighs, each side's half from its own, so a stride or a
+  // crouch swings it with the leg instead of the leg poking through it.
+  const skirtPart = (i, j) => (j < SKIRT_SPLIT ? (C(i) > 0 ? 'upperLegL' : 'upperLegR') : 'hips');
   if (o.legs === 'skirt') {
-    // A flared skirt from the waist to above the knee, on the hips.
+    // A flared skirt from the waist to above the knee.
     for (let i = -11; i < 11; i++)
       for (let j = 11; j < Y.spine; j++)
         for (let k = -8; k < 9; k++) {
           const t = (Y.spine - j) / 8;
-          if (Math.abs(C(i)) < b.hip + 0.6 + t * 2 && Math.abs(C(k)) < 4.2 + t * 1.8) vox.set('hips', i, j, k, 'shirt');
+          if (Math.abs(C(i)) < b.hip + 0.6 + t * 2 && Math.abs(C(k)) < 4.2 + t * 1.8) vox.set(skirtPart(i, j), i, j, k, 'shirt');
         }
   }
   if (o.apron) {
@@ -643,7 +646,7 @@ function dress(vox, s) {
     for (let j = 11; j < Y.spine; j++) {
       const t = (Y.spine - j) / 8;
       const k = Math.floor(4.2 + t * 1.8);
-      for (let i = -4; i < 4; i++) vox.set('hips', i, j, k, 'apron');
+      for (let i = -4; i < 4; i++) vox.set(skirtPart(i, j), i, j, k, 'apron');
     }
     for (let i = -3; i < 3; i++) for (let j = Y.chest; j < Y.chest + 5; j++) vox.set('chest', i, j, F + b.bust + 1, 'apron');
     for (const i of [-4, 3]) for (let j = Y.chest + 4; j < Y.chestTop; j++) vox.set('chest', i, j, F + 1, 'apron');
@@ -857,13 +860,6 @@ if (!only.length && OUT === join(HERE, '../../models/fighters')) {
     'export const FIGHTERS: FighterModel[] = [',
     ...OUTFITS.map((d) => `  { id: '${d.id}', name: '${d.name}', url: ${d.id} },`),
     '];',
-    '',
-    '/**',
-    ' * How the platform draws and moves these figures (`Models.gltf` options): their first-person arms at',
-    ' * half their size (the voxel fists are big, and a gun needs the view), their feet as far apart as',
-    ' * their hips.',
-    ' */',
-    `export const FIGHTER_STYLE = ${JSON.stringify(STYLE).replace(/"(\w+)":/g, '$1: ').replace(/,/g, ', ').replace(/{/g, '{ ').replace(/}/g, ' }')};`,
     '',
   ];
   writeFileSync(join(OUT, 'index.ts'), lines.join('\n'));

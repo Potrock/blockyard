@@ -162,6 +162,7 @@ export default async function gunhold() {
   const fit = fitArms({ scale: 0.9, bend: 0.6 }, { reach: [0.5, 0.6], bend: [0.5, 0.7] });
   check(fit.scale === 0.9 && fit.reach.join() === '0.5,0.6' && fit.bend.join() === '0.5,0.7' && fit.support.join() === '0.01,-0.012,0', `a gun's arm over the model's over the platform's: ${JSON.stringify(fit)}`);
   check(fitArms().bend.join() === '0,0' && fitArms({ bend: 0.4 }).bend.join() === '0.4,0.4', 'straight by default; one bend for both arms');
+  check(fitArms().hands === 1 && fitArms({ hands: 0.7 }, { scale: 0.8 }).hands === 0.7, 'fists the arms\' size by default; `hands` over it');
   check(near(upperFor(0.55, 0.25, 0.2, 0), 0.3) && near(upperFor(0.55, 0.25, 0.4, 0), 0.4), 'straight: the upper arm drawn out to the reach (never shorter than its own)');
   const b = upperFor(0.5, 0.25, 0.1, 0.8);
   const w = new THREE.Vector3(0, 0, 0);
@@ -176,9 +177,9 @@ export default async function gunhold() {
   const lib = new GltfLibrary({} as SharedUniforms);
   lib.adopt('/m.glb', await load('src/games/gallery/models/mannequin.glb'));
   const arms = lib.humanoidArms('/m.glb')!;
-  const arm = (bendBy: number) => {
+  const arm = (bendBy: number, hands?: number) => {
     const { vm: m, inside: i } = viewModel();
-    m.setHumanoidArms(arms, { bend: bendBy });
+    m.setHumanoidArms(arms, { bend: bendBy, hands });
     m.setItem(geometry, tex, tex, { style: 'gun' }, 'gun', points);
     run(m, 1, gunView());
     const R = i.humanoid!.R;
@@ -190,6 +191,13 @@ export default async function gunhold() {
   check(near(straight.angle, Math.PI, 1e-4), `bend 0: one straight line from the wrist (${straight.angle.toFixed(4)} rad at the elbow)`);
   const bent = arm(0.6);
   check(near(Math.PI - bent.angle, 0.6, 0.01), `bend 0.6: the elbow bent that much at rest (${(Math.PI - bent.angle).toFixed(3)})`);
+  // Smaller fists (`hands`): the fist that much smaller than the forearm, still closed on the grip.
+  const small = arm(0, 0.6);
+  const Rs = small.i.humanoid!.R;
+  const Rn = straight.i.humanoid!.R;
+  const grip = (R: typeof Rs) => arms.R.grip.clone().multiplyScalar(R.fist.scale.x).applyQuaternion(R.fist.quaternion).add(R.fist.position);
+  check(near(Rs.fist.scale.x / Rs.forearm.scale.x, 0.6, 1e-6) && near(Rn.fist.scale.x, Rn.forearm.scale.x, 1e-9), `hands 0.6: the fist 0.6 of the arm (${(Rs.fist.scale.x / Rs.forearm.scale.x).toFixed(3)})`);
+  check(grip(Rs).distanceTo(grip(Rn)) < 1e-6, 'and still holding the same grip');
   const shoulder = () => bent.i.humanoid!.R.upper.position.clone().applyQuaternion(bent.i.hand.quaternion).add(bent.i.hand.position);
   const before = shoulder();
   bent.m.fire(2);
@@ -224,5 +232,5 @@ export default async function gunhold() {
   check(whipped.at('handR').z > cocked.at('handR').z + 0.3, 'whipped: the hand out ahead');
   check(swung.at('handR').y < swung.at('head').y && thrown(true, 9).at('handR').distanceTo(thrown(false, 9).at('handR')) < 1e-6, 'anything else swings as before, and at rest a throwable hangs the same');
 
-  console.log('  item poses over the figure\'s · points from a spec over a file\'s · two items on one model held their own ways · one hand (hidden, in to reload) · lever, hammer, the game\'s own action · arms fitted per gun, bent to a shoulder that stays put · a figure\'s free hand, its reload cycle, its action');
+  console.log('  item poses over the figure\'s · points from a spec over a file\'s · two items on one model held their own ways · one hand (hidden, in to reload) · lever, hammer, the game\'s own action · arms fitted per gun, bent to a shoulder that stays put, fists sized on their own · a figure\'s free hand, its reload cycle, its action');
 }

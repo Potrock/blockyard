@@ -1318,6 +1318,12 @@ export interface FirstPersonArms {
    */
   scale?: number;
   /**
+   * The fists' size, times the arms' (1). A figure drawn with big stylized mitts (right at a
+   * distance) can show life-size hands round the gun in first person with less, the forearms as
+   * thick as ever; the fist still closes on the grip, and the wrist comes in to meet it.
+   */
+  hands?: number;
+  /**
    * How far the firing and the support arm run from the wrist to the shoulder, in blocks
    * ([0.55, 0.72]), along the gun pose's `forearm` and `forearm2`: far enough that the shoulder is
    * off the screen, as in any shooter.
