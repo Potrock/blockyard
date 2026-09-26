@@ -287,7 +287,7 @@ in parallel against one API.
 ```ts
 interface ClientKit {
   name: string;
-  setup?(client: Client): void;              // once, when the game's client starts
+  setup?(client: Client): void;              // once, when the screen starts showing the game (watching or playing)
   frame?(client: Client, dt: number): void;  // every frame, in the order listed
   late?(client: Client, dt: number): void;   // every frame, once the world's effects have moved on
   dispose?(): void;

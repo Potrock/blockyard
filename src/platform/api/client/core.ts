@@ -20,7 +20,10 @@ export type Node = Pick<THREE.Object3D, 'position' | 'quaternion' | 'scale' | 'r
 /** A kit: a piece of a game's client behaviour (what a first-person gun looks like, a HUD panel). */
 export interface ClientKit {
   readonly name: string;
-  /** Once, when the game's client starts (the world is up, before the first frame). */
+  /**
+   * Once, when the game's client starts: at the first frame this screen shows the game, watching
+   * from the home page or playing (so looks and voices are ready for what it shows either way).
+   */
   setup?(client: Client): void;
   /** Every frame, in the order the kits are listed, before the game's own `frame`. */
   frame?(client: Client, dt: number): void;
@@ -39,7 +42,7 @@ export interface ClientKit {
 export interface ClientDefinition {
   /** The kits it uses, in the order they run each frame. */
   kits?: ClientKit[];
-  /** Once, when this screen joins: listen for messages, set up what the kits don't. */
+  /** Once, after the kits' `setup`, when this screen starts showing the game (watching or playing): define looks and voices, listen for messages. */
   setup?(client: Client): void;
   /** Every frame, after the kits (after prediction, before rendering). */
   frame?(client: Client, dt: number): void;
