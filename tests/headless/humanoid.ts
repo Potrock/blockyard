@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { defineGame, HumanoidJoints, Models } from '../../src/platform';
+import { defineGame, HumanoidJoints, Models, type HumanoidPoses } from '../../src/platform';
+import { DEFAULT_POSES, humanoid as humanoidKit, resolvePoses } from '../../src/platform/client-kits/figures';
+import { partsOf, ShownFigure } from '../../src/platform/client/figures';
 import { GltfFigure, GltfLibrary } from '../../src/platform/client/gltf';
-import { DEFAULT_POSES, HumanoidRig, resolvePoses, type RigOptions } from '../../src/platform/client/humanoid';
+import { HumanoidRig } from '../../src/platform/client/humanoid';
 import { GameHost } from '../../src/platform/host/game';
-import type { AnimState } from '../../src/platform/render/entities';
 import type { SharedUniforms } from '../../src/platform/render/pipeline';
+import { clientOf, posed, still, type Posed, type TestItem } from './_figures';
 import { check } from './_harness';
 
 const MODELS = 'src/games/gallery/models/';
@@ -15,37 +16,23 @@ const load = (file: string): Promise<GLTF> => {
   const b = readFileSync(MODELS + file);
   return new GLTFLoader().parseAsync(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), '');
 };
-const still = (): AnimState => ({ walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0, speed: 0, moveX: 0, moveZ: 1, ads: 0, shotT: 9 });
-
-/** A figure on the rig, stepped through `seconds` of `state` (60 steps a second). */
-function posed(gltf: GLTF, opts: RigOptions, seconds: number, state: Partial<AnimState>, before?: (rig: HumanoidRig) => void) {
-  const root = new THREE.Group();
-  const model = cloneSkinned(gltf.scene);
-  root.add(model);
-  const rig = new HumanoidRig(model, { clips: gltf.animations, ...opts });
-  before?.(rig);
-  const s = still();
-  for (let i = 1; i <= Math.round(seconds * 60); i++) rig.animate(Object.assign(s, state, { time: i / 60 }));
-  root.updateMatrixWorld(true);
-  const at = (name: Parameters<HumanoidRig['joint']>[0]) => rig.joint(name).getWorldPosition(new THREE.Vector3());
-  return { rig, at };
-}
 
 const JOINTS = ['hips', 'chest', 'head', 'lowerArmL', 'handL', 'lowerArmR', 'handR', 'lowerLegL', 'footL', 'lowerLegR', 'footR'] as const;
-const apart = (a: ReturnType<typeof posed>, b: ReturnType<typeof posed>) => Math.max(...JOINTS.map((j) => a.at(j).distanceTo(b.at(j))));
+const apart = (a: Posed, b: Posed) => Math.max(...JOINTS.map((j) => a.at(j).distanceTo(b.at(j))));
 
 /**
- * Humanoid animation under a game's control: pose options over the platform's own; a clip asked
- * for in the simulation reaching every screen's frames (players' and entities'), and stopping; the
- * rig driving a Mixamo-style skeleton (a T-pose, bones turned their own way, named its own way,
- * under a scaled armature) just as it drives the rig's own; clips blended over the rig's poses (a
- * layer leaves the legs to the gait) the same on both skeletons; a gun held as a rifle or a pistol
- * by its length, the figure's `pistolUnder` or the item's `stance`; skinned meshes drawn with
- * skinned materials; first-person arms cut from a skin; and clips on a figure that isn't a humanoid.
+ * Humanoid animation under a game's control: the figures kit's poses over its defaults; a clip
+ * asked for in the simulation reaching every screen's frames (players' and entities'), and
+ * stopping; the kit posing a Mixamo-style skeleton (a T-pose, bones turned their own way, named its
+ * own way, under a scaled armature) just as it poses the rig's own (the engine maps the rig's
+ * joints onto each); clips blended over the kit's poses (a layer leaves the legs to the gait) the
+ * same on both skeletons; a gun held as a rifle or a pistol by its length, the figure's
+ * `pistolUnder` or the item's `stance`; skinned meshes drawn with skinned materials; first-person
+ * arms cut from a skin; and clips on a figure that isn't a humanoid.
  */
 export default async function humanoid() {
-  // Pose options: the platform's own unless given, part by part.
-  check(JSON.stringify(resolvePoses()) === JSON.stringify(DEFAULT_POSES), 'no options: the platform\'s poses');
+  // Pose options: the kit's own unless given, part by part.
+  check(JSON.stringify(resolvePoses()) === JSON.stringify(DEFAULT_POSES), 'no options: the kit\'s poses');
   check(DEFAULT_POSES.heldScale === 0.52 && DEFAULT_POSES.pistolUnder === 0.45 && DEFAULT_POSES.death.backward === 0.65 && DEFAULT_POSES.rifle.hip.join() === '-0.13,-0.19,0.27', 'the defaults are the rig\'s old constants');
   const p = resolvePoses({ heldScale: 0.6, pistolUnder: undefined, rifle: { hip: [0, -0.1, 0.3] }, gait: { width: 0.14 }, sword: { swing: { chop: { turn: [2, 0, 0] } } } });
   check(p.heldScale === 0.6 && p.pistolUnder === 0.45, 'numbers given replace the defaults (undefined keeps them)');
@@ -97,23 +84,22 @@ export default async function humanoid() {
   check(!f.players.find((x) => x.name === 'Ann')!.clip && !f.entities.find((e) => e.type === 'dancer')!.clip, 'stopped: gone from the frames');
   host.dispose();
 
-  // The rig on a Mixamo-style skeleton (T-pose, turned bones, 0.01 armature, its own names, no
-  // grips) moves exactly as on the rig's own skeleton (the same body, skinned), and both as the
-  // rigid mannequin's joints do.
+  // The kit on a Mixamo-style skeleton (T-pose, turned bones, 0.01 armature, its own names, no
+  // grips) moves it exactly as the rig's own skeleton (the same body, skinned), and both as the
+  // rigid mannequin's joints: the kit poses the rig's joints, the engine maps them onto each.
   const [rigid, skinned, mixamo] = await Promise.all([load('mannequin.glb'), load('mannequin_skinned.glb'), load('mannequin_mixamo.glb')]);
   const joints = HumanoidJoints.mixamo();
   check(HumanoidRig.fits(mixamo.scene, joints) && !HumanoidRig.fits(mixamo.scene), 'a Mixamo skeleton fits the rig through its joint map (not without)');
-  const gun = () => new THREE.Object3D();
-  const rifle = { kind: 'gun' as const, grip: new THREE.Vector3(0, -0.05, 0), grip2: new THREE.Vector3(0, 0, 0.6), length: 1.4 };
-  const states: [string, Partial<AnimState>, boolean][] = [
+  const rifle: TestItem = { kind: 'gun', grip: new THREE.Vector3(0, -0.05, 0), grip2: new THREE.Vector3(0, 0, 0.6), length: 1.4 };
+  const states: [string, Parameters<typeof posed>[3], boolean][] = [
     ['standing', {}, false],
     ['walking', { walkAmount: 1, speed: 4 }, false],
     ['running, strafing', { walkAmount: 1, speed: 7, moveX: 1, moveZ: 0.3 }, false],
-    ['crouched, looking up', { stance: 1, headPitch: -0.5, headYaw: 0.4 }, false],
-    ['sliding', { stance: 2, walkAmount: 1, speed: 9 }, false],
+    ['crouched, looking up', { posture: 1, headPitch: -0.5, headYaw: 0.4 }, false],
+    ['sliding', { posture: 2, walkAmount: 1, speed: 9 }, false],
     ['a rifle, walking', { walkAmount: 1, speed: 3.5 }, true],
     ['a rifle, sprinting', { walkAmount: 1, speed: 8, sprint: true }, true],
-    ['a rifle, aimed down the sights', { ads: 1, headPitch: 0.3 }, true],
+    ['a rifle, aimed down the sights', { sights: 1, headPitch: 0.3 }, true],
     ['a rifle, reloading', { reloading: true }, true],
   ];
   const standing = posed(skinned, {}, 0.8, {});
@@ -121,21 +107,21 @@ export default async function humanoid() {
   const arm = turned.rig.joint('upperArmL');
   check(arm.name === 'mixamorigLeftArm' && Math.abs(arm.quaternion.w) < 0.99, `the Mixamo arm bone is its own, turned its own way (${arm.quaternion.toArray().map((v) => v.toFixed(2))})`);
   for (const [what, state, armed] of states) {
-    const hold = armed ? (r: HumanoidRig) => r.hold(gun(), rifle) : undefined;
-    const a = posed(skinned, {}, 0.8, state, hold);
+    const item = armed ? rifle : undefined;
+    const a = posed(skinned, {}, 0.8, state, { item });
     if (what !== 'standing') check(apart(a, standing) > 0.05, `${what}: a pose of its own (${apart(a, standing).toFixed(2)} m from standing)`);
-    const b = posed(mixamo, { joints }, 0.8, state, hold);
-    const c = posed(rigid, {}, 0.8, state, hold);
+    const b = posed(mixamo, { joints }, 0.8, state, { item });
+    const c = posed(rigid, {}, 0.8, state, { item });
     check(apart(a, b) < 1e-4, `${what}: the Mixamo skeleton's joints are where the rig's own are (${apart(a, b).toExponential(1)} m apart)`);
     check(apart(a, c) < 1e-4, `${what}: and the rigid mannequin's (${apart(a, c).toExponential(1)} m)`);
   }
   // Grips from the model, or a point in the fist: the rigid mannequin's grips are where the default puts them.
-  const armed = posed(rigid, {}, 0.3, {}, (r) => r.hold(gun(), rifle));
-  const armedMixamo = posed(mixamo, { joints }, 0.3, {}, (r) => r.hold(gun(), rifle));
+  const armed = posed(rigid, {}, 0.3, {}, { item: rifle });
+  const armedMixamo = posed(mixamo, { joints }, 0.3, {}, { item: rifle });
   check(apart(armed, armedMixamo) < 1e-4, 'holding a gun, the Mixamo figure (no grips of its own) has its hands where the mannequin has them');
 
   // A gun's stance: by its length, the figure's `pistolUnder`, or the item's own say; its size in the hands.
-  const holding = (o: RigOptions, info: Partial<typeof rifle> & { stance?: 'rifle' | 'pistol' }) => posed(skinned, o, 0.3, {}, (r) => r.hold(gun(), { ...rifle, ...info }));
+  const holding = (o: { poses?: HumanoidPoses; kit?: { poses?: HumanoidPoses } }, info: Partial<TestItem>) => posed(skinned, o, 0.3, {}, { item: { ...rifle, ...info } });
   const asRifle = holding({}, {});
   const asPistol = holding({}, { length: 0.5 });
   check(apart(asRifle, asPistol) > 0.05, 'a short gun is held out as a pistol');
@@ -143,39 +129,42 @@ export default async function humanoid() {
   check(apart(holding({ poses: { pistolUnder: 1 } }, {}), asPistol) < 1e-6, 'a figure whose pistols are longer holds this rifle as one');
   check(apart(holding({ poses: { pistol: { hip: [0, -0.3, 0.3] } } }, { stance: 'pistol' }), asPistol) > 0.05, 'the pistol stance is the figure\'s');
   const big = holding({ poses: { heldScale: 0.8 } }, {});
-  check(Math.abs(big.rig.holding!.scale.x - 0.8) < 1e-9 && Math.abs(asRifle.rig.holding!.scale.x - 0.52) < 1e-9, 'a held gun is the figure\'s `heldScale` (0.52 by default)');
+  check(Math.abs(big.node!.scale.x - 0.8) < 1e-9 && Math.abs(asRifle.node!.scale.x - 0.52) < 1e-9, 'a held gun is the figure\'s `heldScale` (0.52 by default)');
+  // The kit's own options: under every model's `poses`.
+  check(apart(holding({ kit: { poses: { pistolUnder: 1 } } }, {}), asPistol) < 1e-6, 'the kit\'s options: every figure holds this rifle as a pistol');
+  check(apart(holding({ kit: { poses: { pistolUnder: 1 } }, poses: { pistolUnder: 0.45 } }, {}), asRifle) < 1e-6, 'and a model\'s own `poses` over the kit\'s');
 
-  // Clips over the rig: the wave (the upper body) raises the right hand while the legs walk as
-  // they would; the same on both skeletons; stopped, it fades back out.
-  const waving = (gltf: GLTF, o: RigOptions) => posed(gltf, o, 1, { walkAmount: 1, speed: 4 }, (r) => r.play({ name: 'wave', loop: true, fade: 0.2, layer: 'upper', speed: 1, elapsed: 0 }));
+  // Clips over the kit's poses: the wave (the upper body) raises the right hand while the legs
+  // walk as they would; the same on both skeletons; stopped, it fades back out.
+  type Setup = Parameters<typeof posed>[4];
+  const playing = (clip: Parameters<HumanoidRig['play']>[0], more: Setup = {}): Setup => ({ ...more, before: (f) => f.rig.play(clip) });
+  const waving = (gltf: GLTF, o: { joints?: typeof joints }) => posed(gltf, o, 1, { walkAmount: 1, speed: 4 }, playing({ name: 'wave', loop: true, fade: 0.2, layer: 'upper', speed: 1, elapsed: 0 }));
   const walking = posed(skinned, {}, 1, { walkAmount: 1, speed: 4 });
   const w1 = waving(skinned, {});
   const w2 = waving(mixamo, { joints });
   check(w1.at('handR').y > 1.8 && walking.at('handR').y < 1.1, `waving: the right hand up (${w1.at('handR').y.toFixed(2)} m; walking, ${walking.at('handR').y.toFixed(2)})`);
   check(w1.at('footL').distanceTo(walking.at('footL')) < 1e-6 && w1.at('handL').distanceTo(walking.at('handL')) < 1e-6, 'the legs (and the other arm) as they walk');
   check(w1.at('handR').distanceTo(w2.at('handR')) < 1e-3 && w1.at('lowerArmR').distanceTo(w2.at('lowerArmR')) < 1e-3, `the clip made for each skeleton puts the Mixamo figure's hand in the same place (${w1.at('handR').distanceTo(w2.at('handR')).toExponential(1)} m)`);
-  const partWay = posed(skinned, {}, 0.1, {}, (r) => r.play({ name: 'wave', loop: true, fade: 0.4, layer: 'upper', speed: 1, elapsed: 0 }));
-  const late = posed(skinned, {}, 0.1, {}, (r) => r.play({ name: 'wave', loop: true, fade: 0.4, layer: 'upper', speed: 1, elapsed: 5 }));
+  const partWay = posed(skinned, {}, 0.1, {}, playing({ name: 'wave', loop: true, fade: 0.4, layer: 'upper', speed: 1, elapsed: 0 }));
+  const late = posed(skinned, {}, 0.1, {}, playing({ name: 'wave', loop: true, fade: 0.4, layer: 'upper', speed: 1, elapsed: 5 }));
   check(partWay.at('handR').y < late.at('handR').y - 0.2, 'it fades in; a screen that sees it late starts it faded in');
-  const stopped = posed(skinned, {}, 1.5, {}, (r) => {
-    r.play({ name: 'wave', loop: true, fade: 0.2, layer: 'upper', speed: 1, elapsed: 5 });
-    const s = still();
-    for (let i = 1; i <= 30; i++) r.animate(Object.assign(s, { time: -1 + i / 60 }));
-    r.play(null);
+  const stopped = posed(skinned, {}, 1.5, {}, {
+    before: (f) => {
+      f.rig.play({ name: 'wave', loop: true, fade: 0.2, layer: 'upper', speed: 1, elapsed: 5 });
+      for (let i = 1; i <= 30; i++) f.step({ ...still(), time: -1 + i / 60 });
+      f.rig.play(null);
+    },
   });
   check(stopped.at('handR').y < 1.1, `stopped, it fades out (the hand at ${stopped.at('handR').y.toFixed(2)} m)`);
-  const once = posed(skinned, {}, 2, {}, (r) => r.play({ name: 'wave', loop: false, fade: 0.2, layer: 'full', speed: 1, elapsed: 0 }));
+  const once = posed(skinned, {}, 2, {}, playing({ name: 'wave', loop: false, fade: 0.2, layer: 'full', speed: 1, elapsed: 0 }));
   check(once.at('handR').y < 1.1, 'played once, it ends by itself');
-  const cheering = posed(mixamo, { joints }, 0.25, {}, (r) => r.play({ name: 'cheer', loop: true, fade: 0, layer: 'full', speed: 1, elapsed: 0 }));
+  const cheering = posed(mixamo, { joints }, 0.25, {}, playing({ name: 'cheer', loop: true, fade: 0, layer: 'full', speed: 1, elapsed: 0 }));
   check(cheering.at('handL').y > 1.9 && cheering.at('handR').y > 1.9 && cheering.at('footL').y > 0.1, `a full-body clip: both hands up, a hop (hands ${cheering.at('handL').y.toFixed(2)}, feet ${cheering.at('footL').y.toFixed(2)})`);
-  const rifleWave = posed(skinned, {}, 1, {}, (r) => {
-    r.hold(gun(), rifle);
-    r.play({ name: 'wave', loop: true, fade: 0.2, layer: ['upperArmR'], speed: 1, elapsed: 0 });
-  });
-  const held = rifleWave.rig.holding!.getWorldPosition(new THREE.Vector3());
+  const rifleWave = posed(skinned, {}, 1, {}, playing({ name: 'wave', loop: true, fade: 0.2, layer: ['upperArmR'], speed: 1, elapsed: 0 }, { item: rifle }));
+  const held = rifleWave.node!.getWorldPosition(new THREE.Vector3());
   check(held.distanceTo(rifleWave.at('handR')) < 0.2 && held.y > 1.6, `a gun goes with the hand a clip moves (${held.y.toFixed(2)} m up)`);
 
-  // Skinned meshes get skinned materials (and shadows); the rig drives their bones.
+  // Skinned meshes get skinned materials (and shadows); the kit's pose drives their bones.
   const lib = new GltfLibrary({} as SharedUniforms);
   const fig = new GltfFigure(skinned, { url: '/skinned.glb', rig: 'humanoid' }, 1, lib);
   const meshes: THREE.SkinnedMesh[] = [];
@@ -183,11 +172,18 @@ export default async function humanoid() {
   check(meshes.length === 4 && meshes.every((m) => (m.material as THREE.RawShaderMaterial).defines?.SKINNED === 1 && (m.customDepthMaterial as THREE.RawShaderMaterial).defines?.SKINNED === 1), 'a skin is drawn with skinned materials and shadows');
   check(meshes.every((m) => m.skeleton.bones[0] !== (skinned.scene.getObjectByName('hips') as THREE.Bone)), 'each figure has its own skeleton');
   const s = still();
+  const shown = new ShownFigure(1, null, 'test', Models.gltf('/skinned.glb', { rig: 'humanoid' }), partsOf(fig), s);
+  const kit = humanoidKit();
   s.headYaw = 0.8;
   fig.animate(s);
-  check(meshes[0].skeleton.bones.find((b) => b.name === 'head')!.quaternion.y > 0.2, 'the rig turns the skin\'s bones');
+  check(Math.abs(meshes[0].skeleton.bones.find((b) => b.name === 'head')!.quaternion.y) < 1e-9, 'no kit, no pose: the engine leaves a figure on the rig standing straight');
+  kit.frame!(clientOf([shown]), 1 / 60);
+  check(shown.posed, 'the kit says it posed it');
+  fig.animate(s);
+  check(meshes[0].skeleton.bones.find((b) => b.name === 'head')!.quaternion.y > 0.2, 'the kit\'s pose turns the skin\'s bones');
   fig.play({ name: 'cheer', loop: true, fade: 0, layer: 'full', speed: 1, elapsed: 0.25 });
   s.time = 0.1;
+  kit.frame!(clientOf([shown]), 1 / 60);
   fig.animate(s);
   fig.root.updateMatrixWorld(true);
   check(fig.pivots.get('handL')!.getWorldPosition(new THREE.Vector3()).y > 1.9, 'a figure plays a clip it\'s told to (`play`)');
@@ -250,5 +246,5 @@ export default async function humanoid() {
   check(Math.abs(turn()) < 1e-3, `and off again (${turn().toFixed(3)})`);
   plain.dispose();
   lib2.dispose();
-  console.log('  poses over the defaults · clips in every screen\'s frames, restarted, stopped · a Mixamo T-pose skeleton moves as the rig\'s own (9 states) · clips over the rig (layers, fades, late joiners, once, a gun in the hand) · skinned materials · arms cut from a skin · clips on other figures');
+  console.log('  the kit\'s poses over its defaults (its options, a model\'s, an item\'s) · clips in every screen\'s frames, restarted, stopped · the kit poses a Mixamo T-pose skeleton as the rig\'s own (9 states) · clips over the kit\'s poses (layers, fades, late joiners, once, a gun in the hand) · skinned materials · no kit, no pose · arms cut from a skin · clips on other figures');
 }

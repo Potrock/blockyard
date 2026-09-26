@@ -23,13 +23,16 @@ const FILES = [
   'src/platform/render/viewarms.ts',
   'src/platform/client/api/view.ts',
   // Figures.
+  'src/platform/client/humanoid.ts',
+  'src/platform/client/entities.ts',
+  'src/platform/client/figures.ts',
   // HUD and effects.
 ];
 
 /** Item kinds and hold styles, as strings. */
-const LITERALS = ['gun', 'sword', 'bow', 'throw', 'axe', 'polearm'];
+const LITERALS = ['gun', 'sword', 'bow', 'throw', 'axe', 'polearm', 'melee', 'throwable', 'rifle', 'pistol'];
 /** Words of the kits' vocabulary, in names and strings. */
-const WORDS = ['stylename', 'stance', 'ads', 'pump', 'bolt', 'lever', 'hammer', 'scope'];
+const WORDS = ['stylename', 'stance', 'ads', 'pump', 'bolt', 'lever', 'hammer', 'scope', 'rifle', 'pistol'];
 
 /** The code without its comments (strings kept). */
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' ')).replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');

@@ -13,7 +13,7 @@ import type { ClientDefinition, ClientGame } from './client/core';
 
 export type { Node, ClientKit, ClientDefinition, ClientGame, Client, ClientServices, ClientCamera, ClientFx, ClientAudio, ClientInput, ClientWorld, Me, MeHeld, ClientEvent } from './client/core';
 export type { ViewLayer, ViewCamera, ViewSpriteOptions, HeldItem, ViewArms, HumanoidViewArms, ViewArm } from './client/view';
-export type { ClientFigures } from './client/figures';
+export type { ClientFigures, Figure, FigureBone, FigureHeld, FigureNode, FigureRig, FigureState, HeldPoint } from './client/figures';
 export type { ClientHud } from './client/hud';
 
 /** The game on each player's screen (`client.ts`). */

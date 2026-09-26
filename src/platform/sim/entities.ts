@@ -107,15 +107,6 @@ export interface EntityFrame {
   held?: string | null;
   /** Health, 0..1 (health bars over heads). */
   hp?: number;
-  /** Crouching (1) or sliding (2) (players' figures). */
-  stance?: number;
-  /** Aiming a gun where it looks, how far down the sights 0..1 (players' figures). */
-  aim?: number;
-  /** A player's figure (made on each screen from the players' frames): off the ground, sprinting, reloading, aiming down the sights 0..1. */
-  air?: boolean;
-  sprint?: boolean;
-  reloading?: boolean;
-  ads?: number;
   /** A model animation clip it's playing (`animate`). */
   clip?: ClipFrame;
 }

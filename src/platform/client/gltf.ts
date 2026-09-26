@@ -8,7 +8,7 @@ import type { SharedUniforms } from '../render/pipeline';
 import { Shaders } from '../render/shaders';
 import type { AnimState, Figure } from '../render/entities';
 import { ClipLayer, type ClipPlay } from './clips';
-import { HELD_SCALE, HumanoidRig, resolvePoses, rigFrames, type HeldInfo, type RigFrames } from './humanoid';
+import { HELD_SCALE, HumanoidRig, rigFrames, type RigFrames } from './humanoid';
 
 /** A model without an emissive map glows nowhere. */
 const BLACK = (() => {
@@ -271,7 +271,7 @@ export class GltfLibrary {
     const src = typeof spec === 'string' ? { url: spec } : spec;
     const g = this.get(src.url);
     if (!g) return null;
-    const k = HELD_SCALE / resolvePoses(src.poses).heldScale;
+    const k = HELD_SCALE / (src.poses?.heldScale ?? HELD_SCALE);
     const key = `arms|${src.url}|${JSON.stringify(src.joints ?? null)}|${k}`;
     const hit = this.arms.get(key);
     if (hit !== undefined) return hit;
@@ -565,7 +565,8 @@ const restSpheres = new WeakMap<THREE.BufferGeometry, THREE.Sphere>();
  * and its animations. As an entity it plays `idle`, `walk` or `run` by how fast it goes (walking
  * in step with the ground it covers), `attack` once per swing, and turns its `head` to look; any of
  * its clips can be played over that (`play`); as a prop it loops whichever animation it's told
- * to. A humanoid (docs/HUMANOID.md) is animated by the rig instead, its clips over the rig's poses.
+ * to. A humanoid (docs/HUMANOID.md) is on the rig instead: client code poses it (the figures kit),
+ * and its clips play over that.
  */
 export class GltfFigure implements Figure {
   readonly root = new THREE.Group();
@@ -582,8 +583,8 @@ export class GltfFigure implements Figure {
   private last = -1;
   private attackT = Infinity;
   private duration = new Map<THREE.AnimationAction, number>();
-  /** Built on the humanoid rig: animated in code. */
-  private rig: HumanoidRig | null = null;
+  /** Built on the humanoid rig: posed by client code. */
+  readonly rig: HumanoidRig | null = null;
   /** Clips played over its animation (`play`), when it isn't a humanoid. */
   private layer: ClipLayer | null = null;
 
@@ -642,7 +643,7 @@ export class GltfFigure implements Figure {
     this.material = this.materials[0] ?? lib.material(lib.swatch(new THREE.Color(1, 1, 1)), null, THREE.FrontSide, own);
     if (!this.materials.length) this.materials.push(this.material);
     if ((spec.rig === 'humanoid' || spec.joints || !spec.clips) && HumanoidRig.fits(scene, spec.joints)) {
-      this.rig = new HumanoidRig(scene, { joints: spec.joints, poses: spec.poses, clips: gltf.animations });
+      this.rig = new HumanoidRig(scene, { joints: spec.joints, clips: gltf.animations });
       this.pivots.set('armR', this.rig.joint('handR'));
     }
     if (spec.hand) {
@@ -684,9 +685,12 @@ export class GltfFigure implements Figure {
     }
   }
 
-  /** An entity's frame: which animations, how much of each, the look, and the fall on death. */
-  animate(s: AnimState) {
-    if (this.rig) return this.rig.animate(s);
+  /**
+   * An entity's frame: which animations, how much of each, the look, and the fall on death. On
+   * the rig: the pose client code gave its skeleton onto the model, its clips over that.
+   */
+  animate(s: AnimState, held: THREE.Object3D | null = null) {
+    if (this.rig) return this.rig.apply(s.time, held);
     const dt = this.last < 0 ? 0 : Math.max(0, Math.min(0.25, s.time - this.last));
     this.last = s.time;
     this.layer?.reset();
@@ -720,13 +724,6 @@ export class GltfFigure implements Figure {
   play(clip: ClipPlay | null) {
     if (this.rig) this.rig.play(clip);
     else this.layer?.play(clip);
-  }
-
-  /** A humanoid holds things its own way. */
-  hold(mesh: THREE.Object3D | null, info: HeldInfo | null): boolean {
-    if (!this.rig) return false;
-    this.rig.hold(mesh, info);
-    return true;
   }
 
   /** A prop's animation: loop this one (by name), or none. */

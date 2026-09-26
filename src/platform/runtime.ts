@@ -41,13 +41,13 @@ import { CommandBar } from './ui/commandbar';
 import { Content } from './content';
 import { Presenter } from './client/present';
 import { PlayerCamera } from './client/camera';
-import { EntityView } from './client/entities';
+import { EntityView, type FigureFrame } from './client/entities';
 import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
 import type { SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
 import { newRoomCode, ROOM_CODE, type DevReply, type HostBatch, type PlayerInput, type TimedBatch } from './net/protocol';
-import { clipFrame, type ClipFrame, type EntityFrame } from './sim/entities';
+import { clipFrame, type ClipFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -596,7 +596,7 @@ export class Runtime {
         // First person.
         view: this.held,
         // Figures.
-        figures: {},
+        figures: this.entityView.figures,
         // HUD and effects.
         hud: {},
         // Shared services.
@@ -881,8 +881,8 @@ export class Runtime {
   }
 
   /** Other players as figures (entities of the built-in `$player` type), with their names above. */
-  private avatars(f: SimFrame, me: PlayerFrame): EntityFrame[] {
-    const out: EntityFrame[] = [];
+  private avatars(f: SimFrame, me: PlayerFrame): FigureFrame[] {
+    const out: FigureFrame[] = [];
     const seen = new Set<string>();
     this.targets = [];
     for (const other of f.players) {
@@ -903,9 +903,11 @@ export class Runtime {
       h.flash = Math.max(0, h.flash - 0.05);
       this.avatarHurt.set(p.id, h);
       const held = p.hotbar?.slots[p.hotbar.selected]?.item ?? null;
-      const gunUp = held !== null && this.content.items.get(held)?.kind === 'gun' && !p.dead;
+      // The held item's mechanics, as the frame reports them (a gun's aim and reload): the dead aim nothing.
+      const mech = p.dead ? undefined : p.hand.gun;
       out.push({
         id,
+        player: p.id,
         type,
         x: p.x,
         y: p.y,
@@ -921,12 +923,12 @@ export class Runtime {
         hurt: h.flash,
         dying: p.dead ? p.deathTime : -1,
         held,
-        aim: gunUp ? 1 : 0,
-        stance: p.sliding ? 2 : p.sneaking ? 1 : 0,
+        aim: mech ? 1 : 0,
+        posture: p.sliding ? 2 : p.sneaking ? 1 : 0,
         air: !p.onGround && !p.flying && !p.inWater,
         sprint: p.sprinting,
-        reloading: gunUp && (p.hand.gun?.reload ?? -1) >= 0,
-        ads: gunUp ? (p.hand.gun?.aim ?? 0) : 0,
+        reloading: (mech?.reload ?? -1) >= 0,
+        sights: mech?.aim ?? 0,
         clip: (mine && this.ownClip) || p.clip || undefined,
       });
       if (mine) continue;
@@ -1548,6 +1550,8 @@ export class Runtime {
       this.client.setup(mine);
     }
     this.client.frame(dt, mine);
+    // The figures as client code posed them (the figures kit), animated.
+    this.entityView.finish();
     this.drawOwnShots();
     this.gunHud(me);
     this.throwHud(me);

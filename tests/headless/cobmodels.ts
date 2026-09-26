@@ -2,10 +2,14 @@ import { readFileSync, statSync } from 'node:fs';
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { Models } from '../../src/platform';
+import { humanoid } from '../../src/platform/client-kits/figures';
+import { partsOf, ShownFigure } from '../../src/platform/client/figures';
 import { GltfFigure, GltfLibrary } from '../../src/platform/client/gltf';
 import { HumanoidRig } from '../../src/platform/client/humanoid';
 import type { AnimState } from '../../src/platform/render/entities';
 import type { SharedUniforms } from '../../src/platform/render/pipeline';
+import { clientOf } from './_figures';
 import { check } from './_harness';
 
 const DIR = 'src/games/callofblocky/models/';
@@ -45,7 +49,7 @@ async function load(file: string): Promise<GLTF> {
   return new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength), '');
 }
 
-const still = (): AnimState => ({ walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, stance: 0, speed: 0, moveX: 0, moveZ: 1, ads: 0, shotT: 9 });
+const still = (): AnimState => ({ walkPhase: 0, walkAmount: 0, pace: 0, attackT: 9, raised: false, casting: false, headYaw: 0, headPitch: 0, dying: 0, time: 0, aim: 0, posture: 0, speed: 0, moveX: 0, moveZ: 1, sights: 0, shotT: 9 });
 
 /**
  * Call of Blocky's voxel models load through the platform: each fighter one skinned mesh (voxel
@@ -78,12 +82,21 @@ export default async function cobmodels() {
     meshes[0].computeBoundingBox();
     const box = meshes[0].boundingBox!;
     check(box.min.y > -0.01 && box.min.y < 0.01 && box.max.y > 1.8 && box.max.y < 2.05, `${id}: standing on the ground, ${box.max.y.toFixed(2)} m tall`);
-    // The rig moves it: crouched, the head comes down.
+    // The figures kit poses it: crouched, the head comes down.
     const s = still();
-    fig.animate(s);
+    const kit = humanoid();
+    const client = clientOf([new ShownFigure(1, null, id, Models.gltf(`/${id}.glb`, { rig: 'humanoid' }), partsOf(fig), s)]);
+    const step = () => {
+      kit.frame!(client, 1 / 60);
+      fig.animate(s);
+    };
+    step();
     fig.root.updateMatrixWorld(true);
     const head = fig.pivots.get('head')!.getWorldPosition(new THREE.Vector3()).y;
-    for (let i = 1; i <= 30; i++) fig.animate(Object.assign(s, { stance: 1, time: i / 60 }));
+    for (let i = 1; i <= 30; i++) {
+      Object.assign(s, { posture: 1, time: i / 60 });
+      step();
+    }
     fig.root.updateMatrixWorld(true);
     check(fig.pivots.get('head')!.getWorldPosition(new THREE.Vector3()).y < head - 0.2, `${id}: crouches`);
     fig.dispose();
