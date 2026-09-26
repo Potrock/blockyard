@@ -1,7 +1,7 @@
 # Redesign, part 2: item kinds as kits
 
-Status: **in progress**. 4a (the mechanism and the host halves), 4b (the screen halves) and 4c
-(open item types) are built; 4d and 4e are next.
+Status: **in progress**. 4a (the mechanism and the host halves), 4b (the screen halves), 4c (open
+item types) and 4e (the litmus) are built; 4d (`runtime.ts` in parts) is next.
 Started 2026-09-26, following REDESIGN-CLIENT-SERVER.md's "Later": the user asked to continue the
 refactor for the edges and overfits raised after phases 1 to 3.
 
@@ -276,6 +276,32 @@ Building it settled a few things the design left open:
   whenever its kit says it's drawn.
 - **Left for later:** `HoldSpec.gun` (`GunHold`) and the gun sounds in `ItemSounds`. They're data
   the presentation kits read, not logic, but they're still gun vocabulary in the core types.
+
+## 4e: the litmus passed
+
+Laser Tag (`src/games/lasertag`, a development game) has a kind of item of its own, the
+`tagger`, written only in its folder against the public API, with no platform change:
+- `tagger.shared.ts`: its type, state, rate and energy maths, and its movement;
+- `tagger.server.ts`: the host half, an `ItemKit`;
+- `client/tagger.ts`: the screen half, a `ClientKit` with a `kind`, plus an energy-bar kit.
+
+What it does:
+- A click fires on the player's screen at once: the beam from the eye as the camera's placed, and
+  the shot sent as an action.
+- The host takes the shot if the tagger could have fired it (its rate, its energy, a little slack),
+  checks the action's values itself, and casts the shot lag-compensated.
+- A tag is damage of the kit's own cause, `'tag'`.
+- Everyone else's screen draws the beam from the shooter's figure's muzzle (`tagger.beam`,
+  `figure.point`, `figure.used`).
+- The heavy lance slows its holder, on the host and in prediction, through the kit's `move`.
+- A bot fires from its trigger on the host.
+- Its own client event (`'tagger.fired'`) joins `ClientEvents`.
+
+`tests/headless/lasertag.ts` covers the host side. In a browser against the real server, three
+clicks were three predicted shots, all taken, with the energy bar showing.
+
+The API gap it met was one of wording, not mechanism: a bot's look is `bot.controls.look`, not
+`teleport`'s view (a bot's controls own its look). That's as documented, so nothing changed.
 
 ## Plan
 
