@@ -268,3 +268,103 @@ build. Kits must reproduce today's looks exactly until a game chooses otherwise.
    - Recommended: yes. Simple games keep working without client code for UI.
 4. **Phase 4 (simulation kinds as kits) is out of scope for now.**
    - Recommended: yes. It's the same principle, but a much larger change to gameplay code.
+
+---
+
+## Phase 2 in detail: the client API and the kits
+
+This is the working design for phase 2, fixed before the kits are ported so they can be ported
+in parallel against one API.
+
+### Kits and the order things run
+
+```ts
+interface ClientKit {
+  name: string;
+  setup?(client: Client): void;              // once, when the game's client starts
+  frame?(client: Client, dt: number): void;  // every frame, in the order listed
+  dispose?(): void;
+}
+defineClient(shared, { kits: [firstPerson.standard(), figures.humanoid(), hud.gunner(), effects.gunfire()], setup, frame });
+```
+
+Each frame runs in this order:
+1. prediction and local mechanics (movement, the gun and throw controllers);
+2. `client.me` and this frame's `client.events` are filled in;
+3. each kit's `frame`, in order;
+4. the game's own `frame`;
+5. render.
+
+### The client object
+
+- **Math.** `@platform/client/math` exports the platform's math types (`Vec3`, `Quat`, `Mat4`,
+  `Euler`; three.js's classes, re-exported under the platform's names) and helpers (springs,
+  easing, two-bone IK, point-to-point placement). Kits use these, so the numbers come out exactly
+  as before.
+- **`Node`.** Something drawn or grouped: `position: Vec3`, `quaternion: Quat`,
+  `scale: Vec3`, `visible`, `add(node)`, `remove(node)`, plus `renderOrder` and `depthTest` where
+  it draws. It is structurally a three.js `Object3D` subset. Games never import three.js.
+- **`client.view`: the first-person layer.**
+  - `camera` (`fov`, `aspect`); `root: Node`; `node()` makes a group; `visible`.
+  - `held: HeldItem | null`. The engine loads what's in hand: a sprite extruded to 3D, a box or
+    glTF model, or a block. A `HeldItem` is:
+    - `{ item: string; def: ItemDefinition | undefined; node: Node; form: 'model' | 'sprite' | 'block' | 'cross' }`;
+    - `points: Record<string, Vec3>` (the model's markers, its own space);
+    - `bounds`, `halfWidthAt(z)`;
+    - `setGeometry(frame)` for a bow's draw frames.
+  - `arms`:
+    - `skin: { R: Node; L: Node } | null`: the player skin's blocky arms;
+    - `hands: { R: Node; L: Node } | null`: the skin's blocky fists for two-handed holds;
+    - `humanoid`: the player model's upper arm, forearm and fist per side, with their joint
+      lengths and grip frames (today's `HumanoidArms`).
+
+    The engine builds the meshes; kits place them.
+  - `sprite(image: 'flash' | url, opts: { additive?, depthTest?, color? })` returns a `Node`.
+  - Light (the probe at the eye) is applied by the engine to everything in the layer.
+- **`client.me`: the local player, predicted.**
+  - position, velocity, look, onGround, flying, crouching, sprinting, sliding, dead, vehicle,
+    health, `bob` phase, `thirdPerson`;
+  - `hand` (item, count, strength, drawing, charge);
+  - `held` (item, def, and the item's local state: a gun's mag, reserve, reload progress,
+    shells to load, aim, sprint blend, sight, action);
+  - abilities.
+- **`client.events`: this frame's events, local and from the server.**
+  - Local: `shot`, `use`, `swing`, `kick`, `equip` (after the held item has loaded),
+    `unequip`, `reload`, `throw`, `land` (with vertical speed).
+  - From the server: `view.play`, `view.kick`, `view.visible`, `view.setSkin`, and the game's
+    own `client.on` messages.
+- **`client.figures`.** For each drawn player or entity: `{ id, player?, entity?, joints: Record<name, Node>, rig: 'humanoid' | 'box' | null, state: AnimState, held }`.
+  A kit that poses a figure sets `figure.posed = true`, and the engine skips its own pose for it.
+  - Humanoid figures: the kit takes the pose over.
+  - Box-model figures keep the engine's animation in phase 2.
+- **`client.hud`.**
+  - `layer(name)` returns an `HTMLElement` in the HUD. The game's client code is trusted
+    (bundled), so it can build DOM itself; server-sent markup stays sanitized.
+  - `theme`; the widget API, usable locally.
+- **Other services.**
+  - `client.fx`: today's effects (burst, tracer, impact, explosion, shockwave, flash, shake, …).
+  - `client.camera`: the world camera's extra `fovScale` (aim zoom) and shake.
+  - `client.audio`: play, loop, define a voice.
+  - `client.input`: keys, buttons, pad, device.
+  - `client.items.get(id)`.
+  - `client.world`: read-only raycasts and block queries.
+  - `client.on` / `client.send`.
+
+### Which kit takes what
+
+| Kit | Ported from | Owns after |
+|---|---|---|
+| `firstPerson.standard()` | `render/viewmodel.ts` (styles, poses, motions, gun motion, springs, flash, scope hide, FOV, bob and sway); the hold-style choice in `runtime.ts` | Everything in the first-person layer |
+| `figures.humanoid()` | `client/humanoid.ts` rig posing; the held-kind and stance choice in `client/entities.ts` | Humanoid figures' poses |
+| `hud.gunner()`, `hud.throwables()` | `ui/hudkit.ts` ammo and lethal panels; `ui/hud.ts` crosshair, reticles and scope; `runtime.ts` `gunHud` / `throwHud` | Those HUD pieces |
+| `effects.gunfire()`, `effects.throwables()` | `runtime.ts` tracers, impacts and blood; `client/throwables.ts` flight view, trail, warning marker and flames | Those effects and their sounds |
+| `sounds.standard()` | The built-in voices in `audio/sfx.ts` | Their definitions |
+
+Mechanics stay in the platform core: movement, the gun controller (local shots, spread, reload
+timing, recoil turning the view), the throw controller (cook, throw), aim assist and prediction.
+They report through `client.me` and `client.events`, and no longer draw anything.
+
+**Done when:**
+- Every game's `client.ts` lists these kits, and every game looks and sounds pixel-identical.
+- A check fails on item-kind or style checks (`kind === 'gun'`, `'sword'`, `stance`, …) in the
+  client presentation core (`render/`, `ui/`, `fx/`, `runtime.ts` outside the mechanics).
