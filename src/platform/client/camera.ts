@@ -6,6 +6,20 @@ const EYE = 1.62;
 const SNEAK_EYE = 1.27;
 const SLIDE_EYE = 0.95;
 
+/**
+ * Stepping up onto a stair or a slab lifts the body in one step (the engine's step-up, up to 0.6);
+ * a rise on the ground between these is one. The eyes start where they were and spring up after
+ * it (critically damped), so a flight of stairs is a smooth climb, not a jolt a step. The spring
+ * stiffens with speed (`STEP_SPRING` standing, `STEP_PER_SPEED` times the walking speed), so the
+ * eyes trail a climb by about the same (half a block or so) walking or sprinting, and never more
+ * than `STEP_LAG`: soft enough that a climb goes up evenly, not in a surge a step.
+ */
+const STEP_MIN = 0.15;
+const STEP_MAX = 0.65;
+const STEP_SPRING = 16;
+const STEP_PER_SPEED = 5;
+const STEP_LAG = 1;
+
 const smoothstep = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 /**
@@ -23,6 +37,11 @@ export class PlayerCamera {
   /** Aiming down the sights: the field of view is divided by this (the runtime eases it). */
   aimZoom = 1;
   private eye = EYE;
+  /** How far the eyes are below where they'd be, after stepping up (<= 0), and how fast they're catching up. */
+  private stepLag = 0;
+  private stepSpeed = 0;
+  /** Where the feet were last frame, and if on the ground (null: no frame yet). */
+  private feet: { y: number; ground: boolean } | null = null;
   private fov = 75;
   /** The last view the simulation set that we've taken on. */
   viewSeq = -1;
@@ -101,6 +120,7 @@ export class PlayerCamera {
     }
     const targetEye = f.sliding ? SLIDE_EYE : f.sneaking && !f.flying ? SNEAK_EYE : EYE;
     this.eye += (targetEye - this.eye) * (1 - Math.exp(-dt * (f.sliding ? 18 : 14)));
+    this.stepUp(dt, f);
 
     const speed = Math.hypot(f.vx, f.vz);
     const bobAmt = this.viewBobbing && f.onGround && !f.flying ? Math.min(1, speed / 4.3) : 0;
@@ -114,7 +134,7 @@ export class PlayerCamera {
     const t = this.tiltNow;
     for (let i = 0; i < 3; i++) t[i] += ((want?.[i] ?? 0) - t[i]) * ease;
     const kicked = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, this.pitch + t[1]));
-    this.camera.position.set(f.x + Math.cos(this.yaw) * bobX, f.y + this.eye + bobY - t[2], f.z - Math.sin(this.yaw) * bobX);
+    this.camera.position.set(f.x + Math.cos(this.yaw) * bobX, f.y + this.eye + this.stepLag + bobY - t[2], f.z - Math.sin(this.yaw) * bobX);
     this.euler.set(kicked, this.yaw, Math.cos(phase) * 0.004 * bobAmt - t[0]);
     this.camera.quaternion.setFromEuler(this.euler);
 
@@ -124,7 +144,7 @@ export class PlayerCamera {
     if (Math.abs(this.zoomTo - this.distance) < 0.01) this.distance = this.zoomTo;
     if (circle) this.circled.copy(circle);
     if (this.distance > 0) {
-      const eye = new THREE.Vector3(f.x, f.y + this.eye, f.z);
+      const eye = new THREE.Vector3(f.x, f.y + this.eye + this.stepLag, f.z);
       const pivot = eye.lerp(this.circled, smoothstep(this.distance / 6));
       const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.camera.quaternion);
       this.camera.position.copy(pivot).addScaledVector(back, Math.min(this.distance, this.clearance(pivot, back, this.distance)));
@@ -144,7 +164,27 @@ export class PlayerCamera {
   /** Start from where another camera on the same view has settled (its eye height and field of view): a replay's eyes take over without a jump. */
   settleFrom(other: PlayerCamera) {
     this.eye = other.eye;
+    this.stepLag = other.stepLag;
+    this.stepSpeed = other.stepSpeed;
     this.fov = other.fov;
+  }
+
+  /** A step up since last frame leaves the eyes behind; they spring up after it. */
+  private stepUp(dt: number, f: PlayerFrame) {
+    const last = this.feet;
+    this.feet = { y: f.y, ground: f.onGround && !f.flying };
+    const rise = last ? f.y - last.y : 0;
+    if (last?.ground && this.feet.ground && rise > STEP_MIN && rise < STEP_MAX) this.stepLag = Math.max(-STEP_LAG, this.stepLag - rise);
+    if (this.stepLag === 0 && this.stepSpeed === 0) return;
+    // The spring's exact motion over dt (any frame rate): x(t) = (x0 + (v0 + w x0) t) e^(-w t).
+    const w = Math.max(STEP_SPRING, STEP_PER_SPEED * Math.hypot(f.vx, f.vz));
+    const x0 = this.stepLag;
+    const v0 = this.stepSpeed;
+    const e = Math.exp(-w * dt);
+    const c = v0 + w * x0;
+    this.stepLag = Math.min(0, (x0 + c * dt) * e);
+    this.stepSpeed = (v0 - w * c * dt) * e;
+    if (Math.abs(this.stepLag) < 1e-4 && Math.abs(this.stepSpeed) < 1e-3) this.stepLag = this.stepSpeed = 0;
   }
 
   viewDirection(out: THREE.Vector3): THREE.Vector3 {
