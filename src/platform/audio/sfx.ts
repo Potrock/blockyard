@@ -58,32 +58,25 @@ export class Sfx {
     this.listener.rz = -Math.sin(yaw);
   }
 
-  /** The game's own sounds, from its server (`audio.define` there). */
+  /** Sounds client code defines (kits, the game's client code: `client.audio.define`). */
   private custom = new Map<string, SynthVoice>();
-  /** Sounds client code defines (kits, the game's client code): under the server's of the same name. */
-  private local = new Map<string, SynthVoice>();
   private warned = new Set<string>();
 
-  /** Add or replace a sound of the game's, from its server (games bring their own; see `SynthKit`). */
+  /** Add or replace a sound client code defines (`client.audio.define`; see `SynthKit`). */
   define(name: string, voice: SynthVoice) {
     this.custom.set(name, voice);
-  }
-
-  /** Add or replace a sound client code defines (`client.audio.define`): the server's own of the same name wins. */
-  defineLocal(name: string, voice: SynthVoice) {
-    this.local.set(name, voice);
   }
 
   play(name: SoundName, opts: { at?: Vec3; volume?: number; pitch?: number } = {}) {
     // (Silent until the audio's running: the client code's sounds are defined by then.)
     const ctx = this.ctx;
     if (!ctx || !this.master || ctx.state !== 'running') return;
-    const custom = this.custom.get(name) ?? this.local.get(name);
+    const custom = this.custom.get(name);
     const builtin = (VOICES as Record<string, Voice | undefined>)[name];
     if (!custom && !builtin) {
       if (!this.warned.has(name)) {
         this.warned.add(name);
-        console.warn(`audio.play: unknown sound "${name}" (define it with audio.define)`);
+        console.warn(`audio.play: unknown sound "${name}" (define it in the game's client code: client.audio.define)`);
       }
       return;
     }

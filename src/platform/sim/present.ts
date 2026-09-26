@@ -428,7 +428,6 @@ export class Presentation {
   audio(to: string | null): AudioApi {
     return {
       play: (name, opts) => this.send(to, 'audio', 'play', [name, opts && { ...opts, at: opts.at && { x: opts.at.x, y: opts.at.y, z: opts.at.z } }]),
-      define: (name, voice) => this.content.defineSound(name, voice),
       loop: (name, opts): LoopHandle => {
         const id = this.nextId++;
         this.send(to, 'audio', 'loop', [id, name, opts]);

@@ -11,7 +11,6 @@
  */
 
 import type { AtlasPixels, EntityDefinition, ItemDefinition, Vec3, ViewAnimation } from '../api/types';
-import type { RecordedVoice } from '../audio/voice';
 import type { BlueprintData } from '../api/blueprint';
 import type { SimFrame } from '../sim/sim';
 import type { WidgetWire } from '../ui/markup';
@@ -137,7 +136,6 @@ export const IDLE_INPUT: PlayerInput = { active: false, down: [], pressed: [], b
  * the simulation).
  */
 export type ContentDef =
-  | { kind: 'sound'; name: string; voice: RecordedVoice }
   | { kind: 'atlas'; name: string; source: AtlasPixels }
   | { kind: 'animation'; name: string; anim: ViewAnimation }
   | { kind: 'entity'; name: string; def: EntityDefinition }

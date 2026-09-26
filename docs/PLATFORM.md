@@ -29,7 +29,7 @@ src/games/
     content.ts          items, monsters, boss AI
     structure.ts        the colosseum, as a Blueprint (shared.ts puts it in the world)
     art/                the mob skins and weapon sprites, painted in code into the 'arena' atlas
-    sounds.ts           creature voices (audio.define)
+    client/sounds.ts    creature voices (client.audio.define)
   skyship/              an airship crewed together: a solid prop the players walk on as it sails
     server.ts           the helm, sailing, beacons, overboard, the HUD
     ship.ts world.ts    the airship and the sky islands, as Blueprints
@@ -276,7 +276,7 @@ Give one texture for every face, or face by face: `{ top, bottom, side }`, or on
 | `breakable` | `true` | players and explosions can break it (`blockInfo().breakable`; bedrock and liquids say false) |
 | `hardness` | like stone | seconds to mine it by hand with the building kit (`blockInfo().hardness`) |
 | `replaceable` | `false` (a `cross`, true) | placing a block into its cell replaces it |
-| `sounds` | the platform's | `{ break, place }`: sounds (built-in or `audio.define`d) when it's broken and placed |
+| `sounds` | the platform's | `{ break, place }`: sounds (built-in or defined in client code, `client.audio.define`) when it's broken and placed |
 
 #### Shapes of your own
 
@@ -456,7 +456,7 @@ The platform implements everything around them:
 - **Bows:** draw charge, ammo, and ballistic arrows that stick in walls. What flies is the ammo item's icon (or `projectile`); a bow without ammo shoots glowing bolts.
 - **Consumables:** right-click to use.
 - **Pickups:** physics, magnet pull, collection and toasts. `onPickup(game, count, player)` can consume the item instead (and plays its own sound).
-- **Sounds:** each item can bring its own (`sounds: { use, hit, draw }`, built-in or `audio.define`d); otherwise it gets the generic swing, hit and bow sounds.
+- **Sounds:** each item can bring its own (`sounds: { use, hit, draw }`, built-in or defined in client code); otherwise it gets the generic swing, hit and bow sounds.
 - **Held items:** a first-person arm holds the item: its 3D model if it names one (`hold.model`), otherwise an extruded 3D version of its sprite (next section).
 - **Looks on the screen.** How an item looks and sounds (`icon`, `hold`, `sounds`, a gun's `tracer`, a throwable's `trail`, a bow's `drawIcon`) can be given by the game's client code instead (`client.items.look`, see "Items' looks and sounds in client code"): the server's definition then has only what the item does, and needs no model files or voices. `icon` is optional; an item given one by neither side shows a placeholder (a grey tag with a question mark).
 
@@ -1105,7 +1105,7 @@ game.items.atlas('mine', { width: ATLAS, height: ATLAS, pixels: albedo, emissive
 
 The Arena paints its whole atlas this way (`src/games/arena/art/`): five mob skins, weapon sprites and the pike's texture, with bevelled pixel-art shading, in about 50 ms at startup. Bed Wars paints four team skins, a shopkeeper and its item sprites the same way.
 
-**Sound.** A game's client code defines its voices (`client.audio.define(name, voice)`, in `setup`), and anything plays them by name: the server's `audio.play(name, { at })`, client code's `client.audio.play`, and items' `sounds`. Voices are synthesised on each play, on each player's machine, with real Web Audio. A game's server can define them too (`game.audio.define`, the same voice): it's sent to each screen recorded (below), and a voice the server defines under a name wins over the client's.
+**Sound.** A game's client code defines its voices (`client.audio.define(name, voice)`, in `setup`), and anything plays them by name: the server's `audio.play(name, { at })`, client code's `client.audio.play`, and items' `sounds`. Voices are synthesised on each play, on each player's machine, with real Web Audio.
 
 ```ts
 client.audio.define('laser', (s) => {
@@ -1117,8 +1117,8 @@ client.audio.define('laser', (s) => {
 - `s.tone` is an oscillator sweep with an envelope and optional lowpass, bandpass (which can sweep: `bandpass: { freq, to, q }`) or vibrato. Starfighter's TIE howl is three detuned, wavering sawtooths through a sweeping bandpass.
 - `s.noise` is filtered noise with a sweeping filter.
 - `s.pitch` is the play's pitch: multiply frequencies by it.
-- A voice the server defines (`game.audio.define`) is sent to the screens as the tones and noises it makes, recorded at two pitches (the game's rules run away from the player's speakers). Build those only from `s.tone` and `s.noise`; a little randomness in one is fixed at the recording. A voice defined in client code is played as written, every time.
-- The built-in sounds (`BuiltinSound`) are the ones the platform's own systems play. The engine itself keeps only its world's and its screens' (`hit`, `hurt`, `pickup`, `heal`, `click`, `spawn`, `countdown`, `lock`, `alarm`, `wave`, `victory`, `defeat`); the rest (weapons: `swing`, `crit`, `bow_draw`, `bow_shoot`, `arrow_hit`, `gunshot`, `gun_reload`, `gun_empty`, `gun_cycle`, `hitmarker`, `kill`; creatures: `mob_hurt`, `mob_death`; `explosion`, `explosion_big`, a grenade's `bounce`, a bottle's `glass`, `fire`, `whoosh`) are ordinary voices the sounds kit defines on each screen (`sounds.standard()`, see "Client code"). A sound your server defines under the same name wins over the kit's.
+- A voice is code on the player's screen, played as written every time (a little randomness in one differs play to play). The server never defines voices: it plays them by name.
+- The built-in sounds (`BuiltinSound`) are the ones the platform's own systems play. The engine itself keeps only its world's and its screens' (`hit`, `hurt`, `pickup`, `heal`, `click`, `spawn`, `countdown`, `lock`, `alarm`, `wave`, `victory`, `defeat`); the rest (weapons: `swing`, `crit`, `bow_draw`, `bow_shoot`, `arrow_hit`, `gunshot`, `gun_reload`, `gun_empty`, `gun_cycle`, `hitmarker`, `kill`; creatures: `mob_hurt`, `mob_death`; `explosion`, `explosion_big`, a grenade's `bounce`, a bottle's `glass`, `fire`, `whoosh`) are ordinary voices the sounds kit defines on each screen (`sounds.standard()`, see "Client code").
 
 ## Keeping data
 
@@ -1186,7 +1186,7 @@ game.commands.run('/give pike'); // run one from code
 | `hud.feed([...parts])` | A feed line can be parts: text, `{ text, color }`, `{ icon }` (a gun side on, as each screen has it: `{ icon: { item: 'rifle', view: 'side' } }`; or any icon, `{ gltf: url, view: 'side' }`) |
 | `hud.define(name, { html, css, at, modal, actions })`, `hud.widget(name, data)` | HUD widgets of the game's own, from HTML and CSS, filled in from data (see below) |
 | `fx.burst`, `shake`, `flash`, `shockwave`, `damageNumber`, `fireworks`, `explosion` | Effects |
-| `audio.play(name, { at, item })`, `audio.define(name, voice)`, `audio.loop(name)` | Synthesised, positional sound effects (built-in or your own) and continuous engine / wind loops. `item: { id, sound, pitch? }` plays that item's own sound instead (its `sounds.use`, `.hit`…, as each screen has it), where it has one |
+| `audio.play(name, { at, item })`, `audio.loop(name)` | Synthesised, positional sound effects (built-in, or defined in the game's client code) and continuous engine / wind loops. `item: { id, sound, pitch? }` plays that item's own sound instead (its `sounds.use`, `.hit`…, as each screen has it), where it has one |
 | `env.time`, `env.frozen` | Time of day |
 | `events.on('entityDeath' \| 'entityDamage' \| 'playerDamage' \| 'playerDeath' \| 'pickup' \| 'blockBreak' \| 'blockPlace' \| 'blockChange' \| 'playerJoin' \| 'playerReady' \| 'playerLeave' \| 'ability' \| 'clientMessage', fn)` | Events (player events name the `player`) |
 | `clients.send(to, name, data)` | A message to the game's client code on one player's screen, a list of players', or everyone's (`'all'`), heard there with `client.on(name, fn)`; `clientMessage` hears theirs (see "Client code") |

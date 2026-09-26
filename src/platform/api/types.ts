@@ -2462,12 +2462,6 @@ export interface AudioApi {
    * where it has that one; `name` plays where it hasn't.
    */
   play(name: SoundName, opts?: { at?: Vec3; volume?: number; pitch?: number; item?: ItemSoundRef }): void;
-  /**
-   * Add (or replace) a sound, synthesised on each play. Call it in `setup`. (It's recorded and sent
-   * to each screen; a game can define its voices in its client code instead, `client.audio.define`,
-   * and the server just plays them by name.)
-   */
-  define(name: string, voice: SynthVoice): void;
   /** Start a continuous sound; keep the handle to change it and stop it. */
   loop(name: LoopName, opts?: { volume?: number; pitch?: number }): LoopHandle;
 }

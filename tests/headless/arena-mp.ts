@@ -113,7 +113,7 @@ export default function arenaMultiplayer() {
  */
 function looks(seen: HostEvent[]): string {
   const content = seen.flatMap((e) => (e.t === 'content' ? [e.def] : []));
-  check(!content.some((d) => d.kind === 'sound'), `the server defines no voices: ${content.flatMap((d) => (d.kind === 'sound' ? [d.name] : []))}`);
+  check(!content.some((d) => (d.kind as string) === 'sound'), `the server defines no voices: ${content.flatMap((d) => ((d.kind as string) === 'sound' ? [(d as { name?: string }).name] : []))}`);
   const served = [...new Map(content.flatMap((d) => (d.kind === 'item' ? [[d.name, d] as const] : []))).values()];
   const lookish = served.filter((d) => LOOK_FIELDS.some((k) => k in d.def));
   check(served.length >= 10 && !lookish.length, `nor any item's look (${served.length} items): ${lookish.map((d) => `${d.name}: ${Object.keys(d.def)}`).join('; ')}`);

@@ -8,13 +8,24 @@ import { GameHost } from '../../src/platform/host/game';
 import { PLACEHOLDER_ICON, resolveIcon } from '../../src/platform/looks';
 import { decode, encode } from '../../src/platform/net/codec';
 import type { ContentDef, HostBatch, PresentCall } from '../../src/platform/net/protocol';
-import { recordVoice } from '../../src/platform/audio/voice';
 import { sounds } from '../../src/platform/client-kits';
 import cob from '../../src/games/callofblocky/client';
 import { LOOKS } from '../../src/games/callofblocky/client/looks';
 import cobServer from '../../src/games/callofblocky/server';
 import { LETHALS, WEAPONS } from '../../src/games/callofblocky/weapons';
 import { check } from './_harness';
+import type { SynthKit } from '../../src/platform/api/types';
+
+/** A voice runs (it makes its layers without throwing), with a kit that records nothing. */
+const voiceRuns = (voice: SynthVoice): boolean => {
+  const kit = { pitch: 1, tone: () => {}, noise: () => {} } as unknown as SynthKit;
+  try {
+    voice(kit);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
 
@@ -145,7 +156,6 @@ function serverNames() {
     setup(g) {
       game = g;
       g.items.define('rifle', RIFLE);
-      g.audio.define('old_voice', (s) => s.tone({ from: 440, duration: 0.1 }));
     },
   });
   const host = new GameHost(def, { engine: wasm, seed: 5, remote: true, radius: 2, budget: Infinity });
@@ -169,7 +179,6 @@ function serverNames() {
     }
   };
   take(ann.batch);
-  check(ann.batch.events.some((e) => e.t === 'content' && e.def.kind === 'sound' && e.def.name === 'old_voice'), 'a voice the server defines still goes to its screens');
   take(host.step(1 / 30).get(ann.id)!);
   const g = game!;
   g.hud.feed(['Ann ', { icon: { item: 'rifle', view: 'side' } }, ' Bob']);
@@ -207,7 +216,7 @@ function callOfBlocky() {
   const kills = () => calls().filter((c) => c.method === 'feed' && (c.args[0] as { icon?: unknown }[]).some((p) => typeof p === 'object' && p && 'icon' in p));
   for (let i = 0; i < 30 * 90 && kills().length < 3; i++) batches.push(decode<HostBatch>(encode(host.step(1 / 30).get(ann.id)!)));
   const content = batches.flatMap((b) => b.events.flatMap((e) => (e.t === 'content' ? [e.def] : [])));
-  check(!content.some((d) => d.kind === 'sound'), `the server defines no voices: ${content.filter((d) => d.kind === 'sound').map((d) => (d as { name: string }).name)}`);
+  check(!content.some((d) => (d.kind as string) === 'sound'), `the server defines no voices: ${content.filter((d) => (d.kind as string) === 'sound').map((d) => (d as { name: string }).name)}`);
   const items = content.filter((d) => d.kind === 'item') as Extract<ContentDef, { kind: 'item' }>[];
   check(items.length >= 9 && items.every((d) => !LOOK_FIELDS.some((k) => k in d.def)), `nor any item's look: ${items.map((d) => `${d.name}: ${Object.keys(d.def)}`).join('; ')}`);
   const hud = calls().filter((c) => c.target === 'hud');
@@ -225,7 +234,7 @@ function callOfBlocky() {
   const standard = new Set(voices.keys());
   cob.client.setup!(client);
   const own = [...voices.keys()].filter((n) => !standard.has(n));
-  check(own.length >= 20 && own.every((n) => recordVoice(voices.get(n)!)), `its voices, on the screen (${own.length}): ${own.join(', ')}`);
+  check(own.length >= 20 && own.every((n) => voiceRuns(voices.get(n)!)), `its voices, on the screen (${own.length}): ${own.join(', ')}`);
   const item = (id: string) => screen.items.get(id);
 
   // Each weapon as it was: its model, icon and hold, its tracer, trail and sounds.

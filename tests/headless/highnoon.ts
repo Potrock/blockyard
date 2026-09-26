@@ -1,6 +1,5 @@
 import type { GunItem, IconRef, ItemLook, SynthVoice } from '../../src/platform';
 import type { Client } from '../../src/platform/api/client';
-import { recordVoice } from '../../src/platform/audio/voice';
 import { soundOf } from '../../src/platform/client/present';
 import { sounds } from '../../src/platform/client-kits';
 import { Content } from '../../src/platform/content';
@@ -11,6 +10,18 @@ import { LOOKS } from '../../src/games/highnoon/client/looks';
 import { matchState } from '../../src/games/highnoon/server';
 import { WEAPONS } from '../../src/games/highnoon/weapons';
 import { check, launch } from './_harness';
+import type { SynthKit } from '../../src/platform/api/types';
+
+/** A voice runs (it makes its layers without throwing), with a kit that records nothing. */
+const voiceRuns = (voice: SynthVoice): boolean => {
+  const kit = { pitch: 1, tone: () => {}, noise: () => {} } as unknown as SynthKit;
+  try {
+    voice(kit);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** The fields of an item that are its look (`ItemLook`): the server's guns have none. */
 const LOOK_FIELDS = ['icon', 'hold', 'sounds', 'tracer', 'trail', 'drawIcon'] as const;
@@ -110,7 +121,7 @@ function looks(content: ContentDef[], calls: PresentCall[]) {
     const has = LOOK_FIELDS.filter((k) => k in def);
     check(!has.length, `the server's ${id} has look fields: ${has.join(', ')}`);
   }
-  check(!content.some((d) => d.kind === 'sound'), `the server defines no voices: ${content.filter((d) => d.kind === 'sound').map((d) => (d as { name: string }).name)}`);
+  check(!content.some((d) => (d.kind as string) === 'sound'), `the server defines no voices: ${content.filter((d) => (d.kind as string) === 'sound').map((d) => (d as { name: string }).name)}`);
   const items = content.filter((d) => d.kind === 'item') as Extract<ContentDef, { kind: 'item' }>[];
   check(items.length === 2 && items.every((d) => !LOOK_FIELDS.some((k) => k in d.def)), `nor any gun's look: ${items.map((d) => `${d.name}: ${Object.keys(d.def)}`).join('; ')}`);
   check(!JSON.stringify(calls.filter((c) => c.target === 'hud')).includes('.glb'), 'no model file in its HUD calls');
@@ -127,7 +138,7 @@ function looks(content: ContentDef[], calls: PresentCall[]) {
   const standard = new Set(voices.keys());
   hn.client.setup!(client);
   const own = [...voices.keys()].filter((n) => !standard.has(n));
-  check(own.length === 13 && own.every((n) => recordVoice(voices.get(n)!)), `its voices, on the screen (${own.length}): ${own.join(', ')}`);
+  check(own.length === 13 && own.every((n) => voiceRuns(voices.get(n)!)), `its voices, on the screen (${own.length}): ${own.join(', ')}`);
   const gun = (id: string) => screen.items.get(id) as GunItem;
   for (const id of Object.keys(LOOKS)) {
     const d = gun(id);

@@ -1,6 +1,6 @@
 # Redesign: client/server split and a client API of primitives
 
-Status: **proposal** (2026-09-25). Nothing here is built yet.
+Status: **built**, phases 1 to 3 (2026-09-26; approved 2026-09-25). Phase 4 is for later. How the platform works now is in PLATFORM.md; this is the design and its record.
 
 ## Why
 
@@ -409,8 +409,28 @@ Built (decisions 1 to 3 above). Docs: PLATFORM.md, "Items' looks and sounds in c
   - `client.ts` lists its kits.
   - Its server reaches no weapon model file and defines no voice; `split.ts` checks both.
   - The fighters (`setModel`) and the dossier widget stay on the server.
-- **Still to go.**
-  - The other games move their looks and voices the same way.
-  - Then the record/replay of server voices (`recordVoice`, `playRecorded`) and the
-    `server-assets` Vite plugin (it emits files that server-reached modules name by URL: Call of
-    Blocky's fighters, High Noon's weapons and blocks, the gallery's and sandbox's models) can go.
+
+## Phase 3b: every game's looks and voices on the client
+
+Built. Each game's items' looks are in its `client/looks.ts` (or `client.ts` for Heart Hunt's one
+heart), its voices in `client/sounds.ts`, and its `client.ts` lists the kits it uses (only
+those: no gun HUD in Bed Wars, Starfighter only the sounds kit). Its server names items
+(`{ item }` icons) and plays voices by name. High Noon's revolver (one-handed, a hammer) and
+lever gun are its own client code: the hands, hammer and lever are options of the first-person
+and figures kits, not the engine.
+
+- **The server never defines voices.** `game.audio.define`, the recording of voices
+  (`recordVoice`, `playRecorded`) and the `sound` content definition are gone; a game's voices are
+  its client code (`client.audio.define`), played as written.
+- **What stays on the server**, as the server decides it: players' models (`setModel`: Call of
+  Blocky's fighters, High Noon's cowboys), props and entities it places, what a bow fires, HUD
+  widgets (sanitized markup bound to data), texture atlases the server paints for skins and
+  creatures, and each game's HUD theme (shared).
+- **The `server-assets` Vite plugin stays.** It emits every file the server's code names by URL
+  (a player's model, a prop), so the URL the server sends is on the site. The bundle check proves
+  it (a small file the browser build inlines, like Sandbox's crate texture, is still emitted for
+  the server's URL, though the screen draws its own copy).
+- `tests/headless/split.ts` lists each game's client-only files (its looks, its voices, the model
+  files only its client code reaches) and fails if server or shared code reaches one;
+  `looks-games.ts`, `looks.ts` and the games' own tests check that no voice or look is sent and
+  that every item has a look and every sound asked for a voice on the screen.

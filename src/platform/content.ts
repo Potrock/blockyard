@@ -1,8 +1,7 @@
-import type { AtlasPixels, EntityDefinition, ItemDefinition, ItemLook, SynthVoice, Vec3, ViewAnimation } from './api/types';
+import type { AtlasPixels, EntityDefinition, ItemDefinition, ItemLook, Vec3, ViewAnimation } from './api/types';
 import { Blueprint } from './api/blueprint';
 import { lookOver } from './looks';
 import type { ContentDef } from './net/protocol';
-import { playRecorded, recordVoice } from './audio/voice';
 import type { WidgetWire } from './ui/markup';
 
 type Listener<T> = (name: string, value: T) => void;
@@ -16,7 +15,6 @@ type AtlasSource = HTMLCanvasElement | OffscreenCanvas | AtlasPixels;
  * client's copy takes it in with `apply`.
  */
 export class Content {
-  readonly sounds = new Map<string, SynthVoice>();
   readonly atlases = new Map<string, AtlasSource>();
   readonly animations = new Map<string, ViewAnimation>();
   /** Entity types: their models, for the client to draw. */
@@ -36,22 +34,11 @@ export class Content {
   readonly models = new Map<number, { blueprint: Blueprint; opts: { scale?: number; pivot?: Vec3 } } | { url: string; opts: { scale?: number; animation?: string } }>();
   /** Set by a host: each definition, as data for its clients. */
   forward: ((def: ContentDef) => void) | null = null;
-  private soundListeners: Listener<SynthVoice>[] = [];
   private atlasListeners: Listener<AtlasSource>[] = [];
   private animationListeners: Listener<ViewAnimation>[] = [];
   private modelFileListeners: Listener<string>[] = [];
   private widgetListeners: Listener<WidgetWire>[] = [];
   private inline = 0;
-
-  defineSound(name: string, voice: SynthVoice) {
-    this.sounds.set(name, voice);
-    for (const l of this.soundListeners) l(name, voice);
-    if (!this.forward) return;
-    // A voice is code: it goes as the layers it makes (see `recordVoice`).
-    const recorded = recordVoice(voice);
-    if (recorded) this.forward({ kind: 'sound', name, voice: recorded });
-    else console.warn(`audio.define: sound "${name}" uses Web Audio directly (s.ctx / s.out / s.t), so it can't be sent to players; use s.tone and s.noise`);
-  }
 
   defineAtlas(name: string, source: AtlasSource) {
     this.atlases.set(name, source);
@@ -115,8 +102,6 @@ export class Content {
   /** A definition forwarded by the host. */
   apply(d: ContentDef) {
     switch (d.kind) {
-      case 'sound':
-        return this.defineSound(d.name, playRecorded(d.voice));
       case 'atlas':
         return this.defineAtlas(d.name, d.source);
       case 'animation':
@@ -135,11 +120,6 @@ export class Content {
   }
 
   /** Get everything defined so far, then each new definition as it comes. */
-  onSound(fn: Listener<SynthVoice>) {
-    for (const [n, v] of this.sounds) fn(n, v);
-    this.soundListeners.push(fn);
-  }
-
   onAtlas(fn: Listener<AtlasSource>) {
     for (const [n, v] of this.atlases) fn(n, v);
     this.atlasListeners.push(fn);

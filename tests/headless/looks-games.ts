@@ -132,7 +132,7 @@ function game(id: string, c: Case) {
   const calls = events.flatMap((e) => (e.t === 'call' ? [e.call] : [])) as PresentCall[];
 
   // The server: no voices, no looks, no model files in what it shows.
-  check(!content.some((d) => d.kind === 'sound'), `${id}: the server defines voices: ${content.filter((d) => d.kind === 'sound').map((d) => (d as { name: string }).name)}`);
+  check(!content.some((d) => (d.kind as string) === 'sound'), `${id}: the server defines voices: ${content.filter((d) => (d.kind as string) === 'sound').map((d) => (d as { name: string }).name)}`);
   const items = content.filter((d) => d.kind === 'item') as Extract<ContentDef, { kind: 'item' }>[];
   for (const d of items) check(!LOOK_FIELDS.some((k) => k in d.def), `${id}: the server's ${d.name} has look fields: ${Object.keys(d.def)}`);
   check(!/\.(glb|gltf)\b/.test(JSON.stringify(items)) && !/\.(glb|gltf)\b/.test(JSON.stringify(calls.filter((x) => x.target === 'hud'))), `${id}: a model file in its items or HUD calls`);
