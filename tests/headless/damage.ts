@@ -13,6 +13,7 @@ import { FrameReader } from '../../src/platform/net/delta';
 import type { ClientCommand, HostBatch, HostEvent, PlayerInput, ServerWelcome, TimedBatch, WireBatch } from '../../src/platform/net/protocol';
 import type { SimFrame } from '../../src/platform/sim/sim';
 import { blockIdOf, loadRegistry } from '../../src/platform/world/registry';
+import { guns, melee } from '../../src/platform/kits';
 import { check, launch } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
@@ -35,6 +36,7 @@ const range = defineGame({
   title: 'Carving range',
   world: { terrain: 'void', structures: [yard()], spawn: { x: 0.5, y: FLOOR, z: 0.5 }, time: 0.5, freezeTime: true, destructible: { above: FLOOR - 1 } },
   player: { health: 100, hurtCooldown: 0, hotbar: 'items', pvp: true },
+  items: [guns(), melee()],
   setup(game) {
     // Call of Blocky's guns as they are, one held steady, and one that doesn't carve.
     for (const id of ['rifle', 'smg', 'shotgun', 'sniper', 'pistol']) game.items.define(id, WEAPONS[id]);
@@ -89,10 +91,12 @@ function aimAtWall(h: Headless, id: string, x = 0.5) {
 
 /** Tap one shot down the sights (pulling until the gun's ready), and let its bloom settle. */
 function fire(h: Headless) {
-  const before = h.me.combat.shots;
-  for (let i = 0; i < 600 && h.me.combat.shots === before; i++) h.step(1 / 60, { buttons: 5, clicked: 1 });
+  // (Each shot counts up the gun's serial.)
+  const serial = () => guns.of(h.ctx)!.held(h.ctx.player)?.state.serial ?? 0;
+  const before = serial();
+  for (let i = 0; i < 600 && serial() === before; i++) h.step(1 / 60, { buttons: 5, clicked: 1 });
   h.run(0.35, { pilot: () => ({ buttons: 4 }) });
-  check(h.me.combat.shots > before, 'the gun fired');
+  check(serial() > before, 'the gun fired');
 }
 
 /** Whether a ray from the eye straight ahead gets through the wall now. */

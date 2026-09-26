@@ -5,6 +5,7 @@ import type { PlayerInput } from '../../src/platform/net/protocol';
 import { sanitizeCommand } from '../../src/platform/net/validate';
 import { padBindings, padHints } from '../../src/platform/player/gamepad';
 import { games } from '../../src/games/server';
+import { guns, melee } from '../../src/platform/kits';
 import { check } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
@@ -14,6 +15,7 @@ const field = defineGame({
   title: 'Field',
   world: { terrain: 'flat', flatHeight: 64, spawn: { x: 0.5, y: 65, z: 0.5 }, time: 0.5, freezeTime: true },
   player: { health: 100, hotbar: 'items', movement: { walk: 5, sprint: 8, sprintKeys: ['ShiftLeft'], crouchKeys: ['KeyC'] } },
+  items: [guns(), melee()],
   setup(game) {
     for (const id of ['rifle', 'pistol']) game.items.define(id, { kind: 'gun', name: id, icon: 'iron_sword', rpm: 300, damage: 10, magazine: 10, reload: 1 });
   },

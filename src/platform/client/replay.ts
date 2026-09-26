@@ -79,12 +79,14 @@ export class ReplayPlayback {
     if (this.at >= b.t) return b.frame;
     const k = (this.at - a.t) / (b.t - a.t);
     const f = blend(a.frame, b.frame, k);
-    // Where each looks (and how far a gun's aimed), between the two as well.
+    // Where each looks (and how far their held item's aimed: its state's `aim`), between the two as well.
     const before = new Map(a.frame.players.map((p) => [p.id, p]));
     f.players = f.players.map((p) => {
       const o = before.get(p.id);
       if (!o) return p;
-      const aim = p.hand.gun && o.hand.gun ? { ...p.hand, gun: { ...p.hand.gun, aim: lerp(o.hand.gun.aim, p.hand.gun.aim, k) } } : p.hand;
+      const now = p.hand.state as { aim?: unknown } | null;
+      const was = o.hand.state as { aim?: unknown } | null;
+      const aim = typeof now?.aim === 'number' && typeof was?.aim === 'number' ? { ...p.hand, state: { ...now, aim: lerp(was.aim, now.aim, k) } } : p.hand;
       return { ...p, view: { ...p.view, yaw: lerpAngle(o.view.yaw, p.view.yaw, k), pitch: lerp(o.view.pitch, p.view.pitch, k) }, hand: aim };
     });
     return f;

@@ -83,37 +83,32 @@ function sanitizeInput(raw: unknown): PlayerInput | null {
     if (seen === null) return null;
     out.seen = seen;
   }
-  if (raw.shots !== undefined) {
-    // A few shots an input at most (a gun fires a few times a frame at most).
-    if (!Array.isArray(raw.shots) || raw.shots.length > 8) return null;
-    const shots: [number, number, number, number][] = [];
-    for (const s of raw.shots) {
-      if (!Array.isArray(s) || s.length !== 4) return null;
-      const serial = int(s[0], 0, Number.MAX_SAFE_INTEGER);
-      const y = num(s[1], -1e6, 1e6);
-      const p = num(s[2], -Math.PI / 2, Math.PI / 2);
-      const spread = num(s[3], 0, 45);
-      if (serial === null || y === null || p === null || spread === null) return null;
-      shots.push([serial, y, p, spread]);
+  if (raw.acts !== undefined) {
+    // Item kits' actions (see `PlayerInput.acts`): a few kinds, a few actions each an input, each a
+    // short list of plain values. What each value means is the kind's to check (its host half).
+    if (!isObject(raw.acts)) return null;
+    const kinds = Object.keys(raw.acts);
+    if (kinds.length > 8) return null;
+    const acts: Record<string, unknown[][]> = {};
+    for (const k of kinds) {
+      const list = raw.acts[k];
+      // (Not a name every object has: `constructor`, `toString`.)
+      if (!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(k) || k in Object.prototype || !Array.isArray(list) || list.length > 8) return null;
+      const out: unknown[][] = [];
+      for (const a of list) {
+        if (!Array.isArray(a) || a.length > 16 || !a.every(plainValue)) return null;
+        out.push([...a]);
+      }
+      acts[k] = out;
     }
-    out.shots = shots;
-  }
-  if (raw.throws !== undefined) {
-    // A throw or two an input at most.
-    if (!Array.isArray(raw.throws) || raw.throws.length > 4) return null;
-    const throws: NonNullable<PlayerInput['throws']> = [];
-    for (const s of raw.throws) {
-      if (!Array.isArray(s) || s.length !== 9 || typeof s[1] !== 'string' || s[1].length > 40) return null;
-      const serial = int(s[0], 0, Number.MAX_SAFE_INTEGER);
-      const n = [2, 3, 4, 5, 6, 7].map((i) => num(s[i], -1e6, 1e6));
-      const cook = num(s[8], 0, 60);
-      if (serial === null || cook === null || n.some((v) => v === null)) return null;
-      const [x, y, z, vx, vy, vz] = n as number[];
-      throws.push([serial, s[1], x, y, z, vx, vy, vz, cook]);
-    }
-    out.throws = throws;
+    out.acts = acts;
   }
   return out;
+}
+
+/** A value an item kit's action may carry: a finite number, a short string, a boolean or null. */
+function plainValue(v: unknown): boolean {
+  return v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1e9) || (typeof v === 'string' && v.length <= 64);
 }
 
 function sanitizeMessage(raw: unknown): ClientMessage | null {

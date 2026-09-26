@@ -1,4 +1,5 @@
 import { defineServer, HumanoidJoints, math, Models, type Entity } from '@platform';
+import { melee } from '@platform/kits';
 import auctioneer from './models/auctioneer_npc.gltf?url';
 import barrier from './models/barrier.gltf?url';
 import cards from './models/card_and_token.gltf?url';
@@ -63,6 +64,8 @@ const MANNEQUINS: { id: string; label: string; model: ReturnType<typeof Models.g
  * and one cheering (a clip over the whole body).
  */
 export default defineServer(shared, {
+  // Its kinds of item: swords (and the bare fist).
+  items: [melee()],
   setup(game) {
     // (How they look and are held is each screen's: `client/looks.ts`.)
     game.items.define('blocky_sword', { kind: 'melee', name: 'Blocky Sword', damage: 6, cooldown: 0.45, reach: 3.5 });

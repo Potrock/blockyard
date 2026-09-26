@@ -1,4 +1,5 @@
 import { defineServer, math, vec, type GameContext, type LoopHandle, type Player, type Prop, type PropModel } from '@platform';
+import { melee } from '@platform/kits';
 import { shared } from './shared';
 import { airship, propeller, DECK_SPAWN, HELM, PROPELLER, WHEEL } from './ship';
 import { beaconLamp, beaconPad, ISLES, HOME, MOORING, VOID_Y } from './world';
@@ -212,6 +213,8 @@ function readouts(p: Player) {
 }
 
 export default defineServer(shared, {
+  // Nothing to use but the bare fist.
+  items: [melee()],
   setup(game) {
     shipModel = game.props.model(airship());
     screwModel = game.props.model(propeller());

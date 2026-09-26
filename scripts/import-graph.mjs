@@ -15,6 +15,7 @@ export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'
 const ALIASES = [
   [/^@platform\/art$/, 'src/platform/art/index.ts'],
   [/^@platform\/kits$/, 'src/platform/kits/index.ts'],
+  [/^@platform\/items$/, 'src/platform/items/index.ts'],
   [/^@platform\/client$/, 'src/platform/api/client.ts'],
   [/^@platform$/, 'src/platform/index.ts'],
   [/^@engine\/(.*)$/, 'engine/pkg/$1'],

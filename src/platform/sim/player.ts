@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Bot, BotControls, CameraApi, GameContext, GameEvents, ItemStack, ModelSpec, OrbitOptions, Player, PlayerOptions, Prop, Vec3, VehicleDefinition, VehicleWorld } from '../api/types';
 import { IDLE_INPUT, type PlayerInput } from '../net/protocol';
-import { Combat, type ShotWire } from './combat';
-import { moveMods, type GunRules, type Stance } from './guns';
-import type { BulletHit, Penetration } from './hitscan';
+import type { ItemHost, ItemKind, Penetration } from '../api/items';
+import { ItemRunner } from './itemrun';
+import type { BulletHit } from './hitscan';
 import { clipFrame, type ClipFrame, type EntitySim } from './entities';
 import { PlayerHealth } from './health';
 import { SimInput } from './input';
@@ -15,7 +15,6 @@ import { abilityStates, copyMemory, freshMemory, resolveMovement, stepMovement, 
 import type { AbilityCamera, AbilityEvent } from './abilities';
 import type { PropState } from './props';
 import { VehicleSim } from './vehicle';
-import type { ThrowSim } from './throwing';
 
 const EYE = 1.62;
 const SNEAK_EYE = 1.27;
@@ -56,11 +55,10 @@ export interface PlayerFrame {
   deathTime: number;
   /** The items hotbar (item games). */
   hotbar: { slots: (ItemStack | null)[]; selected: number } | null;
-  /**
-   * The held weapon: bow draw, melee readiness 0..1, and a held gun's rounds, reload (seconds
-   * left, -1 when not reloading), its last shot's serial and how far it's aimed down the sights.
-   */
-  hand: { drawing: boolean; charge: number; strength: number; gun?: { mag: number; reserve: number; reload: number; serial: number; aim: number } };
+  /** The held item's state, as its kind shows it to everyone (`ItemKind.shown`: a gun's rounds, its aim, a reload), or null. */
+  hand: { state: object | null };
+  /** What their own screen gets from each item kind (`ItemKind.own`: a throw's serial, a sword's readiness), by kind. */
+  items?: Record<string, object>;
   /**
    * The game's camera (`controller: 'none'`), or, `follow`ing, the vehicle's (the client works it
    * out from the vehicle's state, every frame).
@@ -100,8 +98,6 @@ export interface PlayerFrame {
   clip?: ClipFrame | null;
   /** The solid prop they ride (`player.riding`), and where their feet are on it (its own space). */
   ride: { prop: number; p: [number, number, number] } | null;
-  /** Throwables: the last throw their screen made that the host has taken (or turned down). */
-  throws: number;
   /**
    * Third person (`camera.orbit`): what the camera circles (a prop or a player, by id), the point
    * on it, and the wheel's range. `seq` counts up each time the game sets it (their screen then
@@ -115,8 +111,9 @@ export interface PlayerSimParts {
   name: string;
   world: VoxelWorld;
   options: PlayerOptions;
-  /** The game's gun rules (`guns`). */
-  guns: GunRules;
+  /** The game's item kinds (`items`), by kind, and what they get of the simulation. */
+  kinds: ReadonlyMap<string, ItemKind>;
+  itemHost: ItemHost;
   /** The game's vehicles, and the world as they see it. */
   vehicles: Record<string, VehicleDefinition>;
   query: VehicleWorld;
@@ -125,12 +122,8 @@ export interface PlayerSimParts {
   items: ItemSim;
   /** Props by id (what they ride). */
   props: { byId(id: number): Prop | null };
-  /** Guns: a bullet's path from this player (see `castBullet`), through walls with `pen`. */
+  /** A bullet's path from this player (see `castBullet`), through walls with `pen`. */
   bullet(from: Vec3, dir: Vec3, range: number, seen: number | null, shooter: Player, pen: Penetration | null): BulletHit;
-  /** Guns: carve where a bullet hit a block (`Sim.carve`); null when the world's blocks don't carve. */
-  carve: ((point: Vec3, dir: Vec3, opts: { radius: number; depth: number }, by: Player) => void) | null;
-  /** Throwables in the air (the host flies them and sets them off). */
-  throws: ThrowSim;
   ctx(): GameContext;
   emit<K extends keyof GameEvents>(event: K, e: GameEvents[K]): void;
   /** Host time (`SimFrame.t`). */
@@ -164,7 +157,8 @@ export class PlayerSim {
   readonly input = new SimInput();
   readonly inventory: Inventory;
   readonly health: PlayerHealth;
-  readonly combat: Combat;
+  /** Their items: the hotbar slot, and each item kind's step (see `ItemRunner`). */
+  readonly items: ItemRunner;
   /** The game's camera, for `controller: 'none'`. */
   readonly cam = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), fov: 70 };
   private seq = 0;
@@ -217,7 +211,7 @@ export class PlayerSim {
     this.tune = resolveMovement(o.movement);
     p.world.player_tune(this.slot, new Float64Array(this.tune.params));
     const present = p.present;
-    this.inventory = new Inventory(p.items.defs);
+    this.inventory = new Inventory(p.items.defs, p.kinds);
     this.health = new PlayerHealth(
       p.world,
       this.slot,
@@ -233,10 +227,8 @@ export class PlayerSim {
     );
     this.health.configure(o);
     const me = this;
-    this.combat = new Combat(
-      p.world,
-      p.entities,
-      p.items,
+    this.items = new ItemRunner(
+      [...p.kinds.values()],
       {
         get api() {
           return me.api;
@@ -245,59 +237,23 @@ export class PlayerSim {
         get eye() {
           return me.eye;
         },
-        get look() {
-          return me.look;
-        },
-        get yaw() {
-          return me.yaw;
-        },
-        get pitch() {
-          return me.pitch;
-        },
         get falling() {
           const s = me.state;
           return !s.onGround && s.vy < -1 && !s.inWater;
-        },
-        get onGround() {
-          return me.state.onGround;
         },
         get moving() {
           const s = me.state;
           return Math.hypot(s.vx, s.vz) / Math.max(1, me.tune.params[0]);
         },
-        get stance(): Stance {
+        get stance(): 0 | 1 | 2 {
           return me.sliding ? 2 : me.sneaking ? 1 : 0;
         },
         bullet: (from, dir, range, seen, pen) => p.bullet(from, dir, range, seen, me.api, pen),
-        carve: p.carve && ((point, dir, opts) => p.carve!(point, dir, opts, me.api)),
-        shotSeen: (shot: ShotWire, sound: string, at: Vec3) => {
-          present.message(null, '$shot', shot, this.id);
-          // (The gun's own shot as each screen has it: its look's, else the server's `sound`.)
-          present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z }, item: { id: shot.item, sound: 'use' } }], this.id);
-        },
-        launch: (item, t, from, v, fuse, key, mine) => {
-          p.throws.launch(item, t, from, v, fuse, key, this.api, mine);
-          // Their figure swings its arm; everyone else hears it go (their own screen played it).
-          this.swings++;
-          const sound = t.def.sounds?.use ?? 'whoosh';
-          present.send(null, 'audio', 'play', [sound, { at: { x: from.x, y: from.y, z: from.z }, volume: 0.7, item: { id: item, sound: 'use' } }], mine ? this.id : undefined);
-        },
-        refuse: (key) => p.throws.refuse(key, this.id),
-        now: () => p.now(),
-        emit: (k, e) => p.emit(k, e),
-        view: (method, power) => {
-          if (method === 'swing' || method === 'use') this.swings++;
-          present.send(this.id, 'view', method, [power ?? 1]);
-        },
-        audio: present.audio(this.id),
-        fx: present.fx(this.id),
-        hud: present.hud(this.id),
         hitMarker: (kind) => present.send(this.id, 'hud', 'hitMarker', [kind]),
+        now: () => p.now(),
       },
-      present.fx(null),
+      p.itemHost,
       p.ctx,
-      o.pvp ?? false,
-      p.guns,
     );
     this.api = this.makeApi();
   }
@@ -359,8 +315,8 @@ export class PlayerSim {
     this.ack = -1;
     this.lead = 0;
     this.swings = 0;
-    // Their screen counts its throws from the start.
-    this.combat.thrown = 0;
+    // Their screen counts its actions from the start.
+    this.items.reset(true);
     this.speedMul = 1;
     this.sliding = false;
     this.memory = freshMemory();
@@ -413,8 +369,8 @@ export class PlayerSim {
       this.yaw = inp.yaw;
       this.pitch = inp.pitch;
     }
-    const held = this.inventory.held;
-    const mods = moveMods(held ? this.p.items.get(held.item) : undefined, inp.buttons, this.speedMul, this.p.guns);
+    const item = this.items.move(inp.buttons);
+    const mods = { speed: this.speedMul * (item?.speed ?? 1), noSprint: item?.noSprint ?? false };
     const { sneak, sprint, slide, events, camera } = stepMovement(world, this.slot, inp, this.yaw, this.allowFlight, this.memory, dt, this.tune, mods, this.pitch, this.p.query);
     if (events.length) {
       this.abilityEvents.push(...events);
@@ -467,7 +423,7 @@ export class PlayerSim {
 
   /** The built-in weapons and hotbar (after the game has had its say on the controls). */
   updateHands(dt: number, running: boolean) {
-    if (this.itemMode) this.combat.update(running ? dt : 0, this.input, this.weaponsLocked);
+    if (this.itemMode) this.items.update(running ? dt : 0, this.input, this.weaponsLocked);
   }
 
   /** A weapons-locked freeze holds (it ends with the freeze: `freeze(false)`, a revive). */
@@ -483,7 +439,7 @@ export class PlayerSim {
   }
 
   reset() {
-    this.combat.reset();
+    this.items.reset(false);
     this.held = false;
     this.lockWeapons = false;
   }
@@ -491,10 +447,8 @@ export class PlayerSim {
   frame(): PlayerFrame {
     const s = this.state;
     const h = this.health;
-    const c = this.combat;
     const q = this.cam.quat;
     const p = this.cam.pos;
-    const g = c.heldGun();
     return {
       id: this.id,
       name: this.name,
@@ -522,9 +476,8 @@ export class PlayerSim {
       dead: h.dead,
       deathTime: h.deathTime,
       hotbar: this.itemMode ? { slots: this.inventory.slots.map((st) => (st ? { ...st } : null)), selected: this.inventory.selected } : null,
-      hand: g
-        ? { drawing: false, charge: 0, strength: 1, gun: { mag: g.state.mag, reserve: g.state.reserve, reload: g.state.reload, serial: g.state.serial, aim: g.state.aim } }
-        : { drawing: c.isDrawing, charge: c.charge, strength: c.strength },
+      hand: { state: this.itemMode ? this.items.shown() : null },
+      ...(this.itemMode && { items: this.items.own() }),
       camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov, follow: this.followVehicle && !!this.vehicle },
       vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
@@ -542,7 +495,6 @@ export class PlayerSim {
       clip: this.clip,
       ride: s.ride ? { prop: s.ride, p: [s.rideX, s.rideY, s.rideZ] } : null,
       orbit: this.orbit,
-      throws: c.thrown,
     };
   }
 
@@ -694,9 +646,6 @@ export class PlayerSim {
       get frozen() {
         return world.player_state(me.slot)[12] > 0.5;
       },
-      get reloading() {
-        return (me.combat.heldGun()?.state.reload ?? -1) >= 0;
-      },
       drive: <S extends object>(name: string, state: S, opts: { prop?: Prop } = {}) => {
         const def = this.p.vehicles[name];
         if (!def) throw new Error(`player.drive: no vehicle "${name}" (add it to the game's \`vehicles\`)`);
@@ -724,9 +673,6 @@ export class PlayerSim {
       get sliding() {
         return me.sliding;
       },
-      get aiming() {
-        return (me.combat.heldGun()?.state.aim ?? 0) > 0.5;
-      },
       get speed() {
         return me.speedMul;
       },
@@ -737,7 +683,6 @@ export class PlayerSim {
         return abilityStates(me.memory, me.tune);
       },
       protect: (seconds) => this.health.protect(seconds),
-      throw: (item, opts) => this.combat.throwFromCode(item, opts),
     };
   }
 }

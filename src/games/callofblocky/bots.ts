@@ -1,5 +1,5 @@
 import type { Bot, GameContext, Player, Vec3 } from '@platform';
-import { shooterBots, type BotMind, type BotWeapon, type NavGrid, type ShooterBots } from '@platform/kits';
+import { shooterBots, throwables, type BotMind, type BotWeapon, type NavGrid, type ShooterBots } from '@platform/kits';
 import { LETHALS } from './weapons';
 
 /**
@@ -77,7 +77,7 @@ export function makeBots(game: GameContext, nav: () => NavGrid | null, hotspots:
         const dir = { x: (dx / flat) * Math.cos(LOB), y: Math.sin(LOB), z: (dz / flat) * Math.cos(LOB) };
         if (game.world.raycast(eye, dir, CLEAR)) return false;
         if (game.players.some((p) => p !== bot && p.alive && Math.hypot(p.position.x - bot.position.x, p.position.z - bot.position.z) < 2)) return false;
-        return bot.throw(item, { at, cook: item === 'frag' ? mind.skill * 1.4 : 0 });
+        return throwables.of(game)?.throw(bot, item, { at, cook: item === 'frag' ? mind.skill * 1.4 : 0 }) ?? false;
       },
     }),
     { objective: null as Vec3 | null, rules: null as BotRules | null },

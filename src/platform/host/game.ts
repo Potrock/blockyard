@@ -501,8 +501,8 @@ export class GameHost {
       i.wheel = 0;
       i.mouseX = 0;
       i.mouseY = 0;
-      if (i.shots) i.shots = [];
-      if (i.throws) i.throws = [];
+      // (A kind this screen runs stays listed, with nothing yet.)
+      if (i.acts) for (const k of Object.keys(i.acts)) i.acts[k] = [];
     }
     const events = this.flush();
     const frame = sim.frame();
@@ -564,10 +564,9 @@ export class GameHost {
         i.viewSeq = n.viewSeq;
         for (const k of n.pressed) if (!i.pressed.includes(k)) i.pressed.push(k);
         i.clicked |= n.clicked;
-        // Shots add up until a step; a client that sends them (even none) fires its own from then on.
-        if (n.shots) (i.shots ??= []).push(...n.shots);
-        // So do throws.
-        if (n.throws) (i.throws ??= []).push(...n.throws);
+        // Item kits' actions (shots, throws) add up until a step; a client that sends a kind's
+        // (even none) runs that kind's own from then on.
+        if (n.acts) for (const k of Object.keys(n.acts)) ((i.acts ??= Object.create(null) as Record<string, unknown[][]>)[k] ??= []).push(...n.acts[k]);
         if (n.seen !== undefined) i.seen = n.seen;
         i.wheel += n.wheel;
         i.mouseX += n.mouseX;

@@ -1,5 +1,5 @@
 import * as engine from '@engine/voxel_engine.js';
-import type { Actor, Anchor, BlockRef, Bot, BotApi, DamageCause, DestructibleOptions, Entity, GameContext, GameDefinition, GameEvents, Player, ReplayApi, ReplayHandle, ReplayOptions, Rng, StoreApi, Vec3, VehicleWorld, WorldApi } from '../api/types';
+import type { Actor, Anchor, AudioApi, BlockRef, Bot, BotApi, DamageCause, DestructibleOptions, Entity, GameContext, GameDefinition, GameEvents, Player, ReplayApi, ReplayHandle, ReplayOptions, Rng, StoreApi, Vec3, VehicleWorld, WorldApi } from '../api/types';
 import { Commands } from '../commands';
 import type { Content } from '../content';
 import { IDLE_INPUT, type ClientMessage, type PlayerInput } from '../net/protocol';
@@ -10,13 +10,14 @@ import { EntitySim, type EntityFrame, type ProjectileFrame } from './entities';
 import { ItemSim, type PickupFrame } from './items';
 import { BotControlsImpl, PlayerSim, type PlayerFrame } from './player';
 import { castBullet, History, type Hittable } from './hitscan';
-import { resolveGunRules, type GunRules } from './guns';
+import { resolveHitscan, type HitscanRules } from './hitboxes';
+import { flightWorld } from './flight';
+import type { ItemHost, ItemKind } from '../api/items';
 import { Presentation, type Sink } from './present';
 import { toLocal, toWorld } from './movers';
 import { PropSim, PropState, type PropFrame } from './props';
 import { rayHit, surfaceY, worldQuery } from './worldquery';
 import { watchBlocks, type WorldHost } from './world';
-import { ThrowSim } from './throwing';
 
 function mulberry32(seed: number): Rng {
   let a = seed >>> 0;
@@ -157,10 +158,13 @@ export class Sim {
   time = 0;
   /** Where everyone was, for the last second (shots are checked where the shooter saw them). */
   readonly history = new History();
-  /** Throwables in the air, and the fires they started. */
-  readonly throws: ThrowSim;
-  /** The game's gun rules (`guns`): the rewind, hitboxes, reloading, the fire-rate slack. */
-  readonly gunRules: GunRules;
+  /** The game's item kinds (`items`), in the order they run, and by kind. */
+  readonly kinds: readonly ItemKind[];
+  readonly kindMap: ReadonlyMap<string, ItemKind>;
+  /** What the item kinds get of the simulation (see `ItemHost`). */
+  readonly itemHost: ItemHost;
+  /** Where bullets meet players (`hitscan`): how far back shots look, and the hitboxes. */
+  readonly hitscan: HitscanRules;
   /** Bots (`game.bots`), in the order they came. */
   private botList: Bot[] = [];
   /** Which blocks a blast takes in a world with destructible blocks (null: whole blocks, as always). */
@@ -177,9 +181,9 @@ export class Sim {
       (x, y, z) => this.emit('blockChange', { x, y, z, block: this.registry.blocks[o.world.world.get_block(x, y, z)]?.name ?? 'unknown' }),
     );
     this.content = o.content;
-    this.gunRules = resolveGunRules(o.def.guns);
+    this.hitscan = resolveHitscan(o.def.hitscan);
     this.blastable = blastRule(o.registry, o.def.world?.destructible);
-    this.history.keep = Math.max(1, this.gunRules.rewind + 0.1);
+    this.history.keep = Math.max(1, this.hitscan.rewind + 0.1);
     this.rng = mulberry32(o.seed ^ 0x9e3779b9);
     const world = o.world.world;
     const emit = <K extends keyof GameEvents>(k: K, e: GameEvents[K]) => this.emit(k, e);
@@ -240,8 +244,7 @@ export class Sim {
       },
       content: o.content,
       present: this.presentation,
-      thrown: () => this.throws.flying,
-      fires: () => this.throws.burning,
+      kind: (name) => this.kindMap.get(name) ?? null,
     });
     this.props = new PropSim(
       this.registry,
@@ -256,20 +259,10 @@ export class Sim {
       },
       world,
     );
-    this.throws = new ThrowSim({
-      world,
-      registry: this.registry,
-      present: this.presentation,
-      fx: this.presentation.fx(null),
-      audio: this.presentation.audio(null),
-      targets: () => [
-        ...this.players.filter((p) => !p.vacant && !p.health.dead).map((p) => ({ target: p.api as Player | Entity, feet: p.position, height: p.sneaking ? 1.5 : 1.8, width: 0.6 })),
-        ...this.entities.all().map((e) => ({ target: e, feet: e.position, ...this.entities.hitbox(e) })),
-      ],
-      hurt: (at, reach, near, far, knockback, by, weapon) => this.hurtAround(at, reach, near, far, knockback, by, weapon),
-      blow: (at, radius, by) => this.blowBlocks(at, radius, { by }),
-      guard: (fn) => this.guard(fn),
-    });
+    this.itemHost = this.makeItemHost();
+    // Each item kit's kind for this game (its own state: things in flight, cooldowns).
+    this.kinds = (o.def.items ?? []).map((kit) => kit(this.itemHost));
+    this.kindMap = new Map(this.kinds.map((k) => [k.kind, k]));
     this.local = this.newPlayer(o.player?.id ?? 'local', o.player?.name ?? 'Player');
     this.players.push(this.local);
     this.roster.push(this.local.api);
@@ -278,6 +271,48 @@ export class Sim {
     this.commands = new Commands(() => this.ctx, o.cheats);
     this.ctx = this.createContext();
     this.registerCommands();
+  }
+
+  /** What the item kinds get of the simulation (`ItemHost`). */
+  private makeItemHost(): ItemHost {
+    const sim = this;
+    const world = this.host.world;
+    const flight = flightWorld(world, this.registry);
+    const present = this.presentation;
+    const audioFor = (except: string | undefined): AudioApi =>
+      except === undefined
+        ? present.audio(null)
+        : {
+            play: (name, opts) => present.send(null, 'audio', 'play', [name, opts && { ...opts, at: opts.at && { x: opts.at.x, y: opts.at.y, z: opts.at.z } }], except),
+            loop: (name, opts) => present.audio(null).loop(name, opts),
+          };
+    return {
+      get game() {
+        return sim.ctx;
+      },
+      pvp: this.def.player?.pvp ?? false,
+      carves: !!this.def.world?.destructible,
+      bodies: () => [
+        ...this.players.filter((p) => !p.vacant && !p.health.dead).map((p) => ({ target: p.api as Player | Entity, feet: p.position, height: p.sneaking ? 1.5 : 1.8, width: 0.6 })),
+        ...this.entities.all().map((e) => ({ target: e as Player | Entity, feet: e.position, ...this.entities.hitbox(e) })),
+      ],
+      solid: (from, dir, max) => {
+        const r = flight.hit(from.x, from.y, from.z, dir.x, dir.y, dir.z, max);
+        return r && { dist: r.t, normal: { x: r.nx, y: r.ny, z: r.nz } };
+      },
+      blast: (c, o) => this.hurtAround(c, o.reach, o.near, o.far, o.knockback ?? 1, o.by ?? 'world', o.weapon, o.cause ?? 'explosion'),
+      send: (name, data, o = {}) => present.message(o.to ? o.to.id : null, name, data, o.except?.id),
+      audio: (o = {}) => audioFor(o.except?.id),
+      emit: (k, e) => this.emit(k, e),
+      now: () => this.time,
+      swing: (player, view, power) => {
+        const p = this.players.find((x) => x.api === player);
+        if (!p) return;
+        p.swings++;
+        if (view) present.send(p.id, 'view', view, [power ?? 1]);
+      },
+      guard: (fn) => this.guard(fn),
+    };
   }
 
   /** Run game code; with an error handler, a throw is reported and the tick goes on. */
@@ -340,7 +375,8 @@ export class Sim {
     // Where the game moved its solid props, what stands on them goes too (before creatures step).
     if (this.props.carry(dt)) for (const p of this.players) p.syncState();
     this.entities.update(dt, running);
-    if (running) this.throws.update(dt);
+    // Things in flight (throwables), fires: the item kinds' own, for the whole game.
+    if (running) for (const k of this.kinds) if (k.update) this.guard(() => k.update!(this.itemHost, dt));
     this.items.update(dt, running);
     for (const p of this.players) {
       p.updateHands(dt, running);
@@ -520,7 +556,7 @@ export class Sim {
             history: this.history,
             prop: (o, d, max) => this.props.raycast(o, d, max),
             targets: () => this.hittable(),
-            rules: this.gunRules,
+            rules: this.hitscan,
           },
           from,
           dir,
@@ -530,14 +566,12 @@ export class Sim {
           shooter,
           pen,
         ),
-      // Guns carve where their bullets land, if the world's blocks can be carved.
-      carve: this.def.world?.destructible ? (point, dir, opts, by) => this.carve(point, dir, { ...opts, by }) : null,
-      throws: this.throws,
       id,
       name,
       world: this.host.world,
       options: this.def.player ?? {},
-      guns: this.gunRules,
+      kinds: this.kindMap,
+      itemHost: this.itemHost,
       vehicles: this.def.vehicles ?? {},
       query: (this.query ??= worldQuery(this.host.world, this.registry)),
       present: this.presentation,
@@ -569,7 +603,7 @@ export class Sim {
   restart() {
     this.entities.clear();
     this.props.clear();
-    this.throws.clear();
+    for (const k of this.kinds) k.clear?.();
     // Put the world back the way it was generated (craters, broken blocks), unless the game
     // saves the world (Sandbox keeps your builds).
     if (!this.def.world?.persist) this.host.revert();

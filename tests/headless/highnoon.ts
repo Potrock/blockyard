@@ -9,6 +9,7 @@ import hn from '../../src/games/highnoon/client';
 import { LOOKS } from '../../src/games/highnoon/client/looks';
 import { matchState } from '../../src/games/highnoon/server';
 import { WEAPONS } from '../../src/games/highnoon/weapons';
+import { guns } from '../../src/platform/kits';
 import { check, launch } from './_harness';
 import type { SynthKit } from '../../src/platform/api/types';
 
@@ -74,7 +75,7 @@ export default function highNoon() {
   // Rooted to the mark, hands off the guns (a weapons-locked freeze): 1 doesn't draw the Peacemaker.
   const me = g.player;
   h.step(1 / 60, { down: ['Digit1'], pressed: ['Digit1'] });
-  check(me.frozen && me.inventory.selected === 2 && me.inventory.ammo('revolver')?.magazine === 6, `no drawing in the standoff: frozen ${me.frozen}, slot ${me.inventory.selected}`);
+  check(me.frozen && me.inventory.selected === 2 && guns.of(g)!.ammo(me, 'revolver')?.magazine === 6, `no drawing in the standoff: frozen ${me.frozen}, slot ${me.inventory.selected}`);
   // Their outfit picker went up as they came into play (`playerReady`).
   check(h.find('hud', 'widget').some((c) => c.args[0] === 'outfits' && c.to === me.id), 'the outfit picker should be up on their screen');
   const [, a, b] = g.players;

@@ -20,7 +20,10 @@
 // The indirect rules follow imports within the game's folder, types included.
 //
 // Client kits (src/platform/client-kits/) may import only '@platform', '@platform/art',
-// '@platform/client' and '@platform/client/math', and files in their own folder: a game can copy one.
+// '@platform/items', '@platform/client' and '@platform/client/math', and files in their own
+// folder: a game can copy one. The item kits' shared parts (src/platform/items/, '@platform/items':
+// what an item kit's host half and screen half both run) import only '@platform'; every part of
+// a game may use them.
 // Kits and the art toolkit (src/platform/kits/, src/platform/art/) may import only '@platform'
 // (and '@platform/art') and files inside their own folder: they get no access a game doesn't
 // have, so any kit could be copied into a game unchanged.
@@ -60,7 +63,7 @@ function check(folder, allowed, what, { relative: own = () => true } = {}) {
 // Games
 // ---------------------------------------------------------------------------------------------
 
-const PUBLIC = ['@platform', '@platform/art'];
+const PUBLIC = ['@platform', '@platform/art', '@platform/items'];
 const CLIENT = ['@platform/client', '@platform/client/kits', '@platform/client/math'];
 const ALLOWED = { meta: ['@platform'], shared: PUBLIC, client: [...PUBLIC, ...CLIENT], server: [...PUBLIC, '@platform/kits'] };
 const NAMES = { meta: 'its meta', shared: 'its shared code', client: 'its client code', server: 'its server code' };
@@ -94,8 +97,9 @@ for (const name of readdirSync(games)) {
   }
 }
 
-check(at('src/platform/kits'), () => ['@platform', '@platform/art'], () => 'a kit');
-check(at('src/platform/client-kits'), () => ['@platform', '@platform/art', '@platform/client', '@platform/client/math'], () => 'a client kit');
+check(at('src/platform/kits'), () => ['@platform', '@platform/art', '@platform/items'], () => 'a kit');
+check(at('src/platform/items'), () => ['@platform'], () => "an item kit's shared part");
+check(at('src/platform/client-kits'), () => ['@platform', '@platform/art', '@platform/items', '@platform/client', '@platform/client/math'], () => 'a client kit');
 check(at('src/platform/art'), () => ['@platform'], () => 'the art toolkit');
 
 // ---------------------------------------------------------------------------------------------

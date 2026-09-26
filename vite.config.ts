@@ -87,6 +87,7 @@ export default defineConfig({
     alias: [
       { find: /^@platform\/art$/, replacement: r('./src/platform/art/index.ts') },
       { find: /^@platform\/kits$/, replacement: r('./src/platform/kits/index.ts') },
+      { find: /^@platform\/items$/, replacement: r('./src/platform/items/index.ts') },
       { find: /^@platform\/client\/kits$/, replacement: r('./src/platform/client-kits/index.ts') },
       { find: /^@platform\/client\/math$/, replacement: r('./src/platform/api/client/math.ts') },
       { find: /^@platform\/client$/, replacement: r('./src/platform/api/client.ts') },

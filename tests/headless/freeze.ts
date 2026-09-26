@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { defineGame } from '../../src/platform';
 import { GameHost } from '../../src/platform/host/game';
 import type { PlayerInput } from '../../src/platform/net/protocol';
+import { guns, melee, throwables } from '../../src/platform/kits';
 import { check } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
@@ -13,6 +14,7 @@ const yard = defineGame({
   world: { terrain: 'void', ground: { y: 40 }, spawn: { x: 0.5, y: 41, z: 0.5 }, time: 0.5, freezeTime: true },
   player: { health: 100, hotbar: 'items' },
   guns: { autoReload: false },
+  items: [throwables(), guns({ autoReload: false }), melee()],
   setup(game) {
     const still = { spread: { hip: 0, aim: 0, move: 0, air: 0, bloom: 0 }, recoil: { up: 0, side: 0 } };
     game.items.define('pistol', { kind: 'gun', name: 'Pistol', icon: 'iron_sword', rpm: 300, damage: 10, magazine: 6, reserve: 30, reload: 0.5, ...still });
@@ -52,14 +54,14 @@ export default function freeze() {
   let serial = 0;
   /** One step of Ann's controls: a shot her screen fired (and the click), and keys pressed. */
   const act = (o: { fire?: boolean; pressed?: string[] } = {}) => {
-    const input: PlayerInput = { active: true, down: [...(o.pressed ?? [])], pressed: o.pressed ?? [], buttons: o.fire ? 1 : 0, clicked: o.fire ? 1 : 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, shots: o.fire ? [[++serial, 0, 0, 0]] : [] };
+    const input: PlayerInput = { active: true, down: [...(o.pressed ?? [])], pressed: o.pressed ?? [], buttons: o.fire ? 1 : 0, clicked: o.fire ? 1 : 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, acts: { gun: o.fire ? [[++serial, 0, 0, 0]] : [], throwable: [] } };
     host.command(ann.id, { t: 'input', input });
     step();
     // (Held keys let go.)
-    host.command(ann.id, { t: 'input', input: { ...input, down: [], pressed: [], buttons: 0, clicked: 0, shots: [] } });
+    host.command(ann.id, { t: 'input', input: { ...input, down: [], pressed: [], buttons: 0, clicked: 0, acts: { gun: [], throwable: [] } } });
     step(8);
   };
-  const mag = () => a.inventory.ammo('pistol')!.magazine;
+  const mag = () => guns.of(sim.ctx)!.ammo(a, 'pistol')!.magazine;
   const frame = () => sim.frame().players.find((p) => p.id === a.id)!;
 
   // Locked: nothing answers, nothing is spent.
@@ -69,13 +71,13 @@ export default function freeze() {
   act({ fire: true, pressed: ['Digit2'] });
   act({ pressed: ['KeyR'] });
   check(shots() === 0 && mag() === 6, `a locked gun fired nothing and spent nothing: ${shots()} shots, ${mag()} rounds`);
-  check(a.inventory.selected === 0 && !a.reloading, `no switching or reloading while locked: slot ${a.inventory.selected}, reloading ${a.reloading}`);
-  const inAir = () => sim.ctx.items.thrown.length;
+  check(a.inventory.selected === 0 && !guns.of(sim.ctx)!.reloading(a), `no switching or reloading while locked: slot ${a.inventory.selected}, reloading ${guns.of(sim.ctx)!.reloading(a)}`);
+  const inAir = () => throwables.of(sim.ctx)!.thrown().length;
   // Nor throwing: the key held does nothing, and a throw the screen sent anyway is turned away.
   a.inventory.give('frag', 2);
   act({ pressed: ['KeyG'] });
-  const idle: PlayerInput = { active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, shots: [] };
-  host.command(ann.id, { t: 'input', input: { ...idle, throws: [[1, 'frag', 0.5, 42.6, 0.5, 0, 4, 10, 0]] } });
+  const idle: PlayerInput = { active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, acts: { gun: [], throwable: [] } };
+  host.command(ann.id, { t: 'input', input: { ...idle, acts: { gun: [], throwable: [[1, 'frag', 0.5, 42.6, 0.5, 0, 4, 10, 0]] } } });
   step(3);
   check(a.inventory.count('frag') === 2 && inAir() === 0, `nothing thrown while locked: ${a.inventory.count('frag')} frags, ${inAir()} in the air`);
 
@@ -86,16 +88,16 @@ export default function freeze() {
 
   // Let go: free, and reloading shows.
   a.freeze(false);
-  host.command(ann.id, { t: 'input', input: { ...idle, throws: [[2, 'frag', 0.5, 42.6, 0.5, 0, 4, 10, 0]] } });
+  host.command(ann.id, { t: 'input', input: { ...idle, acts: { gun: [], throwable: [[2, 'frag', 0.5, 42.6, 0.5, 0, 4, 10, 0]] } } });
   step(3);
   check(a.inventory.count('frag') === 1 && inAir() === 1, `unlocked, a throw is taken: ${a.inventory.count('frag')} frags, ${inAir()} in the air`);
   act({ fire: true });
   check(!a.frozen && shots() === 2 && mag() === 4, `free again: ${shots()} shots, ${mag()} rounds`);
-  host.command(ann.id, { t: 'input', input: { active: true, down: ['KeyR'], pressed: ['KeyR'], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, shots: [] } });
+  host.command(ann.id, { t: 'input', input: { active: true, down: ['KeyR'], pressed: ['KeyR'], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq: A.viewSeq, acts: { gun: [], throwable: [] } } });
   step();
-  const reloading = a.reloading;
+  const reloading = guns.of(sim.ctx)!.reloading(a);
   step(30);
-  check(reloading && !a.reloading && mag() === 6, `player.reloading while the rounds go in, then full: ${reloading}, ${a.reloading}, ${mag()}`);
+  check(reloading && !guns.of(sim.ctx)!.reloading(a) && mag() === 6, `player.reloading while the rounds go in, then full: ${reloading}, ${guns.of(sim.ctx)!.reloading(a)}, ${mag()}`);
 
   // The lock ends with the freeze: a revive lets them go, and the gun with them.
   a.freeze(true, { weapons: true });

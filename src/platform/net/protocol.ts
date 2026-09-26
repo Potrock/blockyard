@@ -117,6 +117,12 @@ export interface PlayerInput {
    * one they could have thrown and flies it the same way, and decides when and where it goes off.
    */
   throws?: [number, string, number, number, number, number, number, number, number][];
+  /**
+   * What this screen's item kits did ahead of the host with these controls, by kind (see
+   * `ClientKit.controls`): each a list of plain values, which the kind's host half takes or turns
+   * down (`ItemKind.acts`). A kind listed here, even with none, is one this screen runs.
+   */
+  acts?: Record<string, unknown[][]>;
   /** The host time (`SimFrame.t`) of what this client was showing when it made these controls: shots hit where targets were then. */
   seen?: number;
 }

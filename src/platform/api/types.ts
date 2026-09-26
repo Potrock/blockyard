@@ -9,6 +9,7 @@
 
 import type { Quaternion as MathQuaternion, Vector3 as MathVector3 } from 'three';
 import type { Blueprint } from './blueprint';
+import type { ItemKind, ItemKit } from './items';
 
 export interface Vec3 {
   x: number;
@@ -66,7 +67,12 @@ export interface SharedDefinition extends GameMeta {
   cheats?: boolean;
   world?: WorldOptions;
   player?: PlayerOptions;
-  /** How guns play in this game: rewind, hitboxes, what they do to movement, reloading, aim assist (see `GunOptions`). */
+  /** Where bullets meet players: how far back the host looks for a shot's target, and the hitboxes (see `HitscanOptions`). */
+  hitscan?: HitscanOptions;
+  /**
+   * How guns play in this game (see `GunOptions`). For now the screens' gun prediction reads it
+   * here; the host's gun kit takes the same options (`guns(shared.guns)`).
+   */
   guns?: GunOptions;
   /**
    * Vehicles players can drive (`player.drive(name, state)`): ships, cars, boards. Defined here,
@@ -96,6 +102,12 @@ export interface ServerDefinition {
   start?(game: GameContext): void;
   /** Runs every frame while the game is running (not while paused). `dt` is in seconds. */
   update?(game: GameContext, dt: number): void;
+  /**
+   * The kinds of item it uses, each made to work by an item kit (see `ItemKit`), in the order
+   * they run each step: `[throwables(), guns(RULES), melee()]` from `@platform/kits`. An item whose
+   * kind isn't listed does nothing but be carried.
+   */
+  items?: ItemKit[];
 }
 
 /** A whole game as the server runs it: its shared definition and its rules (`defineServer`). */
@@ -1106,8 +1118,6 @@ export interface PlayerApi {
   freeze(frozen: boolean, opts?: { weapons?: boolean }): void;
   /** Their body is frozen: `freeze`, dead, driving, or not in play yet. */
   readonly frozen: boolean;
-  /** Reloading the gun they hold (rounds going in, one at a time or all at once). */
-  readonly reloading: boolean;
   /**
    * Put them in one of the game's `vehicles`, starting from `state` (plain numbers, booleans and
    * lists: it goes to their screen as data). From now on their controls drive it (the vehicle's
@@ -1151,8 +1161,6 @@ export interface PlayerApi {
   /** Crouching (or sneaking), and sliding (`movement.slide`). */
   readonly crouching: boolean;
   readonly sliding: boolean;
-  /** Aiming down the sights of the gun they hold (right mouse). */
-  readonly aiming: boolean;
   /** Multiplies their movement speed (a power-up, a heavy load). Default 1. */
   speed: number;
   /**
@@ -1162,14 +1170,6 @@ export interface PlayerApi {
   readonly abilities: Record<string, any>;
   /** Ignore damage for this long (spawn protection); 0 ends it. */
   protect(seconds: number): void;
-  /**
-   * Throw one of their throwables (`kind: 'throwable'`, see `ThrowableItem`) from their eyes, as if
-   * they'd thrown it themselves: along where they look (or `yaw` / `pitch`), or lobbed to land at
-   * `at` (the arc worked out for its speed; the lower one, or none if it can't reach). `cook` is
-   * seconds of its fuse already burnt. It takes one from their inventory; false if they have none,
-   * they're dead, or they threw one less than its `cooldown` ago. Bots throw this way.
-   */
-  throw(item: string, opts?: { at?: Vec3; yaw?: number; pitch?: number; cook?: number }): boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1424,16 +1424,17 @@ export interface InventoryApi {
   readonly slots: readonly (ItemStack | null)[];
   readonly selected: number;
   readonly held: ItemStack | null;
+  /**
+   * A carried item's state, as its kind's kit keeps it (`ItemKind.state`: a gun's rounds), made
+   * when first asked for; null if they carry none, or its kind keeps none.
+   */
+  state<S extends object = Record<string, unknown>>(item: string): S | null;
   /** Add items; returns the amount that did not fit. */
   give(item: string, count?: number): number;
   take(item: string, count?: number): boolean;
   count(item: string): number;
   select(slot: number): void;
   clear(): void;
-  /** A gun's rounds: in the magazine and spare (null for anything else, or if they don't have it). */
-  ammo(item: string): { magazine: number; reserve: number } | null;
-  /** Set a gun's rounds (a refill, a scavenged magazine); what's left out stays as it is. */
-  setAmmo(item: string, ammo: { magazine?: number; reserve?: number }): void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1454,7 +1455,7 @@ export type BuiltinSprite =
   | 'health_potion'
   | 'heart';
 
-interface ItemBase {
+export interface ItemBase {
   name: string;
   /**
    * A sprite, a picture of a glTF model, or `{ block }`: an item that looks like a block is shown
@@ -1705,7 +1706,11 @@ export type GunAction = 'pump' | 'bolt' | 'lever' | 'hammer' | ViewAnimation;
  * play by these (a screen predicts its own movement and fires its own shots), so they're data.
  * Every field is optional; the defaults are what Call of Blocky plays by.
  */
-export interface GunOptions {
+/**
+ * Where bullets meet players (`SharedDefinition.hitscan`), for any item kit that casts them
+ * (`ItemUse.hitscan`): how far back the host looks, and the hitboxes.
+ */
+export interface HitscanOptions {
   /**
    * The furthest back a shot looks for its target, in seconds (0.35). The host checks each shot
    * against where people were on the shooter's screen, but no further back than this, so a laggy
@@ -1714,6 +1719,10 @@ export interface GunOptions {
   rewind?: number;
   /** Players' hitboxes for bullets, standing, crouching and sliding: what's given goes over each stance's default (see `PlayerHitbox`). */
   hitboxes?: { stand?: Partial<PlayerHitbox>; crouch?: Partial<PlayerHitbox>; slide?: Partial<PlayerHitbox> };
+}
+
+/** How guns play in a game: the gun kit's options (`guns(options)` on the host, and on each screen). */
+export interface GunOptions {
   /** Aiming down the sights slows the holder to the gun's `aim.move`. Default true. */
   aimSlows?: boolean;
   /** Aiming down the sights stops a sprint, and so does holding the trigger. Both default true. */
@@ -1814,6 +1823,8 @@ export interface AtlasPixels {
 export interface ItemApi {
   define(id: string, def: ItemDefinition): void;
   get(id: string): ItemDefinition | undefined;
+  /** The running kind of item this game lists (`items`), by its `kind` (`'gun'`): its kit's hooks and helpers. Null if it isn't listed. */
+  kind<K extends ItemKind = ItemKind>(kind: string): K | null;
   /**
    * Drop an item into the world. `beam` adds a light pillar so players can find it. `for`: only
    * that player can pick it up (a reward each); once they've left, anyone can.
@@ -1822,13 +1833,6 @@ export interface ItemApi {
   clearPickups(): void;
   /** Register a custom sprite / skin atlas from any canvas (e.g. drawn with Canvas 2D). */
   atlas(name: string, source: HTMLCanvasElement | OffscreenCanvas | AtlasPixels): void;
-  /**
-   * Throwables in the air (or come to rest, waiting to go off), and the fires they started: what
-   * a bot keeps away from. `radius` is how far one reaches (its blast's, or its fire's); `left`,
-   * seconds until it goes off (a fire: until it's out).
-   */
-  readonly thrown: readonly ThrownInfo[];
-  readonly fires: readonly { position: Vec3; radius: number; left: number; by: Player }[];
 }
 
 /** A throwable in the air, as `items.thrown` lists it. */
@@ -2084,6 +2088,10 @@ export interface ProjectileSpec {
   sticky?: boolean;
   /** Emissive glow colour (fireballs). */
   glow?: string;
+  /** Its hits are critical (the `damage` event's `crit`: a fully drawn bow's). */
+  crit?: boolean;
+  /** The item it's from, for the `damage` event (`weapon`). */
+  weapon?: string;
 }
 
 export interface Entity {
@@ -2152,8 +2160,8 @@ export interface EntityApi {
   clear(): void;
   /** Fire a projectile from anywhere (traps, turrets). */
   projectile(spec: ProjectileSpec, from: Vec3, dir: Vec3, owner?: Entity | Player): void;
-  /** The first living entity along a ray, stopping at solid blocks (what the crosshair is on). */
-  raycast(origin: Vec3, dir: Vec3, maxDistance: number): { entity: Entity; distance: number } | null;
+  /** The first living entity along a ray, stopping at solid blocks (what the crosshair is on); `margin` widens each body by that much (default 0.1). */
+  raycast(origin: Vec3, dir: Vec3, maxDistance: number, opts?: { margin?: number }): { entity: Entity; distance: number } | null;
 }
 
 // ---------------------------------------------------------------------------------------------

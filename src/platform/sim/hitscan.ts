@@ -1,7 +1,7 @@
 import type { VoxelWorld } from '@engine/voxel_engine.js';
 import type { Entity, Player, Vec3 } from '../api/types';
 import type { Registry } from '../world/registry';
-import { playerBoxes, rayBox, type GunRules, type Stance } from './guns';
+import { playerBoxes, rayBox, type HitscanRules, type Stance } from './hitboxes';
 import { rayHit } from './worldquery';
 
 /** Where a player or creature was at one moment. */
@@ -26,7 +26,7 @@ interface Snapshot {
  */
 export class History {
   private snaps: Snapshot[] = [];
-  /** Seconds kept: a second, or longer for a game whose shots reach further back (`guns.rewind`). */
+  /** Seconds kept: a second, or longer for a game whose shots reach further back (`hitscan.rewind`). */
   keep = 1;
 
   record(t: number, players: Map<string, Pose>, entities: Map<number, Pose>) {
@@ -159,14 +159,14 @@ export interface HitscanWorld {
   prop(o: Vec3, d: Vec3, max: number): { distance: number; point: Vec3 } | null;
   /** Everyone a shot could hit. */
   targets(): Hittable[];
-  /** The game's gun rules: how far back a shot looks (`rewind`), players' hitboxes. */
-  rules: GunRules;
+  /** The game's hitscan rules: how far back a shot looks (`rewind`), players' hitboxes. */
+  rules: HitscanRules;
 }
 
 /**
  * One bullet from `from` along the unit vector `dir`: the first player, creature, block or solid
  * prop it meets within `range`. Targets are where they were at host time `seen` (the moment the
- * shooter's screen was showing), no more than the game's `guns.rewind` ago; `ignore` is the
+ * shooter's screen was showing), no more than the game's `hitscan.rewind` ago; `ignore` is the
  * shooter. Plants, torches and leaves don't stop bullets.
  */
 export function castBullet(w: HitscanWorld, from: Vec3, dir: Vec3, range: number, now: number, seen: number | null, ignore: Player | Entity | null, pen: Penetration | null = null): BulletHit {

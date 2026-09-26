@@ -1,4 +1,5 @@
 import { defineServer, type GameContext, type Player, type Vec3 } from '@platform';
+import { melee } from '@platform/kits';
 import { DASH, WALL_RUN, type DashState, type WallRunState } from './abilities';
 import { FLOOR, HIGH, shared } from './shared';
 
@@ -98,6 +99,8 @@ function update(game: GameContext) {
  * answer at once online; the game hears what they did (`ability` events) for sounds and effects.
  */
 export default defineServer(shared, {
+  // Nothing to use but the bare fist.
+  items: [melee()],
   setup(game) {
     game.events.on('ability', ({ player, ability, name }) => {
       const at = player.position;

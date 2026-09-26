@@ -1,4 +1,5 @@
 import { defineServer, type GameContext, type Player } from '@platform';
+import { bows, consumables, melee } from '@platform/kits';
 import { FLOOR, GATES, GATE_SPAWN_RADIUS } from './structure';
 import { defineArt, defineItems, defineMonsters } from './content';
 import { Sprite } from './art';
@@ -219,6 +220,8 @@ function defeat(game: GameContext) {
  * public platform API.
  */
 export default defineServer(shared, {
+  // Its kinds of item: bows, swords and axes (and the bare fist), potions.
+  items: [bows(), melee(), consumables()],
   setup(game) {
     Object.assign(state, fresh());
     // (Its voices and its items' looks are each screen's, `client/`: played and named here.)

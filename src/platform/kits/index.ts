@@ -19,3 +19,4 @@ export { building, defaultBreakTime, type Builder, type Building, type BuildingO
 export { interactions, type Interactions } from './interact';
 export { navGrid, type NavCell, type NavEdge, type NavGrid, type NavGridOptions } from './navgrid';
 export { shooterBots, type BotAim, type BotMind, type BotMoves, type BotSenses, type BotWeapon, type BySkill, type ShooterBotOptions, type ShooterBots } from './shooterbot';
+export { bows, consumables, FIST, guns, melee, throwables, type FireInfo, type Guns, type MeleeOptions, type Strike, type Throwables } from './items';

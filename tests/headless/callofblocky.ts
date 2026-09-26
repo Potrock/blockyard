@@ -1,3 +1,4 @@
+import { throwables } from '../../src/platform/kits';
 import { check, launch } from './_harness';
 
 /**
@@ -31,7 +32,7 @@ export default function callofblocky() {
     pilot: () => null,
     until: (hh) => {
       for (const p of hh.ctx.players) if (p.bot) visited.add(`${Math.floor(p.position.x / 4)},${Math.floor(p.position.z / 4)}`);
-      const now = hh.ctx.items.thrown.length;
+      const now = throwables.of(hh.ctx)!.thrown().length;
       if (now > flying) thrown += now - flying;
       flying = now;
       return false;

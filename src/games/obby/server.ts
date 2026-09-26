@@ -1,4 +1,5 @@
 import { defineServer, math, type GameContext, type Player, type Prop, type Vec3 } from '@platform';
+import { melee } from '@platform/kits';
 import { course, key, type Cell, type Special } from './course';
 import { shared } from './shared';
 
@@ -325,6 +326,8 @@ function resetCourse(game: GameContext) {
  * you back at your last checkpoint, and best times go on a leaderboard.
  */
 export default defineServer(shared, {
+  // Nothing to use but the bare fist.
+  items: [melee()],
   setup(game) {
     // (Its voices are each screen's, `client/sounds.ts`: played here by name.)
     game.events.on('playerJoin', ({ player }) => {

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { LETHALS, WEAPONS } from '../../src/games/callofblocky/weapons';
 import { Blueprint, defineGame, type Bot, type Vec3 } from '../../src/platform';
-import { navGrid, shooterBots, type NavCell, type NavGrid, type ShooterBots } from '../../src/platform/kits';
+import { guns, melee, navGrid, shooterBots, throwables, type NavCell, type NavGrid, type ShooterBots } from '../../src/platform/kits';
 import { Headless } from '../../src/platform/host/headless';
 import { check } from './_harness';
 
@@ -27,6 +27,7 @@ const walled = defineGame({
   title: 'Walled yard',
   world: { terrain: 'void', structures: [yard()], spawn: { x: 0.5, y: FLOOR, z: 8.5 }, time: 0.5, freezeTime: true, destructible: { above: FLOOR - 1 } },
   player: { health: 100, hurtCooldown: 0, hotbar: 'items', pvp: true },
+  items: [throwables(), guns(), melee()],
   setup(game) {
     game.items.define('pistol', WEAPONS.pistol);
     game.items.define('frag', LETHALS.frag);
@@ -151,7 +152,7 @@ export default function navgrid() {
   const drop = (at: Vec3) => {
     me.teleport(at, 0, 0);
     me.inventory.give('frag');
-    check(me.throw('frag', { pitch: -Math.PI / 2 }), 'the frag should be thrown');
+    check(throwables.of(g)!.throw(me, 'frag', { pitch: -Math.PI / 2 }), 'the frag should be thrown');
     me.teleport({ x: 11.5, y: FLOOR, z: 8.5 }, 0, 0);
   };
   const frag = LETHALS.frag.blast!.radius;
@@ -166,7 +167,7 @@ export default function navgrid() {
   h.run(4, {
     pilot: () => null,
     until: () => {
-      const t = g.items.thrown[0];
+      const t = throwables.of(g)!.thrown()[0];
       if (t) far = Math.hypot(bot.position.x - t.position.x, bot.position.z - t.position.z);
       return false;
     },
@@ -187,7 +188,7 @@ export default function navgrid() {
   h.run(8, {
     pilot: () => null,
     until: () => {
-      live = g.items.thrown.length > 0;
+      live = throwables.of(g)!.thrown().length > 0;
       if (live) closest = Math.min(closest, Math.hypot(bot.position.x - B.x, bot.position.z - B.z));
       return !live && Math.hypot(bot.position.x - B.x, bot.position.z - B.z) < 1;
     },

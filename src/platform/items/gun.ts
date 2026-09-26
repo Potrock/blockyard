@@ -1,10 +1,9 @@
-import type { AimAssist, GunItem, GunOptions, ItemDefinition, PlayerHitbox, Vec3 } from '../api/types';
-import type { MoveMods } from './movement';
+import type { AimAssist, GunItem, GunOptions, ItemDefinition, ItemMove, Vec3 } from '@platform';
 
 /**
- * Gun rules shared by the host and the shooter's own screen, so both fire, spread, reload and
- * slow down the same way: the screen shows a shot the moment it's fired, and the host (which
- * decides what it hit) agrees about where it went.
+ * The gun kit's shared part: rules the host and the shooter's own screen both play, so both fire,
+ * spread, reload and slow down the same way: the screen shows a shot the moment it's fired, and
+ * the host (which decides what it hit) agrees about where it went.
  */
 
 export const DEG = Math.PI / 180;
@@ -89,13 +88,10 @@ export function freshGun(def: GunItem): GunState {
 export const RAISE = 0.35;
 
 /**
- * A game's gun rules (`GameDefinition.guns`) with the defaults filled in. The host and each
- * shooter's screen resolve the same ones from the game's definition, so they agree.
+ * A game's gun rules (the gun kit's options, `GunOptions`) with the defaults filled in. The host's
+ * half of the kit and each shooter's screen take the same options, so they agree.
  */
 export interface GunRules {
-  rewind: number;
-  /** Per stance (standing, crouching, sliding): the neck and the top of the head, and the body's and head's half widths. */
-  boxes: [StanceBox, StanceBox, StanceBox];
   aimSlows: boolean;
   aimStopsSprint: boolean;
   fireStopsSprint: boolean;
@@ -105,30 +101,9 @@ export interface GunRules {
   assist: AimAssist;
 }
 
-/** A stance's hitboxes: [neck, top of the head, body half width, head half width], blocks from the feet. */
-type StanceBox = [number, number, number, number];
-
-/**
- * The figure is two blocks tall: legs and body to 1.5, the head above. Crouched it's 0.3 lower;
- * sliding it leans back from the hips, so the boxes are lower and wider.
- */
-const BOXES: [StanceBox, StanceBox, StanceBox] = [
-  [1.5, 2.0, 0.36, 0.28],
-  [1.2, 1.7, 0.38, 0.3],
-  [0.85, 1.4, 0.45, 0.45],
-];
-
-/** A game's `guns`, with the defaults filled in (a hitbox's widths halved, as `playerBoxes` uses them). */
+/** A game's gun options, with the defaults filled in. */
 export function resolveGunRules(o: GunOptions = {}): GunRules {
-  const box = (i: Stance, h: Partial<PlayerHitbox> | undefined): StanceBox => {
-    const [neck, top, bw, hw] = BOXES[i];
-    return [h?.neck ?? neck, h?.height ?? top, h?.width === undefined ? bw : h.width / 2, h?.headWidth === undefined ? hw : h.headWidth / 2];
-  };
-  const hb = o.hitboxes ?? {};
   return {
-    // A laggy shooter doesn't get to hit where someone was a second ago.
-    rewind: Math.max(0, o.rewind ?? 0.35),
-    boxes: [box(0, hb.stand), box(1, hb.crouch), box(2, hb.slide)],
     aimSlows: o.aimSlows ?? true,
     aimStopsSprint: o.aimStopsSprint ?? true,
     fireStopsSprint: o.fireStopsSprint ?? true,
@@ -141,15 +116,14 @@ export function resolveGunRules(o: GunOptions = {}): GunRules {
 export const DEFAULT_GUN_RULES = resolveGunRules();
 
 /**
- * How the held item and the mouse change movement: a gun's weight; aiming slows (to the gun's
+ * How holding a gun and the mouse change movement: its weight; aiming slows (to the gun's
  * `aim.move`) and stops sprinting, and so does firing, unless the game's rules say otherwise.
  */
-export function moveMods(def: ItemDefinition | undefined, buttons: number, speed = 1, rules: GunRules = DEFAULT_GUN_RULES): MoveMods {
-  if (!isGun(def)) return speed === 1 ? { speed: 1, noSprint: false } : { speed, noSprint: false };
+export function gunMove(def: GunItem, buttons: number, rules: GunRules = DEFAULT_GUN_RULES): ItemMove {
   const g = gun(def);
   const aiming = (buttons & 4) !== 0;
   const firing = (buttons & 1) !== 0;
-  return { speed: speed * g.mobility * (aiming && rules.aimSlows ? g.aim.move : 1), noSprint: (aiming && rules.aimStopsSprint) || (firing && rules.fireStopsSprint) };
+  return { speed: g.mobility * (aiming && rules.aimSlows ? g.aim.move : 1), noSprint: (aiming && rules.aimStopsSprint) || (firing && rules.fireStopsSprint) };
 }
 
 /** Aim assist's shape with the defaults filled in (see `AimAssist`); `angle` in radians. */
@@ -295,47 +269,27 @@ export function stepReload(g: Gun, s: GunState, dt: number, trigger: boolean): b
   return true;
 }
 
-/** Stance for hitboxes: standing, crouching or sliding. */
-export type Stance = 0 | 1 | 2;
-
-/**
- * A player's hitboxes where they stand (feet at `p`): the body and the head, as min / max corners.
- * They match the figure everyone sees: upright, crouched, or leaning back in a slide (the game's
- * `guns.hitboxes` can change them).
- */
-export function playerBoxes(p: Vec3, stance: Stance, rules: GunRules = DEFAULT_GUN_RULES): { body: [Vec3, Vec3]; head: [Vec3, Vec3] } {
-  const [bodyTop, headTop, bw, hw] = rules.boxes[stance];
-  return {
-    body: [
-      { x: p.x - bw, y: p.y, z: p.z - bw },
-      { x: p.x + bw, y: p.y + bodyTop, z: p.z + bw },
-    ],
-    head: [
-      { x: p.x - hw, y: p.y + bodyTop, z: p.z - hw },
-      { x: p.x + hw, y: p.y + headTop, z: p.z + hw },
-    ],
-  };
+/** A held gun as everyone's screen has it (`hand.state`): its rounds, a reload, its last shot, how far it's aimed. */
+export interface GunShown {
+  mag: number;
+  reserve: number;
+  /** Seconds left of the reload (a shotgun's: of the round going in), -1 when not reloading. */
+  reload: number;
+  serial: number;
+  aim: number;
 }
 
-/** Where a ray (unit direction) first enters a box, or null. */
-export function rayBox(o: Vec3, d: Vec3, min: Vec3, max: Vec3): number | null {
-  let t0 = 0;
-  let t1 = Infinity;
-  const os = [o.x, o.y, o.z];
-  const ds = [d.x, d.y, d.z];
-  const lo = [min.x, min.y, min.z];
-  const hi = [max.x, max.y, max.z];
-  for (let i = 0; i < 3; i++) {
-    if (Math.abs(ds[i]) < 1e-9) {
-      if (os[i] < lo[i] || os[i] > hi[i]) return null;
-      continue;
-    }
-    let a = (lo[i] - os[i]) / ds[i];
-    let b = (hi[i] - os[i]) / ds[i];
-    if (a > b) [a, b] = [b, a];
-    t0 = Math.max(t0, a);
-    t1 = Math.min(t1, b);
-    if (t0 > t1) return null;
-  }
-  return t0;
+/** A shot as other screens draw it (the `$shot` message): who fired what, and where each bullet ended (and what it hit). */
+export interface ShotWire {
+  by: string;
+  item: string;
+  /** Per bullet: [x, y, z, what it hit: 0 nothing, 1 a block, 2 someone], and the block's face and id. */
+  ends: [number, number, number, number][];
+  normals: ([number, number, number] | null)[];
+  blocks: number[];
+  /**
+   * Per bullet, the walls it went through (wall-banging), if any did: each [in x, y, z, its face
+   * x, y, z, out x, y, z, that face x, y, z, the block].
+   */
+  walls?: number[][][];
 }

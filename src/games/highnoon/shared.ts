@@ -68,10 +68,13 @@ export const shared = defineShared({
       abilities: { roll },
     },
   },
-  guns: {
+  hitscan: {
     rewind: 0.3,
     // Bigger heads: the hat counts (the head's zone starts lower and is wider).
     hitboxes: { stand: { neck: 1.42, headWidth: 0.66 }, crouch: { neck: 1.12, headWidth: 0.68 } },
+  },
+  // The gun kit's rules, the same on the host (`server.ts`) and on each screen.
+  guns: {
     autoReload: false,
     aimStopsSprint: true,
     fireStopsSprint: true,

@@ -3,6 +3,7 @@ import { defineGame } from '../../src/platform';
 import { GameHost } from '../../src/platform/host/game';
 import type { PlayerInput } from '../../src/platform/net/protocol';
 import { WheelSteps, type WheelLike } from '../../src/platform/player/input';
+import { guns, melee, throwables } from '../../src/platform/kits';
 import { check } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
@@ -25,6 +26,7 @@ const shelf = defineGame({
   title: 'Shelf',
   world: { terrain: 'void', ground: { y: 40 }, spawn: { x: 0.5, y: 41, z: 0.5 }, time: 0.5, freezeTime: true },
   player: { health: 100, hotbar: 'items' },
+  items: [throwables(), guns(), melee()],
   setup(game) {
     for (const id of ['rifle', 'pistol']) game.items.define(id, { kind: 'gun', name: id, icon: 'iron_sword', rpm: 300, damage: 10, magazine: 10, reload: 1 });
     game.items.define('knife', { kind: 'melee', name: 'Knife', icon: 'iron_sword', damage: 5, cooldown: 0.5 });

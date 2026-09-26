@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { defineGame, type Player } from '../../src/platform';
 import { GameHost } from '../../src/platform/host/game';
 import type { PlayerInput } from '../../src/platform/net/protocol';
+import { guns as gunKit, melee } from '../../src/platform/kits';
+import { sanitizeCommand } from '../../src/platform/net/validate';
 import { check } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
@@ -12,6 +14,7 @@ const range = defineGame({
   title: 'Range',
   world: { terrain: 'flat', flatHeight: 64, spawn: { x: 0.5, y: 65, z: 0.5 }, time: 0.5, freezeTime: true },
   player: { health: 100, hurtCooldown: 0, pvp: true, hotbar: 'items', movement: { walk: 5, slide: true, mantle: true } },
+  items: [gunKit(), melee()],
   setup(game) {
     game.items.define('rifle', {
       kind: 'gun',
@@ -29,7 +32,7 @@ const range = defineGame({
   },
 });
 
-const idle = (viewSeq: number): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq, shots: [] });
+const idle = (viewSeq: number): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq, acts: { gun: [] } });
 
 /**
  * Guns online: a shot is checked where its target was on the shooter's screen (the host rewinds
@@ -81,7 +84,7 @@ export default function guns() {
   };
   let serial = 1;
   const fire = (aim: { yaw: number; pitch: number }, seen: number) => {
-    host.command(ann.id, { t: 'input', input: { ...idle(A.viewSeq), yaw: aim.yaw, pitch: aim.pitch, shots: [[serial++, aim.yaw, aim.pitch, 0]], seen } });
+    host.command(ann.id, { t: 'input', input: { ...idle(A.viewSeq), yaw: aim.yaw, pitch: aim.pitch, acts: { gun: [[serial++, aim.yaw, aim.pitch, 0]] }, seen } });
     bobWalks();
     step();
   };
@@ -108,10 +111,10 @@ export default function guns() {
   });
   step(30);
   const burst = Array.from({ length: 8 }, () => [serial++, 0, 0, 0] as [number, number, number, number]);
-  host.command(ann.id, { t: 'input', input: { ...idle(A.viewSeq), shots: burst, seen: sim.time } });
+  host.command(ann.id, { t: 'input', input: { ...idle(A.viewSeq), acts: { gun: burst }, seen: sim.time } });
   step();
   check(shots >= 2 && shots <= 4, `8 shots in one tick from a 600 rpm gun: the host took ${shots}`);
-  const ammo = A.api.inventory.ammo('rifle');
+  const ammo = gunKit.of(sim.ctx)!.ammo(A.api, 'rifle');
   check(ammo !== null && ammo.magazine === 30 - 4 - shots, `rounds spent: ${JSON.stringify(ammo)}`);
 
   // A bot: walks forward on its own controls, and fires from its trigger.
@@ -137,4 +140,11 @@ export default function guns() {
   sim.ctx.bots.remove(bot);
   check(!sim.ctx.players.includes(bot as Player), 'removed');
   console.log(`  rewound hits: body ${damage[0].amount}, head ${damage[1].amount}; stale and over-the-cap shots missed; burst of 8 → ${shots}; bot walked ${(b1.z - b0.z).toFixed(1)} and fired ${botShots}`);
+
+  // What a screen sends of its kits' actions, as the server takes it: plain values kept; a kind
+  // every object has (`constructor`), a thing that isn't plain data, or too many turned away.
+  const acts = (a: unknown) => (sanitizeCommand({ t: 'input', input: { ...idle(0), acts: a } }) as { input?: PlayerInput } | null)?.input?.acts;
+  check(JSON.stringify(acts({ gun: [[1, 0.5, -0.2, 1.5]], throwable: [] })) === '{"gun":[[1,0.5,-0.2,1.5]],"throwable":[]}', 'plain actions are kept');
+  check(acts({ constructor: [[1]] }) === undefined && acts({ gun: [[{ x: 1 }]] }) === undefined && acts({ gun: [[Infinity]] }) === undefined, 'a kind every object has, or values that aren\'t plain, are turned away');
+  check(acts({ gun: Array.from({ length: 9 }, () => [1]) }) === undefined && acts({ gun: [Array.from({ length: 17 }, () => 1)] }) === undefined, 'too many actions, or too long a one, are turned away');
 }

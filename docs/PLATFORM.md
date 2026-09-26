@@ -326,7 +326,7 @@ Under the hood `world/blocks.ts` turns the definitions into the engine's block v
 
 `game.player` (one of `game.players`, see "Players and multiplayer") gives you `position`, `eye`, `look`, `velocity`, `onGround`, `health` and `maxHealth` (both writable), `armor` (0..20 points, each blocking 4% of damage, like Minecraft's), `damage(amount, { source, knockback, from })`, `heal`, `revive`, `teleport`, `impulse` and `freeze`, plus `inventory` (`give`, `take`, `count`, `select`, `clear`; nine slots) and `viewModel` (see below). Picking up a better-ranked weapon auto-equips it and replaces the weakest weapon if the hotbar is full.
 
-**Freezing.** `player.freeze(true)` stops their body (a countdown, a cutscene) and `freeze(false)` lets it go; their weapons still work. `freeze(true, { weapons: true })` locks their weapons as well, for as long as the freeze lasts: they can't switch slots, aim, reload, fire or use items, their own screen doesn't fire, and any shot it sends anyway is refused, so no rounds are spent (a duel's standoff, a between-rounds pause). The lock ends with the freeze: `freeze(false)`, a `revive`, or a restart. A freeze put on as they join (`playerJoin`, before they've pressed Play) holds once they do. `player.frozen` says whether their body is frozen (by a freeze, or dead, driving, not yet in play), and `player.reloading` whether the gun they hold is reloading.
+**Freezing.** `player.freeze(true)` stops their body (a countdown, a cutscene) and `freeze(false)` lets it go; their weapons still work. `freeze(true, { weapons: true })` locks their weapons as well, for as long as the freeze lasts: they can't switch slots, aim, reload, fire or use items, their own screen doesn't fire, and any shot it sends anyway is refused, so no rounds are spent (a duel's standoff, a between-rounds pause). The lock ends with the freeze: `freeze(false)`, a `revive`, or a restart. A freeze put on as they join (`playerJoin`, before they've pressed Play) holds once they do. `player.frozen` says whether their body is frozen (by a freeze, or dead, driving, not yet in play), and the gun kit's `guns.of(game).reloading(player)` whether the gun they hold is reloading.
 
 **Movement.** `player: { movement }` tunes how everyone moves (speeds in blocks a second; the defaults are Minecraft's). It's data, and the moves you add are pure functions (*Movement abilities*, below), because each player's own screen runs the same movement to predict them:
 
@@ -458,10 +458,22 @@ game.items.spawnPickup('iron_sword', pos, { beam: '#ffd36b' });
 game.items.spawnPickup('iron_sword', pos, { for: player }); // only they can take it (a reward each)
 ```
 
-The platform implements everything around them:
-- **Melee:** swing animation, hit detection through walls, knockback, crits while falling, and sweep attacks.
-- **Bows:** draw charge, ammo, and ballistic arrows that stick in walls. What flies is the ammo item's icon (or `projectile`); a bow without ammo shoots glowing bolts.
-- **Consumables:** right-click to use.
+**Kinds of item are kits.** What an item does comes from the kit for its `kind`, which the game lists in its server definition, in the order they run each step:
+
+```ts
+import { bows, consumables, guns, melee, throwables } from '@platform/kits';
+export default defineServer(shared, {
+  items: [throwables(), guns(shared.guns), melee(), bows(), consumables()],   // only the kinds it uses
+  setup(game) { ... },
+});
+```
+
+The platform knows no kinds itself: an item whose kind isn't listed is carried, dropped and given, and does nothing else (a `misc` item). The kits above are the platform's own, written against the public API alone (`ItemKind`, `ItemHost`, `ItemUse` in `@platform`), so a game can copy one into its folder and change it, or write a kind of its own: a kit is a function the game's host calls with the running game's `ItemHost` for a fresh `ItemKind`, whose `step` runs for every player every step (the controls, the held item, lag-compensated `hitscan`, `swing`, and messages to screens), whose `move` slows a holder, and whose `state` keeps each carried item's (a gun's rounds, `inventory.state(item)`). A kind whose client half runs ahead on the holder's screen (a gun's shots, a throw) gets that screen's actions in `use.acts`, and takes each that could have happened. Game code reaches a running kit with `game.items.kind('gun')`; the platform's have typed helpers: `guns.of(game)`, `throwables.of(game)`.
+
+The platform's kits implement everything around them:
+- **Melee** (`melee()`): swing animation, hit detection through walls, knockback, crits while falling, and sweep attacks. It's also the bare fist: the fire button swings with nothing in hand, or anything whose kind doesn't take the mouse buttons (`melee({ fist: false })` for none).
+- **Bows** (`bows()`): draw charge, ammo, and ballistic arrows that stick in walls. What flies is the ammo item's icon (or `projectile`); a bow without ammo shoots glowing bolts.
+- **Consumables** (`consumables()`): right-click to use.
 - **Pickups:** physics, magnet pull, collection and toasts. `onPickup(game, count, player)` can consume the item instead (and plays its own sound).
 - **Sounds:** each item can bring its own (`sounds: { use, hit, draw }`, built-in or defined in client code); otherwise it gets the generic swing, hit and bow sounds.
 - **Held items:** a first-person arm holds the item: its 3D model if it names one (`hold.model`), otherwise an extruded 3D version of its sprite (next section).
@@ -478,7 +490,7 @@ Art drawn another way works too: set `hold.grip` (and `hold.rotation`) to match 
 
 ## Guns
 
-A `kind: 'gun'` item is a hitscan gun: every shot is a ray (a few for a shotgun) that hits the first player, creature, block or solid prop along it. Plants, torches and leaves don't stop bullets.
+A `kind: 'gun'` item (the `guns()` kit) is a hitscan gun: every shot is a ray (a few for a shotgun) that hits the first player, creature, block or solid prop along it. Plants, torches and leaves don't stop bullets.
 
 ```ts
 game.items.define('rifle', {
@@ -498,14 +510,14 @@ game.items.define('rifle', {
 (Its `icon`, `hold`, `sounds` and `tracer` can be the client's instead: Call of Blocky's server defines only what its guns do, and `client/looks.ts` gives each its model, icon, hold, tracer and sounds with `client.items.look`. See "Items' looks and sounds in client code".)
 
 The platform does the rest:
-- **Fair online.** The shooter's own screen fires the moment the trigger's pulled: the flash, the kick, the tracer, the sound, the rounds. The shots go to the host with the controls. The host takes each one the gun could have fired (its rate, its rounds) and casts it where the targets were *on the shooter's screen*: it keeps a second of everyone's positions and rewinds to the moment that screen was showing, at most 0.35 s back (`guns.rewind`). Spread is seeded per shot, so the tracer you see is where the host's bullet goes.
+- **Fair online.** The shooter's own screen fires the moment the trigger's pulled: the flash, the kick, the tracer, the sound, the rounds. The shots go to the host with the controls. The host takes each one the gun could have fired (its rate, its rounds) and casts it where the targets were *on the shooter's screen*: it keeps a second of everyone's positions and rewinds to the moment that screen was showing, at most 0.35 s back (the game's `hitscan.rewind`). Spread is seeded per shot, so the tracer you see is where the host's bullet goes.
 - **Controls.** Left mouse fires (held, for `auto`). Right mouse aims down the sights: the view zooms, the gun comes up to the eye, spread and speed drop, and a `scope` fills the view. R reloads, and an empty gun reloads by itself (unless `guns.autoReload` is off). Firing and aiming stop a sprint, and coming out of a sprint the gun takes a moment to come up. On a controller the triggers fire and aim, X reloads, and there's aim assist (`aim.assist`, see Controllers).
 - **Hits.** Damage falls off with distance, head hits multiply it, and the shooter gets a hit marker (red for a kill), a tick and their own damage numbers. The victim's HUD points to where the shot came from. `playerDamage`, `playerDeath`, `entityDamage` and `entityDeath` carry `weapon` (the item id) and `headshot`; `shot` fires for every shot (a gunshot is also how bots hear people). The `damage` event (see Player) can change or cancel a hit before it lands.
 - **Sights.** `iron` sights are the model's own. A `dot` or `holo` sight lights its reticle (a red dot, or a holo's ring and dot; `aim.color`) at the aim point as the optic's window comes up to the eye: model the optic with its window open and its `sight` point in the window's middle. A `scope` fills the view with the scope.
 - **Wall-banging.** `penetration: { depth, damageLoss }` sends bullets through walls with up to `depth` blocks of material in them all told (a block-thick wall head on is 1, at a slant more; what's been shot out of it doesn't count, so a wall shot into gets easier), losing `damageLoss` of their damage for each block (0.4 by default). Bedrock and unbreakable blocks stop them. In a destructible world they hole the wall where they go in and where they come out. Everyone sees the holes on both faces, the chips spraying out of the far one and the tracer carrying on from there; the shooter's screen works the path out as the host does. The hit's `through` says how much wall there was. Off by default; Call of Blocky's rifle has `{ depth: 1.15, damageLoss: 0.32 }` (through a block-thick wall head on, at about two thirds of its damage), the pistol `{ 0.7, 0.45 }` (only walls already shot into, slabs), the sniper `{ 2.2, 0.18 }` (two blocks, and still a kill up close). Lag compensation is the same through a wall.
 - **Walls.** In a world with destructible blocks (`world.destructible`), each bullet (each pellet) carves a pit where it lands: `carve: { radius, depth }` in blocks, default `{ radius: 0.1, depth: 0.05 }`; `carve: false` for a gun that doesn't. The next shot on the same spot lands at the bottom of the last one's pit, so each goes about `radius + depth` further in: seven or eight on one spot hole a block. Call of Blocky's: rifle and pistol `{ 0.09, 0.04 }` (eight shots down the sights through a block-thick wall), SMG `{ 0.1, 0.025 }` (ten), sniper `{ 0.12, 0.42 }` (two), shotgun pellets `{ 0.07, 0.01 }` (a spray of small pits). The pit is the bullet's mark: no bullet-hole decal on a block that carves.
 - **The HUD.** An ammo counter replaces the hotbar's job, and the crosshair opens with the spread (and goes when aiming).
-- **Ammo.** `player.inventory.ammo('rifle')` is `{ magazine, reserve }`, and `setAmmo` refills it. A gun given again comes full.
+- **Ammo.** `guns.of(game).ammo(player, 'rifle')` is `{ magazine, reserve }`, and `setAmmo(player, 'rifle', { … })` refills it. A gun given again comes full. `guns.of(game).reloading(player)` and `aiming(player)` say what the gun in their hand is doing.
 - **In the hand.** The `gun` hold style puts two hands on the gun: at the hip, swung across the chest to sprint, leaning into a slide, up to the eye to aim, tipped to show the magazine as the support hand fetches a new one, and working its action. `hold.scale` multiplies its size (0.42 of the model's own), and `hold.gun` moves its poses (next). A held glTF model marks its points with empty nodes named `grip` (the firing hand, at the model's origin), `grip2` (the support hand), `muzzle`, `sight` (on the eye line when aiming) and `mag`; `HeldModels.gltf(url, { grip, grip2 })` gives them in pixels instead, over the file's, in first person and on figures alike. A gun without a `grip2` anywhere is held halfway along. Others see the gun raised to their figure's shoulder, a flash at its muzzle, and its tracers. Call of Blocky builds its guns in code (`src/games/callofblocky/tools/guns/build.mjs`) and writes them as GLB files that way.
 - **Actions.** `action` is worked a beat (0.08 s) after each shot: a `pump` (the support hand back and forth along the gun), a `bolt` (the gun rolled over to work it), a `lever` (the gun rocked muzzle-up on the support hand as the firing hand swings the lever), a `hammer` thumbed back (a single-action revolver: the gun canted in and tipped up), or a `ViewAnimation` of the game's own, the hand's motion (as `viewModel.define` takes; keep it shorter than the time between shots). A humanoid figure works a `lever` and a `hammer` too (`HumanoidPoses.lever`, `.hammer`, see docs/HUMANOID.md).
 
@@ -544,17 +556,19 @@ gun: {
 
 **Iron sights.** Aiming, the gun turns to point dead ahead and its `sight` point goes on the eye line, `ads` blocks ahead (iron sights 0.42 by default). The eye line then runs along the gun's own +z through the `sight` point, so model the sights on that line: the front post's tip at the `sight` point's height, the rear sight's notch open down to it, and put `sight` at the rear sight (or the front post). Nothing behind the `sight` point, between it and the eye (a hammer, the top of a receiver, a stock's comb), may rise above the line: it's drawn nearer the eye than the sights, and covers what they point at. The hands and arms are below the line too: a support hand far along the gun sits under the sights, and a firing hand close to the eye (a rifle whose sight is well ahead of its grip, with a short `ads`) looms large at the bottom of the view; a longer `ads` moves the whole gun away.
 
-**A game's gun rules.** `guns` in the game definition sets how every gun plays. The host and each shooter's own screen both play by it (a screen predicts its own movement and fires its own shots), so it's data. The defaults are Call of Blocky's:
+**A game's gun rules.** The gun kit's options set how every gun plays. The host and each shooter's own screen both play by them (a screen predicts its own movement and fires its own shots), so they're data in the shared definition, handed to the kit on the host (`guns(shared.guns)`). Where bullets meet players is the platform's (`hitscan`: any kit's bullets use it). The defaults are Call of Blocky's:
 
 ```ts
 defineShared({
-  guns: {
+  hitscan: {
     rewind: 0.35,                          // seconds a shot may look back for where its target was
     hitboxes: {                            // players' boxes for bullets, blocks up from the feet; give what you change
       stand: { height: 2, neck: 1.5, width: 0.72, headWidth: 0.56 },    // the head is from the neck up
       crouch: { height: 1.7, neck: 1.2, width: 0.76, headWidth: 0.6 },
       slide: { height: 1.4, neck: 0.85, width: 0.9, headWidth: 0.9 },
     },
+  },
+  guns: {
     aimSlows: true,                        // aiming slows to the gun's aim.move
     aimStopsSprint: true, fireStopsSprint: true,
     autoReload: true,                      // an empty gun reloads by itself
@@ -568,7 +582,7 @@ defineShared({
 
 ## Throwables
 
-A `kind: 'throwable'` item is thrown: a grenade that bounces, rolls and goes off when its fuse is out, a molotov that breaks where it lands and burns. Hold its `key` (or, with it in hand, the fire button) to pull the pin and cook it, let go to throw it where you look, lobbed a little.
+A `kind: 'throwable'` item (the `throwables()` kit, listed before `guns()`: a throwable being cooked takes the fire button) is thrown: a grenade that bounces, rolls and goes off when its fuse is out, a molotov that breaks where it lands and burns. Hold its `key` (or, with it in hand, the fire button) to pull the pin and cook it, let go to throw it where you look, lobbed a little.
 
 ```ts
 game.items.define('frag', {
@@ -597,7 +611,7 @@ player.inventory.give('frag', 2);
 - **How it flies.** Gravity and a little drag; off a block it bounces (the part of its speed into the block turned round and cut to `bounce`, the part along it cut by `friction`), landing gently it rolls and comes to rest. It goes through plants and torches like bullets do, and it bounces off what's left of a damaged block. (Not yet: solid props and players; an `impact` one breaks on whoever it meets, on the host.)
 - **The blast** (`blast`) is `world.explode`'s: `damage` falling off from its middle to `radius` (none behind a wall; the thrower too), a push, and a crater `carve` blocks round (whole blocks in a world without destructible ones). The hits are `'explosion'`s with the item as their `weapon`. **The fire** (`fire`) burns on the ground round where it broke for `duration` seconds: flames and smoke on every screen, and `damage` a second (every half second) to anyone standing in it who isn't behind a wall (`'fire'`).
 - **On screen.** A count of each throwable with a key over the rounds (bottom right; a cooked one shakes), the fuse burning down round the crosshair while it's cooked, and a warning marker (at the screen's edge when it's off it) on any live one that could reach you. In first person the `throw` hold style holds it up by the shoulder, and it's thrown with the `toss` animation; others see the thrower's arm swing (a humanoid figure throws overarm: its arm cocked back over the shoulder, the other out ahead, then whipped over and down).
-- **From code.** `player.throw(item, { at, yaw, pitch, cook })` throws one of theirs from their eyes: along their view (or the one given), or lobbed to come down at `at` (up at about 40 degrees, as hard as that needs, so it doesn't roll far). It's how bots throw; a bot can also hold the key through its controls (`bot.controls.hold('KeyG')`, then let go) and cook it for as long as it holds. `game.items.thrown` lists what's in the air (where, whose, how far it reaches, seconds to go) and `game.items.fires` the fires burning: what a bot keeps away from.
+- **From code.** `throwables.of(game).throw(player, item, { at, yaw, pitch, cook })` throws one of theirs from their eyes: along their view (or the one given), or lobbed to come down at `at` (up at about 40 degrees, as hard as that needs, so it doesn't roll far). It's how bots throw; a bot can also hold the key through its controls (`bot.controls.hold('KeyG')`, then let go) and cook it for as long as it holds. `throwables.of(game).thrown()` lists what's in the air (where, whose, how far it reaches, seconds to go) and `fires()` the fires burning: what a bot keeps away from.
 - **Controllers:** give the key a button with the game's `gamepad` (Call of Blocky: `RB: ['KeyG', 'lethal']`); hold to cook, let go to throw.
 
 ## Controllers

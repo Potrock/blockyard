@@ -8,12 +8,12 @@ import { ReplayPlayback } from './client/replay';
 import { Predictor } from './client/predict';
 import { GunController, type FiredShot } from './client/guns';
 import { Flights, ThrowController } from './client/throwables';
-import { flightWorld, fuseSteps, isThrowable, throwable } from './sim/throwables';
+import { flightWorld } from './sim/flight';
 import { Rubble, damageTaken } from './render/rubble';
 import { freshMemory, resolveMovement, type MoveTune } from './sim/movement';
-import { assistOf, gun as gunOf, isGun, moveMods, playerBoxes, rayBox, resolveGunRules, spreadDeg, type Assist, type Gun, type GunRules } from './sim/guns';
+import { assistOf, fuseSteps, gun as gunOf, gunMove, isGun, isThrowable, resolveGunRules, spreadDeg, throwable, type Assist, type BowOwn, type Gun, type GunRules, type GunShown, type MeleeOwn, type ShotWire, type ThrowOwn } from '@platform/items';
+import { playerBoxes, rayBox, resolveHitscan, type HitscanRules } from './sim/hitboxes';
 import { bulletPath, type WallPass } from './sim/hitscan';
-import type { ShotWire } from './sim/combat';
 import { ClientMovers, propPose } from './client/movers';
 import { heading, toWorld } from './sim/movers';
 import { VehicleView } from './client/vehicle';
@@ -49,7 +49,7 @@ import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
 import type { SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
-import { MESSAGE_MAX, newRoomCode, ROOM_CODE, type DevReply, type HostBatch, type PlayerInput, type PresentCall, type ReplayEvent, type ReplayWire, type TimedBatch } from './net/protocol';
+import { MESSAGE_MAX, newRoomCode, ROOM_CODE, type DevReply, type HostBatch, type PresentCall, type ReplayEvent, type ReplayWire, type TimedBatch } from './net/protocol';
 import { sanitizeGameMessage } from './net/validate';
 import { clipFrame, type ClipFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
@@ -199,11 +199,13 @@ export class Runtime {
   private guns: GunController;
   /** The game's gun rules (`guns`), as the host plays them: movement, reloading, hitboxes. */
   private gunRules: GunRules;
+  /** Where bullets meet players (`hitscan`), as the host has it. */
+  private hitscanRules: HitscanRules;
   /** Shots fired and not yet sent (they go with the frame's controls). */
   private shotQueue: [number, number, number, number][] = [];
   /** Throwables: cooked and thrown on this screen at once; the throws not yet sent. */
   private throwsCtl!: ThrowController;
-  private throwQueue: NonNullable<PlayerInput['throws']> = [];
+  private throwQueue: [number, string, number, number, number, number, number, number, number][] = [];
   /** Throwables in the air (ours, and everyone's), flown here. */
   private flights!: Flights;
   /** `client.hud`: client code's layers and stylesheets. */
@@ -280,6 +282,7 @@ export class Runtime {
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
     this.tune = resolveMovement(def.player?.movement);
     this.gunRules = resolveGunRules(def.guns);
+    this.hitscanRules = resolveHitscan(def.hitscan);
     this.guns = new GunController(this.gunRules);
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
     // The keys this game reads its moves by: a controller presses them, and the player's key bindings read as them.
@@ -545,7 +548,17 @@ export class Runtime {
     this.link.onClose = () => this.disconnected();
     if (this.walker) {
       // Movement as the server moves them: the game's tuning, and what they hold (a heavy gun, aiming).
-      this.predictor = new Predictor(this.chunks.world, this.tune, (input) => moveMods(this.heldDef(), input.buttons, this.mine(this.frameData)?.speed ?? 1, this.gunRules), worldQuery(this.chunks.world, this.registry));
+      // What the held item does to movement, as the host works it out (its kind's `move`): here, a gun's.
+      this.predictor = new Predictor(
+        this.chunks.world,
+        this.tune,
+        (input) => {
+          const def = this.heldDef();
+          const item = isGun(def) ? gunMove(def, input.buttons, this.gunRules) : null;
+          return { speed: (this.mine(this.frameData)?.speed ?? 1) * (item?.speed ?? 1), noSprint: item?.noSprint ?? false };
+        },
+        worldQuery(this.chunks.world, this.registry),
+      );
       this.movers = new ClientMovers(this.chunks.world, this.content, this.registry, (b) => this.blockId(b));
     }
 
@@ -987,7 +1000,7 @@ export class Runtime {
       maxHealth: p.maxHealth,
       bob: { phase: p.bob * Math.PI * 0.9, amount: this.settings.viewBobbing && p.onGround && !p.flying ? Math.min(1, Math.hypot(p.vx, p.vz) / 4.3) : 0 },
       thirdPerson: false,
-      hand: { item: stack?.item ?? null, count: stack?.count ?? 0, strength: this.itemMode ? p.hand.strength : 1, drawing: p.hand.drawing, charge: p.hand.charge },
+      hand: this.handOf(p, stack),
       held: this.replayHeld(p, stack?.item ?? null),
       abilities: {},
       quick: [],
@@ -998,7 +1011,7 @@ export class Runtime {
   /** The followed player's held gun as the replay's frame has it (its rounds, reload, how far it's aimed). */
   private replayHeld(p: PlayerFrame, item: string | null): Me['held'] {
     const def = item ? this.content.items.get(item) : undefined;
-    const h = p.hand.gun;
+    const h = p.hand.state as GunShown | null;
     if (!item || !isGun(def) || !h) return null;
     const g = gunOf(def);
     const shells = def.shells ? Math.max(0, Math.min(def.magazine - h.mag, h.reserve)) : 0;
@@ -1103,7 +1116,7 @@ export class Runtime {
         this.predictor?.reconcile(me);
         this.vehicles.reconcile(me);
         if (me.dead) this.guns.reset();
-        else this.guns.reconcile(me.hand.gun);
+        else this.guns.reconcile(this.gunShown(me));
       }
     }
   }
@@ -1164,7 +1177,7 @@ export class Runtime {
       dead: false,
       deathTime: 0,
       hotbar: null,
-      hand: { drawing: false, charge: 0, strength: 1 },
+      hand: { state: null },
       camera: { p: [sp.x, sp.y + 1.62, sp.z], q: [0, 0, 0, 1], fov: this.settings.fov, follow: false },
       vehicle: null,
       creative: null,
@@ -1178,7 +1191,6 @@ export class Runtime {
       skin: null,
       model: null,
       color: null,
-      throws: 0,
       ride: null,
       orbit: null,
     };
@@ -1217,7 +1229,7 @@ export class Runtime {
       this.avatarHurt.set(p.id, h);
       const held = p.hotbar?.slots[p.hotbar.selected]?.item ?? null;
       // The held item's mechanics, as the frame reports them (a gun's aim and reload): the dead aim nothing.
-      const mech = p.dead ? undefined : p.hand.gun;
+      const mech = p.dead ? undefined : this.gunShown(p);
       out.push({
         id,
         player: p.id,
@@ -1984,7 +1996,7 @@ export class Runtime {
     const slots = me.hotbar?.slots ?? [];
     const quick = this.throwsCtl.quick(slots).map((item) => {
       const d = this.content.items.get(item);
-      return { item, count: this.throwsCtl.count(slots, item, me.throws ?? 0), key: isThrowable(d) && d.key ? d.key : '' };
+      return { item, count: this.throwsCtl.count(slots, item, this.thrownOf(me)), key: isThrowable(d) && d.key ? d.key : '' };
     });
     const c = this.throwsCtl.cooking;
     return {
@@ -2003,7 +2015,7 @@ export class Runtime {
       maxHealth: me.maxHealth,
       bob: { phase: me.bob * Math.PI * 0.9, amount: this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0 },
       thirdPerson: this.view.thirdPerson,
-      hand: { item: stack?.item ?? null, count: stack?.count ?? 0, strength: this.itemMode ? me.hand.strength : 1, drawing: me.hand.drawing, charge: me.hand.charge },
+      hand: this.handOf(me, stack),
       // The held gun as its controller has it (the newest frame's hand: what fires, and what the HUD shows).
       held: this.heldGun(me),
       abilities: {},
@@ -2051,6 +2063,27 @@ export class Runtime {
     return { mag: st.mag, reserve: st.reserve, spread, color: gunOf(this.guns.def!).aim.color };
   }
 
+  /**
+   * `client.me.hand` from a player's frame: what's in it, and the melee and bow kits' word (their
+   * `items.melee` readiness, `items.bow` draw).
+   */
+  private handOf(p: PlayerFrame, stack: ItemStack | null): Me['hand'] {
+    const melee = p.items?.melee as MeleeOwn | undefined;
+    const bow = p.items?.bow as BowOwn | undefined;
+    return { item: stack?.item ?? null, count: stack?.count ?? 0, strength: this.itemMode ? (melee?.strength ?? 1) : 1, drawing: bow?.drawing ?? false, charge: bow?.charge ?? 0 };
+  }
+
+  /** A player's held gun as the host shows it (the gun kit's `hand.state`), or null. */
+  private gunShown(p: PlayerFrame): GunShown | null {
+    const stack = p.hotbar?.slots[p.hotbar.selected];
+    return stack && isGun(this.content.items.get(stack.item)) ? (p.hand.state as GunShown | null) : null;
+  }
+
+  /** The last throw of this screen's the host has taken (the throwable kit's `items.throwable`). */
+  private thrownOf(p: PlayerFrame): number {
+    return (p.items?.throwable as ThrowOwn | undefined)?.thrown ?? 0;
+  }
+
   /** The item in this player's hand, as the newest frame has it. */
   private heldDef(): ItemDefinition | undefined {
     const me = this.mine(this.frameData);
@@ -2058,12 +2091,14 @@ export class Runtime {
     return stack ? this.content.items.get(stack.item) : undefined;
   }
 
-  /** Shots fired since the last controls sent go with these ones, and what this screen is showing. */
-  private withShots<T extends { shots?: [number, number, number, number][]; throws?: PlayerInput['throws']; seen?: number }>(input: T): T {
+  /**
+   * Shots fired and throws made since the last controls sent go with these ones (the gun's and the
+   * throwable's actions: `PlayerInput.acts`), and what this screen is showing.
+   */
+  private withShots<T extends { acts?: Record<string, unknown[][]>; seen?: number }>(input: T): T {
     if (this.walker && this.itemMode) {
-      input.shots = this.shotQueue;
+      input.acts = { gun: this.shotQueue, throwable: this.throwQueue };
       this.shotQueue = [];
-      input.throws = this.throwQueue;
       this.throwQueue = [];
     }
     input.seen = this.shownT;
@@ -2074,7 +2109,7 @@ export class Runtime {
   private gunFrame(dt: number, active: boolean, me: PlayerFrame): FiredShot[] {
     const stack = me.hotbar?.slots[me.hotbar.selected] ?? null;
     const def = stack ? this.content.items.get(stack.item) : undefined;
-    this.guns.hold(isGun(def) ? stack!.item : null, def, me.hand.gun);
+    this.guns.hold(isGun(def) ? stack!.item : null, def, this.gunShown(me));
     if (!this.guns.state) return [];
     const p = this.predictor?.shown() ?? me;
     const body = { moving: Math.hypot(p.vx, p.vz) / Math.max(1, this.tune.params[0]), air: !p.onGround, crouch: p.sneaking, sprinting: p.sprinting, dead: me.dead };
@@ -2149,7 +2184,7 @@ export class Runtime {
     let { end, normal, block, walls } = bulletPath(this.chunks.world, this.registry, o, d, range, pen);
     let body = false;
     for (const p of others) {
-      const b = playerBoxes(p, p.sliding ? 2 : p.sneaking ? 1 : 0, this.gunRules);
+      const b = playerBoxes(p, p.sliding ? 2 : p.sneaking ? 1 : 0, this.hitscanRules);
       const t = Math.min(rayBox(o, d, b.body[0], b.body[1]) ?? Infinity, rayBox(o, d, b.head[0], b.head[1]) ?? Infinity);
       if (t < end) {
         end = t;
@@ -2236,7 +2271,7 @@ export class Runtime {
     const held = me.hotbar ? (slots[me.hotbar.selected]?.item ?? null) : null;
     const p = this.predictor?.shown() ?? me;
     const eye = { x: p.x, y: p.y + (p.sneaking && !p.flying ? 1.27 : 1.62), z: p.z };
-    const made = this.throwsCtl.update(dt, { active: active && !me.dead && !me.vehicle, isDown: (c) => this.input.isDown(c), fire: this.input.button(0) }, slots, held, me.throws ?? 0, eye, this.view.yaw, this.view.pitch, (item) => this.emit({ t: 'cook', item }));
+    const made = this.throwsCtl.update(dt, { active: active && !me.dead && !me.vehicle, isDown: (c) => this.input.isDown(c), fire: this.input.button(0) }, slots, held, this.thrownOf(me), eye, this.view.yaw, this.view.pitch, (item) => this.emit({ t: 'cook', item }));
     if (!made) return;
     const def = this.content.items.get(made.item);
     if (!isThrowable(def)) return;

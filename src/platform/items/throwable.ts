@@ -1,6 +1,4 @@
-import type { VoxelWorld } from '@engine/voxel_engine.js';
-import type { ItemDefinition, ThrowableItem, Vec3 } from '../api/types';
-import type { Registry } from '../world/registry';
+import type { ItemDefinition, ThrowableItem, Vec3 } from '@platform';
 
 /**
  * Throwables (`kind: 'throwable'`): how one flies, bounces, rolls and comes to rest, shared by the
@@ -16,7 +14,7 @@ import type { Registry } from '../world/registry';
 /** Seconds a flight step lasts. */
 export const STEP = 1 / 120;
 
-export const DEG = Math.PI / 180;
+const DEG = Math.PI / 180;
 
 /** A throwable's settings with the defaults filled in. */
 export interface Throwable {
@@ -90,27 +88,6 @@ export interface Flight {
 /** What a flight asks of the world: the first solid block along a ray (unit `d`): how far, and the face it hits. */
 export interface FlightWorld {
   hit(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, max: number): { t: number; nx: number; ny: number; nz: number } | null;
-}
-
-/**
- * Solid blocks, as a flight meets them: through plants, torches and anything else bodies walk
- * through, stopping where a damaged block (or a slab) really is.
- */
-export function flightWorld(world: VoxelWorld, registry: Registry): FlightWorld {
-  return {
-    hit(ox, oy, oz, dx, dy, dz, max) {
-      let from = 0;
-      for (let i = 0; i < 8; i++) {
-        const r = world.raycast(ox + dx * from, oy + dy * from, oz + dz * from, dx, dy, dz, max - from);
-        if (!r[0]) return null;
-        const t = from + r[8];
-        if (registry.blocks[r[7]]?.solid) return { t, nx: r[4], ny: r[5], nz: r[6] };
-        from = t + 0.02;
-        if (from >= max) return null;
-      }
-      return null;
-    },
-  };
 }
 
 /** How fast it leaves the hand, thrown along a view (lobbed `lift` degrees above it), at `speed` (its own, thrown hard). */
@@ -244,4 +221,9 @@ export function flyFor(f: Flight, t: Throwable, w: FlightWorld, acc: { t: number
     if (s > 0) hit?.(s);
   }
   return f.steps >= f.fuse || (t.impact && f.struck);
+}
+
+/** A player's throws (`items.throwable` on their screen): the last one their screen made that the host has taken (or turned down). */
+export interface ThrowOwn {
+  thrown: number;
 }

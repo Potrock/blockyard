@@ -1,7 +1,8 @@
 # Redesign, part 2: item kinds as kits
 
-Status: **in progress** (started 2026-09-26, following REDESIGN-CLIENT-SERVER.md's "Later").
-The user asked to continue the refactor for the edges and overfits raised after phases 1 to 3.
+Status: **in progress**. 4a (the mechanism and the host halves) is built; 4b to 4e are next.
+Started 2026-09-26, following REDESIGN-CLIENT-SERVER.md's "Later": the user asked to continue the
+refactor for the edges and overfits raised after phases 1 to 3.
 
 ## Why
 
@@ -161,6 +162,50 @@ the held item's `state` on each figure. The runtime keeps no gun or throwable st
   presentation kits import those types from the item kits.
 - `Me.hand.strength`, `drawing` and `charge`, and `Me.quick` / `cooking`, move to
   `me.items.melee`, `me.items.bow` and `me.items.throwable`.
+
+## What 4a changed from the design above
+
+Building it settled a few things the design left open:
+
+- **A kit is a factory, started once per game.** A game lists `ItemKit`s (`(host) => ItemKind`),
+  and the simulation starts each one's kind with that game's `ItemHost`. Whatever a kind keeps
+  (grenades in flight, each player's cooldown) then belongs to that game alone, as `ThrowSim` did,
+  even with several games in one process (headless tests). Game code reaches the running kind with
+  `game.items.kind('gun')`, through typed helpers: `guns.of(game)` and `throwables.of(game)`.
+- **Screen actions arrive inside `step`** (`use.acts`, null when their screen doesn't run the
+  kind) rather than in a separate hook before it. The gun takes its shots after its timers
+  (cooldown, rate tokens, the reload), as it always did.
+- **`holds`** on a kind means it takes the mouse buttons when held (guns, bows, throwables,
+  melee). The bare fist (the melee kit) swings only when the held item's kind doesn't hold. That
+  way the order of the list matters only where a kind consumes a control from the kinds after it
+  (a throwable being cooked takes the fire button from the gun).
+- **`reset(player, whole)`**: `whole` when a new person takes a player's place, whose screen counts
+  its actions from the start.
+- **Validation is generic, with meaning checked by the kind.** The server's input check takes
+  `acts` as plain data only: at most 8 kinds with names that aren't `Object.prototype`'s, 8
+  actions each, 16 values each, finite numbers, short strings, booleans. The host merges them
+  onto a null-prototype object, and each kit checks its own values (a gun's pitch and spread, a
+  throw's numbers) and skips anything else.
+- **Where frames carry kit state.** `PlayerFrame.hand` is `{ state }` (the held kind's `shown`)
+  and `items` is the kinds' `own`. The client runtime reads them through small helpers until 4b
+  moves the reading into the kits' client halves. `@platform/items` holds the types both sides
+  read (`GunShown`, `ShotWire`, `MeleeOwn`, `BowOwn`, `ThrowOwn`).
+- **New public primitives, each generic:**
+  - `ItemHost`: `bodies`, `solid`, `blast`, `send` (to one screen, to everyone, or to everyone
+    but one), `audio({ except })`, `emit`, `now`, `swing`, `guard`, and the `pvp` and `carves`
+    flags;
+  - `ItemUse.hitscan` with `rewind`;
+  - `inventory.state(item)`;
+  - a `margin` on `entities.raycast`, and `crit` / `weapon` on `ProjectileSpec`;
+  - `math.rayBox`;
+  - the `hitscan` option.
+- **Checked:**
+  - all 52 headless test files pass, including a new check of the server's `acts` validation;
+  - the seeded bot matches' stats are identical to main (Call of Blocky, High Noon, Arena,
+    Bed Wars);
+  - the production build's bundle check passes;
+  - in a browser against the real server, a rifle fires and spends its rounds, and a frag is
+    thrown and taken.
 
 ## Plan
 

@@ -5,8 +5,9 @@ import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
 import { Headless } from '../../src/platform/host/headless';
 import { worldGenConfig } from '../../src/platform/workers/config';
 import type { HostEvent, PlayerInput } from '../../src/platform/net/protocol';
-import type { ShotWire } from '../../src/platform/sim/combat';
-import { flightWorld, flyFor, fuseSteps, newFlight, throwable, throwVelocity } from '../../src/platform/sim/throwables';
+import { flyFor, fuseSteps, newFlight, throwable, throwVelocity, type ShotWire } from '../../src/platform/items';
+import { guns, melee, throwables } from '../../src/platform/kits';
+import { flightWorld } from '../../src/platform/sim/flight';
 import { blockIdOf, loadRegistry } from '../../src/platform/world/registry';
 import { check } from './_harness';
 
@@ -34,6 +35,7 @@ const range = defineGame({
   world: { terrain: 'void', structures: [yard()], spawn: { x: 0.5, y: FLOOR, z: 4.5 }, time: 0.5, freezeTime: true, destructible: { above: FLOOR - 1 } },
   // Plenty of health: the test measures the damage rather than who dies.
   player: { health: 1000, hurtCooldown: 0, hotbar: 'items', pvp: true },
+  items: [throwables(), guns(), melee()],
   setup(game) {
     game.items.define('frag', LETHALS.frag);
     game.items.define('molotov', LETHALS.molotov);
@@ -97,7 +99,7 @@ export default function destruction() {
   const calls = (method: string) => events.filter((e) => e.t === 'call' && e.call.method === method).map((e) => (e as Extract<HostEvent, { t: 'call' }>).call);
   /** The platform's messages to the screens (`$thrown`, `$thrownEnd`, `$fire`): each one's data. */
   const said = (name: string) => calls(name).map((c) => c.args[0] as unknown[]);
-  const input = (o: Partial<PlayerInput> = {}): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: A.yaw, pitch: A.pitch, viewSeq: A.viewSeq, shots: [], throws: [], ...o });
+  const input = (o: Partial<PlayerInput> = {}): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: A.yaw, pitch: A.pitch, viewSeq: A.viewSeq, acts: { gun: [], throwable: [] }, ...o });
   step(4);
   const hurt = new Map<Player, { amount: number; cause: string; weapon?: string; through?: number }[]>();
   game.events.on('damage', (e) => {
@@ -149,11 +151,11 @@ export default function destruction() {
   const far = dummy('Far', { x: predicted.x + 7.5, y: FLOOR, z: predicted.z + 2 });
   for (const b of [near, mid, far]) b.freeze(true);
   step(3);
-  host.command(ann.id, { t: 'input', input: input({ throws: [[1, 'frag', eye.x, eye.y, eye.z, v.x, v.y, v.z, cooked]] }) });
+  host.command(ann.id, { t: 'input', input: input({ acts: { gun: [], throwable: [[1, 'frag', eye.x, eye.y, eye.z, v.x, v.y, v.z, cooked]] } }) });
   step();
   const told = bobHears.filter((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$thrown');
   check(A.api.inventory.count('frag') === 1 && told.length === 1 && said('$thrown').length === 0, 'the host took the throw (one frag left), and tells everyone but Ann (her screen flies it already)');
-  const live = game.items.thrown;
+  const live = throwables.of(game)!.thrown();
   check(live.length === 1 && live[0].item === 'frag' && live[0].by === A.api && live[0].radius === frag.blast!.radius && Math.abs(live[0].left - (fuse - 2) / 120) < 0.02, `items.thrown lists it: ${JSON.stringify(live.map((l) => ({ ...l, by: l.by.name })))}`);
   const damageBefore = host.world.world.damage_count();
   for (let i = 0; i < 30 * 5 && !said('$thrownEnd').length; i++) step();
@@ -204,8 +206,8 @@ export default function destruction() {
   step(4);
   const spot = { x: -4.5, y: FLOOR, z: 0.5 };
   events.length = 0;
-  check(lobber.throw('frag', { at: spot }), 'player.throw: a bot lobs one at a spot');
-  check(!lobber.throw('frag', { at: spot }) && lobber.inventory.count('frag') === 1, 'not again straight away (its cooldown); one used');
+  check(throwables.of(game)!.throw(lobber, 'frag', { at: spot }), 'throwables.throw: a bot lobs one at a spot');
+  check(!throwables.of(game)!.throw(lobber, 'frag', { at: spot }) && lobber.inventory.count('frag') === 1, 'not again straight away (its cooldown); one used');
   step();
   check(said('$thrown').length === 1, 'everyone sees it thrown (Ann too)');
   for (let i = 0; i < 30 * 5 && !said('$thrownEnd').length; i++) step();
@@ -242,13 +244,14 @@ export default function destruction() {
   const clear = dummy('Clear', { x: lands.x + 5, y: FLOOR, z: lands.z });
   for (const b of [inFire, clear]) b.freeze(true);
   step(3);
-  host.command(ann.id, { t: 'input', input: input({ throws: [[2, 'molotov', meye.x, meye.y, meye.z, mv.x, mv.y, mv.z, 0]] }) });
+  host.command(ann.id, { t: 'input', input: input({ acts: { gun: [], throwable: [[2, 'molotov', meye.x, meye.y, meye.z, mv.x, mv.y, mv.z, 0]] } }) });
   events.length = 0;
   step(30 * 3);
   const fire = said('$fire')[0];
   check(fire && Math.hypot((fire[1] as number) - lands.x, (fire[3] as number) - lands.z) < 0.01, 'a fire where it broke');
   const burns = [...(hurt.get(inFire) ?? [])];
-  check(game.items.fires.length === 1 && game.items.fires[0].radius === 3 && game.items.fires[0].left > 3, `items.fires lists it: ${JSON.stringify(game.items.fires.map((f) => ({ ...f, by: f.by.name })))}`);
+  const fires = throwables.of(game)!.fires();
+  check(fires.length === 1 && fires[0].radius === 3 && fires[0].left > 3, `fires lists it: ${JSON.stringify(fires.map((f) => ({ ...f, by: f.by.name })))}`);
   check(burns.length >= 4 && burns.every((h) => h.cause === 'fire' && h.weapon === 'molotov'), `the one in the fire burns, again and again: ${burns.length} burns, ${took(inFire).toFixed(0)} damage`);
   check(!hurt.has(clear), 'the one outside it, not at all');
   const before = took(inFire);
@@ -277,7 +280,7 @@ export default function destruction() {
     const yaw = Math.atan2(-(c.x - e.x), -(c.z - e.z));
     const pitch = Math.atan2(c.y - e.y, Math.hypot(c.x - e.x, c.z - e.z));
     bobHears.length = 0;
-    host.command(ann.id, { t: 'input', input: input({ yaw, pitch, shots: [[serial, yaw, pitch, 0]], seen: sim.time }) });
+    host.command(ann.id, { t: 'input', input: input({ yaw, pitch, acts: { gun: [[serial, yaw, pitch, 0]], throwable: [] }, seen: sim.time }) });
     step();
     // (What everyone else's screen draws: Ann's drew it herself.)
     const shot = bobHears.find((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$shot');

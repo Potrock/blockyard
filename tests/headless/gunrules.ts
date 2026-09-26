@@ -1,20 +1,28 @@
 import { readFileSync } from 'node:fs';
-import { defineGame, Models, type DamageEvent, type GameDefinition, type GunOptions } from '../../src/platform';
+import { defineGame, Models, type DamageEvent, type GameDefinition, type GunOptions, type HitscanOptions } from '../../src/platform';
 import { GameHost } from '../../src/platform/host/game';
 import type { PlayerInput } from '../../src/platform/net/protocol';
-import { assistOf, gun, moveMods, resolveGunRules } from '../../src/platform/sim/guns';
+import { assistOf, gun, gunMove, resolveGunRules } from '../../src/platform/items';
+import { guns as gunKit, melee } from '../../src/platform/kits';
+import { resolveHitscan } from '../../src/platform/sim/hitboxes';
 import { check } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');
 
-/** A flat field and a gun with no spread (like `guns.ts`), under the given gun rules. */
-const range = (guns?: GunOptions): GameDefinition =>
-  defineGame({
+/** The rules a test plays under: the gun kit's, and where bullets meet players (`hitscan`). */
+type Rules = GunOptions & HitscanOptions;
+
+/** A flat field and a gun with no spread (like `guns.ts`), under the given rules. */
+const range = (rules?: Rules): GameDefinition => {
+  const { rewind, hitboxes, ...guns } = rules ?? {};
+  return defineGame({
     id: 'range',
     title: 'Range',
     world: { terrain: 'flat', flatHeight: 64, spawn: { x: 0.5, y: 65, z: 0.5 }, time: 0.5, freezeTime: true },
     player: { health: 100, hurtCooldown: 0, pvp: true, hotbar: 'items' },
+    hitscan: { rewind, hitboxes },
     guns,
+    items: [gunKit(guns), melee()],
     setup(game) {
       game.items.define('rifle', {
         kind: 'gun',
@@ -34,11 +42,12 @@ const range = (guns?: GunOptions): GameDefinition =>
       game.entities.define('dummy', { name: 'Dummy', model: Models.humanoid({ skin: [0, 0] }), hitbox: { width: 0.6, height: 1.8 }, health: 40, speed: 0 });
     },
   });
+};
 
-const idle = (viewSeq: number): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq, shots: [] });
+const idle = (viewSeq: number): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: 0, pitch: 0, viewSeq, acts: { gun: [] } });
 
 /** Ann and Bob in a game with these rules: Ann holds the rifle, Bob stands 8 blocks in front of her. */
-function duel(guns?: GunOptions) {
+function duel(guns?: Rules) {
   const host = new GameHost(range(guns), { engine: wasm, seed: 1, remote: true, radius: 3, budget: Infinity, player: { id: 'p1', name: 'Ann' } });
   const ann = host.connect('Ann');
   const bob = host.connect('Bob');
@@ -65,7 +74,7 @@ function duel(guns?: GunOptions) {
   /** One shot from Ann's screen at Bob's `dy` above his feet, as it was showing him at `seen`. */
   const fire = (dy: number, at = B.position, seen = sim.time) => {
     const aim = aimAt(at, dy);
-    host.command(ann.id, { t: 'input', input: { ...idle(A.viewSeq), yaw: aim.yaw, pitch: aim.pitch, shots: [[serial++, aim.yaw, aim.pitch, 0]], seen } });
+    host.command(ann.id, { t: 'input', input: { ...idle(A.viewSeq), yaw: aim.yaw, pitch: aim.pitch, acts: { gun: [[serial++, aim.yaw, aim.pitch, 0]] }, seen } });
     step();
   };
   const hurt: { amount: number; head: boolean }[] = [];
@@ -81,7 +90,7 @@ function duel(guns?: GunOptions) {
  */
 export default function gunrules() {
   // Defaults: exactly today's numbers.
-  const d = resolveGunRules();
+  const d = { ...resolveGunRules(), ...resolveHitscan() };
   check(d.rewind === 0.35 && d.rateSlack === 3 && d.autoReload && d.aimSlows && d.aimStopsSprint && d.fireStopsSprint, `default rules: ${JSON.stringify(d)}`);
   check(JSON.stringify(d.boxes) === JSON.stringify([[1.5, 2, 0.36, 0.28], [1.2, 1.7, 0.38, 0.3], [0.85, 1.4, 0.45, 0.45]]), `default hitboxes: ${JSON.stringify(d.boxes)}`);
 
@@ -121,11 +130,11 @@ export default function gunrules() {
   // No reloading by itself: an emptied magazine stays empty until R.
   for (const autoReload of [true, false]) {
     const t = duel({ autoReload });
-    t.A.api.inventory.setAmmo('rifle', { magazine: 1, reserve: 30 });
+    gunKit.of(t.sim.ctx)!.setAmmo(t.A.api, 'rifle', { magazine: 1, reserve: 30 });
     t.step();
     t.fire(1.0);
     t.step(60);
-    const ammo = t.A.api.inventory.ammo('rifle')!;
+    const ammo = gunKit.of(t.sim.ctx)!.ammo(t.A.api, 'rifle')!;
     check(ammo.magazine === (autoReload ? 30 : 0), `autoReload ${autoReload}: magazine ${ammo.magazine} two seconds after emptying`);
   }
 
@@ -138,7 +147,7 @@ export default function gunrules() {
     });
     t.step(30);
     const many = Array.from({ length: 8 }, () => [t.serial(), 0, 0, 0] as [number, number, number, number]);
-    t.host.command(t.ann.id, { t: 'input', input: { ...idle(t.A.viewSeq), shots: many, seen: t.sim.time } });
+    t.host.command(t.ann.id, { t: 'input', input: { ...idle(t.A.viewSeq), acts: { gun: many }, seen: t.sim.time } });
     t.step();
     return shots;
   };
@@ -147,9 +156,9 @@ export default function gunrules() {
 
   // Movement: aiming and firing stop a sprint and aiming slows, unless the rules say not.
   const rifle = { kind: 'gun', name: 'R', icon: 'iron_sword', rpm: 600, damage: 1, magazine: 1, reload: 1, aim: { move: 0.5 } } as const;
-  const def = moveMods(rifle, 4 | 1);
-  const free = moveMods(rifle, 4 | 1, 1, resolveGunRules({ aimSlows: false, aimStopsSprint: false, fireStopsSprint: false }));
-  const aimOnly = moveMods(rifle, 1, 1, resolveGunRules({ fireStopsSprint: false }));
+  const def = gunMove(rifle, 4 | 1);
+  const free = gunMove(rifle, 4 | 1, resolveGunRules({ aimSlows: false, aimStopsSprint: false, fireStopsSprint: false }));
+  const aimOnly = gunMove(rifle, 1, resolveGunRules({ fireStopsSprint: false }));
   check(def.noSprint && def.speed === 0.5 && !free.noSprint && free.speed === 1 && !aimOnly.noSprint, `move mods: ${JSON.stringify({ def, free, aimOnly })}`);
 
   // Aim assist's shape: the gun's own over the game's over the defaults.
@@ -181,9 +190,8 @@ export default function gunrules() {
   check(e.part === 'head' && e.headshot === true && t.hurt.at(-1)!.amount === 10, `a head hit: part ${e.part}, ${t.hurt.at(-1)!.amount} damage`);
   rule = (e) => e.target.kind === 'player' && e.cause === 'gun' && e.cancel();
   const hurtBefore = t.hurt.length;
-  const hits = t.A.combat.hits;
   t.fire(1.0);
-  check(heard.at(-1)!.cancelled && t.hurt.length === hurtBefore && hp() === 85 && t.A.combat.hits === hits, `cancelled: no playerDamage, health ${hp()}, no hit counted`);
+  check(heard.at(-1)!.cancelled && t.hurt.length === hurtBefore && hp() === 85, `cancelled: no playerDamage, health ${hp()}`);
   // Setting it to nothing cancels it too.
   rule = (e) => (e.amount = 0);
   check(!t.B.api.damage(5, { source: 'world' }) && hp() === 85, 'amount 0: nothing lands');

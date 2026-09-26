@@ -1,6 +1,5 @@
 import type { GunItem, ItemDefinition, Vec3 } from '../api/types';
-import { addBloom, canReload, DEFAULT_GUN_RULES, freshGun, gun, pelletDirs, RAISE, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunRules, type GunState } from '../sim/guns';
-import type { PlayerFrame } from '../sim/player';
+import { addBloom, canReload, DEFAULT_GUN_RULES, freshGun, gun, pelletDirs, RAISE, settleBloom, spreadDeg, startReload, stepAim, stepReload, type Gun, type GunRules, type GunShown, type GunState } from '@platform/items';
 
 /** The controls a gun reads this frame (the page's own input, as the snapshot will send it). */
 export interface GunControls {
@@ -62,7 +61,7 @@ export class GunController {
   constructor(private rules: GunRules = DEFAULT_GUN_RULES) {}
 
   /** The gun in hand changed (or none): take the host's state for it, else what we had, else a full one. */
-  hold(item: string | null, def: ItemDefinition | undefined, host: PlayerFrame['hand']['gun'] | undefined) {
+  hold(item: string | null, def: ItemDefinition | undefined, host: GunShown | null | undefined) {
     if (item === this.item) return;
     if (this.item && this.state) {
       this.state.reload = -1;
@@ -91,7 +90,7 @@ export class GunController {
   }
 
   /** The host's view of the held gun (from the newest frame): taken when things are quiet here. */
-  reconcile(host: PlayerFrame['hand']['gun'] | undefined) {
+  reconcile(host: GunShown | null | undefined) {
     const st = this.state;
     if (!st || !host) return;
     if (host.serial > st.serial) st.serial = host.serial;

@@ -1,3 +1,4 @@
+import { throwables } from '../../src/platform/kits';
 import { launch } from './_harness';
 
 /** Probe: Call of Blocky's bots' lethals over three 2-minute matches: thrown, kills, and bots killed by their own. */
@@ -16,7 +17,7 @@ export default function lethals() {
     h.run(120, {
       pilot: () => null,
       until: (hh) => {
-        const n = hh.ctx.items.thrown.length;
+        const n = throwables.of(hh.ctx)!.thrown().length;
         if (n > flying) thrown += n - flying;
         flying = n;
         return false;

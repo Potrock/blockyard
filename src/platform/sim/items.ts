@@ -1,7 +1,7 @@
-import type { AtlasPixels, GameContext, GameEvents, ItemApi, ItemDefinition, ItemStack, InventoryApi, Pickup, Player, ThrownInfo, Vec3 } from '../api/types';
+import type { AtlasPixels, GameContext, GameEvents, ItemApi, ItemDefinition, ItemStack, InventoryApi, Pickup, Player, Vec3 } from '../api/types';
 import type { Content } from '../content';
 import type { Presentation } from './present';
-import { freshGun, isGun, type GunState } from './guns';
+import type { ItemKind } from '../api/items';
 
 export interface ItemServices {
   ctx(): GameContext;
@@ -20,9 +20,8 @@ export interface ItemServices {
   content: Content;
   /** Sounds and toasts for the player who picks something up. */
   present: Presentation;
-  /** Throwables in the air and the fires they started (`items.thrown`, `items.fires`). */
-  thrown(): ThrownInfo[];
-  fires(): { position: Vec3; radius: number; left: number; by: Player }[];
+  /** The game's running item kinds (`items.kind`). */
+  kind(name: string): ItemKind | null;
 }
 
 /** One pickup as the client draws it. */
@@ -41,45 +40,47 @@ export class Inventory implements InventoryApi {
   readonly slots: (ItemStack | null)[] = new Array(9).fill(null);
   selected = 0;
   onChange: (() => void) | null = null;
-  /** Each gun carried: its rounds and what it's doing (a fresh one comes full). */
-  readonly guns = new Map<string, GunState>();
+  /** Each carried item's state, as its kind keeps it (`ItemKind.state`: a gun's rounds; a fresh one comes full). */
+  private states = new Map<string, object>();
 
-  constructor(private defs: Map<string, ItemDefinition>) {}
+  constructor(
+    private defs: Map<string, ItemDefinition>,
+    /** The game's item kinds, by kind (`items`). */
+    private kinds: ReadonlyMap<string, ItemKind> = new Map(),
+  ) {}
+
+  def(item: string): ItemDefinition | undefined {
+    return this.defs.get(item);
+  }
+
+  private kindOf(item: string): ItemKind | undefined {
+    const d = this.defs.get(item);
+    return d ? this.kinds.get(d.kind) : undefined;
+  }
 
   get held(): ItemStack | null {
     return this.slots[this.selected];
   }
 
   private max(item: string): number {
-    const d = this.defs.get(item);
-    return d?.stack ?? (d && (d.kind === 'melee' || d.kind === 'bow' || d.kind === 'gun') ? 1 : 64);
+    return this.defs.get(item)?.stack ?? this.kindOf(item)?.stack ?? 64;
   }
 
-  /** A gun's state, if it's carried. */
-  gunState(item: string): GunState | null {
-    const def = this.defs.get(item);
-    if (!isGun(def) || this.count(item) === 0) return null;
-    let g = this.guns.get(item);
-    if (!g) this.guns.set(item, (g = freshGun(def)));
-    return g;
+  state<S extends object = Record<string, unknown>>(item: string): S | null {
+    if (this.count(item) === 0) return null;
+    let st = this.states.get(item);
+    if (!st) {
+      const def = this.defs.get(item);
+      const k = this.kindOf(item);
+      if (!def || !k?.state) return null;
+      this.states.set(item, (st = k.state(def, item)));
+    }
+    return st as S;
   }
 
-  ammo(item: string): { magazine: number; reserve: number } | null {
-    const g = this.gunState(item);
-    return g && { magazine: g.mag, reserve: g.reserve };
-  }
-
-  setAmmo(item: string, a: { magazine?: number; reserve?: number }) {
-    const g = this.gunState(item);
-    const def = this.defs.get(item);
-    if (!g || !isGun(def)) return;
-    if (a.magazine !== undefined) g.mag = Math.max(0, Math.min(def.magazine, Math.floor(a.magazine)));
-    if (a.reserve !== undefined) g.reserve = Math.max(0, Math.floor(a.reserve));
-  }
-
-  /** Guns no longer carried lose their state (given again, they come full). */
+  /** Items no longer carried lose their state (given again, a gun comes full). */
   private forget() {
-    for (const item of [...this.guns.keys()]) if (this.count(item) === 0) this.guns.delete(item);
+    for (const item of [...this.states.keys()]) if (this.count(item) === 0) this.states.delete(item);
   }
 
   give(item: string, count = 1): number {
@@ -93,9 +94,10 @@ export class Inventory implements InventoryApi {
         left -= n;
       }
     }
-    // Full inventory: a better weapon replaces the weakest weapon of lower rank.
+    // Full inventory: a better weapon replaces the weakest weapon of lower rank (kinds that `upgrade`).
     const def = this.defs.get(item);
-    if (left > 0 && def && (def.kind === 'melee' || def.kind === 'bow') && !this.slots.includes(null)) {
+    const upgrades = !!this.kindOf(item)?.upgrades;
+    if (left > 0 && def && upgrades && !this.slots.includes(null)) {
       let worst = -1;
       let worstRank = def.rank ?? 0;
       this.slots.forEach((s, i) => {
@@ -115,7 +117,7 @@ export class Inventory implements InventoryApi {
         // Auto-equip strictly better weapons.
         const def = this.defs.get(item);
         const cur = this.held ? this.defs.get(this.held.item) : undefined;
-        if (def && (def.kind === 'melee' || def.kind === 'bow') && (!cur || (def.rank ?? 0) > (cur.rank ?? 0))) this.selected = i;
+        if (def && upgrades && (!cur || (def.rank ?? 0) > (cur.rank ?? 0))) this.selected = i;
       }
     }
     this.onChange?.();
@@ -155,7 +157,6 @@ export class Inventory implements InventoryApi {
 
   /**
    * The next slot with something in it (`by` of them on, or back for a negative), round the end.
-   * Throwables with a key of their own are thrown with it, and skipped.
    */
   cycle(by: number) {
     let at = this.selected;
@@ -174,7 +175,7 @@ export class Inventory implements InventoryApi {
   clear() {
     this.slots.fill(null);
     this.selected = 0;
-    this.guns.clear();
+    this.states.clear();
     this.onChange?.();
   }
 }
@@ -235,12 +236,8 @@ export class ItemSim implements ItemApi {
     return this.defs.get(id);
   }
 
-  get thrown(): ThrownInfo[] {
-    return this.s.thrown();
-  }
-
-  get fires(): { position: Vec3; radius: number; left: number; by: Player }[] {
-    return this.s.fires();
+  kind<K extends ItemKind = ItemKind>(name: string): K | null {
+    return this.s.kind(name) as K | null;
   }
 
   /** Ids of the defined items. */

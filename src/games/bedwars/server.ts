@@ -1,5 +1,5 @@
 import { defineServer, Models, type Actor, type GameContext, type Player } from '@platform';
-import { building, interactions, type Building, type Interactions } from '@platform/kits';
+import { bows, building, consumables, interactions, melee, type Building, type Interactions } from '@platform/kits';
 import { BEDWARS_ATLAS, Skin, botSword, paintBedwarsAtlas } from './art';
 import { Bot, type Target } from './bots';
 import { Fireballs } from './fireballs';
@@ -360,6 +360,8 @@ function refreshHud(game: GameContext) {
 // ---------------------------------------------------------------------------------------------
 
 export default defineServer(shared, {
+  // Its kinds of item: bows, swords and pickaxes (and the bare fist), golden apples and fire charges.
+  items: [bows(), melee(), consumables()],
   setup(game) {
     // The game's atlas goes to every screen: the skins, the bots' sword, and the item sprites the
     // screens' looks name. (Its items' looks and its voices are each screen's, `client/`; named and

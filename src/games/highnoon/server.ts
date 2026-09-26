@@ -1,5 +1,5 @@
 import { defineServer, type Bot, type GameContext, type Player, type WidgetHandle } from '@platform';
-import { navGrid } from '@platform/kits';
+import { guns, melee, navGrid } from '@platform/kits';
 import { makeBots, type Bots } from './bots';
 import { CYLINDER, DUEL, OUTFITS, ROUNDBAR, WANTED } from './hud';
 import { MAP, type SpawnPoint } from './map';
@@ -349,6 +349,8 @@ export const matchState = () => ({ phase, round });
 // -------------------------------------------------------------------------------------------------
 
 export default defineServer(shared, {
+  // Its kinds of item: guns, played by its rules (`shared.guns`), and the bare fist.
+  items: [guns(shared.guns), melee()],
   setup(game) {
     slingers = new Map();
     running = false;
@@ -419,7 +421,7 @@ export default defineServer(shared, {
       const now = game.clock.now;
       // Dead-eye: an aimed Peacemaker headshot, standing still, kills outright.
       const still = Math.hypot(by.velocity.x, by.velocity.z) < 0.6;
-      if (hit.weapon === 'revolver' && hit.part === 'head' && by.aiming && still) {
+      if (hit.weapon === 'revolver' && hit.part === 'head' && guns.of(game)?.aiming(by) && still) {
         hit.amount = Math.max(hit.amount, 500);
         by.hud.pop('DEAD-EYE', { big: true, color: COLORS.brass, sub: 'aimed, still, between the eyes' });
         by.audio.play('dead_eye');

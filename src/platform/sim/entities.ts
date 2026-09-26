@@ -525,9 +525,9 @@ export class EntitySim implements EntityApi {
     });
   }
 
-  raycast(origin: Vec3, dir: Vec3, maxDistance: number): { entity: Entity; distance: number } | null {
+  raycast(origin: Vec3, dir: Vec3, maxDistance: number, opts: { margin?: number } = {}): { entity: Entity; distance: number } | null {
     const l = Math.hypot(dir.x, dir.y, dir.z) || 1;
-    const hit = this.s.world.pick_body(origin.x, origin.y, origin.z, dir.x / l, dir.y / l, dir.z / l, maxDistance, 0.1);
+    const hit = this.s.world.pick_body(origin.x, origin.y, origin.z, dir.x / l, dir.y / l, dir.z / l, maxDistance, opts.margin ?? 0.1);
     if (hit[0] < 0) return null;
     const e = this.byBody(hit[0]);
     return e && e.alive ? { entity: e, distance: hit[1] } : null;

@@ -9,6 +9,7 @@
  * See docs/PLATFORM.md for a guide.
  */
 export * from './api/types';
+export * from './api/items';
 export { Blueprint } from './api/blueprint';
 export { Models, Skins, HeldModels, HumanoidJoints } from './api/models';
 export { Behaviors } from './api/behaviors';

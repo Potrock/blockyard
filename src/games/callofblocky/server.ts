@@ -1,5 +1,5 @@
 import { defineServer, type Bot, type GameContext, type IconRef, type MenuHandle, type MenuOptions, type Pickup, type Player, type Vec3 } from '@platform';
-import { navGrid, type NavGrid } from '@platform/kits';
+import { guns, melee, navGrid, throwables, type NavGrid } from '@platform/kits';
 import { ATLAS, defineArt, OUTFITS, skinOrigin } from './art';
 import { CaseRounds } from './briefcase';
 import { makeBots, type Bots } from './bots';
@@ -753,6 +753,8 @@ function matchMenu(game: GameContext, p: Player) {
 // -------------------------------------------------------------------------------------------------
 
 export default defineServer(shared, {
+  // Its kinds of item: lethals (first: a grenade being cooked takes the fire button), guns, the katana (and the bare fist).
+  items: [throwables(), guns(), melee()],
   setup(game) {
     // A fresh game (a page can host one game after another): nothing carries over.
     match.fighters = fighters = new Map();

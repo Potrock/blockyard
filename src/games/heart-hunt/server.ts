@@ -1,4 +1,5 @@
 import { defineServer } from '@platform';
+import { melee } from '@platform/kits';
 import { shared } from './shared';
 
 /**
@@ -9,6 +10,8 @@ let found = 0;
 let won = false;
 
 export default defineServer(shared, {
+  // Nothing to use but the bare fist.
+  items: [melee()],
   setup(game) {
     // (How a heart looks is each screen's: `client.ts`.)
     game.items.define('heart', {

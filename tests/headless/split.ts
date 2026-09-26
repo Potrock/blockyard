@@ -161,7 +161,7 @@ export default async function split() {
     const { shared } = await entry.load();
     // The client's shared definition is the one the server runs, value for value: `{ ...shared, ...rules }`.
     for (const [k, v] of Object.entries(shared)) check(def[k as keyof GameDefinition] === v, `${def.id}: the server's ${k} isn't the client's shared one`);
-    for (const k of Object.keys(def)) check(k in shared || k === 'setup' || k === 'start' || k === 'update', `${def.id}: the server's definition has ${k}, which isn't shared or a rule`);
+    for (const k of Object.keys(def)) check(k in shared || k === 'setup' || k === 'start' || k === 'update' || k === 'items', `${def.id}: the server's definition has ${k}, which isn't shared or a rule`);
   }
   console.log(`  ${all.length} games split (${server.games.length} listed, ${all.length - server.games.length} in development): meta alone, clients only on shared code, shared code clear of the rules, ${clientOnly} looks-and-voices modules on screens only (${walked.size} modules walked)`);
 }

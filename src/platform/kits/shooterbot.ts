@@ -1,4 +1,5 @@
 import type { Bot, GameContext, GunItem, MeleeItem, Player, Vec3 } from '@platform';
+import type { Guns, Throwables } from './items';
 import type { NavCell, NavGrid } from './navgrid';
 
 /**
@@ -391,9 +392,18 @@ class Brains implements ShooterBots {
         best = { at, reach };
       }
     };
-    for (const t of this.game.items.thrown) check(t.position, t.radius + 1);
-    for (const f of this.game.items.fires) check(f.position, f.radius + 1);
+    // Live grenades and fires, from the game's throwable kit (if it lists one).
+    const lethals = this.game.items.kind<Throwables>('throwable');
+    if (lethals) {
+      for (const t of lethals.thrown()) check(t.position, t.radius + 1);
+      for (const f of lethals.fires()) check(f.position, f.radius + 1);
+    }
     return best;
+  }
+
+  /** A carried gun's rounds (through the game's gun kit), or null. */
+  private ammo(bot: Bot, item: string): { magazine: number; reserve: number } | null {
+    return this.game.items.kind<Guns>('gun')?.ammo(bot, item) ?? null;
   }
 
   private weapon(id: string): BotWeapon {
@@ -419,7 +429,7 @@ class Brains implements ShooterBots {
     const gun = item?.kind === 'gun' ? (item as GunItem) : null;
     const melee = item?.kind === 'melee' ? (item as MeleeItem) : null;
     const w = this.weapon(held);
-    const ammo = inv.ammo(held);
+    const ammo = this.ammo(bot, held);
     const s = b.skill;
     b.slideCool = Math.max(0, b.slideCool - dt);
 
@@ -484,7 +494,7 @@ class Brains implements ShooterBots {
       const dist = Math.hypot(aimAt.x - eye.x, aimAt.y - eye.y, aimAt.z - eye.z);
       // The right weapon for the range, if the game says.
       const want = this.opts.weapon?.(bot, b, dist);
-      if (want && want !== held && (inv.ammo(want)?.magazine ?? 1) > 0) this.switchTo(bot, want);
+      if (want && want !== held && (this.ammo(bot, want)?.magazine ?? 1) > 0) this.switchTo(bot, want);
       const lead = Math.min(0.12, dist / 300);
       // Still taking it in: the aim doesn't move yet. After that the error settles as it tracks,
       // but a target on the move drags the aim behind it.
@@ -492,7 +502,7 @@ class Brains implements ShooterBots {
       const settle = reacting ? 1 : Math.exp(-dt * at(aim.settle, s));
       const drag = reacting ? 0 : dt * at(aim.drag, s);
       b.err = { x: b.err.x * settle - v.x * drag, y: b.err.y * settle, z: b.err.z * settle - v.z * drag };
-      const jitter = at(aim.shake, s) + (bot.aiming ? aim.aimedShake : aim.hipShake) + Math.hypot(v.x, v.z) * aim.moveShake;
+      const jitter = at(aim.shake, s) + (this.game.items.kind<Guns>('gun')?.aiming(bot) ? aim.aimedShake : aim.hipShake) + Math.hypot(v.x, v.z) * aim.moveShake;
       const px = aimAt.x + v.x * lead + b.err.x + (Math.random() - 0.5) * jitter;
       const py = aimAt.y + v.y * lead * 0.5 + b.err.y + (Math.random() - 0.5) * jitter;
       const pz = aimAt.z + v.z * lead + b.err.z + (Math.random() - 0.5) * jitter;
@@ -511,7 +521,7 @@ class Brains implements ShooterBots {
       const wantAds = !!gun && (ads === true || (typeof ads === 'number' && dist > ads));
       c.button(2, wantAds);
       const loaded = ammo ? ammo.magazine > 0 : true;
-      const ready = b.react <= 0 && onTarget && (!w.steady || !wantAds || bot.aiming) && loaded;
+      const ready = b.react <= 0 && onTarget && (!w.steady || !wantAds || !!this.game.items.kind<Guns>('gun')?.aiming(bot)) && loaded;
       if (gun?.auto) {
         // Bursts: short ones at range, longer up close, then a moment to re-aim.
         if (b.pause > 0) b.pause -= dt;
@@ -539,7 +549,7 @@ class Brains implements ShooterBots {
       }
       // Out of rounds mid-fight: another loaded gun is quicker than a reload, up close.
       if (ammo && ammo.magazine === 0) {
-        const other = dist < moves.swapWithin ? inv.slots.find((st) => st && st.item !== held && (inv.ammo(st.item)?.magazine ?? 0) > 0) : null;
+        const other = dist < moves.swapWithin ? inv.slots.find((st) => st && st.item !== held && (this.ammo(bot, st.item)?.magazine ?? 0) > 0) : null;
         if (other) this.switchTo(bot, other.item);
         else c.press('KeyR');
       }

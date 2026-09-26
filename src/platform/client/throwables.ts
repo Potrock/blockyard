@@ -1,6 +1,6 @@
 import type { ItemDefinition, ItemStack, ThrowableItem, Vec3 } from '../api/types';
 import type { ClientThrown } from '../api/client/core';
-import { flyFor, isThrowable, newFlight, throwable, throwVelocity, type Flight, type FlightWorld, type Throwable } from '../sim/throwables';
+import { flyFor, isThrowable, newFlight, throwable, throwVelocity, type Flight, type FlightWorld, type Throwable } from '@platform/items';
 
 /** A throw this screen made: for the host (`PlayerInput.throws`), and to fly here at once. */
 export interface ThrowMade {
