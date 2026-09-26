@@ -1,8 +1,11 @@
-import type { GameContext } from '@platform';
+import type { Client } from '@platform/client';
 
-/** Bed Wars' own sounds, synthesised on each play. */
-export function defineSounds(game: GameContext) {
-  const a = game.audio;
+/**
+ * Bed Wars' own sounds, synthesised on each screen (`client.audio.define`: nothing is recorded or
+ * sent). The server plays them by name (`audio.play('bed_break')`).
+ */
+export function defineSounds(client: Client) {
+  const a = client.audio;
   // A bed going: a splintering crash and a falling, ominous chord.
   a.define('bed_break', (s) => {
     s.noise({ duration: 0.5, filter: 'bandpass', from: 2600, to: 500, q: 1.2, volume: 0.6 });

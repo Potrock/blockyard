@@ -1,8 +1,12 @@
-import type { GameContext } from '@platform';
+import type { Client } from '@platform/client';
 
-/** The Arena's creature voices, synthesised on each play. */
-export function defineSounds(game: GameContext) {
-  const a = game.audio;
+/**
+ * The Arena's creature voices, synthesised on each screen (`client.audio.define`: nothing is
+ * recorded or sent). The server plays them by name: the monsters' `sounds`, the Warden's slam and
+ * roar.
+ */
+export function defineSounds(client: Client) {
+  const a = client.audio;
   // A wet, wobbling groan.
   a.define('zombie', (s) => {
     s.tone({ wave: 'sawtooth', from: 95 * s.pitch, to: 70 * s.pitch, duration: 0.8, attack: 0.12, volume: 0.55, bandpass: { freq: 520, q: 3 }, vibrato: { rate: 7, depth: 6 } });

@@ -23,7 +23,9 @@ const PICK_PRICES: [Currency, number][] = [
 
 /**
  * The shopkeeper's menu: blocks, weapons, armour, tools and team upgrades, paid for from the
- * wallet of the shopper's team. Each player has their own (several can shop at once).
+ * wallet of the shopper's team. Each player has their own (several can shop at once). An offer of
+ * an item shows it as each screen has it (`{ item }`); armour and the team upgrades, which aren't
+ * items, show a sprite of the game's own.
  */
 export class Shop {
   private open = new Map<Player, { handle: MenuHandle; shown: string }>();
@@ -68,8 +70,7 @@ export class Shop {
   private offers(p: Player, t: Team): { title: string; offers: Offer[] }[] {
     const inv = p.inventory;
     const sword = (tier: number, label: string, price: [Currency, number]): Offer => ({
-      // Sword item ids are the built-in sprite names.
-      icon: SWORD_ITEMS[tier] as IconRef,
+      icon: { item: SWORD_ITEMS[tier] },
       label,
       price,
       note: `${[4, 5, 6, 7][tier] + (t.sharp ? 1 : 0)} damage · lost on death`,
@@ -95,7 +96,7 @@ export class Shop {
     const pick: Offer =
       t.pick < 3
         ? {
-            icon: [Sprite.wooden_pickaxe, Sprite.iron_pickaxe, Sprite.diamond_pickaxe][t.pick],
+            icon: { item: PICK_ITEMS[t.pick + 1] },
             label: `${PICK_NAMES[t.pick]} Pickaxe`,
             price: PICK_PRICES[t.pick],
             note: t.pick ? 'Upgrade · drops a tier when you die' : 'Mines end stone and wood fast',
@@ -105,15 +106,15 @@ export class Shop {
               return this.give(p, PICK_ITEMS[t.pick]);
             },
           }
-        : { icon: Sprite.diamond_pickaxe, label: 'Diamond Pickaxe', price: ['gold', 6], note: 'Fully upgraded', owned: true, buy: () => false };
+        : { icon: { item: 'diamond_pickaxe' }, label: 'Diamond Pickaxe', price: ['gold', 6], note: 'Fully upgraded', owned: true, buy: () => false };
     return [
       {
         title: 'Blocks',
         offers: [
-          { icon: { block: t.wool }, label: 'Wool ×16', price: ['iron', 4], note: 'Cheap and quick to place', buy: () => this.give(p, `wool_${t.color}`, 16) },
-          { icon: { block: 'oak_planks' }, label: 'Oak Planks ×16', price: ['gold', 4], note: 'Sturdier than wool', buy: () => this.give(p, 'planks', 16) },
-          { icon: { block: 'end_stone' }, label: 'End Stone ×12', price: ['iron', 24], note: 'Blast-proof; slow to mine by hand', buy: () => this.give(p, 'end_stone', 12) },
-          { icon: { block: 'obsidian' }, label: 'Obsidian ×4', price: ['emerald', 4], note: 'Almost unbreakable', buy: () => this.give(p, 'obsidian', 4) },
+          { icon: { item: `wool_${t.color}` }, label: 'Wool ×16', price: ['iron', 4], note: 'Cheap and quick to place', buy: () => this.give(p, `wool_${t.color}`, 16) },
+          { icon: { item: 'planks' }, label: 'Oak Planks ×16', price: ['gold', 4], note: 'Sturdier than wool', buy: () => this.give(p, 'planks', 16) },
+          { icon: { item: 'end_stone' }, label: 'End Stone ×12', price: ['iron', 24], note: 'Blast-proof; slow to mine by hand', buy: () => this.give(p, 'end_stone', 12) },
+          { icon: { item: 'obsidian' }, label: 'Obsidian ×4', price: ['emerald', 4], note: 'Almost unbreakable', buy: () => this.give(p, 'obsidian', 4) },
         ],
       },
       {
@@ -122,8 +123,8 @@ export class Shop {
           sword(1, 'Stone Sword', ['iron', 10]),
           sword(2, 'Iron Sword', ['gold', 7]),
           sword(3, 'Diamond Sword', ['emerald', 4]),
-          { icon: 'bow', label: 'Bow', price: ['gold', 12], note: 'Hold left-click to draw', buy: () => this.give(p, 'bow') },
-          { icon: 'arrow', label: 'Arrows ×8', price: ['gold', 2], buy: () => this.give(p, 'arrow', 8) },
+          { icon: { item: 'bow' }, label: 'Bow', price: ['gold', 12], note: 'Hold left-click to draw', buy: () => this.give(p, 'bow') },
+          { icon: { item: 'arrow' }, label: 'Arrows ×8', price: ['gold', 2], buy: () => this.give(p, 'arrow', 8) },
         ],
       },
       {
@@ -133,7 +134,7 @@ export class Shop {
           armor(2, 'Diamond Armor', Sprite.diamond_armor, ['emerald', 6]),
           pick,
           {
-            icon: Sprite.shears,
+            icon: { item: 'shears' },
             label: 'Shears',
             price: ['iron', 20],
             note: 'Permanent · cuts through wool',
@@ -148,8 +149,8 @@ export class Shop {
       {
         title: 'Utility',
         offers: [
-          { icon: Sprite.golden_apple, label: 'Golden Apple', price: ['gold', 3], note: 'Heals 4 hearts', buy: () => this.give(p, 'golden_apple') },
-          { icon: Sprite.fire_charge, label: 'Fireball', price: ['iron', 40], note: 'Right-click to throw · blasts wool and wood', buy: () => this.give(p, 'fire_charge') },
+          { icon: { item: 'golden_apple' }, label: 'Golden Apple', price: ['gold', 3], note: 'Heals 4 hearts', buy: () => this.give(p, 'golden_apple') },
+          { icon: { item: 'fire_charge' }, label: 'Fireball', price: ['iron', 40], note: 'Right-click to throw · blasts wool and wood', buy: () => this.give(p, 'fire_charge') },
         ],
       },
       {

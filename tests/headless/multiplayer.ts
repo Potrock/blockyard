@@ -88,7 +88,8 @@ function arena() {
   const a = host.connect('Ann');
   const b = host.connect('Bob');
   const kinds = new Set(b.batch.events.flatMap((e) => (e.t === 'content' ? [e.def.kind] : [])));
-  check(['sound', 'atlas', 'entity', 'item'].every((k) => kinds.has(k as never)), `the catch-up has the game's content: ${[...kinds]}`);
+  // (No voices: the Arena's are each screen's own, `client/sounds.ts`.)
+  check(['atlas', 'entity', 'item'].every((k) => kinds.has(k as never)) && !kinds.has('sound'), `the catch-up has the game's content: ${[...kinds]}`);
   host.command(a.id, { t: 'start' });
   host.command(b.id, { t: 'start' });
   const [pa, pb] = host.sim.players;

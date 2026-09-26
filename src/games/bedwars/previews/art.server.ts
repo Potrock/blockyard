@@ -16,7 +16,8 @@ export default defineServer(shared, {
         speed: 0,
       });
     }
-    for (const [id, icon] of Object.entries(Sprite)) game.items.define(id, { kind: 'misc', name: id, icon });
+    // Each sprite as an item of its name (its icon is each screen's: `SPRITE_LOOKS`).
+    for (const id of Object.keys(Sprite)) game.items.define(id, { kind: 'misc', name: id });
   },
   start(game) {
     game.player.freeze(true);

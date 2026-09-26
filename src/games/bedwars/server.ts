@@ -5,9 +5,8 @@ import { Bot, type Target } from './bots';
 import { Fireballs } from './fireballs';
 import { defineItems } from './items';
 import { Nav } from './nav';
-import { map, shared } from './shared';
+import { BLOCK_ITEMS, map, shared } from './shared';
 import { Shop } from './shop';
-import { defineSounds } from './sounds';
 import {
   armorPoints,
   CURRENCIES,
@@ -362,14 +361,17 @@ function refreshHud(game: GameContext) {
 
 export default defineServer(shared, {
   setup(game) {
+    // The game's atlas goes to every screen: the skins, the bots' sword, and the item sprites the
+    // screens' looks name. (Its items' looks and its voices are each screen's, `client/`; named and
+    // played by name here.)
     const art = paintBedwarsAtlas();
     game.items.atlas(BEDWARS_ATLAS, { width: art.width, height: art.height, pixels: art.albedo, emissive: art.emissive });
-    defineSounds(game);
     match = new Match(game, map);
     nav = new Nav(game, navBounds(), (x, y, z) => match.isPlaced(x, y, z));
     build = building(game, {
       canBreak: (at, block, by) => match.canBreak(at, block, by),
       canPlace: (at, block, by) => match.canPlace(at, block, by),
+      blockOf: (item) => BLOCK_ITEMS[item] ?? null,
       breakTime: (block, held) => {
         const item = held?.item ?? '';
         return mineTime(block, Math.max(0, PICK_ITEMS.indexOf(item)), item === 'shears');

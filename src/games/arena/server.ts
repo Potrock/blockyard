@@ -3,7 +3,6 @@ import { FLOOR, GATES, GATE_SPAWN_RADIUS } from './structure';
 import { defineArt, defineItems, defineMonsters } from './content';
 import { Sprite } from './art';
 import { CENTER, shared } from './shared';
-import { defineSounds } from './sounds';
 
 interface Wave {
   name: string;
@@ -222,7 +221,7 @@ function defeat(game: GameContext) {
 export default defineServer(shared, {
   setup(game) {
     Object.assign(state, fresh());
-    defineSounds(game);
+    // (Its voices and its items' looks are each screen's, `client/`: played and named here.)
     defineArt(game);
     defineItems(game);
     defineMonsters(game);

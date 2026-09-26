@@ -7,6 +7,20 @@ import meta from './meta';
 export const map = buildMap();
 const RED = map.teams[0];
 
+/**
+ * The block items: the block each places (the server's building rules) and shows as (each
+ * screen's look: in the hotbar, in hand, dropped). Each team has its wool.
+ */
+export const BLOCK_ITEMS: Record<string, string> = {
+  wool_red: 'red_wool',
+  wool_blue: 'blue_wool',
+  wool_green: 'green_wool',
+  wool_yellow: 'yellow_wool',
+  planks: 'oak_planks',
+  end_stone: 'end_stone',
+  obsidian: 'obsidian',
+};
+
 /** The islands in the void and the player (a red skin until they take a team). */
 export const shared = defineShared({
   ...meta,

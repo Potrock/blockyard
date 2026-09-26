@@ -13,8 +13,8 @@ const GAMES = resolve('src/games');
  * stays true), and never from its shared code, its client code or its meta.
  */
 const SERVER_ONLY: Record<string, string[]> = {
-  arena: ['content.ts', 'sounds.ts'],
-  bedwars: ['bots.ts', 'fireballs.ts', 'items.ts', 'nav.ts', 'shop.ts', 'sounds.ts', 'state.ts'],
+  arena: ['content.ts'],
+  bedwars: ['bots.ts', 'fireballs.ts', 'items.ts', 'nav.ts', 'shop.ts', 'state.ts'],
   callofblocky: ['bots.ts', 'hud.ts', 'weapons.ts'],
   highnoon: ['bots.ts', 'hud.ts', 'sounds.ts', 'weapons.ts'],
   obby: ['sounds.ts'],
@@ -28,6 +28,8 @@ const SERVER_ONLY: Record<string, string[]> = {
  * shared code never do (the server names the items, and plays the voices by name).
  */
 const CLIENT_ONLY: Record<string, string[]> = {
+  arena: ['client/looks.ts', 'client/sounds.ts'],
+  bedwars: ['client/looks.ts', 'client/sounds.ts'],
   callofblocky: ['models/index.ts', 'client/looks.ts', 'client/sounds.ts'],
 };
 
