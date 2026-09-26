@@ -1290,7 +1290,7 @@ defineClient(shared, {
 | `hud.theme` | The game's `hud.theme` |
 | `hud.progress`, `marker`, `banner`, `toast`, `pop`, `feed` | The server's HUD calls, on this screen only (a marker takes a point) |
 
-**What the kits read.** `client.me` is the local player as this screen predicts it: `held` (the item and its local state: a gun's `mag`, `reserve`, `reload` progress, `aim`, `spread` in degrees, `sight` and its `color`), `quick` (throwables with keys of their own they carry: how many, less throws the server hasn't taken, and the key) and `cooking` (one being held: for how long, its fuse). `client.thrown` lists what's in the air on this screen, flown as the server flies it (where, rolling, at rest, how old, how far its harm reaches). `client.events` has this frame's happenings: `bullets` (a shot's bullets: ours as fired here, or someone else's, each with where it ended, what it hit, the block's colour and face, whether it carved it, the walls it went through), `reload`, `empty`, `cook`, `thrown`, `bounce`, `thrownEnd`, `fire`, `reset`, and messages. `client.scene` puts things in the world (`scene.item(id)`: an item's look as a mesh), `client.fx` draws effects (`tracer`, `impact`, `flare`, `particles`, `burst`, …), `client.world.raycast` finds blocks, `client.camera` has the view's `position`, `fov` and `toWorld`, and `client.view.worldPoint('muzzle')` a held item's point in the world.
+**What the kits read.** `client.me` is the local player as this screen predicts it: `held` (the item and its local state: a gun's `mag`, `reserve`, `reload` progress, `aim`, `spread` in degrees, `sight` and its `color`), `quick` (throwables with keys of their own they carry: how many, less throws the server hasn't taken, and the key) and `cooking` (one being held: for how long, its fuse). `client.thrown` lists what's in the air on this screen, flown as the server flies it (where, rolling, at rest, how old, how far its harm reaches). `client.events` has this frame's happenings: `bullets` (a shot's bullets: ours as fired here, or someone else's, each with where it ended, what it hit, the block's colour and face, whether it carved it, the walls it went through), `reload`, `empty`, `cook`, `thrown`, `bounce`, `thrownEnd`, `fire`, `reset`, and messages. `client.scene` puts things in the world (`scene.item(id)`: an item's look as a mesh), `client.fx` draws effects (`tracer`, `impact`, `flare`, `particles`, `burst`, …), `client.world.raycast` finds blocks, `client.camera` has the view's `position`, `fov` and `toWorld`, and `client.view.worldPoint('muzzle')` a held item's point in the world. While a replay plays (`client.replay`, see "Replays"), `client.me` and the events are the player it follows.
 
 **The kits.**
 
@@ -1355,6 +1355,50 @@ defineClient(shared, {
 - From the server: at most 64 KB as JSON; a bad name or too much throws in the game's code. It arrives in order with the HUD, effects and sound calls, at `client.on(name, fn)` and in `client.events` (`{ t: 'message', name, data }`). Bots have no screen.
 - From a client: at most 8 KB as JSON. The server checks the name, the shape and the size and drops anything else, then `clientMessage` hears it as the player whose connection it came on (whatever the message says). Someone only watching sends nothing. What it asks for is the game's to check: anyone can send anything.
 - The platform's own presentation (someone's shot, a throwable in the air and where it went off, a fire, a block's debris, a restart) travels as messages of its own (`$shot`, `$thrown`, `$thrownEnd`, `$fire`, `$debris`, `$reset`), which the engine turns into the events above for the kits.
+
+## Replays: the last few seconds again
+
+The server keeps each game's last few seconds (8 by default), step by step: every frame as it went out (everyone's places, looks, poses and what they hold; creatures, props, pickups) and what was shown in each step (shots and where their bullets landed, throws, fires, effects, sounds, blocks shot into). **`game.replay.show(player, opts)`** plays a stretch of it on one player's screen, through someone's eyes or from a camera, while the game goes on underneath: their own player stays where the game has them (dead, say, waiting to respawn). A kill cam is a few lines:
+
+```ts
+game.events.on('playerDeath', ({ player, source }) => {
+  if (player.bot || typeof source !== 'object' || source?.kind !== 'player') return;
+  // A moment to fall, then the last 4 seconds through the killer's eyes (the kill, and half a second after it).
+  game.clock.after(0.5, () =>
+    game.replay.show(player, { from: 4, seconds: 4, follow: source, label: 'killcam', data: { killer: source.name }, onEnd: () => respawn(player) }),
+  );
+});
+```
+
+| Option | What |
+| --- | --- |
+| `from` | Where it starts: seconds ago (`5`), or a moment by the game's clock (`{ at: game.clock.now - 5 }`). Default: as far back as the history goes |
+| `seconds` | How long a stretch (default: up to now). It ends by now at the latest |
+| `follow` | Through this player's eyes (first person) |
+| `camera` | Or from a camera standing still: `{ at, look, fov? }` |
+| `speed` | How fast it plays (default 1; 0.25 to 4) |
+| `label`, `data` | A name and plain data for the client code (`client.replay.label`, `.data`): who did it, with what |
+| `skippable` | The player may end it early (default true) |
+| `onEnd({ player, skipped })` | It ended on the server's clock: played out, skipped by the player, stopped, or replaced by another replay. Not called if the player leaves |
+
+`show` returns a handle (`duration`, `from` and `to` by the game's clock, `playing`, `stop()`), or null when there's nothing to show (nothing kept yet, or a bot: bots have no screen). `game.replay.stop(player)` ends one, `game.replay.playing(player)` finds it, `game.replay.seconds` says how far back the history reaches, and `game.replay.keep(seconds)` changes how much is kept (up to 30; `keep(0)` turns recording off).
+
+**On the player's screen** the replay's frames are drawn in place of the live game's, with the same figures and the same interpolation (players' looks blended too, so the eyes it follows turn smoothly):
+
+- **Through someone's eyes**, `client.me` is that player as the replay shows them: their look, what they hold, their gun's rounds, reload and aim. So the first-person kit draws their hands and their gun, aiming down the sights and working its action as they did, and the gunner kit shows the crosshair, reticle or scope they aimed through. Their shots are `shot` and `bullets` events as if they were ours (the tracers leave their muzzle); the effects and sounds their own screen was given play (damage numbers, the kill sound); their death tilts the view as ours does. Everyone else's shots fly from their figures.
+- **The live game steps aside**: the platform's HUD panels and the game's widgets and banners hide (markers and names over heads stay), and what the live game shows in the world (its effects, sounds out in the world, shots, throws) isn't shown until the replay ends. The HUD's calls keep arriving, for after.
+- **Client code knows**: `client.replay` (`playing`, `follow`, `label`, `data`, `time`, `duration`, `speed`, `skippable`, `skip()`) and the events `replay.start` and `replay.end` (`skipped`). A kit hides what's the live player's own (`hud.gunner()` hides the rounds panel), and the game shows what's playing in a layer of its own (client code's layers stay up). `client.replay.skip()` ends it on this screen as the next frame starts (every kit sees `replay.end` then) and tells the server (`onEnd` with `skipped: true`), if it's `skippable`.
+
+**What it costs.** Recording adds nothing measurable to a step (the server rounds each frame and works out its patch once, for the socket and the history alike). Call of Blocky with six fighters keeps about 20 KB a second: 160 KB for its 8 seconds, plus one frame whole (about 7 KB), bounded by `seconds` and by bytes (4 MB). A replay goes to its player in one message, the frames as the socket sends them (the first whole, then each a patch on the one before: `net/delta`), less what only prediction uses: a 5 second stretch of that match is 150 steps, about 90 to 100 KB of JSON and 24 KB once the socket's compression has it (about what 5 seconds of the live game cost); building it takes the server about 7 ms. `tests/headless/replay.ts` measures all of this.
+
+**What it doesn't do (yet).**
+- The world's blocks are as they are now: a wall shot away during the replay is already gone at its start (the chips still fly and the holes are there where the bullets hit).
+- It ends by now at the latest; it can't run on into what hasn't happened yet.
+- The HUD isn't replayed (no hit markers, no kill feed), and a camera of the game's own (`controller: 'none'`, a vehicle's) isn't followed: `follow` is first person at the player's eyes.
+- Things thrown in the live game while a replay plays aren't shown once it's over (what's in the air on screen is the replay's while it plays).
+- The server's clock ends it: on a screen that fell behind (a long stall), the last moments are cut rather than holding up the game.
+
+**Call of Blocky's kill cam** (`killcam.ts`, `client/killcam.ts`): shot by someone, you fall for half a second, then see the last 4 seconds (from 3.5 s before the death to half a second after) through their eyes, with letterbox bars, a KILLCAM stamp, who did it with what (headshot, through the wall) and the time left; you respawn when it ends, 4.5 s after the death (it was 3 s). Click or Space (a controller's trigger or A) skips it: you respawn at the usual 3 s, or at once if they're up. Bots get none. It's 121 steps, about 80 KB (23 KB compressed).
 
 ## Running and debugging
 

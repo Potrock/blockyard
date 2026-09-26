@@ -66,7 +66,9 @@ export type ClientMessage =
   /** The player closed a modal widget (Esc, B, a click outside). */
   | { t: 'widgetClosed'; player: string; widget: string }
   /** A message from the game's client code (`client.send(name, data)`), for its server (`clientMessage`). */
-  | { t: 'game'; player: string; name: string; data: unknown };
+  | { t: 'game'; player: string; name: string; data: unknown }
+  /** The player ended the replay on their screen (`client.replay.skip()`): `id` is its `ReplayWire.id`. */
+  | { t: 'replaySkip'; player: string; id: number };
 
 /** A game's message name (either way): a letter, then letters, digits, `_`, `-`, `.` or `:` (the platform's own start with `$`). */
 export const MESSAGE_NAME = /^[A-Za-z][\w.:-]{0,63}$/;
@@ -169,8 +171,49 @@ export type HostEvent =
   | { t: 'reply'; id: number; value: unknown; client?: string }
   /** This client is in the game now, as this player (a server's client, after `start`). */
   | { t: 'joined'; player: string; client: string }
+  /** A stretch of the recent past for this player's screen to play back (`game.replay.show`). */
+  | { t: 'replay'; player: string; replay: ReplayWire }
+  /** The server ended this player's replay (its time was up, the game stopped it, it was skipped). */
+  | { t: 'replayEnd'; player: string; id: number }
   /** The game threw (the host carries on). */
   | { t: 'error'; text: string };
+
+/**
+ * A replay as its viewer's screen gets it (`game.replay.show`): the room's frames over a stretch of
+ * the last few seconds, as the frames went out (the first whole, then each a patch on the one
+ * before, `net/delta`), with what was shown in each step. The screen plays it on its own clock,
+ * through the same interpolation and figures as live frames, while the live game goes on under it.
+ */
+export interface ReplayWire {
+  /** Its number (the room's): a skip names it. */
+  id: number;
+  steps: ReplayStep[];
+  /** Whose eyes it looks through (a player's id), or null for `camera`. */
+  follow: string | null;
+  /** A camera of its own, standing still: where it is, what it looks at, its field of view (null: the viewer's own). */
+  camera: { at: [number, number, number]; look: [number, number, number]; fov: number | null } | null;
+  /** Played this many times as fast as it happened. */
+  speed: number;
+  /** The game's name for it and anything it sends with it, for its client code (`client.replay`). */
+  label: string;
+  data: unknown;
+  /** Its viewer may end it (`client.replay.skip()`). */
+  skippable: boolean;
+}
+
+/** One step of a replay: the host time it was, its frame (the first step's whole, then patches), and what was shown in it. */
+export interface ReplayStep {
+  t: number;
+  f: unknown;
+  e?: ReplayEvent[];
+}
+
+/**
+ * What a replay shows besides its frames: the presentation calls made in a step (to everyone, and
+ * effects, sounds and view calls to one player: a replay through their eyes shows theirs) and the
+ * blocks shot into (rubble; the world itself is already as it is now).
+ */
+export type ReplayEvent = { t: 'call'; call: PresentCall } | { t: 'damage'; data: Uint8Array };
 
 export interface HostBatch {
   events: HostEvent[];

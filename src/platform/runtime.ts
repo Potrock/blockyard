@@ -4,13 +4,14 @@ import { WorkerPool } from './workers/pool';
 import { worldGenConfig } from './workers/config';
 import { SocketLink } from './client/link';
 import { FrameBuffer } from './client/interp';
+import { ReplayPlayback } from './client/replay';
 import { Predictor } from './client/predict';
 import { GunController, type FiredShot } from './client/guns';
 import { Flights, ThrowController } from './client/throwables';
 import { flightWorld, fuseSteps, isThrowable, throwable } from './sim/throwables';
 import { Rubble, damageTaken } from './render/rubble';
 import { freshMemory, resolveMovement, type MoveTune } from './sim/movement';
-import { assistOf, gun as gunOf, isGun, moveMods, playerBoxes, rayBox, resolveGunRules, type Assist, type Gun, type GunRules } from './sim/guns';
+import { assistOf, gun as gunOf, isGun, moveMods, playerBoxes, rayBox, resolveGunRules, spreadDeg, type Assist, type Gun, type GunRules } from './sim/guns';
 import { bulletPath, type WallPass } from './sim/hitscan';
 import type { ShotWire } from './sim/combat';
 import { ClientMovers, propPose } from './client/movers';
@@ -40,14 +41,14 @@ import { DebugOverlay } from './ui/debug';
 import { CommandBar } from './ui/commandbar';
 import { Content } from './content';
 import { PLACEHOLDER_ICON, resolveIcon } from './looks';
-import { Presenter } from './client/present';
+import { Presenter, soundOf } from './client/present';
 import { PlayerCamera } from './client/camera';
 import { EntityView, type FigureFrame } from './client/entities';
 import { PickupView } from './client/pickups';
 import { PropView } from './client/props';
 import type { SimFrame } from './sim/sim';
 import type { PlayerFrame } from './sim/player';
-import { MESSAGE_MAX, newRoomCode, ROOM_CODE, type DevReply, type HostBatch, type PlayerInput, type TimedBatch } from './net/protocol';
+import { MESSAGE_MAX, newRoomCode, ROOM_CODE, type DevReply, type HostBatch, type PlayerInput, type PresentCall, type ReplayEvent, type ReplayWire, type TimedBatch } from './net/protocol';
 import { sanitizeGameMessage } from './net/validate';
 import { clipFrame, type ClipFrame } from './sim/entities';
 import { Inventory as BlockPicker, PauseMenu, TitleScreen } from './ui/screens';
@@ -55,7 +56,7 @@ import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
 import type { BlockRef, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
-import type { Client, ClientBullet, ClientDefinition, ClientEvent, ClientGame, GameEntry, Me } from './api/client';
+import type { Client, ClientBullet, ClientDefinition, ClientEvent, ClientGame, ClientReplay, GameEntry, Me } from './api/client';
 import { ClientRuntime } from './client/api/client';
 import { FirstPersonLayer } from './client/api/view';
 import { ClientHudService } from './client/api/hud';
@@ -235,6 +236,23 @@ export class Runtime {
   private fullTilt = 0;
   /** Our health last frame (the controller rumbles when it drops). */
   private lastHealth = -1;
+  /**
+   * A replay playing on this screen (`game.replay.show`): its frames are drawn in place of the live
+   * game's, through its player's eyes (their own camera, `replayView`) or from its camera.
+   */
+  private replay: ReplayPlayback | null = null;
+  private replayView!: PlayerCamera;
+  /** The followed player's shots this frame: their bullets go out once the hand's placed (as our own do). */
+  private replayShots: ShotWire[] = [];
+  /** The followed player's gun coming down for a sprint (0..1, eased as the gun controller eases ours). */
+  private replaySprint = 0;
+  /**
+   * When the replay last moved on (ms, the page's clock): it plays on the wall clock, as the server
+   * times it, so a slow frame (whose `dt` is capped) doesn't leave it behind to be cut short.
+   */
+  private replayWall = 0;
+  /** `client.replay.skip()` was called: the replay ends as the next frame starts (every kit sees `replay.end` in its `frame`). */
+  private replaySkip = false;
 
   private constructor(
     private canvas: HTMLCanvasElement,
@@ -496,6 +514,7 @@ export class Runtime {
 
     this.view = new PlayerCamera(this.camera);
     this.view.clearance = (from, dir, max) => this.clearance(from, dir, max);
+    this.replayView = new PlayerCamera(this.camera);
     this.held = new FirstPersonLayer(this.textures.albedo, this.textures.material, this.graphics, this.camera, this.content.animations, (e) => this.client?.emit(e));
     this.renderer.overlay = { scene: this.held.view.scene, camera: this.held.view.camera };
     this.renderer.opaqueScene.add(this.highlight.object);
@@ -613,6 +632,8 @@ export class Runtime {
         hud: this.clientHud,
         scene: new SceneService(this.renderer.entityScene, this.graphics, this.content.items),
         thrown: this.flights.list,
+        // Replays.
+        replay: this.replayService(),
         // Shared services.
         camera: {
           get zoom() {
@@ -707,7 +728,8 @@ export class Runtime {
       const [id, x, y, z, radius, duration, color] = data as [number, number, number, number, number, number, string];
       this.emit({ t: 'fire', id, at: { x, y, z }, radius, duration, color });
     } else if (name === '$reset') {
-      // A restart: everything the game put on screen goes.
+      // A restart: everything the game put on screen goes (a replay too).
+      this.endReplay(false);
       this.guns.reset();
       this.entityView.clear();
       this.pickupView.clear();
@@ -766,6 +788,227 @@ export class Runtime {
     if (this.playerId) this.link.send({ t: 'message', msg: m });
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Replays (`game.replay.show`)
+  // ---------------------------------------------------------------------------------------------
+
+  /** `client.replay`: the replay playing here, as client code sees it. */
+  private replayService(): ClientReplay {
+    const rt = this;
+    return {
+      get playing() {
+        return rt.replay !== null;
+      },
+      get id() {
+        return rt.replay?.wire.id ?? 0;
+      },
+      get follow() {
+        return rt.replay?.wire.follow ?? null;
+      },
+      get label() {
+        return rt.replay?.wire.label ?? '';
+      },
+      get data() {
+        return rt.replay?.wire.data ?? null;
+      },
+      get time() {
+        return rt.replay?.time ?? 0;
+      },
+      get duration() {
+        return rt.replay?.duration ?? 0;
+      },
+      get speed() {
+        return rt.replay?.wire.speed ?? 1;
+      },
+      get skippable() {
+        return rt.replay?.wire.skippable ?? false;
+      },
+      skip: () => {
+        if (rt.replay?.wire.skippable) rt.replaySkip = true;
+      },
+    };
+  }
+
+  /** A replay for this screen: it plays from the next frame (one playing already gives way). */
+  private startReplay(wire: ReplayWire) {
+    if (wire.steps.length < 2) return;
+    if (this.replay) this.endReplay(false);
+    this.replay = new ReplayPlayback(wire);
+    this.replayShots = [];
+    this.replaySprint = 0;
+    this.replayWall = performance.now();
+    this.replaySkip = false;
+    this.replayView.settleFrom(this.view);
+    // Things in the air now are the live game's: the replay's own fly instead.
+    this.flights.clear();
+    this.ui.classList.add('replaying');
+    this.emit({ t: 'replay.start', label: wire.label, follow: wire.follow, data: wire.data });
+  }
+
+  /** The replay's over here: played out, ended by the server, or skipped (the server hears). */
+  private endReplay(skipped: boolean) {
+    const r = this.replay;
+    if (!r) return;
+    this.replay = null;
+    this.replayShots = [];
+    this.replaySkip = false;
+    if (skipped && this.playerId) this.link.send({ t: 'message', msg: { t: 'replaySkip', player: this.playerId, id: r.wire.id } });
+    this.flights.clear();
+    this.view.aimZoom = 1;
+    this.ui.classList.remove('replaying');
+    this.emit({ t: 'replay.end', label: r.wire.label, skipped });
+  }
+
+  /**
+   * While a replay plays, what the live game shows in the world isn't: its effects, sounds out in
+   * the world, shots, throws and fires, and calls to our own view (it's the replay's eyes now).
+   * The HUD's calls, sounds of no place and the game's own messages still come.
+   */
+  private hiddenByReplay(c: PresentCall): boolean {
+    switch (c.target) {
+      case 'fx':
+        return true;
+      case 'audio':
+        return c.method === 'play' && !!(c.args[1] as { at?: unknown } | undefined)?.at;
+      case 'message':
+        return c.method.startsWith('$') && c.method !== '$reset';
+      case 'view':
+        return c.method !== 'visible' && c.method !== 'setSkin';
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * The replay on by this frame's time: what was shown in the steps it passed (the followed
+   * player's own shots kick their hands; everyone else's fly from their figures), and the frame to
+   * draw with whoever's eyes it follows in it. Null: it just ended (the live game is drawn).
+   */
+  private replayStep(): { frame: SimFrame; eyes: PlayerFrame | null; follow: string | null } | null {
+    const r = this.replay!;
+    if (r.done || this.replaySkip) {
+      this.endReplay(this.replaySkip);
+      return null;
+    }
+    const wall = performance.now();
+    const due = r.advance(Math.min(0.5, Math.max(0, (wall - this.replayWall) / 1000)));
+    this.replayWall = wall;
+    const frame = r.sample();
+    const follow = r.wire.follow;
+    for (const e of due) this.replayEvent(e, follow, frame);
+    const eyes = follow ? (frame.players.find((p) => p.id === follow) ?? null) : null;
+    return { frame, eyes, follow };
+  }
+
+  /**
+   * Something shown in a replay's step, as the followed player's screen showed it: calls to
+   * everyone (but those their own screen made itself: their shots, their throws), and theirs.
+   */
+  private replayEvent(e: ReplayEvent, follow: string | null, frame: SimFrame) {
+    if (e.t === 'damage') return this.rubbleFromDamage(e.data);
+    const c = e.call;
+    if (c.to !== null && c.to !== follow) return;
+    if (c.target === 'message') {
+      if (c.method !== '$shot') return this.message(c.method, c.args[0]);
+      const w = c.args[0] as ShotWire;
+      if (follow !== null && w.by === follow) {
+        // Their own: their hand kicks now, the bullets go once it's placed.
+        this.emit({ t: 'shot', item: w.item, power: 1 });
+        this.replayShots.push(w);
+      } else this.othersShot(w, frame.players);
+      return;
+    }
+    // Their own screen made these itself (the sound of their shot): shown from their `$shot`.
+    if (c.to === null && c.skip !== undefined && c.skip === follow) return;
+    switch (c.target) {
+      case 'fx':
+        return (this.fx as unknown as Record<string, (...a: unknown[]) => void>)[c.method]?.(...c.args);
+      case 'audio': {
+        const sound = c.method === 'play' ? soundOf(c.args[0] as string, c.args[1] as Parameters<typeof soundOf>[1], (id) => this.content.items.get(id)) : null;
+        if (sound) this.sfx.play(sound[0], sound[1]);
+        return;
+      }
+      case 'view':
+        return this.viewCall(c.method, c.args);
+    }
+  }
+
+  /** Where a replay's camera is: the followed player's eyes (first person), else its own camera. */
+  private replayCamera(dt: number, eyes: PlayerFrame | null) {
+    const r = this.replay!;
+    if (eyes) {
+      const v = this.replayView;
+      v.yaw = eyes.view.yaw;
+      v.pitch = eyes.view.pitch;
+      // (Aiming zooms as client code has it: `client.camera.zoom`.)
+      v.aimZoom = this.view.aimZoom;
+      v.follow(dt, eyes);
+      return;
+    }
+    const cam = r.wire.camera;
+    if (!cam) return;
+    this.camera.position.set(cam.at[0], cam.at[1], cam.at[2]);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(cam.look[0], cam.look[1], cam.look[2]);
+    const fov = cam.fov ?? this.settings.fov;
+    if (this.camera.fov !== fov) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
+    this.camera.updateMatrixWorld();
+  }
+
+  /** The followed player's shots this frame, for the client code: from their hand as it's drawn (`bullets`, ours as far as the kits know). */
+  private replayBullets() {
+    const shots = this.replayShots;
+    this.replayShots = [];
+    for (const w of shots) this.emit({ t: 'bullets', item: w.item, by: w.by, mine: true, from: null, bullets: this.bulletsOf(w) });
+  }
+
+  /** `client.me` in a replay: the player it follows, as it shows them (their look, what they hold, their gun as it was). */
+  private replayMe(p: PlayerFrame, dt: number): Me {
+    const stack = p.hotbar?.slots[p.hotbar.selected] ?? null;
+    this.replaySprint += ((p.sprinting ? 1 : 0) - this.replaySprint) * Math.min(1, dt * 10);
+    return {
+      id: p.id,
+      position: { x: p.x, y: p.y, z: p.z },
+      velocity: { x: p.vx, y: p.vy, z: p.vz },
+      look: { yaw: p.view.yaw, pitch: p.view.pitch },
+      onGround: p.onGround,
+      flying: p.flying,
+      crouching: p.sneaking,
+      sprinting: p.sprinting,
+      sliding: p.sliding,
+      dead: p.dead,
+      inVehicle: !!p.vehicle,
+      health: p.health,
+      maxHealth: p.maxHealth,
+      bob: { phase: p.bob * Math.PI * 0.9, amount: this.settings.viewBobbing && p.onGround && !p.flying ? Math.min(1, Math.hypot(p.vx, p.vz) / 4.3) : 0 },
+      thirdPerson: false,
+      hand: { item: stack?.item ?? null, count: stack?.count ?? 0, strength: this.itemMode ? p.hand.strength : 1, drawing: p.hand.drawing, charge: p.hand.charge },
+      held: this.replayHeld(p, stack?.item ?? null),
+      abilities: {},
+      quick: [],
+      cooking: null,
+    };
+  }
+
+  /** The followed player's held gun as the replay's frame has it (its rounds, reload, how far it's aimed). */
+  private replayHeld(p: PlayerFrame, item: string | null): Me['held'] {
+    const def = item ? this.content.items.get(item) : undefined;
+    const h = p.hand.gun;
+    if (!item || !isGun(def) || !h) return null;
+    const g = gunOf(def);
+    const shells = def.shells ? Math.max(0, Math.min(def.magazine - h.mag, h.reserve)) : 0;
+    const reload = h.reload < 0 ? -1 : Math.max(0, Math.min(def.shells ? 0.999 : 1, 1 - h.reload / Math.max(0.01, def.reload)));
+    const spread = spreadDeg(g, { aim: h.aim, moving: Math.hypot(p.vx, p.vz) / Math.max(1, this.tune.params[0]), air: !p.onGround, crouch: p.sneaking, bloom: 0 });
+    return {
+      item,
+      def,
+      state: { aim: h.aim, sprint: this.replaySprint, slide: p.sliding ? 1 : 0, reload, shells, sight: g.aim.sight, action: def.action, zoom: g.aim.zoom, mag: h.mag, reserve: h.reserve, spread, color: g.aim.color },
+    };
+  }
+
   /** Show a block in the hand (a bed whole: its head too), from the block picker or an item that looks like one. */
   private holdBlock(id: number, item: string | null = null, itemDef?: ItemDefinition) {
     const def = this.registry.blocks[id];
@@ -799,6 +1042,8 @@ export class Runtime {
           this.content.apply(e.def);
           break;
         case 'call':
+          // (A replay playing: what the live game shows in the world waits for nobody.)
+          if (this.replay && this.hiddenByReplay(e.call)) break;
           this.presenter.apply(e.call);
           break;
         case 'edits':
@@ -806,7 +1051,13 @@ export class Runtime {
           break;
         case 'damage':
           this.chunks.applyDamage(e.data);
-          if (this.worldReady) this.damageSeen.push(e.data);
+          if (this.worldReady && !this.replay) this.damageSeen.push(e.data);
+          break;
+        case 'replay':
+          this.startReplay(e.replay);
+          break;
+        case 'replayEnd':
+          if (this.replay?.wire.id === e.id) this.endReplay(false);
           break;
         case 'revert':
           this.chunks.revertEdits();
@@ -937,16 +1188,19 @@ export class Runtime {
     this.gameHud.screen({ title: 'Disconnected', subtitle: 'The connection to the game server was lost.', tone: 'defeat', buttons: [{ label: 'Reload', primary: true, onClick: () => location.reload() }] });
   }
 
-  /** Other players as figures (entities of the built-in `$player` type), with their names above. */
-  private avatars(f: SimFrame, me: PlayerFrame): FigureFrame[] {
+  /**
+   * Other players as figures (entities of the built-in `$player` type), with their names above.
+   * `self` is whose eyes we see through (a replay's player, not `live`: never drawn), or none.
+   */
+  private avatars(f: SimFrame, me: PlayerFrame, self: string | null = this.playerId, live = true): FigureFrame[] {
     const out: FigureFrame[] = [];
     const seen = new Set<string>();
     this.targets = [];
     for (const other of f.players) {
       // Only people on foot get a figure: a driver is their vehicle's model. Our own shows in
       // third person, where we're shown (predicted) facing where we look.
-      const mine = other.id === this.playerId;
-      if ((mine && !this.view.thirdPerson) || !this.walker || other.vehicle) continue;
+      const mine = other.id === self;
+      if ((mine && !(live && this.view.thirdPerson)) || !this.walker || other.vehicle) continue;
       const p = mine ? { ...me, view: { ...me.view, yaw: this.view.yaw, pitch: this.view.pitch } } : other;
       const type = this.avatarType(p);
       let id = this.avatarIds.get(p.id);
@@ -989,7 +1243,7 @@ export class Runtime {
         clip: (mine && this.ownClip) || p.clip || undefined,
       });
       if (mine) continue;
-      if (!p.dead) this.targets.push({ id: p.id, x: p.x, y: p.y + (p.sliding ? 0.55 : p.sneaking ? 0.95 : 1.25), z: p.z });
+      if (live && !p.dead) this.targets.push({ id: p.id, x: p.x, y: p.y + (p.sliding ? 0.55 : p.sneaking ? 0.95 : 1.25), z: p.z });
       const tags = this.def.hud?.nameTags ?? 'always';
       if (tags === 'never' || p.dead) continue;
       const top = { x: p.x, y: p.y + (p.sliding ? 1.45 : p.sneaking ? 1.95 : 2.25), z: p.z };
@@ -1312,7 +1566,8 @@ export class Runtime {
     return this.graphics.icon(icon, size);
   }
 
-  private showPlayer(me: PlayerFrame) {
+  /** The player's hands and what they hold, and (`hud`) their health and hotbar on the HUD. */
+  private showPlayer(me: PlayerFrame, hud = true) {
     // A player model with a hand: their first-person arm is that part of it (once its file is here).
     const model = me.model ?? this.def.player?.model;
     const hand = model?.gltf?.hand;
@@ -1342,11 +1597,11 @@ export class Runtime {
     }
     const creative = me.creative;
     const health = `${me.health}|${me.mortal ? me.maxHealth : 0}`;
-    if (health !== this.shown.health) {
+    if (hud && health !== this.shown.health) {
       this.shown.health = health;
       this.gameHud.setHealth(me.health, me.mortal ? me.maxHealth : 0);
     }
-    if (creative) {
+    if (creative && hud) {
       const key = `${creative.hotbar.join(',')}|${creative.selected}`;
       if (key !== this.shown.creative) {
         const announce = this.shown.creative !== '' && !this.shown.creative.endsWith(`|${creative.selected}`);
@@ -1355,13 +1610,13 @@ export class Runtime {
         this.holdBlock(creative.hotbar[creative.selected]);
       }
     }
-    if (me.hotbar) this.showHotbar(me.hotbar.slots, me.hotbar.selected);
+    if (me.hotbar) this.showHotbar(me.hotbar.slots, me.hotbar.selected, hud);
   }
 
-  private showHotbar(slots: (ItemStack | null)[], selected: number) {
+  private showHotbar(slots: (ItemStack | null)[], selected: number, hud = true) {
     // (Redrawn as model files arrive: an icon can be a picture of one.)
     const key = `${slots.map((s) => (s ? `${s.item}x${s.count}` : '')).join(',')}|${selected}|${this.graphics.gltf.version}`;
-    if (key !== this.shown.hotbar) {
+    if (hud && key !== this.shown.hotbar) {
       const prevSelected = this.shown.hotbar.split('|')[1];
       this.shown.hotbar = key;
       this.hud.setSlots(
@@ -1376,7 +1631,7 @@ export class Runtime {
     }
     // What's in hand (the first-person layer loads it; the game's kits hold it): the item
     // selected, or a throwable being thrown with its key over it.
-    const quick = this.throwsCtl.inHand;
+    const quick = hud ? this.throwsCtl.inHand : null;
     const stack = quick ? { item: quick, count: 1 } : slots[selected];
     const def = stack ? this.content.items.get(stack.item) : undefined;
     const heldKey = stack?.item ?? '';
@@ -1421,6 +1676,8 @@ export class Runtime {
     this.view.sensitivity = s.sensitivity;
     this.view.baseFov = s.fov;
     this.view.viewBobbing = s.viewBobbing;
+    this.replayView.baseFov = s.fov;
+    this.replayView.viewBobbing = s.viewBobbing;
     this.link.send({ t: 'env', dayLength: s.dayMinutes * 60 });
     this.link.send({ t: 'radius', columns: this.hostRadius(s) });
     this.camera.far = Math.max(256, (rd + 1.5) * 16 * 1.08);
@@ -1536,9 +1793,16 @@ export class Runtime {
     this.env.time = f.time;
     this.env.paused = true;
     this.env.update(dt);
+    // A replay playing (`game.replay.show`): its frame is drawn in place of the live one, through
+    // its player's eyes (`eyes`; null: its own camera). The live game goes on under it.
+    const rp = this.replay ? this.replayStep() : null;
+    const shown = rp?.frame ?? f;
+    const eyes = rp ? rp.eyes : me;
     // Driving: the vehicle's camera, worked out here every frame from its (predicted) state.
-    const ride = me.camera.follow && this.vehicles.active ? this.vehicles.camera(dt) : null;
-    if (ride) {
+    const ride = !rp && me.camera.follow && this.vehicles.active ? this.vehicles.camera(dt) : null;
+    if (rp) {
+      this.replayCamera(dt, rp.eyes);
+    } else if (ride) {
       this.camera.position.copy(ride.position);
       this.camera.up.copy(ride.up);
       this.camera.lookAt(ride.target);
@@ -1571,19 +1835,21 @@ export class Runtime {
       if (this.mode !== 'title') this.titleSpin = 0;
     }
     // The game runs on while this client is paused: its figures keep walking.
-    if (f.players.length < 2) this.targets = [];
-    this.entityView.sync(f.players.length > 1 || this.view.thirdPerson ? [...f.entities, ...this.avatars(f, me)] : f.entities, f.projectiles, dt, started, f.t);
+    if (shown.players.length < 2) this.targets = [];
+    const avatars = () => (rp ? this.avatars(shown, eyes ?? me, rp.follow, false) : this.avatars(f, me));
+    this.entityView.sync(shown.players.length > 1 || (!rp && this.view.thirdPerson) ? [...shown.entities, ...avatars()] : shown.entities, shown.projectiles, dt, started, shown.t);
     // A controller rumbles when we're hurt.
     if (me.health < this.lastHealth && this.lastHealth > 0 && this.input.device === 'pad' && this.settings.vibration) rumble(0.55, 0.3, 170);
     this.lastHealth = me.health;
-    this.pickupView.sync(f.pickups, dt);
+    this.pickupView.sync(shown.pickups, dt);
     this.flights.update(dt, started);
     // Our own vehicle's model where prediction has it, not where the (older) frame does.
-    const own = this.vehicles.active && this.vehicles.prop !== null ? new Map([[this.vehicles.prop, this.vehicles.pose()]]) : undefined;
-    this.propView.sync(f.props, dt, { clock: f.clock, me: this.playerId, inputTime: (seq) => this.inputTimes.get(seq) ?? null, now: now / 1000, camera: this.camera.position }, own);
-    this.showPlayer(me);
+    const own = !rp && this.vehicles.active && this.vehicles.prop !== null ? new Map([[this.vehicles.prop, this.vehicles.pose()]]) : undefined;
+    this.propView.sync(shown.props, dt, { clock: shown.clock, me: rp ? null : this.playerId, inputTime: (seq) => this.inputTimes.get(seq) ?? null, now: now / 1000, camera: this.camera.position }, own);
+    // (In a replay, its player's hands and what they hold; our own HUD stays ours.)
+    this.showPlayer(eyes ?? me, !rp);
 
-    if (this.walker && !ride) {
+    if (this.walker && !ride && !rp) {
       this.view.viewDirection(this.dir);
       this.chunks.update(me.x, me.z, this.dir.x, this.dir.z);
     } else {
@@ -1608,11 +1874,11 @@ export class Runtime {
     this.held.setLight(this.probe);
     // The first-person layer: drawn only in first person (nothing in hand while dead, someone out
     // of the game watching sees only the game, or in third person).
-    this.held.frame(this.camera.aspect, this.walker && this.mode !== 'title' && !me.dead && !me.vehicle && !this.view.thirdPerson);
+    this.held.frame(this.camera.aspect, rp ? !!eyes && !eyes.dead && !eyes.vehicle : this.walker && this.mode !== 'title' && !me.dead && !me.vehicle && !this.view.thirdPerson);
     // The game's client code: its kits (the first-person view places the hand, the figures are
-    // posed, ...), then its own frame.
+    // posed, ...), then its own frame. In a replay, `client.me` is the player it follows.
     if (!this.clientStarted) this.startClient(me);
-    const mine = this.meOf(me, dt);
+    const mine = rp && eyes ? this.replayMe(eyes, dt) : this.meOf(me, dt);
     this.client.frame(dt, mine);
     // The figures as client code posed them (the figures kit), animated.
     this.entityView.finish();
@@ -1626,19 +1892,23 @@ export class Runtime {
     // This frame's own shots, their bullets worked out from where the eye is now, and the client
     // code's late work (they're drawn where they start: the tracers leave the muzzle as drawn).
     this.ownBullets();
+    if (rp) this.replayBullets();
     this.client.late(dt);
     if (this.gameHud.wantsLocal) this.gameHud.setLocal(this.localState(me));
     this.gameHud.holdScoreboard(this.mode === 'playing' && this.input.isDown('Tab'));
     // Camera effects: shake and the death tilt (which rights itself after a moment, for someone
     // out of the game a while to watch).
     this.camera.position.add(this.fx.shakeOffset);
-    if (this.walker && me.dead) {
-      const k = Math.min(1, me.deathTime / 0.6) * Math.min(1, Math.max(0, (2.8 - me.deathTime) / 0.8));
+    // (In a replay, the eyes it follows fall as they did.)
+    const fallen = rp ? eyes : me;
+    if (this.walker && fallen?.dead) {
+      const k = Math.min(1, fallen.deathTime / 0.6) * Math.min(1, Math.max(0, (2.8 - fallen.deathTime) / 0.8));
       this.camera.position.y -= k * 1.2;
       this.camera.rotateZ(k * 0.45);
     }
     this.camera.updateMatrixWorld();
-    this.sfx.setListener(this.camera.position, this.walker ? this.view.yaw : Math.atan2(-this.dir.x, -this.dir.z));
+    const heading = rp ? (eyes ? this.replayView.yaw : Math.atan2(-this.dir.x, -this.dir.z)) : this.walker ? this.view.yaw : Math.atan2(-this.dir.x, -this.dir.z);
+    this.sfx.setListener(this.camera.position, heading);
     this.present(dt, t0);
   }
 
@@ -1893,10 +2163,8 @@ export class Runtime {
    * Someone else's shot (the host's word), for the client code (a `bullets` event): from their
    * gun's muzzle as their figure's drawn, where each bullet ended and what it hit. Their figure kicks.
    */
-  private othersShot(w: ShotWire) {
-    const def = this.content.items.get(w.item);
-    const gun = isGun(def) ? def : null;
-    const shooter = this.frameData?.players.find((p) => p.id === w.by);
+  private othersShot(w: ShotWire, players = this.frameData?.players) {
+    const shooter = players?.find((p) => p.id === w.by);
     const avatar = this.avatarIds.get(w.by);
     const from = new THREE.Vector3();
     if (!(avatar !== undefined && this.entityView.muzzle(avatar, from))) {
@@ -1904,8 +2172,15 @@ export class Runtime {
       from.set(shooter.x, shooter.y + 1.45, shooter.z);
     }
     if (avatar !== undefined) this.entityView.kick(avatar);
+    this.emit({ t: 'bullets', item: w.item, by: w.by, mine: false, from: { x: from.x, y: from.y, z: from.z }, bullets: this.bulletsOf(w) });
+  }
+
+  /** A shot's bullets as the host had them, for the client code: where each ended, what it hit, the walls it went through. */
+  private bulletsOf(w: ShotWire): ClientBullet[] {
+    const def = this.content.items.get(w.item);
+    const gun = isGun(def) ? def : null;
     const v = (p: number[], i: number) => ({ x: p[i], y: p[i + 1], z: p[i + 2] });
-    const bullets = w.ends.map(([x, y, z, kind], i): ClientBullet => {
+    return w.ends.map(([x, y, z, kind], i): ClientBullet => {
       const at = { x, y, z };
       const block = w.blocks[i];
       const normal = w.normals[i] ? v(w.normals[i]!, 0) : null;
@@ -1919,7 +2194,6 @@ export class Runtime {
         walls: gun ? (w.walls?.[i] ?? []).map((p) => this.wallOf(gun, v(p, 0), v(p, 3), v(p, 6), v(p, 9), p[12])) : [],
       };
     });
-    this.emit({ t: 'bullets', item: w.item, by: w.by, mine: false, from: { x: from.x, y: from.y, z: from.z }, bullets });
   }
 
   /** Whether a bullet from `gun` that hit `block` at `at` (on its face `normal`) carves it (then the pit it leaves is its mark). */

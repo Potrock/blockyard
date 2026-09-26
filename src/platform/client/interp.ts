@@ -48,7 +48,7 @@ const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
  * Players where they are at the frame's time: a server plays whole inputs, so a player's state
  * trails the step a little (`lead`); drawn from there, they'd move in fits and starts.
  */
-function caughtUp(f: SimFrame): SimFrame {
+export function caughtUp(f: SimFrame): SimFrame {
   if (!f.players.some((p) => p.lead > 0)) return f;
   return { ...f, players: f.players.map((p) => (p.lead > 0 ? { ...p, x: p.x + p.vx * p.lead, y: p.y + p.vy * p.lead, z: p.z + p.vz * p.lead, lead: 0 } : p)) };
 }
@@ -58,7 +58,7 @@ function byId<T extends { id: number | string }>(list: T[]): Map<number | string
 }
 
 /** Frame `b`, with everything that moves put `k` of the way from where it was in `a`. */
-function blend(a: SimFrame, b: SimFrame, k: number): SimFrame {
+export function blend(a: SimFrame, b: SimFrame, k: number): SimFrame {
   const pa = byId(a.players);
   const ea = byId(a.entities);
   const qa = byId(a.projectiles);

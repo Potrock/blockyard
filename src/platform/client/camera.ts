@@ -141,6 +141,12 @@ export class PlayerCamera {
     this.camera.updateMatrixWorld();
   }
 
+  /** Start from where another camera on the same view has settled (its eye height and field of view): a replay's eyes take over without a jump. */
+  settleFrom(other: PlayerCamera) {
+    this.eye = other.eye;
+    this.fov = other.fov;
+  }
+
   viewDirection(out: THREE.Vector3): THREE.Vector3 {
     return this.camera.getWorldDirection(out);
   }

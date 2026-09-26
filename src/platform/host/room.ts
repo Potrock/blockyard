@@ -1,6 +1,6 @@
 import type { GameDefinition } from '../api/types';
 import { encode } from '../net/codec';
-import { FrameWriter, quantize } from '../net/delta';
+import { quantize } from '../net/delta';
 import type { ClientCommand, ServerWelcome, WireBatch } from '../net/protocol';
 import type { SimFrame } from '../sim/sim';
 import { GameHost } from './game';
@@ -74,7 +74,6 @@ export class RoomCore {
   private time = 0;
   private savedAt = 0;
   private timer: ReturnType<typeof setInterval>;
-  private frames = new FrameWriter<SimFrame>();
   /** The server's client ids and the host's, and the frame each client has. */
   private ids = new Map<string, string>();
   private had = new Map<string, SimFrame>();
@@ -154,15 +153,15 @@ export class RoomCore {
     if (!this.ids.size) return;
     this.time += dt;
     const batches = this.host.step(dt);
-    const frame = batches.values().next().value?.frame;
-    if (frame) this.frames.next(frame);
+    // (The host rounded the step's frame and worked out its patch once: `host.frames`.)
+    const frames = this.host.frames;
     for (const [client, id] of this.ids) {
       const b = batches.get(id);
       if (!b) continue;
       let f: unknown;
       if (b.frame) {
-        f = this.frames.patchFor(this.had.get(client));
-        this.had.set(client, this.frames.current!);
+        f = frames.patchFor(this.had.get(client));
+        this.had.set(client, frames.current!);
       }
       this.out.send(client, encode({ events: b.events, f, time: this.time } satisfies WireBatch));
     }
