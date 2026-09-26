@@ -30,6 +30,7 @@ import { ChunkManager } from './world/chunks';
 import { firstGameBlock, gameBlocks, useGameBlocks, type GameBlocks } from './world/blocks';
 import { blockIdOf, DEFAULT_TINT, destructibleIds, loadRegistry, variant, type Registry } from './world/registry';
 import { Input } from './player/input';
+import { gameKeys } from './player/keys';
 import { padBindings, padHints, rumble } from './player/gamepad';
 import { PadNav } from './ui/padnav';
 import { Effects } from './fx/effects';
@@ -281,16 +282,17 @@ export class Runtime {
     this.gunRules = resolveGunRules(def.guns);
     this.guns = new GunController(this.gunRules);
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
-    const padKeys = { jump: 'Space', crouch: this.tune.crouchKeys[0] ?? 'ShiftLeft', sprint: this.tune.sprintKeys[0] ?? 'ControlLeft' };
+    // The keys this game reads its moves by: a controller presses them, and the player's key bindings read as them.
+    const keys = gameKeys(this.tune);
     this.input.padBindings = padBindings(def.gamepad);
-    this.input.padKeysFor = padKeys;
+    this.input.keysFor = keys;
     // The title screen asks for a name and says who's on; a game with rooms of players' own
     // offers one (or, in one, the link to it and the way back).
     const room = link.welcome.room && link.welcome.room !== 'public' ? link.welcome.room : null;
     this.room = room;
     const online = { server: new URL(link.url).origin, game: def.id, room, onRoom: def.instances ? (own: boolean) => this.switchGame(def.id, own ? newRoomCode() : null) : undefined };
     this.title = title;
-    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, padKeys), walks: this.walker, keys: this.settings.keys, online });
+    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, keys), walks: this.walker, keys: { bound: this.settings.keys, game: keys }, online });
   }
 
   /**
@@ -561,7 +563,7 @@ export class Runtime {
     this.gameHud.setVisible(false);
     this.held.visible = false;
 
-    this.pause = new PauseMenu(this.ui, this.settings, (s) => this.applySettings(s), () => this.input.lock());
+    this.pause = new PauseMenu(this.ui, this.settings, this.input.keysFor, (s) => this.applySettings(s), () => this.input.lock());
     this.pause.onTime = (t) => this.link.send({ t: 'env', time: t });
     this.pause.onRestart = () => {
       this.pause.hide();
@@ -583,7 +585,7 @@ export class Runtime {
     };
     this.input.onPadButton = (b, a) => this.onPadButton(b, a);
     document.body.classList.toggle('pad-mode', this.input.device === 'pad');
-    this.pause.setPadHints(padHints(def, this.walker, this.input.padKeysFor));
+    this.pause.setPadHints(padHints(def, this.walker, this.input.keysFor));
     const life = { signal: this.life.signal };
     this.canvas.addEventListener('click', () => {
       this.sfx.unlock();

@@ -1,7 +1,7 @@
 import type { PadAction, PadButton } from '../api/types';
 import type { PlayerInput } from '../net/protocol';
 import { DEFAULT_PAD, PAD_BUTTONS, readPad } from './gamepad';
-import { translation, type KeyBindings } from './keys';
+import { DEFAULT_KEYS, translation, type KeyBindings, type KeyDefaults } from './keys';
 
 /** Directions a controller moves through menus with (the D-pad or the left stick). */
 const NAV: PadButton[] = ['Up', 'Down', 'Left', 'Right'];
@@ -59,8 +59,8 @@ export class Input {
   onPadButton: ((button: PadButton, action: PadAction) => void) | null = null;
   /** What each controller button does (the game's `gamepad` over the platform's layout). */
   padBindings: Record<PadButton, PadAction> = { ...DEFAULT_PAD };
-  /** The movement keys the controller's `jump`, `crouch` and `sprint` press. */
-  padKeysFor = { jump: 'Space', crouch: 'ShiftLeft', sprint: 'ControlLeft' };
+  /** The keys the game reads each action by: the controller's `jump`, `crouch` and `sprint` press them, and key bindings read as them. */
+  keysFor: KeyDefaults = { ...DEFAULT_KEYS };
   /** The right stick, shaped for aiming ([right, down], each -1..1), while it drives the game. */
   padLook: [number, number] = [0, 0];
   /** How far the right stick is pushed (0..1). */
@@ -153,7 +153,7 @@ export class Input {
 
   /** Read keys through these bindings from now on (keys held now are let go). */
   setBindings(b: KeyBindings) {
-    this.bindings = translation(b);
+    this.bindings = translation(b, this.keysFor);
     this.releaseKeys();
   }
 
@@ -284,7 +284,7 @@ export class Input {
         }
         return;
       }
-      const code = a === 'jump' ? this.padKeysFor.jump : a === 'crouch' ? this.padKeysFor.crouch : a;
+      const code = a === 'jump' ? this.keysFor.jump : a === 'crouch' ? this.keysFor.crouch : a;
       keys.add(code);
       if (edge && !this.padKeys.has(code)) {
         this.pressedThisFrame.add(code);
@@ -305,7 +305,7 @@ export class Input {
       if (!this.padKeys.has(code)) this.pressedThisFrame.add(code);
     }
     if (this.padSprint) {
-      const code = this.padKeysFor.sprint;
+      const code = this.keysFor.sprint;
       if (!this.padKeys.has(code)) this.pressedThisFrame.add(code);
       keys.add(code);
     }

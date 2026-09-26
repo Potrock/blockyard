@@ -1,5 +1,5 @@
 import { h } from './dom';
-import { ACTIONS, actionLabel, canBind, keyFor, keyLabel, moveLabel, normalize, rebind, relabel, type Action, type KeyBindings } from '../player/keys';
+import { ACTIONS, DEFAULT_KEYS, actionLabel, canBind, keyFor, keyLabel, moveLabel, normalize, rebind, relabel, resolve, type Action, type KeyBindings, type KeyDefaults } from '../player/keys';
 import type { Settings, ShadowQuality } from '../settings';
 import type { Registry } from '../world/registry';
 
@@ -37,8 +37,8 @@ export interface HomeGame {
   /** The same on a controller (shown instead while one is in use). */
   pad?: [string, string][];
   walks?: boolean;
-  /** The player's key bindings, so the hints name the keys they actually press. */
-  keys?: KeyBindings;
+  /** The player's key bindings and the game's own keys, so the hints name the keys they actually press. */
+  keys?: { bound: KeyBindings; game: KeyDefaults };
   online?: OnlineOptions | null;
 }
 
@@ -114,7 +114,7 @@ export class TitleScreen {
       name = h('label.home-name', {}, h('span', {}, 'Your name'), this.nameInput);
     }
     const walks = g.walks ?? true;
-    const keys = g.keys ?? {};
+    const { bound, game } = g.keys ?? { bound: {}, game: DEFAULT_KEYS };
     const controls = g.controls ?? [['LMB', 'break'], ['RMB', 'place'], ['E', 'blocks']];
     const rooms = g.online?.onRoom ? this.rooms(g.online, g.online.onRoom) : null;
     const tag = g.online?.room ? h('span.home-room-tag', {}, 'Your own game') : null;
@@ -123,8 +123,8 @@ export class TitleScreen {
       h(
         'div.home-controls.keys-only',
         {},
-        ...(walks ? [h('span', {}, h('kbd', {}, moveLabel(keys)), ' move'), h('span', {}, h('kbd', {}, actionLabel(keys, 'jump')), ' jump')] : []),
-        ...controls.map(([k, v]) => h('span', {}, h('kbd', {}, relabel(keys, k)), ` ${v}`)),
+        ...(walks ? [h('span', {}, h('kbd', {}, moveLabel(bound, game)), ' move'), h('span', {}, h('kbd', {}, actionLabel(bound, game, 'jump')), ' jump')] : []),
+        ...controls.map(([k, v]) => h('span', {}, h('kbd', {}, relabel(bound, game, k)), ` ${v}`)),
         h('span', {}, h('kbd', {}, '/'), ' commands'),
       ),
       h('div.home-controls.pad-only', {}, ...(g.pad ?? []).map(([k, v]) => h('span', {}, h('kbd', {}, k), ` ${v}`))),
@@ -301,7 +301,7 @@ export class PauseMenu {
   onRestart: (() => void) | null = null;
   onExit: (() => void) | null = null;
 
-  constructor(parent: HTMLElement, settings: Settings, private onChange: Change, onResume: () => void) {
+  constructor(parent: HTMLElement, settings: Settings, keys: KeyDefaults, private onChange: Change, onResume: () => void) {
     this.settings = { ...settings };
     const s = this.settings;
     const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
@@ -336,7 +336,7 @@ export class PauseMenu {
     }
 
     // Keyboard: click a key, then press the new one (Escape cancels). Taking a key another control
-    // has swaps the two, so Sprint on Shift puts Sneak on Ctrl.
+    // has swaps the two, so Sprint on Shift puts Crouch on Ctrl. `keys` are this game's own.
     const keyButtons = new Map<Action, HTMLButtonElement>();
     const hint = h('div.keybind-hint', {});
     const reset = h('button.link-btn', {
@@ -347,14 +347,15 @@ export class PauseMenu {
       },
     }, 'Reset') as HTMLButtonElement;
     const refreshKeys = () => {
+      const bound = resolve(s.keys, keys);
       for (const a of ACTIONS) {
         const b = keyButtons.get(a.id)!;
-        b.textContent = actionLabel(s.keys, a.id);
-        b.classList.toggle('changed', keyFor(s.keys, a.id) !== a.key);
+        b.textContent = keyLabel(bound[a.id]);
+        b.classList.toggle('changed', normalize(bound[a.id]) !== normalize(keys[a.id]));
         b.classList.remove('listening');
       }
       reset.disabled = Object.keys(s.keys).length === 0;
-      this.keysLine.textContent = keysText(s.keys);
+      this.keysLine.textContent = keysText(s.keys, keys);
     };
     const capture = (e: KeyboardEvent) => {
       // Ours alone: the game mustn't see the key being bound.
@@ -367,9 +368,9 @@ export class PauseMenu {
         hint.textContent = `${e.code ? keyLabel(e.code) : 'That key'} can’t be bound. Press another key, or Escape to cancel.`;
         return;
       }
-      const taken = ACTIONS.find((a) => a.id !== action && keyFor(s.keys, a.id) === normalize(e.code));
-      set('keys', rebind(s.keys, action, e.code));
-      hint.textContent = taken ? `${taken.label} moved to ${actionLabel(s.keys, taken.id)}.` : '';
+      const taken = ACTIONS.find((a) => a.id !== action && normalize(keyFor(s.keys, keys, a.id)) === normalize(e.code));
+      set('keys', rebind(s.keys, keys, action, e.code));
+      hint.textContent = taken ? `${taken.label} moved to ${actionLabel(s.keys, keys, taken.id)}.` : '';
       this.stopRebinding();
     };
     this.stopRebinding = () => {
@@ -494,9 +495,9 @@ export class PauseMenu {
 }
 
 /** The pause menu's footer: every control, with the keys as bound. */
-function keysText(b: KeyBindings): string {
-  const k = (a: Action) => actionLabel(b, a);
-  return `${moveLabel(b)} move · ${k('jump')} jump / fly up · ${k('sneak')} sneak / fly down · ${k('sprint')} or double-tap ${k('forward')} sprint · F fly · 1-9 / wheel select · MMB pick · E blocks · F1 hide HUD · F3 debug · [ ] time`;
+function keysText(b: KeyBindings, d: KeyDefaults): string {
+  const k = (a: Action) => actionLabel(b, d, a);
+  return `${moveLabel(b, d)} move · ${k('jump')} jump / fly up · ${k('crouch')} crouch / fly down · ${k('sprint')} or double-tap ${k('forward')} sprint · F fly · 1-9 / wheel select · MMB pick · E blocks · F1 hide HUD · F3 debug · [ ] time`;
 }
 
 /** Creative block picker. */
