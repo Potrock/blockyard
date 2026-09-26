@@ -1,5 +1,6 @@
 import { defineServer, type Bot, type GameContext, type IconRef, type MenuHandle, type MenuOptions, type Pickup, type Player, type Vec3 } from '@platform';
 import { guns, melee, navGrid, throwables, type NavGrid } from '@platform/kits';
+import { AmmoBags } from './ammo';
 import { ATLAS, defineArt, OUTFITS, skinOrigin } from './art';
 import { CaseRounds } from './briefcase';
 import { makeBots, type Bots } from './bots';
@@ -8,7 +9,7 @@ import { MAPS, mapById, type SpawnPoint } from './map';
 import { fighterOf, hostile, match, teamFighters, type Fighter } from './match';
 import { FFA_LIMIT, MODES, ROTATION, ROUNDS, TDM_LIMIT, TEAMS, type MatchPlan, type ModeId, type Team } from './modes';
 import { COLORS, fighterModel, shared } from './shared';
-import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
+import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, SIDEARMS, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
 import { outfitId, setupProgression, type Progression } from './progression'; // [progression]
 import { killcam, killcamHolds } from './killcam';
 import { selfHarm, Streaks } from './streaks';
@@ -29,11 +30,12 @@ import { STREAK_IDS, STREAKS } from './streaks/kinds';
  * joining take a bot's place. A public room goes round the modes and maps match by match
  * (`ROTATION`); in a room of one's own (`?room=`), M picks the mode and the map.
  *
- * Everyone carries a primary of their choosing (L), the Lucky 45, a katana and a lethal (G: two
- * Pineapple frags or a Mia firebomb). Three kills in a row light up the radar for you (UAV); five
- * get an Adrenaline Shot: faster, and patched up. In a free-for-all or Team Deathmatch, seven earn
- * a Hellstorm missile to steer down onto them, and ten an Attack Chopper to fly and shoot from,
- * each called in with 4 when you like (`streaks/`).
+ * Everyone carries a primary and a sidearm of their choosing (L), a katana and a lethal (G: two
+ * Pineapple frags or a Mia firebomb). Whoever goes down drops a bag of ammo: walk over it to top
+ * up your spare rounds (ammo.ts). Three kills in a row light up the radar for you (UAV); five get
+ * an Adrenaline Shot: faster, and patched up. In a free-for-all or Team Deathmatch, seven earn a
+ * Hellstorm missile to steer down onto them, and ten an Attack Chopper to fly and shoot from, each
+ * called in with 4 when you like (`streaks/`).
  */
 
 const TIME_LIMIT: Record<ModeId, number> = { ffa: 8 * 60, tdm: 10 * 60, case: Infinity };
@@ -56,6 +58,8 @@ let bots: Bots;
 let rounds: CaseRounds;
 /** The killstreaks you steer: the Hellstorm and the Attack Chopper (`streaks/`). */
 let streaks: Streaks;
+/** Ammo bags the fallen drop (ammo.ts). */
+let ammo: AmmoBags;
 /** Each map's walking grid (built once its blocks have loaded, the first time a match is on it). */
 let navs = new Map<string, NavGrid>();
 /** The map's hotspots, where bots drift (the array the bots read: refilled for each map). */
@@ -84,9 +88,20 @@ const ordinal = (n: number) => `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n 
 const isCase = () => match.mode.id === 'case';
 const planName = (m: MatchPlan) => `${MODES[m.mode].name} on ${mapById(m.map)?.name ?? m.map}`;
 
-/** What a bot carries: mostly rifles and SMGs, now and then a shotgun, rarely a sniper. */
+/** What a bot carries: mostly rifles and SMGs, now and then a shotgun or the machine gun, rarely a scope. */
+const BOT_PRIMARIES: [Primary, number][] = [
+  ['rifle', 0.3],
+  ['smg', 0.18],
+  ['tommy', 0.13],
+  ['shotgun', 0.11],
+  ['sawnoff', 0.06],
+  ['lmg', 0.09],
+  ['marksman', 0.07],
+  ['sniper', 0.06],
+];
 function botPrimary(r: number): Primary {
-  return r < 0.42 ? 'rifle' : r < 0.74 ? 'smg' : r < 0.92 ? 'shotgun' : 'sniper';
+  for (const [id, share] of BOT_PRIMARIES) if ((r -= share) < 0) return id;
+  return 'rifle';
 }
 
 function standings(): Fighter[] {
@@ -119,6 +134,7 @@ function addFighter(game: GameContext, p: Player): Fighter {
     plants: 0,
     defuses: 0,
     primary: p.bot ? botPrimary(game.rng.next()) : 'rifle',
+    sidearm: p.bot && game.rng.next() < 0.3 ? 'revolver' : 'pistol',
     lethal: p.bot && game.rng.next() < 0.35 ? 'molotov' : 'frag',
     outfit,
     team: null,
@@ -219,14 +235,14 @@ function pickSpawn(game: GameContext, me: Player): SpawnPoint {
   return best;
 }
 
-function arm(p: Player, primary: Primary, lethal: Lethal) {
+function arm(p: Player, f: Fighter) {
   const inv = p.inventory;
   inv.clear();
-  inv.give(primary);
-  inv.give('pistol');
+  inv.give(f.primary);
+  inv.give(f.sidearm);
   inv.give('katana');
   // The lethal rides in the fourth slot: thrown with G, never switched to.
-  inv.give(lethal, LETHAL_COUNT[lethal] ?? 1);
+  inv.give(f.lethal, LETHAL_COUNT[f.lethal] ?? 1);
   inv.select(0);
 }
 
@@ -239,7 +255,7 @@ function spawnAt(game: GameContext, f: Fighter, sp: SpawnPoint) {
   p.revive();
   p.health = p.maxHealth;
   p.teleport({ x: sp.x, y: sp.y + 0.05, z: sp.z }, sp.yaw, 0);
-  arm(p, f.primary, f.lethal);
+  arm(p, f);
   p.protect(1.5);
   p.speed = 1;
   f.diedAt = -1;
@@ -262,8 +278,8 @@ function spawn(game: GameContext, f: Fighter) {
 }
 
 /**
- * Whether a fighter may pick this weapon from the loadout (a primary or a lethal). All of them,
- * for now: progression hooks in here.
+ * Whether a fighter may pick this weapon from the loadout (a primary, a sidearm or a lethal). All
+ * of them, for now: progression hooks in here.
  */
 function canPick(_f: Fighter, _item: string): boolean {
   return true;
@@ -275,7 +291,7 @@ function loadoutMenu(game: GameContext, f: Fighter) {
   // Just spawned (or waiting for the round): swap now; otherwise it's for the next life.
   const pick = (name: string) => {
     if (p.alive && (game.clock.now - f.spawnedAt < 5 || (isCase() && rounds.phase === 'prep'))) {
-      arm(p, f.primary, f.lethal);
+      arm(p, f);
       p.hud.toast(`${name} it is`);
     } else p.hud.toast(`${name} next life`);
   };
@@ -294,6 +310,20 @@ function loadoutMenu(game: GameContext, f: Fighter) {
         },
       }),
     ); // [progression] locked: greyed out, refused
+  const sidearms = () =>
+    SIDEARMS.filter((id) => canPick(f, id)).map((id) =>
+      xp.gate(p, id, {
+        icon: feedIcon(id) ?? undefined,
+        label: WEAPONS[id].name,
+        note: BLURBS[id],
+        active: f.sidearm === id,
+        onSelect: () => {
+          f.sidearm = id;
+          f.menu?.update({ sections: sections() });
+          pick(WEAPONS[id].name);
+        },
+      }),
+    ); // [progression]
   const lethals = () =>
     (Object.keys(LETHALS) as Lethal[])
       .filter((id) => canPick(f, id))
@@ -312,10 +342,10 @@ function loadoutMenu(game: GameContext, f: Fighter) {
       ); // [progression]
   // [progression] Outfits (the locked greyed out), and the sections all together.
   const outfits = () => xp.outfits(p, f.outfit, (i) => ((f.outfit = i), f.menu?.update({ sections: sections() })));
-  const sections = () => [{ title: 'Primary', entries: entries() }, { title: 'Lethal (G)', entries: lethals() }, outfits()];
+  const sections = () => [{ title: 'Primary', entries: entries() }, { title: 'Sidearm', entries: sidearms() }, { title: 'Lethal (G)', entries: lethals() }, outfits()];
   f.menu = p.hud.menu({
     title: 'Pick your piece',
-    subtitle: `Level ${xp.level(p)}, more unlocking as you go. Your primary, your lethal and your look; the Lucky 45 and the katana come along regardless.`, // [progression]
+    subtitle: `Level ${xp.level(p)}, more unlocking as you go. Your primary, your sidearm, your lethal and your look; the katana comes along regardless.`, // [progression]
     sections: sections(), // [progression]
     onClose: () => {
       f.menu = null;
@@ -382,6 +412,7 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
   v.diedAt = now;
   v.uavUntil = 0;
   boardDirty = true;
+  ammo.drop(victim.position);
   const killer = typeof source === 'object' && source !== null && (source as Player).kind === 'player' ? (source as Player) : null;
   const k = killer && killer !== victim ? fighters.get(killer.id) : undefined;
   const icon = weapon ? killIcon(weapon) : null;
@@ -785,6 +816,7 @@ export default defineServer(shared, {
     defineArt(game);
     defineWeapons(game);
     defineBriefcase(game);
+    ammo = new AmmoBags(game);
     // [progression] XP, levels and unlocks: before the game's own listeners (the kill that ends a match still counts).
     xp = setupProgression(game);
     // (Its voices are each screen's, `client/sounds.ts`: played here by name.)
@@ -794,6 +826,7 @@ export default defineServer(shared, {
     // the bots on whichever the match is on.
     navs = new Map(MAPS.map((m) => [m.id, navGrid(game, { bounds: m.bounds })]));
     bots = makeBots(game, () => navs.get(match.map.id) ?? null, hotspots);
+    bots.supplies = ammo;
     rounds = new CaseRounds(game, { spawnAt: (f, at) => spawnAt(game, f, at), award, endMatch: (t) => endMatch(game, null, t) });
     streaks = new Streaks(game, { bots, award });
     streaks.setup();
@@ -924,6 +957,7 @@ export default defineServer(shared, {
     bots.objective = null;
     watching.clear();
     streaks.reset();
+    ammo.clear();
     nextBriefcase = game.clock.now + 35;
     for (const f of fighters.values()) {
       Object.assign(f, { kills: 0, deaths: 0, score: 0, streak: 0, best: 0, headshots: 0, plants: 0, defuses: 0, diedAt: -1, uavUntil: 0, uavFor: 0, rushUntil: 0, streaks: [], firedAt: -99, radar: '', multi: 0 });
@@ -1001,6 +1035,7 @@ export default defineServer(shared, {
 
     if (isCase()) rounds.update(dt);
     else updateBriefcase(game);
+    ammo.update();
     if (match.phase !== 'playing') return;
     // The clock.
     const left = TIME_LIMIT[match.mode.id] - (now - startedAt);

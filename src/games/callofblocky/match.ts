@@ -1,7 +1,7 @@
 import type { MenuHandle, Player } from '@platform';
 import { MAPS, type MapSpec } from './map';
 import { MODES, type Mode, type Team } from './modes';
-import type { Lethal, Primary } from './weapons';
+import type { Lethal, Primary, Sidearm } from './weapons';
 import type { StreakId } from './streaks/kinds';
 
 /**
@@ -22,6 +22,7 @@ export interface Fighter {
   plants: number;
   defuses: number;
   primary: Primary;
+  sidearm: Sidearm;
   /** Their lethal (thrown with G), a few a life. */
   lethal: Lethal;
   outfit: number;

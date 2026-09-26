@@ -1,4 +1,4 @@
-import { HeldModels, type GunHold, type ItemLook } from '@platform';
+import { HeldModels, type GunHold, type HoldSpec, type ItemLook } from '@platform';
 import type { Client } from '@platform/client';
 import { GUNS } from '../models';
 import { FIGHTERS } from '../models/fighters';
@@ -30,12 +30,21 @@ const FP: GunHold = {
 const FP_COMPACT: GunHold = { ...FP, fist: [0.12, -0.27, -0.4] };
 /** Aimed, a red dot or holo a little further out than the platform's, so it frames the target rather than filling the view. */
 const ADS = 0.4;
-const FP_HOLDS: Record<string, GunHold> = { pistol: { ...FP_COMPACT, ads: ADS }, smg: { ...FP_COMPACT, ads: ADS }, rifle: { ...FP, ads: ADS }, shotgun: { ...FP, ads: ADS } };
+const FP_HOLDS: Record<string, GunHold> = {
+  pistol: { ...FP_COMPACT, ads: ADS },
+  smg: { ...FP_COMPACT, ads: ADS },
+  tommy: { ...FP, ads: ADS },
+  rifle: { ...FP, ads: ADS },
+  shotgun: { ...FP, ads: ADS },
+  lmg: { ...FP, ads: ADS },
+  sawnoff: { ...FP, ads: ADS },
+  revolver: { ...FP_COMPACT, ads: ADS },
+};
 
 /** A gun: its model, its icon (the kill feed shows it side on), how it sits in first person, and the rest of its look. */
-const gun = (id: string, look: ItemLook): ItemLook => ({
+const gun = (id: string, look: ItemLook, hold?: Partial<HoldSpec>): ItemLook => ({
   icon: { gltf: url(id) },
-  hold: { style: 'gun', model: HeldModels.gltf(url(id)), gun: FP_HOLDS[id] ?? FP },
+  hold: { style: 'gun', model: HeldModels.gltf(url(id)), gun: FP_HOLDS[id] ?? FP, ...hold },
   ...look,
 });
 
@@ -54,7 +63,13 @@ export const LOOKS: Record<string, ItemLook> = {
   smg: gun('smg', { tracer: '#ff9ec8', sounds: { use: 'shot_smg', reload: 'reload_mag' } }),
   shotgun: gun('shotgun', { tracer: '#ffb36b', sounds: { use: 'shot_shotgun', reload: 'reload_shell', cycle: 'pump' } }),
   sniper: gun('sniper', { tracer: '#fff1a8', sounds: { use: 'shot_sniper', reload: 'reload_mag', cycle: 'bolt' } }),
+  tommy: gun('tommy', { tracer: '#9ef0e0', sounds: { use: 'shot_tommy', reload: 'reload_drum' } }),
+  lmg: gun('lmg', { tracer: '#ffb347', sounds: { use: 'shot_lmg', reload: 'reload_belt' } }),
+  marksman: gun('marksman', { tracer: '#fff1a8', sounds: { use: 'shot_marksman', reload: 'reload_mag' } }),
+  sawnoff: gun('sawnoff', { tracer: '#ffb36b', sounds: { use: 'shot_sawnoff', reload: 'reload_break' } }),
   pistol: gun('pistol', { sounds: { use: 'shot_pistol', reload: 'reload_pistol' } }),
+  // Held as a pistol by a figure (it's longer than the platform's pistol length).
+  revolver: gun('revolver', { tracer: '#ffe2a0', sounds: { use: 'shot_revolver', reload: 'reload_revolver' } }, { stance: 'pistol' }),
   katana: {
     icon: { gltf: url('katana') },
     // Rolled onto its side: in the hand the flat of the blade (and its hamon) shows, not the edge.
@@ -65,6 +80,8 @@ export const LOOKS: Record<string, ItemLook> = {
   molotov: lethal('molotov', [0, 0, -1.5], { trail: '#ffb347', sounds: { draw: 'lighter', use: 'toss', hit: 'glass' } }),
   // Every so often on the street, glowing: nobody knows what's inside.
   briefcase: { icon: { gltf: url('briefcase') } },
+  // Dropped by the fallen: an ammo can.
+  ammo: { icon: { gltf: url('ammo') } },
 };
 
 /** The killstreaks you steer (never held), as the kill feed and the pilot's call-in show them: their models, side on. */

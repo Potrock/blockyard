@@ -2,18 +2,25 @@ import type { GameContext, GunItem, IconRef, ItemDefinition, MeleeItem, Throwabl
 import { isStreak, STREAKS } from './streaks/kinds';
 
 /**
- * The arsenal. Everyone carries a primary of their choosing, the Lucky 45 and the Hattori
- * katana. Numbers are tuned for 100 health: most guns kill in three to five body shots, heads
- * take fewer, the katana and the Honey Bunny (up close) in one.
+ * The arsenal. Everyone carries a primary and a sidearm of their choosing and the Hattori katana.
+ * Numbers are tuned for 100 health: most guns kill in three to five body shots, heads take fewer,
+ * the katana, the Honey Bunny and Rock Salt (up close) in one, Bad Mother in two.
+ *
+ * The primaries: the Big Kahuna (an all-rounder), two SMGs (the Mac-10, quick and light; the
+ * Wolf, a Tommy gun with a fifty-round drum, heavier to swing), two shotguns (Zed's Pump; Rock
+ * Salt, a sawn-off with both barrels one after the other and then a reload), Marsellus (a
+ * machine gun: a hundred-round belt, slow to aim and to reload), and two scoped rifles (Ezekiel,
+ * semi-automatic, three to the body; the Honey Bunny, a bolt gun, one). The sidearms: the Lucky
+ * 45, quick and steady, or Bad Mother, a magnum revolver that kicks.
  *
  * Every bullet chips the walls (`carve`): a pit `radius` round, and each shot on the same spot
  * goes about `radius + depth` further in. Through a block-thick wall that's about eight rifle or
  * pistol shots, ten from the SMG, two from the Honey Bunny; the shotgun's pellets pepper it.
  *
- * The rifle, the pistol and the Honey Bunny wall-bang (`penetration`): the rifle through a
- * block-thick wall head on (at about two thirds of its damage), the pistol only through thinner
- * stuff (a wall already shot into, a slab, a door), the Honey Bunny through two blocks and still
- * a kill up close.
+ * The rifles, Marsellus, the pistols and the Honey Bunny wall-bang (`penetration`): the rifle
+ * through a block-thick wall head on (at about two thirds of its damage), Marsellus and Ezekiel a
+ * little more, the pistols only through thinner stuff (a wall already shot into, a slab, a door),
+ * the Honey Bunny through two blocks and still a kill up close.
  *
  * And a lethal (G): the Pineapple, a frag that bounces and rolls and blows a crater in a wall,
  * or the Mia, a five-dollar shake bottle full of fuel that breaks where it lands and burns.
@@ -96,6 +103,78 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     carve: { radius: 0.12, depth: 0.42 },
     penetration: { depth: 2.2, damageLoss: 0.18 },
   } satisfies GunItem,
+  tommy: {
+    kind: 'gun',
+    name: 'The Wolf',
+    auto: true,
+    rpm: 720,
+    damage: [27, 17],
+    falloff: [12, 30],
+    headshot: 1.4,
+    magazine: 50,
+    reserve: 150,
+    reload: 2.8,
+    spread: { hip: 2.3, aim: 0.5, move: 0.9, air: 2.6, bloom: 0.16 },
+    recoil: { up: 0.62, side: 0.5, recover: 0.75 },
+    aim: { zoom: 1.2, time: 0.2, move: 0.75, sight: 'holo', color: '#5fffe0' },
+    mobility: 1.02,
+    carve: { radius: 0.1, depth: 0.03 },
+  } satisfies GunItem,
+  lmg: {
+    kind: 'gun',
+    name: 'Marsellus',
+    auto: true,
+    rpm: 600,
+    damage: [30, 23],
+    falloff: [25, 55],
+    headshot: 1.4,
+    magazine: 100,
+    reserve: 200,
+    reload: 5,
+    range: 170,
+    spread: { hip: 3.4, aim: 0.35, move: 1.8, air: 3.5, bloom: 0.12 },
+    recoil: { up: 0.7, side: 0.6, recover: 0.6 },
+    aim: { zoom: 1.3, time: 0.4, move: 0.45, sight: 'holo', color: '#ff8a2a' },
+    mobility: 0.84,
+    carve: { radius: 0.1, depth: 0.05 },
+    penetration: { depth: 1.4, damageLoss: 0.28 },
+  } satisfies GunItem,
+  marksman: {
+    kind: 'gun',
+    name: 'Ezekiel',
+    rpm: 320,
+    damage: [40, 34],
+    falloff: [40, 100],
+    headshot: 1.8,
+    magazine: 12,
+    reserve: 48,
+    reload: 2.4,
+    range: 220,
+    spread: { hip: 4.5, aim: 0.04, move: 2.2, air: 5, bloom: 0.9 },
+    recoil: { up: 2.4, side: 0.5, recover: 0.8 },
+    aim: { zoom: 2.6, time: 0.28, move: 0.55, sight: 'scope' },
+    mobility: 0.94,
+    carve: { radius: 0.1, depth: 0.1 },
+    penetration: { depth: 1.6, damageLoss: 0.25 },
+  } satisfies GunItem,
+  sawnoff: {
+    kind: 'gun',
+    name: 'Rock Salt',
+    rpm: 260,
+    pellets: 10,
+    damage: [17, 3],
+    falloff: [5, 13],
+    headshot: 1.2,
+    magazine: 2,
+    reserve: 24,
+    reload: 2.1,
+    range: 30,
+    spread: { hip: 6, aim: 5, move: 0.8, air: 1, bloom: 0 },
+    recoil: { up: 5, side: 1.5, recover: 0.75 },
+    aim: { zoom: 1.1, time: 0.16, move: 0.8, sight: 'dot' },
+    mobility: 1.04,
+    carve: { radius: 0.07, depth: 0.012 },
+  } satisfies GunItem,
   pistol: {
     kind: 'gun',
     name: 'Lucky 45',
@@ -112,6 +191,23 @@ export const WEAPONS: Record<string, ItemDefinition> = {
     mobility: 1.1,
     carve: { radius: 0.09, depth: 0.04 },
     penetration: { depth: 0.7, damageLoss: 0.45 },
+  } satisfies GunItem,
+  revolver: {
+    kind: 'gun',
+    name: 'Bad Mother',
+    rpm: 160,
+    damage: [58, 40],
+    falloff: [14, 38],
+    headshot: 1.75,
+    magazine: 6,
+    reserve: 30,
+    reload: 2.3,
+    spread: { hip: 1.9, aim: 0.2, move: 1.1, air: 2.6, bloom: 1 },
+    recoil: { up: 4.2, side: 0.8, recover: 0.8 },
+    aim: { zoom: 1.25, time: 0.18, move: 0.82, sight: 'dot' },
+    mobility: 1.08,
+    carve: { radius: 0.1, depth: 0.06 },
+    penetration: { depth: 0.8, damageLoss: 0.4 },
   } satisfies GunItem,
   katana: {
     kind: 'melee',
@@ -167,15 +263,25 @@ export const LETHAL_BLURBS: Record<string, string> = {
 };
 
 /** The primaries on offer, in the order the loadout menu lists them. */
-export const PRIMARIES = ['rifle', 'smg', 'shotgun', 'sniper'] as const;
+export const PRIMARIES = ['rifle', 'smg', 'tommy', 'shotgun', 'sawnoff', 'lmg', 'marksman', 'sniper'] as const;
 export type Primary = (typeof PRIMARIES)[number];
 
+/** The sidearms on offer. */
+export const SIDEARMS = ['pistol', 'revolver'] as const;
+export type Sidearm = (typeof SIDEARMS)[number];
+
 /** One line about each, for the loadout menu. */
-export const BLURBS: Record<Primary, string> = {
+export const BLURBS: Record<Primary | Sidearm, string> = {
   rifle: 'Assault rifle · all-rounder',
   smg: 'SMG · fast and close',
+  tommy: 'Drum SMG · fifty rounds, a heavy hand',
   shotgun: 'Pump shotgun · one pump, one body',
+  sawnoff: 'Sawn-off · both barrels, then reload',
+  lmg: 'Machine gun · a hundred-round belt, slow to aim',
+  marksman: 'Marksman rifle · semi-auto, low scope, three to the body',
   sniper: 'Bolt sniper · one shot, long street',
+  pistol: 'Pistol · quick and steady',
+  revolver: 'Magnum revolver · two to the body, kicks like a mule',
 };
 
 export function defineWeapons(game: GameContext) {

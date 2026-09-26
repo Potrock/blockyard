@@ -51,6 +51,19 @@ export function defineSounds(client: Client) {
     s.noise({ duration: 0.5, delay: 0.32, filter: 'lowpass', from: 1100, to: 140, volume: 0.1 });
   });
   a.define('shot_pistol', (s) => shot(s, { punch: 210, body: 0.12, bright: 4200, crack: 0.5, tail: 0.25, loud: 0.85 }));
+  // The Wolf: a fat, subsonic .45 thump. Marsellus: a heavy rifle round with a long tail.
+  a.define('shot_tommy', (s) => shot(s, { punch: 160, body: 0.15, bright: 3800, crack: 0.22, tail: 0.24, loud: 0.85 }));
+  a.define('shot_lmg', (s) => shot(s, { punch: 115, body: 0.22, bright: 4600, crack: 0.5, tail: 0.42, loud: 1.05 }));
+  a.define('shot_marksman', (s) => {
+    shot(s, { punch: 130, body: 0.24, bright: 5000, crack: 0.7, tail: 0.6, loud: 1.1 });
+    s.noise({ duration: 0.35, delay: 0.26, filter: 'lowpass', from: 1000, to: 150, volume: 0.07 });
+  });
+  // Rock Salt: both barrels' worth of boom, low and wide. Bad Mother: a magnum's crack and ring.
+  a.define('shot_sawnoff', (s) => shot(s, { punch: 78, body: 0.5, bright: 2600, crack: 0.35, tail: 0.75, loud: 1.35 }));
+  a.define('shot_revolver', (s) => {
+    shot(s, { punch: 150, body: 0.2, bright: 3600, crack: 0.75, tail: 0.5, loud: 1.1 });
+    s.tone({ wave: 'triangle', from: 1900 * s.pitch, to: 1750 * s.pitch, duration: 0.25, volume: 0.04, delay: 0.02 });
+  });
   a.define('reload_mag', (s) => {
     click(s, 0.05, 900, 0.35); // magazine out
     click(s, 0.55, 700, 0.45); // magazine in
@@ -61,6 +74,46 @@ export function defineSounds(client: Client) {
     click(s, 0.05, 1100, 0.3);
     click(s, 0.6, 850, 0.4);
     click(s, 0.95, 1400, 0.4);
+  });
+  // The drum: the old one slid out sideways, the new one in, the knob back.
+  a.define('reload_drum', (s) => {
+    click(s, 0.1, 800, 0.35);
+    s.noise({ duration: 0.18, delay: 0.14, filter: 'bandpass', from: 900, to: 600, q: 2, volume: 0.2 });
+    s.noise({ duration: 0.2, delay: 1.3, filter: 'bandpass', from: 700, to: 1000, q: 2, volume: 0.2 });
+    click(s, 1.5, 650, 0.5);
+    click(s, 2.2, 1300, 0.35);
+    click(s, 2.32, 1000, 0.45);
+  });
+  // The belt: the cover up, the box off and on, a new belt laid in, the cover slammed, the handle.
+  a.define('reload_belt', (s) => {
+    click(s, 0.1, 1100, 0.4);
+    s.noise({ duration: 0.2, delay: 0.5, filter: 'bandpass', from: 600, to: 400, q: 2, volume: 0.25 });
+    click(s, 1.9, 600, 0.5);
+    for (let n = 0; n < 5; n++) s.noise({ duration: 0.05, delay: 2.5 + n * 0.09, filter: 'bandpass', from: 2400, to: 1800, q: 3, volume: 0.14 });
+    click(s, 3.6, 700, 0.6);
+    click(s, 4.3, 1200, 0.4);
+    click(s, 4.45, 950, 0.45);
+  });
+  // Broken open, the empties flicked out, two in, snapped shut.
+  a.define('reload_break', (s) => {
+    click(s, 0.08, 700, 0.45);
+    for (const d of [0.32, 0.4]) s.tone({ wave: 'triangle', from: 2600 * s.pitch, to: 2300 * s.pitch, duration: 0.06, volume: 0.08, delay: d });
+    click(s, 1.0, 900, 0.3);
+    click(s, 1.35, 900, 0.3);
+    click(s, 1.8, 520, 0.6);
+  });
+  // The cylinder swung out, the empties tipped out, the speedloader, the cylinder shut.
+  a.define('reload_revolver', (s) => {
+    click(s, 0.08, 1300, 0.35);
+    for (let n = 0; n < 4; n++) s.tone({ wave: 'triangle', from: (2400 + n * 170) * s.pitch, to: 2100 * s.pitch, duration: 0.05, volume: 0.06, delay: 0.35 + n * 0.05 });
+    click(s, 1.2, 1000, 0.35);
+    click(s, 1.85, 800, 0.5);
+  });
+  // An ammo bag grabbed: the can's lid, a rattle of rounds.
+  a.define('ammo', (s) => {
+    click(s, 0, 900, 0.4);
+    for (let n = 0; n < 4; n++) s.tone({ wave: 'triangle', from: (2000 + n * 240) * s.pitch, to: 1800 * s.pitch, duration: 0.05, volume: 0.07, delay: 0.08 + n * 0.045 });
+    click(s, 0.3, 650, 0.45);
   });
   a.define('reload_shell', (s) => {
     s.noise({ duration: 0.08, filter: 'bandpass', from: 1500, to: 900, q: 2, volume: 0.22 });
