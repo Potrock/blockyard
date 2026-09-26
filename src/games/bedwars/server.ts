@@ -189,8 +189,9 @@ function spectate(p: Player) {
 }
 
 /**
- * Put a team's player on their island with the team's gear. After a death, the sword is lost
- * and the pickaxe drops a tier (armour and shears stay).
+ * Put a team's player on their island with the team's gear. After a death they keep everything
+ * they carried; the team's sword, pickaxe and shears are handed back if they're missing (someone
+ * who took the team over while it waited to respawn arrives with nothing).
  */
 function placePlayer(t: Team, afterDeath: boolean) {
   const p = t.player!;
@@ -198,16 +199,11 @@ function placePlayer(t: Team, afterDeath: boolean) {
   p.revive();
   p.freeze(false);
   p.teleport(t.base.spawn, t.base.spawnYaw, 0);
-  if (afterDeath) {
-    t.sword = 0;
-    t.pick = t.pick > 1 ? t.pick - 1 : t.pick;
-  }
   const inv = p.inventory;
-  inv.clear();
-  inv.give(swordItem(t, t.sword));
-  if (t.pick) inv.give(PICK_ITEMS[t.pick]);
-  if (t.shears) inv.give('shears');
-  inv.select(0);
+  if (!afterDeath) inv.clear();
+  const gear = [swordItem(t, t.sword), t.pick ? PICK_ITEMS[t.pick] : '', t.shears ? 'shears' : ''];
+  for (const item of gear) if (item && !inv.count(item)) inv.give(item);
+  if (!afterDeath) inv.select(0);
   applyGear();
   if (afterDeath) {
     p.audio.play('spawn');
@@ -260,10 +256,6 @@ function spawnBot(game: GameContext, t: Team, firstLife: boolean) {
   const e = game.entities.spawn(`bot_${t.color}`, s, { yaw: t.base.spawnYaw, data: { team: t.color } });
   t.body = e;
   t.respawnAt = null;
-  if (!firstLife) {
-    t.sword = 0;
-    t.pick = t.pick > 1 ? t.pick - 1 : t.pick;
-  }
   const skill = BOT_SKILL[nextBotSkill++ % BOT_SKILL.length];
   bots.set(e.id, new Bot(match, nav, build, fireballs, t, e, skill, firstLife));
 }

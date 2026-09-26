@@ -73,7 +73,7 @@ export class Shop {
       icon: { item: SWORD_ITEMS[tier] },
       label,
       price,
-      note: `${[4, 5, 6, 7][tier] + (t.sharp ? 1 : 0)} damage · lost on death`,
+      note: `${[4, 5, 6, 7][tier] + (t.sharp ? 1 : 0)} damage`,
       owned: t.sword >= tier,
       buy: () => {
         for (const s of ALL_SWORDS) inv.take(s, inv.count(s));
@@ -99,7 +99,7 @@ export class Shop {
             icon: { item: PICK_ITEMS[t.pick + 1] },
             label: `${PICK_NAMES[t.pick]} Pickaxe`,
             price: PICK_PRICES[t.pick],
-            note: t.pick ? 'Upgrade · drops a tier when you die' : 'Mines end stone and wood fast',
+            note: t.pick ? 'Upgrade · mines faster' : 'Mines end stone and wood fast',
             buy: () => {
               if (t.pick) inv.take(PICK_ITEMS[t.pick], inv.count(PICK_ITEMS[t.pick]));
               t.pick++;

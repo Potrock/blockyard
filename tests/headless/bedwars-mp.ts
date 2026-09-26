@@ -71,7 +71,9 @@ export default function bedwarsMultiplayer() {
     .find((o): o is { title: string; sections: { title: string; entries: { label: string; icon?: IconRef }[] }[] } => typeof o === 'object' && o !== null && 'sections' in o);
   check(shop?.title === 'Item Shop', `Ann's shop opened: ${JSON.stringify(calls(ann.id, 'menu')).slice(0, 200)}`);
 
-  // PvP: Bob stands in front of Ann; Ann swings until he's down.
+  // PvP: Bob stands in front of Ann; Ann swings until he's down. What he carries, he keeps.
+  pb.api.inventory.give('wool_blue', 16);
+  pb.api.inventory.give('bow');
   const s = red.base.spawn;
   pa.api.teleport({ x: s.x, y: s.y, z: s.z }, 0, 0);
   pb.api.teleport({ x: s.x, y: s.y, z: s.z - 1.6 }, Math.PI, 0);
@@ -93,6 +95,13 @@ export default function bedwarsMultiplayer() {
   step(2);
   check(feed().some((f) => /Bob was (slain|knocked into the void) by Ann/.test(f)), `kill credit in the feed: ${feed().slice(-3).join(' | ')}`);
   check(calls(bob.id, 'banner').some((a) => a[0] === 'YOU DIED!') && !calls(ann.id, 'banner').some((a) => a[0] === 'YOU DIED!'), 'only Bob is told he died');
+  step(30 * 6);
+  const bobInv = pb.api.inventory;
+  const carried = bobInv.slots.map((x) => x && `${x.item}x${x.count}`).join(' ');
+  check(pb.api.alive && bobInv.count('wooden_sword') === 1 && bobInv.count('wool_blue') === 16 && bobInv.count('bow') === 1, `Bob respawned with what he carried: ${carried}`);
+  // Down again, to leave while waiting to respawn.
+  pb.api.damage(1000, { source: 'world', knockback: 0 });
+  step(2);
 
   // Cat joins mid-match and takes over green from its bot; Bob leaves and a bot plays blue.
   const cat = host.connect('Cat');
