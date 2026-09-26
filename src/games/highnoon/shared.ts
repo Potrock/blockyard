@@ -13,7 +13,7 @@ export const COLORS = { brass: '#d9a441', cream: '#f4e6c4', blood: '#b3262c', in
  * Peacemaker held out at arm's length in one hand, body turned side-on like a duellist, the free
  * hand hovering by the belt; guns carried muzzle-down by the thigh at a run; a revolver's hard
  * muzzle flip; a slow dramatic fall, nearly always backwards; a loose, rolling walk. (Each gun's
- * reload is its own: `hold.poses` in weapons.ts.)
+ * reload is its own: `hold.poses` in client/looks.ts.)
  */
 const STYLE: HumanoidPoses = {
   heldScale: 0.5,

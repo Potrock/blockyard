@@ -1,5 +1,21 @@
+import type { GunItem, IconRef, ItemLook, SynthVoice } from '../../src/platform';
+import type { Client } from '../../src/platform/api/client';
+import { recordVoice } from '../../src/platform/audio/voice';
+import { soundOf } from '../../src/platform/client/present';
+import { sounds } from '../../src/platform/client-kits';
+import { Content } from '../../src/platform/content';
+import { resolveIcon } from '../../src/platform/looks';
+import type { ContentDef, HostBatch, PresentCall } from '../../src/platform/net/protocol';
+import hn from '../../src/games/highnoon/client';
+import { LOOKS } from '../../src/games/highnoon/client/looks';
 import { matchState } from '../../src/games/highnoon/server';
+import { WEAPONS } from '../../src/games/highnoon/weapons';
 import { check, launch } from './_harness';
+
+/** The fields of an item that are its look (`ItemLook`): the server's guns have none. */
+const LOOK_FIELDS = ['icon', 'hold', 'sounds', 'tracer', 'trail', 'drawIcon'] as const;
+/** The engine's own sounds (`audio/sfx.ts`): every screen has them without a definition. */
+const ENGINE_SOUNDS = ['hit', 'hurt', 'pickup', 'heal', 'wave', 'victory', 'defeat', 'spawn', 'click', 'countdown', 'lock', 'alarm'];
 
 /**
  * High Noon (a dev game: `launch` finds those too) with the local player standing idle at their
@@ -14,6 +30,14 @@ export default function highNoon() {
   const warn = console.warn;
   console.warn = (...a: unknown[]) => (warnings.push(a.join(' ')), warn(...a));
   const h = launch('highnoon', { seed: 5, radius: 5 });
+  // What the screen is sent (definitions), kept for the looks below.
+  const content: ContentDef[] = [];
+  const step = h.step.bind(h);
+  h.step = (dt, input) => {
+    const b: HostBatch = step(dt, input);
+    for (const e of b.events) if (e.t === 'content') content.push(e.def);
+    return b;
+  };
   const g = h.ctx;
   check(g.players.length === 6, `expected 6 gunslingers (1 person + 5 bots), got ${g.players.length}`);
   let shots = 0;
@@ -72,4 +96,70 @@ export default function highNoon() {
   check(won, 'the match should end with someone taking the town');
   check(early === 0, `${early} hits landed during a standoff`);
   for (const w of ['cylinder', 'wanted', 'duel', 'roundbar', 'outfits']) check(widgets.has(w), `the ${w} widget never went up`);
+  looks(content, h.calls);
+}
+
+/**
+ * The guns' looks and the game's voices are each screen's (`client/`): the server defines what the
+ * guns do (the hammer and the lever are actions it keeps), names them in the kill feed, and plays
+ * the voices by name; a screen, with the game's client code, has everything it's asked to show
+ * and play.
+ */
+function looks(content: ContentDef[], calls: PresentCall[]) {
+  for (const [id, def] of Object.entries(WEAPONS)) {
+    const has = LOOK_FIELDS.filter((k) => k in def);
+    check(!has.length, `the server's ${id} has look fields: ${has.join(', ')}`);
+  }
+  check(!content.some((d) => d.kind === 'sound'), `the server defines no voices: ${content.filter((d) => d.kind === 'sound').map((d) => (d as { name: string }).name)}`);
+  const items = content.filter((d) => d.kind === 'item') as Extract<ContentDef, { kind: 'item' }>[];
+  check(items.length === 2 && items.every((d) => !LOOK_FIELDS.some((k) => k in d.def)), `nor any gun's look: ${items.map((d) => `${d.name}: ${Object.keys(d.def)}`).join('; ')}`);
+  check(!JSON.stringify(calls.filter((c) => c.target === 'hud')).includes('.glb'), 'no model file in its HUD calls');
+
+  // A screen: the definitions, then the game's client code (after the standard voices, as its kits run first).
+  const screen = new Content();
+  for (const d of content) screen.apply(d);
+  const voices = new Map<string, SynthVoice>();
+  const client = {
+    audio: { play() {}, define: (n: string, v: SynthVoice) => voices.set(n, v) },
+    items: { look: (id: string, l: ItemLook) => screen.lookItem(id, l), get: (id: string) => screen.items.get(id) },
+  } as unknown as Client;
+  for (const k of sounds.standard()) k.setup?.(client);
+  const standard = new Set(voices.keys());
+  hn.client.setup!(client);
+  const own = [...voices.keys()].filter((n) => !standard.has(n));
+  check(own.length === 13 && own.every((n) => recordVoice(voices.get(n)!)), `its voices, on the screen (${own.length}): ${own.join(', ')}`);
+  const gun = (id: string) => screen.items.get(id) as GunItem;
+  for (const id of Object.keys(LOOKS)) {
+    const d = gun(id);
+    check(typeof d.icon === 'object' && 'gltf' in d.icon && d.icon.gltf.includes('.glb') && d.hold?.model?.gltf?.url === d.icon.gltf, `${id} shows and is held as its model: ${JSON.stringify(d.icon)}`);
+    for (const s of Object.values(d.sounds ?? {})) check(voices.has(s!) || ENGINE_SOUNDS.includes(s!), `${id}'s ${s} is a voice on the screen`);
+  }
+  const [revolver, rifle] = [gun('revolver'), gun('rifle')];
+  check(
+    revolver.action === 'hammer' && revolver.reload === 0.42 && revolver.hold?.gun?.hands === 1 && revolver.hold.stance === 'pistol' && revolver.hold.poses?.reload?.cycle === 0.42 && revolver.tracer === '#ffe2a0',
+    `the Peacemaker: the server's hammer and reload, the screen's one-handed hold, pistol stance, reload pose and tracer: ${JSON.stringify(revolver)}`,
+  );
+  check(
+    rifle.action === 'lever' && rifle.reload === 0.55 && rifle.hold?.gun?.hands === undefined && rifle.hold?.stance === 'rifle' && rifle.hold.poses?.reload?.cycle === 0.55 && rifle.sounds?.cycle === 'lever',
+    `the Yellowboy: the server's lever and reload, the screen's hold, reload pose and lever sound: ${JSON.stringify(rifle)}`,
+  );
+
+  // The kill feed names the guns (side on); the screen draws them.
+  const feedIcons = calls
+    .filter((c) => c.target === 'hud' && c.method === 'feed')
+    .flatMap((c) => (c.args[0] as { icon?: IconRef }[]).flatMap((p) => (typeof p === 'object' && p?.icon ? [p.icon] : [])));
+  check(feedIcons.length >= 5 && feedIcons.every((i) => typeof i === 'object' && 'item' in i && i.view === 'side'), `the kill feed names guns, side on: ${JSON.stringify(feedIcons.slice(0, 4))}`);
+  for (const i of feedIcons) {
+    const drawn = resolveIcon(i, (id) => screen.items.get(id)) as { gltf: string; view?: string };
+    check(drawn.gltf === (gun((i as { item: string }).item).icon as { gltf: string }).gltf && drawn.view === 'side', `a gun in the feed: ${JSON.stringify(drawn)}`);
+  }
+
+  // Every sound the server asks for is one the screen has: the guns' own through their looks.
+  const asked = calls.filter((c) => c.target === 'audio' && c.method === 'play');
+  const heard = asked.map((c) => soundOf(c.args[0] as string, c.args[1] as never, (id) => screen.items.get(id))).filter((s) => s !== null);
+  const missing = [...new Set(heard.map((s) => s[0]))].filter((n) => !voices.has(n) && !ENGINE_SOUNDS.includes(n) && !standard.has(n));
+  check(!missing.length, `sounds the screen doesn't have: ${missing.join(', ')}`);
+  const shots = new Set(asked.filter((c) => (c.args[1] as { item?: { sound: string } } | undefined)?.item?.sound === 'use').map((c) => soundOf(c.args[0] as string, c.args[1] as never, (id) => screen.items.get(id))![0]));
+  check(shots.has('shot_revolver') && shots.has('shot_rifle'), `others' shots play their gun's own: ${[...shots].join(', ')}`);
+  console.log(`  looks: gameplay-only guns and no voices from the server; ${Object.keys(LOOKS).length} looks and ${own.length} voices on the screen; ${feedIcons.length} kill-feed icons by name; ${asked.length} sounds asked for, all on the screen`);
 }
