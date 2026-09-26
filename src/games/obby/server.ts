@@ -1,7 +1,6 @@
 import { defineServer, math, type GameContext, type Player, type Prop, type Vec3 } from '@platform';
 import { course, key, type Cell, type Special } from './course';
 import { shared } from './shared';
-import { defineSounds } from './sounds';
 
 const STAGES = course.stages.length;
 const GOLD = '#ffd36b';
@@ -327,7 +326,7 @@ function resetCourse(game: GameContext) {
  */
 export default defineServer(shared, {
   setup(game) {
-    defineSounds(game);
+    // (Its voices are each screen's, `client/sounds.ts`: played here by name.)
     game.events.on('playerJoin', ({ player }) => {
       runs.set(player.id, freshRun(game, player));
       player.hud.banner('SKY OBBY', 'The clock starts when you leave the island', { duration: 3, color: GOLD });

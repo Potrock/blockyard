@@ -1,5 +1,6 @@
 import { defineClient } from '@platform/client';
-import { standardKits } from '@platform/client/kits';
+import { figures, firstPerson } from '@platform/client/kits';
 import { shared } from './shipyard.shared';
 
-export default defineClient(shared, { kits: standardKits() });
+/** The ships full size, seen as a builder: the block in hand, and anyone else about. */
+export default defineClient(shared, { kits: [...firstPerson.standard(), figures.humanoid()] });

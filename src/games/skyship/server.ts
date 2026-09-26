@@ -215,18 +215,7 @@ export default defineServer(shared, {
   setup(game) {
     shipModel = game.props.model(airship());
     screwModel = game.props.model(propeller());
-    game.audio.define('bell', (a) => {
-      for (const [f, d] of [
-        [784, 0],
-        [1175, 0.14],
-        [1568, 0.28],
-      ])
-        a.tone({ wave: 'sine', from: f * a.pitch, duration: 1.6, delay: d, attack: 0.004, volume: 0.22 });
-    });
-    game.audio.define('thud', (a) => {
-      a.noise({ duration: 0.6, filter: 'lowpass', from: 500, to: 70, volume: 0.7 });
-      a.tone({ wave: 'sine', from: 95 * a.pitch, to: 38 * a.pitch, duration: 0.55, volume: 0.55 });
-    });
+    // (Its voices, the beacon's bell and the hull's thud, are each screen's, `client/sounds.ts`: played here by name.)
     game.events.on('playerJoin', ({ player }) => {
       // Late to the voyage: straight aboard, wherever the ship is.
       if (ship && vec.distance2D(ship.position, MOORING) > 3) aboard(player);

@@ -5,7 +5,6 @@ import { Weapons, type Target } from './weapons';
 import { Pilot } from './pilot';
 import { Enemy, type EnemyKind } from './enemies';
 import { Capital } from './capital';
-import { defineSounds } from './sounds';
 import { ARENA, DESTROYER_CENTER } from './layout';
 import { RETICLE_FAR, RETICLE_NEAR } from './flight';
 import { destroyer, shared, START } from './shared';
@@ -363,7 +362,7 @@ export default defineServer(shared, {
     pilots.clear();
     enemies = [];
     phase = 'waiting';
-    defineSounds(game);
+    // (Its voices are each screen's, `client/sounds.ts`: played here by name.)
     game.commands.register('wave', {
       cheat: true,
       usage: '<1-3>',

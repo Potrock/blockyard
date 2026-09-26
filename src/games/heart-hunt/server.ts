@@ -10,10 +10,10 @@ let won = false;
 
 export default defineServer(shared, {
   setup(game) {
+    // (How a heart looks is each screen's: `client.ts`.)
     game.items.define('heart', {
       kind: 'misc',
       name: 'Heart',
-      icon: 'heart',
       onPickup(g) {
         found++;
         g.audio.play('pickup');
@@ -55,7 +55,7 @@ export default defineServer(shared, {
       game.hud.screen({
         title: 'You found them all!',
         tone: 'victory',
-        icon: 'heart',
+        icon: { item: 'heart' },
         buttons: [
           { label: 'Play again', primary: true, onClick: () => game.restart() },
           { label: 'Switch game', onClick: () => game.exit() },
