@@ -1,4 +1,4 @@
-import { matchState } from '../../src/games/highnoon';
+import { matchState } from '../../src/games/highnoon/server';
 import { check, launch } from './_harness';
 
 /**

@@ -1,19 +1,12 @@
 import type { GameDefinition } from '@platform';
-import sandbox from './sandbox';
-import arena from './arena';
-import heartHunt from './heart-hunt';
-import starfighter from './starfighter';
-import bedwars from './bedwars';
-import skyship from './skyship';
-import obby from './obby';
-import callofblocky from './callofblocky';
+import { devGames as serverDevGames } from './server';
 
-/** Games shown in the launcher, in order. The first is the default. */
-export const games: GameDefinition[] = [callofblocky, arena, starfighter, skyship, bedwars, obby, sandbox, heartHunt];
+// TEMPORARY (phase 1): for what still imports './games' (src/main.ts, src/sim.worker.ts, src/server.ts,
+// tests/headless/_harness.ts) until they read `./games/browser` or `./games/server`. Delete it then.
+export { games } from './server';
 
-/** Dev-only previews (open by id, e.g. `?game=shipyard`; not listed, not in production builds). */
+/** Dev-only previews, in development only (as before the split). */
 export async function devGames(): Promise<GameDefinition[]> {
   if (!import.meta.env.DEV) return [];
-  const [sf, bw, gallery, cob, moves, highnoon] = await Promise.all([import('./starfighter/previews'), import('./bedwars/previews'), import('./gallery'), import('./callofblocky/previews'), import('./moves'), import('./highnoon')]);
-  return [...sf.previews, ...bw.previews, gallery.default, ...cob.previews, moves.default, highnoon.default];
+  return serverDevGames();
 }

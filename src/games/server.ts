@@ -1,13 +1,32 @@
 import type { GameDefinition } from '@platform';
-import { devGames as allDev, games as all } from './index';
+import callofblocky from './callofblocky/server';
+import arena from './arena/server';
+import starfighter from './starfighter/server';
+import skyship from './skyship/server';
+import bedwars from './bedwars/server';
+import obby from './obby/server';
+import sandbox from './sandbox/server';
+import heartHunt from './heart-hunt/server';
 
-// TRANSITIONAL (phase 1 contract): until each game is split, this re-exports the whole definitions.
-// Its exports are final: the server and the headless tests read only these.
+/** The games a server hosts, as it runs them (shared definition and rules), in the launcher's order. */
+export const games: GameDefinition[] = [callofblocky, arena, starfighter, skyship, bedwars, obby, sandbox, heartHunt];
 
-/** The games a server hosts, as it runs them (shared definition and rules). */
-export const games: GameDefinition[] = all;
-
-/** Development-only games (a development server hosts them when named; the headless tests use them). */
+/**
+ * Development-only games (a development server hosts them when named; the headless tests use
+ * them): the art previews, the model gallery, the movement lab and High Noon. Whether a server
+ * offers them is its own decision.
+ */
 export async function devGames(): Promise<GameDefinition[]> {
-  return allDev();
+  const loaded = await Promise.all([
+    import('./starfighter/previews/shipyard.server'),
+    import('./starfighter/previews/drydock.server'),
+    import('./bedwars/previews/map.server'),
+    import('./bedwars/previews/art.server'),
+    import('./gallery/server'),
+    import('./callofblocky/previews/map.server'),
+    import('./callofblocky/previews/guns.server'),
+    import('./moves/server'),
+    import('./highnoon/server'),
+  ]);
+  return loaded.map((m) => m.default);
 }

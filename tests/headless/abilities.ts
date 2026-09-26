@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { BlockRef, GameDefinition, MovementAbility } from '../../src/platform/api/types';
-import moves from '../../src/games/moves';
+import moves from '../../src/games/moves/server';
 import { roll } from '../../src/games/highnoon/abilities';
 import { Predictor } from '../../src/platform/client/predict';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
