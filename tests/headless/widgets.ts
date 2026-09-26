@@ -190,7 +190,7 @@ function screenOf() {
     get: (t, k) => (k in t ? t[k] : (...args: unknown[]) => void shown.push(`${String(k)}:${typeof args[0] === 'string' ? args[0] : ''}`)),
     set: (t, k, v) => ((t[k] = v), true),
   });
-  const presenter = new Presenter(null, { hud: hud as never, fx: {} as never, sfx: {} as never, view: {} as never, send: () => {}, client: () => {} });
+  const presenter = new Presenter(null, { hud: hud as never, fx: {} as never, sfx: {} as never, view: {} as never, send: () => {}, message: () => {} });
   return {
     shown,
     take(b: HostBatch) {

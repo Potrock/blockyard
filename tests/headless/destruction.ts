@@ -95,6 +95,8 @@ export default function destruction() {
     }
   };
   const calls = (method: string) => events.filter((e) => e.t === 'call' && e.call.method === method).map((e) => (e as Extract<HostEvent, { t: 'call' }>).call);
+  /** The platform's messages to the screens (`$thrown`, `$thrownEnd`, `$fire`): each one's data. */
+  const said = (name: string) => calls(name).map((c) => c.args[0] as unknown[]);
   const input = (o: Partial<PlayerInput> = {}): PlayerInput => ({ active: true, down: [], pressed: [], buttons: 0, clicked: 0, mouseX: 0, mouseY: 0, wheel: 0, yaw: A.yaw, pitch: A.pitch, viewSeq: A.viewSeq, shots: [], throws: [], ...o });
   step(4);
   const hurt = new Map<Player, { amount: number; cause: string; weapon?: string; through?: number }[]>();
@@ -149,15 +151,15 @@ export default function destruction() {
   step(3);
   host.command(ann.id, { t: 'input', input: input({ throws: [[1, 'frag', eye.x, eye.y, eye.z, v.x, v.y, v.z, cooked]] }) });
   step();
-  const told = bobHears.filter((e) => e.t === 'call' && e.call.method === 'thrown');
-  check(A.api.inventory.count('frag') === 1 && told.length === 1 && calls('thrown').length === 0, 'the host took the throw (one frag left), and tells everyone but Ann (her screen flies it already)');
+  const told = bobHears.filter((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$thrown');
+  check(A.api.inventory.count('frag') === 1 && told.length === 1 && said('$thrown').length === 0, 'the host took the throw (one frag left), and tells everyone but Ann (her screen flies it already)');
   const live = game.items.thrown;
   check(live.length === 1 && live[0].item === 'frag' && live[0].by === A.api && live[0].radius === frag.blast!.radius && Math.abs(live[0].left - (fuse - 2) / 120) < 0.02, `items.thrown lists it: ${JSON.stringify(live.map((l) => ({ ...l, by: l.by.name })))}`);
   const damageBefore = host.world.world.damage_count();
-  for (let i = 0; i < 30 * 5 && !calls('thrownEnd').length; i++) step();
-  const end = calls('thrownEnd')[0];
+  for (let i = 0; i < 30 * 5 && !said('$thrownEnd').length; i++) step();
+  const end = said('$thrownEnd')[0];
   check(end, 'it went off');
-  const [ex, ey, ez] = end.args[1] as [number, number, number];
+  const [ex, ey, ez] = end[1] as [number, number, number];
   const miss = dist({ x: ex, y: ey, z: ez }, predicted);
   check(miss < 1e-9, `it went off where her screen had it: ${miss} blocks off (${ex.toFixed(3)}, ${ey.toFixed(3)}, ${ez.toFixed(3)})`);
   step(2);
@@ -205,9 +207,9 @@ export default function destruction() {
   check(lobber.throw('frag', { at: spot }), 'player.throw: a bot lobs one at a spot');
   check(!lobber.throw('frag', { at: spot }) && lobber.inventory.count('frag') === 1, 'not again straight away (its cooldown); one used');
   step();
-  check(calls('thrown').length === 1, 'everyone sees it thrown (Ann too)');
-  for (let i = 0; i < 30 * 5 && !calls('thrownEnd').length; i++) step();
-  const lob = calls('thrownEnd')[0]?.args[1] as [number, number, number] | undefined;
+  check(said('$thrown').length === 1, 'everyone sees it thrown (Ann too)');
+  for (let i = 0; i < 30 * 5 && !said('$thrownEnd').length; i++) step();
+  const lob = said('$thrownEnd')[0]?.[1] as [number, number, number] | undefined;
   check(lob && Math.hypot(lob[0] - spot.x, lob[2] - spot.z) < 3, `it came down about where it was lobbed: ${lob?.map((n) => n.toFixed(2))}`);
   // Holding G (as a bot's controls do): the pin, a second's cook, let go.
   step(30);
@@ -215,12 +217,12 @@ export default function destruction() {
   lobber.controls.look(Math.PI * 0.75, 0.2);
   lobber.controls.hold('KeyG');
   step(30);
-  check(!calls('thrown').length && lobber.inventory.count('frag') === 1, 'held: cooking, not thrown yet');
+  check(!said('$thrown').length && lobber.inventory.count('frag') === 1, 'held: cooking, not thrown yet');
   lobber.controls.hold('KeyG', false);
   step();
-  const cookedThrow = calls('thrown')[0];
+  const cookedThrow = said('$thrown')[0];
   check(cookedThrow && lobber.inventory.count('frag') === 0, 'let go: thrown');
-  const fuseLeft = (cookedThrow.args[9] as number) / 120;
+  const fuseLeft = (cookedThrow[9] as number) / 120;
   check(fuseLeft > 1.9 && fuseLeft < 2.3, `cooked about a second: ${fuseLeft.toFixed(2)} s of fuse left`);
   game.bots.remove(lobber);
   console.log(`  bots: player.throw lobbed one to ${lob ? Math.hypot(lob[0] - spot.x, lob[2] - spot.z).toFixed(2) : '?'} blocks of the spot; held G a second and let go: ${fuseLeft.toFixed(2)} s of fuse left`);
@@ -243,15 +245,15 @@ export default function destruction() {
   host.command(ann.id, { t: 'input', input: input({ throws: [[2, 'molotov', meye.x, meye.y, meye.z, mv.x, mv.y, mv.z, 0]] }) });
   events.length = 0;
   step(30 * 3);
-  const fire = calls('fire')[0];
-  check(fire && Math.hypot((fire.args[1] as number) - lands.x, (fire.args[3] as number) - lands.z) < 0.01, 'a fire where it broke');
+  const fire = said('$fire')[0];
+  check(fire && Math.hypot((fire[1] as number) - lands.x, (fire[3] as number) - lands.z) < 0.01, 'a fire where it broke');
   const burns = [...(hurt.get(inFire) ?? [])];
   check(game.items.fires.length === 1 && game.items.fires[0].radius === 3 && game.items.fires[0].left > 3, `items.fires lists it: ${JSON.stringify(game.items.fires.map((f) => ({ ...f, by: f.by.name })))}`);
   check(burns.length >= 4 && burns.every((h) => h.cause === 'fire' && h.weapon === 'molotov'), `the one in the fire burns, again and again: ${burns.length} burns, ${took(inFire).toFixed(0)} damage`);
   check(!hurt.has(clear), 'the one outside it, not at all');
   const before = took(inFire);
   step(30 * 6);
-  check(took(inFire) > before && calls('fire').length === 1, 'it burns on for its while');
+  check(took(inFire) > before && said('$fire').length === 1, 'it burns on for its while');
   const out = took(inFire);
   step(30 * 2);
   check(took(inFire) === out, `then goes out (${out.toFixed(0)} damage in all)`);
@@ -278,7 +280,7 @@ export default function destruction() {
     host.command(ann.id, { t: 'input', input: input({ yaw, pitch, shots: [[serial, yaw, pitch, 0]], seen: sim.time }) });
     step();
     // (What everyone else's screen draws: Ann's drew it herself.)
-    const shot = bobHears.find((e) => e.t === 'call' && e.call.method === 'shot');
+    const shot = bobHears.find((e) => e.t === 'call' && e.call.target === 'message' && e.call.method === '$shot');
     return shot?.t === 'call' ? (shot.call.args[0] as ShotWire) : undefined;
   };
   // Through the thin wall (a block of stone, head on).

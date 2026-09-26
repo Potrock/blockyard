@@ -382,10 +382,14 @@ export class Sim {
     };
   }
 
-  /** Something a player did on their client (menus, callbacks, the block picker). */
+  /** Something a player did on their client (menus, callbacks, the block picker, the game's own messages). */
   receive(m: ClientMessage) {
     if (m.t === 'creativePick') this.players.find((p) => p.id === m.player)?.creative?.pick(m.block);
-    else this.presentation.receive(m);
+    else if (m.t === 'game') {
+      // The game's own: its code hears it, as the player whose connection it came on.
+      const player = this.players.find((p) => p.id === m.player && !p.vacant)?.api;
+      if (player) this.emit('clientMessage', { player, name: m.name, data: m.data });
+    } else this.presentation.receive(m);
   }
 
   /**
@@ -562,7 +566,7 @@ export class Sim {
     this.clockNow = 0;
     this.history.clear();
     this.presentation.reset();
-    this.presentation.send(null, 'client', 'reset', []);
+    this.presentation.message(null, '$reset', null);
     const sp = this.spawn;
     for (const p of this.players) {
       p.inventory.clear();
@@ -613,7 +617,7 @@ export class Sim {
 
   /** Debris flying off a broken block (the client draws it from the block's texture). */
   private debris(x: number, y: number, z: number, id: number) {
-    this.presentation.send(null, 'client', 'debris', [x, y, z, id]);
+    this.presentation.message(null, '$debris', [x, y, z, id]);
   }
 
   /**
@@ -953,6 +957,7 @@ export class Sim {
       input: local.input,
       props: this.props,
       bots: this.botApi(),
+      clients: this.presentation.clients(),
       env: {
         get time() {
           return sim.env.time;

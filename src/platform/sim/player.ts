@@ -271,7 +271,7 @@ export class PlayerSim {
         bullet: (from, dir, range, seen, pen) => p.bullet(from, dir, range, seen, me.api, pen),
         carve: p.carve && ((point, dir, opts) => p.carve!(point, dir, opts, me.api)),
         shotSeen: (shot: ShotWire, sound: string, at: Vec3) => {
-          present.send(null, 'client', 'shot', [shot], this.id);
+          present.message(null, '$shot', shot, this.id);
           present.send(null, 'audio', 'play', [sound, { at: { x: at.x, y: at.y, z: at.z } }], this.id);
         },
         launch: (item, t, from, v, fuse, key, mine) => {

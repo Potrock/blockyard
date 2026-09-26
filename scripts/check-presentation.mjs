@@ -1,22 +1,29 @@
-// Keeps game vocabulary out of the engine's presentation core (docs/REDESIGN-CLIENT-SERVER.md,
-// "Mechanisms in the engine, policy in the game"): the engine never decides how something looks
-// by an item's kind or a hold style. That's for kits (src/platform/client-kits/) and games.
+// Keeps game vocabulary out of the client's presentation core: the engine draws what client code
+// and kits tell it to, and never decides a look by an item's kind or a game's words for things.
+// Kits (src/platform/client-kits/) and the mechanics (the gun and throw controllers, prediction)
+// may name guns and throwables; the files listed here may not.
 //
-// Each file listed is read without its comments (docs may name what kits do with a primitive),
-// and fails on:
-// - an item kind or hold style as a string (`'gun'`, `'sword'`, ...);
-// - a kind test (`kind ===`, `kind !==`);
-// - a word of the kits' vocabulary in any name or string, camelCase and snake_case split
-//   (`styleName`, `stance`, `ads`, `pump`, `bolt`, `lever`, `hammer`, `scope`: `adsBlend`,
-//   `lever_time` and `'scope'` all fail).
+//   node scripts/check-presentation.mjs
 //
-// Run by `npm run check:boundaries` (and so `typecheck` and `build`). Each port adds its files in
-// its own section, and any words of its own to WORDS.
+// In each file (comments aside) it fails on `kind ===` / `kind !==`, on a quoted string that is
+// one of LITERALS, and on any identifier or string with one of WORDS in it (split at camelCase,
+// snake_case, kebab-case and dots). A file that doesn't exist (yet) is skipped.
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { projectRoot } from './import-graph.mjs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-/** The presentation core's files (a file that's gone is skipped). */
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The HUD's and effects' files: besides WORDS, they may not say HUD_WORDS either. */
+const HUD_FILES = [
+  'src/platform/ui/hudkit.ts',
+  'src/platform/ui/hud.ts',
+  'src/platform/client/api/hud.ts',
+  'src/platform/client/api/scene.ts',
+  'src/platform/fx/effects.ts',
+  'src/platform/audio/sfx.ts',
+  'src/platform/client/present.ts',
+];
 const FILES = [
   // First person.
   'src/platform/render/viewmodel.ts',
@@ -27,45 +34,77 @@ const FILES = [
   'src/platform/client/entities.ts',
   'src/platform/client/figures.ts',
   // HUD and effects.
+  ...HUD_FILES,
 ];
-
-/** Item kinds and hold styles, as strings. */
 const LITERALS = ['gun', 'sword', 'bow', 'throw', 'axe', 'polearm', 'melee', 'throwable', 'rifle', 'pistol'];
-/** Words of the kits' vocabulary, in names and strings. */
 const WORDS = ['stylename', 'stance', 'ads', 'pump', 'bolt', 'lever', 'hammer', 'scope', 'rifle', 'pistol'];
+/** Names that contain a word and mean something else (CSS kept to the HUD: `scopeCss`). */
+const ALLOWED = ['scopeCss'];
+const HUD_WORDS = ['gun', 'guns', 'ammo', 'lethal', 'lethals', 'throwable', 'throwables', 'grenade', 'molotov', 'reticle', 'magazine', 'muzzle', 'bullet', 'bullets', 'rifle', 'sniper', 'pistol', 'shotgun', 'reload', 'reloading'];
 
-/** The code without its comments (strings kept). */
-const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' ')).replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
-
-/** A name's words: `adsBlend` is `ads`, `blend`; `styleName` is also `stylename`. */
-function words(name) {
-  const parts = name
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .toLowerCase()
-    .split(/[\s_$]+/)
-    .filter(Boolean);
-  return [...parts, name.toLowerCase().replace(/[_$]/g, '')];
+/** The file without its comments: code, and strings as they are. */
+function strip(src) {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '/' && n === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && n === '*') {
+      const end = src.indexOf('*/', i + 2);
+      const stop = end < 0 ? src.length : end + 2;
+      // (Its lines kept, so line numbers stay the file's.)
+      out += ' ' + '\n'.repeat((src.slice(i, stop).match(/\n/g) ?? []).length);
+      i = stop;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
+      out += src.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
 }
 
+/** An identifier's or string's words: `muzzleFlash` -> muzzle, flash; `gun_reload` -> gun, reload. */
+const words = (s) =>
+  s
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase());
+
 const problems = [];
-for (const file of FILES) {
-  const path = join(projectRoot, file);
-  if (!existsSync(path)) continue;
-  const lines = code(readFileSync(path, 'utf8')).split('\n');
+for (const rel of FILES) {
+  const file = join(root, rel);
+  if (!existsSync(file)) continue;
+  const code = strip(readFileSync(file, 'utf8'));
+  const banned = HUD_FILES.includes(rel) ? [...WORDS, ...HUD_WORDS] : WORDS;
+  const lines = code.split('\n');
   lines.forEach((line, i) => {
-    const at = `${file}:${i + 1}`;
-    for (const lit of LITERALS) if (new RegExp(`(['"\`])${lit}\\1`).test(line)) problems.push(`${at}: the item kind or hold style '${lit}'`);
-    if (/\bkind\s*[!=]==?/.test(line) || /[!=]==?\s*[\w.?]*\bkind\b/.test(line)) problems.push(`${at}: a test of an item's kind`);
-    for (const name of line.match(/[A-Za-z_$][\w$]*/g) ?? []) {
-      const hit = words(name).find((w) => WORDS.includes(w));
-      if (hit) problems.push(`${at}: '${name}' (a kit's word: ${hit})`);
+    const at = `${rel}:${i + 1}`;
+    if (/\bkind\s*[!=]==/.test(line)) problems.push(`${at}: decides by an item's kind`);
+    for (const m of line.matchAll(/(['"`])((?:\\.|(?!\1).)*)\1/g)) {
+      if (LITERALS.includes(m[2])) problems.push(`${at}: names '${m[2]}'`);
+    }
+    for (const m of line.matchAll(/[A-Za-z_$][\w$]*|(['"`])((?:\\.|(?!\1).)*)\1/g)) {
+      const text = m[2] ?? m[0];
+      if (ALLOWED.includes(text)) continue;
+      for (const w of words(text)) if (banned.includes(w)) problems.push(`${at}: '${w}' (in ${m[0].slice(0, 60)})`);
     }
   });
 }
 
 if (problems.length) {
-  console.error(`Presentation check failed: the engine decides how things look by game vocabulary (that's a kit's to decide; see docs/REDESIGN-CLIENT-SERVER.md):\n  ${[...new Set(problems)].join('\n  ')}`);
+  console.error(`Presentation check failed: the client's presentation core names game vocabulary (that belongs in a kit):\n  ${[...new Set(problems)].join('\n  ')}`);
   process.exit(1);
 }
-console.log('Presentation OK: the engine names no item kinds or hold styles.');
+console.log(`Presentation OK: ${FILES.filter((f) => existsSync(join(root, f))).length} files of the client's presentation core name no item kinds or game words.`);

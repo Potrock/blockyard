@@ -52,7 +52,7 @@ export class PresentState {
 
   /** Whether the call needs sending (false: the screen already shows exactly this). */
   admit(c: PresentCall): boolean {
-    if (c.target === 'client' && c.method === 'reset') {
+    if (c.target === 'message' && c.method === '$reset') {
       // A restart clears every screen.
       this.everyone.clear();
       this.personal.clear();

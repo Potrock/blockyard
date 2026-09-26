@@ -1,6 +1,7 @@
 import type {
   Anchor,
   AudioApi,
+  ClientsApi,
   FxApi,
   HudApi,
   LoopHandle,
@@ -19,8 +20,8 @@ import type {
   WidgetHandle,
 } from '../api/types';
 import type { Content } from '../content';
-import type { AnchorRef, CallbackRef, ClientMessage, PresentCall, PresentTarget, RadarWire } from '../net/protocol';
-import { diffData, mergeData, parseMarkup, plainRecord, WIDGET_ANCHORS, WIDGET_NAME, type PlainData, type WidgetWire } from '../ui/markup';
+import { MESSAGE_MAX, MESSAGE_NAME, type AnchorRef, type CallbackRef, type ClientMessage, type PresentCall, type PresentTarget, type RadarWire } from '../net/protocol';
+import { diffData, mergeData, parseMarkup, plainData, plainRecord, WIDGET_ANCHORS, WIDGET_NAME, type PlainData, type WidgetWire } from '../ui/markup';
 
 export type Sink = (call: PresentCall) => void;
 
@@ -151,6 +152,31 @@ export class Presentation {
   /** A call for one player (`to`), or everyone (null), or everyone but `skip`. */
   send(to: string | null, target: PresentTarget, method: string, args: unknown[], skip?: string) {
     this.sink(skip ? { to, target, method, args, skip } : { to, target, method, args });
+  }
+
+  /**
+   * A message for the client code on one player's screen (`to`), or everyone's (null), or
+   * everyone's but `skip`'s: the game's own (`clients.send`), or the platform's (a `$` name).
+   */
+  message(to: string | null, name: string, data: unknown, skip?: string) {
+    this.send(to, 'message', name, [data], skip);
+  }
+
+  /** `game.clients`: the game's messages to its client code, checked here (a mistake throws in the game's code). */
+  clients(): ClientsApi {
+    return {
+      send: (to, name, data) => {
+        if (typeof name !== 'string' || !MESSAGE_NAME.test(name)) throw new Error(`clients.send: "${String(name)}" can't name a message (a letter, then letters, digits, _, -, . or :)`);
+        const clean = data === undefined ? null : plainData(data);
+        if (clean === undefined) throw new Error(`clients.send("${name}"): its data must be plain data (strings, numbers, booleans, null, lists, records)`);
+        const size = JSON.stringify(clean).length;
+        if (size > MESSAGE_MAX.server) throw new Error(`clients.send("${name}"): ${size} bytes of data is more than ${MESSAGE_MAX.server}`);
+        if (to === 'all') return this.message(null, name, clean);
+        const list = Array.isArray(to) ? (to as readonly Player[]) : [to as Player];
+        // Each player once.
+        for (const id of new Set(list.map((p) => p.id))) this.message(id, name, clean);
+      },
+    };
   }
 
   callback(fn: () => void, into: number[], to: string | null): CallbackRef {

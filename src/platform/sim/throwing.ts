@@ -70,12 +70,12 @@ export class ThrowSim {
   launch(item: string, t: Throwable, from: Vec3, v: Vec3, fuse: number, key: string, by: Player, mine: boolean) {
     const f = newFlight(from, v, fuse);
     this.live.push({ key, item, t, f, acc: { t: 0 }, by, age: 0 });
-    this.h.present.send(null, 'client', 'thrown', [key, item, by.id, f.x, f.y, f.z, f.vx, f.vy, f.vz, f.fuse], mine ? by.id : undefined);
+    this.h.present.message(null, '$thrown', [key, item, by.id, f.x, f.y, f.z, f.vx, f.vy, f.vz, f.fuse], mine ? by.id : undefined);
   }
 
   /** A throw their screen made that the host won't take: it vanishes there. */
   refuse(key: string, player: string) {
-    this.h.present.send(player, 'client', 'thrownEnd', [key, null]);
+    this.h.present.message(player, '$thrownEnd', [key, null]);
   }
 
   /** Throwables in the air, as the game sees them (`items.thrown`: bots keeping away). */
@@ -129,7 +129,7 @@ export class ThrowSim {
   private goOff(l: Live) {
     const h = this.h;
     const at = { x: l.f.x, y: l.f.y, z: l.f.z };
-    h.present.send(null, 'client', 'thrownEnd', [l.key, [at.x, at.y, at.z]]);
+    h.present.message(null, '$thrownEnd', [l.key, [at.x, at.y, at.z]]);
     const b = l.t.blast;
     if (b) {
       h.guard(() => h.hurt(at, b.radius, b.near, b.far, b.knockback, l.by, l.item));
@@ -143,7 +143,7 @@ export class ThrowSim {
       const ground = { x: at.x, y: down ? at.y + 0.05 - down.t : at.y, z: at.z };
       const id = this.nextFire++;
       this.fires.push({ id, at: ground, radius: fire.radius, left: fire.duration, dps: fire.damage, by: l.by, weapon: l.item, next: 0.15 });
-      h.present.send(null, 'client', 'fire', [id, ground.x, ground.y, ground.z, fire.radius, fire.duration, fire.color]);
+      h.present.message(null, '$fire', [id, ground.x, ground.y, ground.z, fire.radius, fire.duration, fire.color]);
       h.audio.play(l.t.def.sounds?.hit ?? 'glass', { at });
       h.audio.play('fire', { at: ground });
     }

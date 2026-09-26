@@ -24,6 +24,13 @@ export interface ClientKit {
   setup?(client: Client): void;
   /** Every frame, in the order the kits are listed, before the game's own `frame`. */
   frame?(client: Client, dt: number): void;
+  /**
+   * Every frame after every kit's `frame` and the game's, once the world's effects (particles,
+   * tracers, flares) have moved on by this frame's time and just before drawing: what's made here
+   * is drawn where it starts (a shot fired this frame: its tracer leaves the muzzle as the hand
+   * is drawn). `client.events` has this frame's shots by now (`bullets`, ours).
+   */
+  late?(client: Client, dt: number): void;
   /** When the game's client stops (switching games). */
   dispose?(): void;
 }
@@ -36,6 +43,8 @@ export interface ClientDefinition {
   setup?(client: Client): void;
   /** Every frame, after the kits (after prediction, before rendering). */
   frame?(client: Client, dt: number): void;
+  /** Every frame, after the kits' `late` (see `ClientKit.late`). */
+  late?(client: Client, dt: number): void;
 }
 
 /** The local player's held item, as this screen has it (predicted). */
@@ -75,6 +84,56 @@ export interface Me {
   readonly hand: { item: string | null; count: number; strength: number; drawing: boolean; charge: number };
   readonly held: MeHeld | null;
   readonly abilities: Record<string, Record<string, number | boolean>>;
+  /**
+   * Throwables with a key of their own that they carry (thrown whatever's in hand), in hotbar
+   * order: how many (less the throws the server hasn't taken yet), and the key (`'KeyG'`).
+   */
+  readonly quick: readonly { item: string; count: number; key: string }[];
+  /**
+   * A throwable being cooked (its pin out, held to throw): which, for how long (seconds), and the
+   * fuse it burns down (seconds; 0 when holding it doesn't burn it).
+   */
+  readonly cooking: { item: string; held: number; fuse: number } | null;
+}
+
+/**
+ * One bullet of a shot, as this screen has it: where it ended and what it hit there (a block, with
+ * its face and colour; someone; or nothing, at its range), and the walls it went through first.
+ */
+export interface ClientBullet {
+  end: PlainVec3;
+  hit: 'block' | 'body' | null;
+  /** The face of the block it hit. */
+  normal: PlainVec3 | null;
+  /** The block's colour (linear RGB), for chips of it. */
+  color: [number, number, number] | null;
+  /** It took a bite out of the block (a world whose blocks carve): the pit is its mark. */
+  carved: boolean;
+  /**
+   * The walls it went through on the way (wall-banging): where it went in and came out, each
+   * face, the wall's colour, and whether each side was carved.
+   */
+  walls: { entry: PlainVec3; normal: PlainVec3; exit: PlainVec3; out: PlainVec3; color: [number, number, number]; carvedIn: boolean; carvedOut: boolean }[];
+}
+
+/**
+ * Something thrown, in the air on this screen: flown here step by step as the server flies it
+ * (from the throw: ours at once, someone else's from the server's word), until the server says
+ * it went off.
+ */
+export interface ClientThrown {
+  readonly key: string;
+  readonly item: string;
+  /** Thrown from this screen (it left our hand here). */
+  readonly mine: boolean;
+  readonly position: PlainVec3;
+  /** Rolling or sliding along the ground; come to rest there. */
+  readonly grounded: boolean;
+  readonly resting: boolean;
+  /** Seconds since it was thrown (on this screen). */
+  readonly age: number;
+  /** How far round it harm reaches when it goes off: its blast's radius and its fire's, added (0 for neither). */
+  readonly reach: number;
 }
 
 /**
@@ -99,7 +158,25 @@ export type ClientEvent =
   | { t: 'view.setSkin'; skin: [number, number] | null; atlas?: string }
   // Figures.
   // HUD and effects.
-  ;
+  /**
+   * A shot's bullets: ours as this screen fired them (`mine`: the tracers leave our own hand's
+   * muzzle), or someone else's as the server had them (from `from`, their figure's muzzle).
+   */
+  | { t: 'bullets'; item: string; by: string | null; mine: boolean; from: PlainVec3 | null; bullets: ClientBullet[] }
+  /** The trigger on an empty gun. */
+  | { t: 'empty'; item: string }
+  /** A throwable's pin pulled: it's being cooked (`client.me.cooking`). */
+  | { t: 'cook'; item: string }
+  /** Something thrown: ours (it just left our hand), or someone else's. It flies in `client.thrown`. */
+  | { t: 'thrown'; key: string; item: string; mine: boolean }
+  /** Something thrown hit a block as it flew, at `speed` (blocks a second). */
+  | { t: 'bounce'; key: string; item: string; at: PlainVec3; speed: number }
+  /** It's gone: went off at `at`, or (null) the server turned it down or never said. */
+  | { t: 'thrownEnd'; key: string; item: string; at: PlainVec3 | null }
+  /** A fire started (a molotov broke): flames `radius` round `at` for `duration` seconds. */
+  | { t: 'fire'; id: number; at: PlainVec3; radius: number; duration: number; color: string }
+  /** The game restarted: what the kits put on screen goes. */
+  | { t: 'reset' };
 
 /** The world's camera, as client code may change it. */
 export interface ClientCamera {
@@ -107,6 +184,10 @@ export interface ClientCamera {
   zoom: number;
   /** The field of view as drawn (degrees, vertical). */
   readonly fov: number;
+  /** Where it is this frame, before any shake (world space). */
+  readonly position: PlainVec3;
+  /** A point in the camera's own space (x right, y up, looking down -z) in the world, as it's placed this frame (before any shake). */
+  toWorld(local: PlainVec3): PlainVec3;
 }
 
 /** Effects in the world, on this screen only. */
@@ -118,7 +199,13 @@ export interface ClientFx {
   shockwave(at: PlainVec3, radius: number, color?: string): void;
   tracer(from: PlainVec3, to: PlainVec3, color?: string): void;
   impact(at: PlainVec3, normal: PlainVec3 | null, color: [number, number, number], body?: boolean, mark?: boolean): void;
-  muzzleFlash(at: PlainVec3, size?: number): void;
+  /** A hot glow for a moment (a few hundredths of a second), facing the camera: `size` blocks across. */
+  flare(at: PlainVec3, size?: number): void;
+  /**
+   * Particles, with every knob: `color` in linear RGB; `spread` (how far round `at` they start),
+   * `up` (an extra push upward), `glow` (emissive), `collide` (they stop on blocks).
+   */
+  particles(at: PlainVec3, color: [number, number, number], opts?: { count?: number; speed?: number; size?: number; gravity?: number; glow?: number; life?: number; spread?: number; up?: number; drag?: number; collide?: boolean }): void;
   damageNumber(at: PlainVec3, amount: number, opts?: { crit?: boolean; color?: string }): void;
   fireworks(at: PlainVec3, count?: number): void;
 }
@@ -126,7 +213,11 @@ export interface ClientFx {
 /** Sounds on this screen. */
 export interface ClientAudio {
   play(name: SoundName, opts?: { at?: PlainVec3; volume?: number; pitch?: number }): void;
-  /** A voice of the game's own (synthesised on each play). */
+  /**
+   * A voice of the game's own (synthesised on each play), under a name `play` (here, or the
+   * server's `audio.play`) uses. A voice the game's server defines under the same name (its
+   * `audio.define`) takes precedence over one defined here.
+   */
   define(name: string, voice: SynthVoice): void;
 }
 
@@ -143,6 +234,22 @@ export interface ClientInput {
 export interface ClientWorld {
   /** The block's name at a position (`'air'` where nothing is, or its chunk isn't here). */
   blockAt(x: number, y: number, z: number): string;
+  /** The first solid block along a ray (`dir` of length 1) within `max` blocks: how far, and the face it meets. */
+  raycast(from: PlainVec3, dir: PlainVec3, max: number): { distance: number; normal: PlainVec3 } | null;
+}
+
+/** Things this screen puts in the world itself (never on the server, never on anyone else's screen). */
+export interface ClientScene {
+  /** A group to put things in (`add` it to the world). */
+  node(): Node;
+  /** Into the world, lit and shadowed as figures are. */
+  add(node: Node): void;
+  remove(node: Node): void;
+  /**
+   * An item's look as a mesh (not in the world yet): its model (glTF or boxes) or its sprite
+   * pressed flat, `center` its middle in its own space. Null while its model's file is coming.
+   */
+  item(id: string): { node: Node; center: PlainVec3; form: 'model' | 'sprite' } | null;
 }
 
 /**
@@ -164,6 +271,10 @@ export interface ClientServices {
   // First person.
   // Figures.
   // HUD and effects.
+  /** Things this screen puts in the world itself. */
+  readonly scene: ClientScene;
+  /** Things thrown, in the air on this screen now (see `ClientThrown`). */
+  readonly thrown: readonly ClientThrown[];
 }
 
 /** A game's code on each player's screen. */
@@ -175,6 +286,8 @@ export interface Client extends ClientServices {
   readonly events: readonly ClientEvent[];
   /** Seconds this screen has run the game. */
   readonly time: number;
+  /** The game is under way (its server's `start` has run): what moves there moves here. */
+  readonly running: boolean;
   /** An item's definition as the server sent it. */
   item(id: string): ItemDefinition | undefined;
   /** The game's own messages from its server (`game.clients.send`). */

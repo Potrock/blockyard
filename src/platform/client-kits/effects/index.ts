@@ -1,6 +1,10 @@
 import type { ClientKit } from '@platform/client';
+import { gunfire } from './gunfire';
+import { throwables } from './throwables';
 
-/** (Phase 2: ported into a kit; until then the engine still does this itself.) */
+export { gunfire, throwables };
+
+/** The world effects the platform's games have always had: gunfire, then throwables and their fires. */
 export function standard(): ClientKit[] {
-  return [];
+  return [gunfire(), throwables()];
 }

@@ -160,6 +160,8 @@ function rig(): Rig {
     hand: { item: null, count: 0, strength: 1, drawing: false, charge: 0 },
     held: null,
     abilities: {},
+    quick: [],
+    cooking: null,
   };
   const client = { view, me, events: [] as ClientEvent[], camera: { zoom: 1, fov: 75 }, time: 0 } as unknown as Rig['client'];
   const [kit] = firstPerson.standard();
