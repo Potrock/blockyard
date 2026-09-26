@@ -3,7 +3,7 @@ import { Blueprint, defineGame, type BlockDefinition, type BlockRef, type GameDe
 import { Predictor } from '../../src/platform/client/predict';
 import { GameHost, GeneratedWorld } from '../../src/platform/host/game';
 import { Headless } from '../../src/platform/host/headless';
-import { worldGenConfig } from '../../src/platform/host/spawn';
+import { worldGenConfig } from '../../src/platform/workers/config';
 import type { HostBatch, PlayerInput } from '../../src/platform/net/protocol';
 import { blockIdOf } from '../../src/platform/world/registry';
 import { check } from './_harness';

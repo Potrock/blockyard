@@ -2,15 +2,15 @@ import { TerrainGen, VoxelWorld } from '@engine/voxel_engine.js';
 import type { BlockRef, GameDefinition } from '../api/types';
 import { Content } from '../content';
 import { loadEngineSync } from '../engine/wasm';
-import { IDLE_INPUT, type ClientCommand, type HostBatch, type HostEvent, type PlayerInput, type SaveState } from '../net/protocol';
+import { IDLE_INPUT, type ClientCommand, type DevReply, type HostBatch, type HostEvent, type PlayerInput } from '../net/protocol';
 import type { PlayerSim } from '../sim/player';
 import { Sim } from '../sim/sim';
 import type { WorldHost } from '../sim/world';
-import { applyWorldConfig } from '../workers/config';
+import { applyWorldConfig, worldGenConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
 import { firstGameBlock, gameBlocks, remapEdits, useGameBlocks, type GameBlocks } from '../world/blocks';
 import { blockIdOf, destructibleIds, loadRegistry, type Registry } from '../world/registry';
-import { groundSpawn, startSpawn, worldGenConfig } from './spawn';
+import { groundSpawn, startSpawn } from './spawn';
 import { PresentState } from './state';
 import { MemoryStore, type SavedPlayer, type Store } from './store';
 
@@ -95,13 +95,17 @@ export class GeneratedWorld {
 }
 
 export interface GameHostOptions {
-  /** The engine: its compiled module (a worker gets the page's) or the `.wasm` bytes (Node). */
+  /** The engine: its compiled module (a room's worker gets the server's) or the `.wasm` bytes. */
   engine: WebAssembly.Module | BufferSource;
   seed: number;
-  /** A saved world to continue. */
-  save?: SaveState | null;
   /** Chat commands like `/give`. */
   cheats?: boolean;
+  /**
+   * Development mode (`npm run dev`): clients' `dev` commands run here (`__game.dev(js)` in the
+   * browser: any code, with the game's context). Never on a public server. A production build
+   * of the server refuses them whatever this says.
+   */
+  dev?: boolean;
   /** Columns kept around each player (the client's view distance). */
   radius?: number;
   /** Columns generated per tick past the first few (`Infinity`: all at once, for tests). */
@@ -113,7 +117,7 @@ export interface GameHostOptions {
   /**
    * Clients connect and leave (`connect`, `disconnect`) and the host keeps its own clock
    * (`step`): a server. Otherwise one client, the first player, is there from the start and its
-   * ticks drive the clock (`handle`): a worker, the page, a test.
+   * ticks drive the clock (`handle`): a test.
    */
   remote?: boolean;
   /** The first player's id and name (default 'local', 'Player'). */
@@ -153,8 +157,7 @@ const PRIME = 0.04;
 
 /**
  * Hosts one game: its simulation, on a world of its own, driven by `ClientCommand`s and
- * answering with `HostBatch`es. Where it runs is up to the transport: a worker in the page,
- * the page itself, Node for tests, a server.
+ * answering with `HostBatch`es. A server runs one per room (`RoomCore`); tests run one in Node.
  */
 export class GameHost {
   readonly sim: Sim;
@@ -167,6 +170,7 @@ export class GameHost {
   readonly blocks: GameBlocks;
   private readonly registry: Registry;
   private onError?: (err: unknown) => void;
+  private dev: boolean;
   private budget: number;
   private events: HostEvent[] = [];
   private clients = new Map<string, Client>();
@@ -190,6 +194,7 @@ export class GameHost {
     const seed = (this.seed = (def.world?.seed ?? o.seed) >>> 0);
     const store = (this.store = o.store ?? new MemoryStore());
     this.onError = o.onError;
+    this.dev = o.dev ?? false;
     this.radius = o.radius ?? 8;
     this.budget = o.budget ?? 4;
     const blockId = (b: BlockRef) => blockIdOf(registry, b);
@@ -267,29 +272,18 @@ export class GameHost {
 
     // A kept world picks up where it was: its builds (the game's own blocks by name), its time of day.
     const kept = this.keeps ? store.world() : null;
-    if (kept?.edits && !o.save) {
+    if (kept?.edits) {
       w.import_edits(remapEdits(kept.edits, kept.blocks ?? undefined, blocks));
       this.sim.env.time = kept.time;
     }
 
-    // Where the player starts: the save, the game's spawn, or open ground near the generator's pick.
+    // Where players start: the game's spawn, or open ground near the generator's pick.
     const me = this.sim.local;
-    const save = o.save;
-    if (save) {
-      w.import_edits(remapEdits(save.edits, save.blocks, blocks));
-      const [x, y, z, yaw, pitch] = save.player;
-      this.sim.env.time = save.time;
-      this.sim.spawn = { x, y, z, yaw };
-      gw.update([{ x, z }], CORE, Infinity);
-      w.set_flying(me.slot, save.flying && (def.player?.fly ?? false));
-      me.place(x, y, z, yaw, pitch);
-    } else {
-      const { fixed, ...sp } = startSpawn(def, seed, cfg);
-      gw.update([sp], CORE, Infinity);
-      const ground = fixed ? null : groundSpawn(w, registry, (x, z) => this.sim.surfaceY(x, z), sp.x, sp.z);
-      this.sim.spawn = { ...sp, ...ground };
-      me.place(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z, sp.yaw);
-    }
+    const { fixed, ...sp } = startSpawn(def, seed, cfg);
+    gw.update([sp], CORE, Infinity);
+    const ground = fixed ? null : groundSpawn(w, registry, (x, z) => this.sim.surfaceY(x, z), sp.x, sp.z);
+    this.sim.spawn = { ...sp, ...ground };
+    me.place(this.sim.spawn.x, this.sim.spawn.y, this.sim.spawn.z, sp.yaw);
     if (o.fov) me.cam.fov = o.fov;
     w.set_frozen(me.slot, true);
     this.events.push({ t: 'ready' });
@@ -299,7 +293,7 @@ export class GameHost {
   }
 
   // -----------------------------------------------------------------------------------------------
-  // One client driving the clock (a worker, the page, tests)
+  // One client driving the clock (tests)
   // -----------------------------------------------------------------------------------------------
 
   /**
@@ -513,6 +507,8 @@ export class GameHost {
 
   private run(id: string, client: Client, c: ClientCommand) {
     const sim = this.sim;
+    // (Watching or playing.)
+    if (c.t === 'dev') return this.devCommand(id, client, c);
     // Watching: they can join (`start`) and say how far they see, nothing else yet.
     if (c.t === 'start' && !client.player) this.join(id, client, c.name ?? 'Player');
     if (c.t === 'radius') {
@@ -611,6 +607,33 @@ export class GameHost {
     p.aheadVehicle(c.bank);
   }
 
+  /**
+   * A development tool's snippet (`__game.dev(js)`): run as a function body (or, if it's one, an
+   * expression) with `game` and `me` (the client's player, null while watching), and answer with
+   * its result as JSON (awaited, if it's a promise), or the error. Only in development mode, and
+   * never in a production build.
+   */
+  private devCommand(id: string, client: Client, c: { id: number; js: string }) {
+    const reply = (value: DevReply) => this.events.push({ t: 'reply', id: c.id, client: id, value });
+    if (!this.dev || !import.meta.env.DEV) return reply({ ok: false, error: 'refused: development commands need a development server (npm run dev)' });
+    const failed = (err: unknown) => reply({ ok: false, error: err instanceof Error ? (err.stack ?? err.message) : String(err) });
+    let result: unknown;
+    try {
+      let run: (game: unknown, me: unknown) => unknown;
+      try {
+        run = new Function('game', 'me', `return (${c.js}\n);`) as typeof run;
+      } catch {
+        run = new Function('game', 'me', c.js) as typeof run;
+      }
+      useGameBlocks(this.blocks);
+      result = run(this.sim.ctx, client.player?.api ?? null);
+    } catch (err) {
+      return failed(err);
+    }
+    if (result instanceof Promise) result.then((v: unknown) => reply({ ok: true, value: plainJson(v) }), failed);
+    else reply({ ok: true, value: plainJson(result) });
+  }
+
   /** Run game code; if it throws, the clients hear about it and the host carries on. */
   private guard(fn: () => void) {
     try {
@@ -641,6 +664,26 @@ export class GameHost {
     this.events = [];
     return out;
   }
+}
+
+/**
+ * A value as JSON has it (what a `dev` reply can carry): functions dropped, an object met again
+ * (a loop) as '[repeated]', `undefined` as null, numbers JSON can't hold as text.
+ */
+function plainJson(v: unknown): unknown {
+  const seen = new WeakSet<object>();
+  const text = JSON.stringify(v, (_k, x: unknown) => {
+    if (typeof x === 'bigint') return String(x);
+    if (typeof x === 'number' && !Number.isFinite(x)) return String(x);
+    if (x instanceof Map) return Object.fromEntries(x);
+    if (x instanceof Set) return [...x];
+    if (typeof x === 'object' && x !== null) {
+      if (seen.has(x)) return '[repeated]';
+      seen.add(x);
+    }
+    return x;
+  });
+  return text === undefined ? null : JSON.parse(text);
 }
 
 /** The engine's exported edits ([cx, cz, count, (local, block)*]…) as cells. */

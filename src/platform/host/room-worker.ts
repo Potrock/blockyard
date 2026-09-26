@@ -28,11 +28,12 @@ export type FromRoom =
 
 /**
  * Run one room in this worker thread (the app's room worker calls this; `find` looks its game
- * up). The server says who connected, what they sent and when they left; the room says what to
- * send each of them. Its game's module-level state, and any crash or runaway loop, stay here.
- * Told to stop, it saves, closes its store and ends: the promise settles then.
+ * up, development games too on a development server: `dev`). The server says who connected, what
+ * they sent and when they left; the room says what to send each of them. Its game's module-level
+ * state, and any crash or runaway loop, stay here. Told to stop, it saves, closes its store and
+ * ends: the promise settles then.
  */
-export async function serveRoomWorker(find: (id: string) => GameDefinition | undefined | Promise<GameDefinition | undefined>): Promise<void> {
+export async function serveRoomWorker(find: (id: string, dev: boolean) => GameDefinition | undefined | Promise<GameDefinition | undefined>): Promise<void> {
   const port = parentPort;
   if (!port) throw new Error('serveRoomWorker: not in a worker thread');
   const data = workerData as RoomWorkerData;
@@ -40,7 +41,7 @@ export async function serveRoomWorker(find: (id: string) => GameDefinition | und
   let core: RoomCore;
   let store: Store | undefined;
   try {
-    const def = await find(data.spec.game);
+    const def = await find(data.spec.game, data.spec.dev);
     if (!def) throw new Error(`no game "${data.spec.game}"`);
     const own = data.storeFile ? SqliteStore.open(data.storeFile, data.spec.game) : undefined;
     store = own && data.own ? new PrivateStore(own, true) : own;

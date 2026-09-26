@@ -1,5 +1,6 @@
-// A room's worker thread for the development server (scripts/server.mjs) and tests: Vite's SSR
-// loader compiles the game here too, so the thread has its own copy of the game's modules.
+// A room's worker thread for the development servers (scripts/server.mjs, scripts/dev.mjs) and
+// tests: Vite's SSR loader compiles the game here too, so the thread has its own copy of the
+// game's modules (and a room started after a change to its game's code runs the new code).
 import { createServer } from 'vite';
 
 const vite = await createServer({

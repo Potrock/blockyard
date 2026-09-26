@@ -16,6 +16,8 @@ export interface RoomSpec {
   instance: string;
   tickRate: number;
   cheats: boolean;
+  /** Development mode: clients' `dev` commands run (see `GameHostOptions.dev`). */
+  dev: boolean;
   /** A new world's seed (default random); the public room carries on a kept one. */
   seed?: number;
   /** Seconds between saves. */
@@ -92,6 +94,7 @@ export class RoomCore {
       seed,
       remote: true,
       cheats: spec.cheats,
+      dev: spec.dev,
       player: { id: 'p1', name: 'Player' },
       radius: 8,
       store,

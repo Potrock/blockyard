@@ -44,6 +44,12 @@ export function sanitizeCommand(raw: unknown): ClientCommand | null {
       if (id === null || typeof raw.line !== 'string' || raw.line.length > 200) return null;
       return { t: raw.t, id, line: raw.line };
     }
+    case 'dev': {
+      // (Only a development server runs it; any other answers that it won't.)
+      const id = int(raw.id, 0, Number.MAX_SAFE_INTEGER);
+      if (id === null || typeof raw.js !== 'string') return null;
+      return { t: 'dev', id, js: raw.js };
+    }
     default:
       return null;
   }

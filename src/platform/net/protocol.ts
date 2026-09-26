@@ -3,8 +3,8 @@
  *
  * The simulation (world, players, entities, rules, the game's own code) runs headless and
  * describes what each player should see and hear; the client (renderer, HUD, audio, input)
- * shows it. Everything that crosses is plain data (structured-cloneable), so the two can live in
- * one page, in a worker, or on either end of a socket.
+ * shows it. Everything that crosses is plain data: the simulation runs on a game server (or in
+ * Node, for tests) and each player's screen is at the other end of a socket.
  *
  * Functions never cross: a callback in a presentation call (a menu entry, a screen button) is
  * sent as `{ $cb: id }` and the client answers with a `callback` message.
@@ -113,10 +113,10 @@ export const IDLE_INPUT: PlayerInput = { active: false, down: [], pressed: [], b
 // -------------------------------------------------------------------------------------------------
 // Host and client
 //
-// A host runs a game's simulation on a world of its own; a client draws it. The client sends one
-// `tick` per frame with the player's controls and gets back a `HostBatch`: what happened, in
-// order, then the frame to draw. The same messages go to a worker in the page or, later, over a
-// socket to a server.
+// A host runs a game's simulation on a world of its own; a client draws it. On a server the host
+// keeps its own clock: each client sends its controls every frame (`input`) and gets a `HostBatch`
+// every step, what happened in order, then the frame to draw. A test in Node drives a host's
+// clock itself, one `tick` at a time.
 // -------------------------------------------------------------------------------------------------
 
 /**
@@ -155,7 +155,7 @@ export type HostEvent =
   | { t: 'ready' }
   /** The game called `exit()`: for the client whose action it answered, or everyone. */
   | { t: 'exit'; client?: string }
-  /** The answer to a request (`exec`, `complete`), for the client who asked. */
+  /** The answer to a request (`exec`, `complete`, `dev`), for the client who asked. */
   | { t: 'reply'; id: number; value: unknown; client?: string }
   /** This client is in the game now, as this player (a server's client, after `start`). */
   | { t: 'joined'; player: string; client: string }
@@ -170,7 +170,10 @@ export interface HostBatch {
 
 /** What a client tells its host. */
 export type ClientCommand =
-  /** Advance the simulation `dt` seconds with this player's controls (idle without); `running` once play began. */
+  /**
+   * Advance the simulation `dt` seconds with this player's controls (idle without); `running` once
+   * play began. Only a host driven by one client (tests) takes it: a server keeps its own clock.
+   */
   | { t: 'tick'; dt: number; running: boolean; input?: PlayerInput }
   /**
    * A server's client: the player's controls now (the server keeps its own clock). A client that
@@ -191,32 +194,16 @@ export type ClientCommand =
   | { t: 'radius'; columns: number }
   /** Requests answered with a `reply`: run a typed command, complete one. */
   | { t: 'exec'; id: number; line: string }
-  | { t: 'complete'; id: number; line: string };
+  | { t: 'complete'; id: number; line: string }
+  /**
+   * Development tools (`__game.dev(js)`): run `js` in the room's server, with `game` (its
+   * `GameContext`) and `me` (this client's `Player`, or null while watching) in scope. The reply
+   * is a `DevReply`. A server takes it only in development mode (`npm run dev`); any other refuses.
+   */
+  | { t: 'dev'; id: number; js: string };
 
-/** A saved world, handed to the host at start. */
-export interface SaveState {
-  edits: Uint8Array;
-  /** The game's own blocks' keys in id order when it was saved: the edits are translated by name. */
-  blocks?: string[];
-  player: [number, number, number, number, number];
-  flying: boolean;
-  time: number;
-}
-
-/** Starting a host in a worker: the first message it gets. */
-export interface HostInit {
-  t: 'init';
-  /** The compiled engine, shared with the page. */
-  module: WebAssembly.Module;
-  game: string;
-  seed: number;
-  save: SaveState | null;
-  cheats: boolean;
-  radius: number;
-  dayLength: number | null;
-  /** What the game kept in `game.store` on this device. */
-  store: Record<string, unknown>;
-}
+/** The answer to a `dev` command: the snippet's result as JSON, or what went wrong. */
+export type DevReply = { ok: true; value: unknown } | { ok: false; error: string };
 
 /** A room a player started of their own: its code, in its address (`wss://host/bedwars/k3x9f2`). */
 export const ROOM_CODE = /^[a-z0-9]{4,24}$/;

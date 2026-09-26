@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { TerrainGen, VoxelWorld } from '@engine/voxel_engine.js';
 import { Blueprint, defineGame, type BlockDefinition } from '../../src/platform';
 import { serveGame } from '../../src/platform/host/server';
-import { worldGenConfig } from '../../src/platform/host/spawn';
+import { worldGenConfig } from '../../src/platform/workers/config';
 import { decode, encode } from '../../src/platform/net/codec';
 import { FrameReader } from '../../src/platform/net/delta';
 import type { ClientCommand, ServerWelcome, TimedBatch, WireBatch } from '../../src/platform/net/protocol';

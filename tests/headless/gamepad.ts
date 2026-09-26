@@ -4,7 +4,7 @@ import { GameHost } from '../../src/platform/host/game';
 import type { PlayerInput } from '../../src/platform/net/protocol';
 import { sanitizeCommand } from '../../src/platform/net/validate';
 import { padBindings, padHints } from '../../src/platform/player/gamepad';
-import { games } from '../../src/games';
+import { games } from '../../src/games/server';
 import { check } from './_harness';
 
 const wasm = readFileSync('engine/pkg/voxel_engine_bg.wasm');

@@ -1,20 +1,8 @@
 import { TerrainGen, type VoxelWorld } from '@engine/voxel_engine.js';
-import type { BlockRef, GameDefinition, Vec3 } from '../api/types';
+import type { GameDefinition, Vec3 } from '../api/types';
 import { applyWorldConfig } from '../workers/config';
 import type { WorldGenConfig } from '../workers/protocol';
 import type { Registry } from '../world/registry';
-
-/** A game's world settings as the terrain generator takes them (workers, the main thread, a server). */
-export function worldGenConfig(def: GameDefinition, blockId: (b: BlockRef) => number): WorldGenConfig {
-  const w = def.world ?? {};
-  return {
-    flat: w.terrain === 'flat' ? (w.flatHeight ?? 64) : undefined,
-    void: w.terrain === 'void',
-    ground: w.terrain === 'void' && w.ground ? { y: w.ground.y, top: blockId(w.ground.top ?? 'grass_block'), fill: blockId(w.ground.fill ?? 'dirt'), depth: w.ground.depth ?? 4 } : undefined,
-    terraforms: w.terraform ?? [],
-    blueprints: (w.structures ?? []).map((s) => s.build(blockId)),
-  };
-}
 
 /**
  * Where a new world starts: the game's own spawn (`fixed`), or the generator's pick near the

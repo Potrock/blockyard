@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { BlockRef } from '../../src/platform/api/types';
 import { GeneratedWorld } from '../../src/platform/host/game';
-import { worldGenConfig } from '../../src/platform/host/spawn';
+import { worldGenConfig } from '../../src/platform/workers/config';
 import { loadEngineSync } from '../../src/platform/engine/wasm';
 import { loadRegistry } from '../../src/platform/world/registry';
 import { check, games } from './_harness';

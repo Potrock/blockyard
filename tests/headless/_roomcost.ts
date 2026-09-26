@@ -16,7 +16,7 @@ export default function roomCost() {
   let bytes = 0;
   let deflateMs = 0;
   let sends = 0;
-  const core = new RoomCore(def, { game: def.id, instance: 'public', tickRate: 30, cheats: true, saveEvery: 1e9 }, readFileSync('engine/pkg/voxel_engine_bg.wasm'), undefined, {
+  const core = new RoomCore(def, { game: def.id, instance: 'public', tickRate: 30, cheats: true, dev: false, saveEvery: 1e9 }, readFileSync('engine/pkg/voxel_engine_bg.wasm'), undefined, {
     send: (_c, text) => {
       bytes += text.length;
       sends++;

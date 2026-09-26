@@ -14,7 +14,8 @@ export interface OnlineOptions {
   onRoom?: (own: boolean) => void;
 }
 
-interface GameEntry {
+/** A game in the list: its meta (`GameMeta`), all the home page knows of it. */
+interface ListedGame {
   id: string;
   title: string;
   tagline?: string;
@@ -64,7 +65,7 @@ export class TitleScreen {
 
   constructor(
     parent: HTMLElement,
-    private games: GameEntry[],
+    private games: ListedGame[],
   ) {
     const mark = h('span.home-mark');
     mark.innerHTML = MARK;
@@ -288,7 +289,6 @@ export class PauseMenu {
   private timeSlider!: HTMLInputElement;
   private padKeys: HTMLElement;
   onTime: ((t: number) => void) | null = null;
-  onNewWorld: ((seed: number | null) => void) | null = null;
   onRestart: (() => void) | null = null;
   onExit: (() => void) | null = null;
 
@@ -328,7 +328,6 @@ export class PauseMenu {
 
     this.timeSlider = h('input', { type: 'range', min: 0, max: 1, step: 0.001, value: '0.3' }) as HTMLInputElement;
     this.timeSlider.addEventListener('input', () => this.onTime?.(Number(this.timeSlider.value)));
-    const seedInput = h('input.seed-input', { type: 'text', placeholder: 'seed (blank = random)' }) as HTMLInputElement;
     this.padKeys = h('div.keys.pad-only');
 
     this.root = h(
@@ -395,11 +394,6 @@ export class PauseMenu {
             'WASD move · Space jump / fly up · Shift sneak / fly down · Ctrl or double-tap W sprint · F fly · 1-9 / wheel select · MMB pick · E blocks · F1 hide HUD · F3 debug · [ ] time',
           ),
           this.padKeys,
-          h('div.new-world', {}, seedInput, h('button.btn', { onclick: () => {
-            const v = seedInput.value.trim();
-            const n = v === '' ? null : Number.isFinite(Number(v)) ? Number(v) >>> 0 : hashString(v);
-            this.onNewWorld?.(n);
-          } }, 'New world')),
         ),
       ),
     );
@@ -423,15 +417,6 @@ export class PauseMenu {
   get visible(): boolean {
     return !this.root.classList.contains('hidden');
   }
-}
-
-function hashString(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
 }
 
 /** Creative block picker. */
