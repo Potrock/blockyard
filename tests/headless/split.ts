@@ -15,7 +15,7 @@ const GAMES = resolve('src/games');
 const SERVER_ONLY: Record<string, string[]> = {
   arena: ['content.ts'],
   bedwars: ['bots.ts', 'fireballs.ts', 'items.ts', 'nav.ts', 'shop.ts', 'state.ts'],
-  callofblocky: ['bots.ts', 'hud.ts', 'weapons.ts'],
+  callofblocky: ['bots.ts', 'hud.ts', 'progression.ts', 'weapons.ts'],
   highnoon: ['bots.ts', 'hud.ts', 'weapons.ts'],
   skyship: ['ship.ts'],
   starfighter: ['capital.ts', 'enemies.ts', 'pilot.ts', 'weapons.ts'],
@@ -29,7 +29,7 @@ const SERVER_ONLY: Record<string, string[]> = {
 const CLIENT_ONLY: Record<string, string[]> = {
   arena: ['client/looks.ts', 'client/sounds.ts'],
   bedwars: ['client/looks.ts', 'client/sounds.ts'],
-  callofblocky: ['models/index.ts', 'client/looks.ts', 'client/sounds.ts'],
+  callofblocky: ['models/index.ts', 'client/looks.ts', 'client/progression.ts', 'client/sounds.ts'],
   gallery: ['client/looks.ts', 'models/blocky_sword.gltf'],
   // (Its cowboys, `models/index.ts`, are the server's to choose: only the guns' model files are the screens'.)
   highnoon: ['models/revolver.glb', 'models/rifle.glb', 'client/looks.ts', 'client/sounds.ts'],

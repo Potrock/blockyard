@@ -1,6 +1,7 @@
 import { defineClient } from '@platform/client';
 import { effects, figures, firstPerson, hud, sounds } from '@platform/client/kits';
 import { defineLooks } from './client/looks';
+import { progressionHud } from './client/progression';
 import { defineSounds } from './client/sounds';
 import { shared } from './shared';
 
@@ -8,10 +9,11 @@ import { shared } from './shared';
  * Call of Blocky on each player's screen: the platform's kits it uses, in the order they run (the
  * standard voices, the first-person view, the fighters' figures, the gun's and the lethals' HUD,
  * gunfire and the lethals in the world), then its own look: each weapon's model, icon, hold,
- * tracer and trail (`client/looks.ts`), and its voices (`client/sounds.ts`).
+ * tracer and trail (`client/looks.ts`), and its voices (`client/sounds.ts`). Last, a kit of its own:
+ * the XP bar, the ticker of gains, the level-ups and the match's XP (`client/progression.ts`).
  */
 export default defineClient(shared, {
-  kits: [...sounds.standard(), ...firstPerson.standard(), figures.humanoid(), hud.gunner(), hud.throwables(), effects.gunfire(), effects.throwables()],
+  kits: [...sounds.standard(), ...firstPerson.standard(), figures.humanoid(), hud.gunner(), hud.throwables(), effects.gunfire(), effects.throwables(), progressionHud()],
   setup(client) {
     defineLooks(client);
     defineSounds(client);

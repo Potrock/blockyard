@@ -63,6 +63,8 @@ src/games/
     models/             the guns and fighters as GLB files (tools/ writes them; the guns reached only by client code)
     art.ts              the pulp wardrobe (skins painted in code)
     hud.css hud.ts      its HUD: the comic-book theme (hud.theme.css) and its own corner widget
+    progression.ts      XP, levels 1 to 30 and what they unlock, kept by name (game.store); the loadout's locks
+    client/progression.ts  the XP bar, the ticker of gains, level-ups and the match's XP: a client kit of its own
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
     server.ts           rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
     course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
@@ -1132,7 +1134,7 @@ game.store.set(key, s);
 game.store.keys('stats:'); // everyone's, for a leaderboard
 ```
 
-Bed Wars counts each player's games, wins, kills, final kills and beds this way and shows the all-time numbers on its result screen.
+Bed Wars counts each player's games, wins, kills, final kills and beds this way and shows the all-time numbers on its result screen. Call of Blocky keeps each player's XP (`xp:<name>`), and so their level and unlocks, across matches, rooms and restarts (`src/games/callofblocky/progression.ts`); a name is anyone's who types it, so guests (the default "Player") aren't kept at all.
 
 ## Commands
 
