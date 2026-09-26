@@ -5,6 +5,7 @@ import hudCss from './hud.css?raw';
 import { MAPS, WORLD } from './map';
 import meta from './meta';
 import { FIGHTERS as FIGHTER_MODELS } from './models/fighters';
+import { chopperVehicle, missileVehicle } from './streaks/flight';
 import { FIGHTER_STYLE } from './style';
 
 export const COLORS = { gold: '#ffcc00', red: '#e63946', ink: '#111111', cream: '#fdf1d6', pink: '#ff5c8a', teal: '#1fa3a0' };
@@ -20,6 +21,8 @@ export const shared = defineShared({
   ...meta,
   // Big Kahuna Burger's thatch, bamboo, tiki heads, chain-link and menu board (blocks.ts).
   blocks: BLOCKS,
+  // The killstreaks you steer (`streaks/flight.ts`): each pilot's screen flies theirs ahead of the server.
+  vehicles: { hellstorm: missileVehicle, chopper: chopperVehicle },
   world: {
     seed: WORLD.seed,
     // No landscape to make: the maps and their backdrops stand on a plain ground over the void,

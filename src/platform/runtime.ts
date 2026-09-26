@@ -459,7 +459,7 @@ export class Runtime {
         if ('$entity' in a) return this.entityView.locate(a.$entity, offset, out);
         const p = this.frameData?.players.find((x) => x.id === a.$player);
         if (!p) return false;
-        if (p.vehicle?.prop != null) return this.propView.locate(p.vehicle.prop, offset, out);
+        if (p.vehicle?.prop != null && !p.vehicle.remote) return this.propView.locate(p.vehicle.prop, offset, out);
         const avatar = this.avatarIds.get(p.id);
         if (p.id !== this.playerId && avatar !== undefined && this.entityView.locate(avatar, offset, out)) return true;
         out.set(p.x + (offset?.x ?? 0), p.y + (offset?.y ?? 0), p.z + (offset?.z ?? 0));
@@ -469,7 +469,7 @@ export class Runtime {
         if ('$prop' in a) return this.propView.heading(a.$prop);
         if ('$player' in a) {
           const p = this.frameData?.players.find((x) => x.id === a.$player);
-          if (p?.vehicle?.prop != null) return this.propView.heading(p.vehicle.prop);
+          if (p?.vehicle?.prop != null && !p.vehicle.remote) return this.propView.heading(p.vehicle.prop);
           return p ? p.view.yaw : null;
         }
         return null;
@@ -1211,11 +1211,14 @@ export class Runtime {
     const seen = new Set<string>();
     this.targets = [];
     for (const other of f.players) {
-      // Only people on foot get a figure: a driver is their vehicle's model. Our own shows in
-      // third person, where we're shown (predicted) facing where we look.
+      // Only people on foot get a figure: a driver is their vehicle's model, but one steering it
+      // from afar (`remote`) stands where they are and shows there (our own too, seen from the
+      // vehicle, as the host has it). Our own shows in third person, where we're shown
+      // (predicted) facing where we look.
       const mine = other.id === self;
-      if ((mine && !(live && this.view.thirdPerson)) || !this.walker || other.vehicle) continue;
-      const p = mine ? { ...me, view: { ...me.view, yaw: this.view.yaw, pitch: this.view.pitch } } : other;
+      const remote = !!other.vehicle?.remote;
+      if ((mine && !(live && (this.view.thirdPerson || remote))) || !this.walker || (other.vehicle && !remote)) continue;
+      const p = mine && !remote ? { ...me, view: { ...me.view, yaw: this.view.yaw, pitch: this.view.pitch } } : other;
       const type = this.avatarType(p);
       let id = this.avatarIds.get(p.id);
       if (id === undefined) this.avatarIds.set(p.id, (id = -1 - this.avatarIds.size));

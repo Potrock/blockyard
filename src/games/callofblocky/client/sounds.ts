@@ -133,6 +133,34 @@ export function defineSounds(client: Client) {
     s.tone({ wave: 'sine', from: 70, to: 45, duration: 0.12, volume: 0.6 });
     s.tone({ wave: 'sine', from: 64, to: 40, duration: 0.12, volume: 0.45, delay: 0.2 });
   });
+  // Killstreaks: one ready to call in (a radio blip under the brass), the Hellstorm's launch and
+  // its rush through the air, the chopper's rotor (a thud a beat) and its cannon.
+  a.define('streak_ready', (s) => {
+    s.tone({ wave: 'square', from: 1320, to: 1320, duration: 0.06, volume: 0.12, lowpass: 3000 });
+    s.tone({ wave: 'square', from: 1760, to: 1760, duration: 0.08, volume: 0.12, delay: 0.08, lowpass: 3000 });
+    for (const [f, d] of [
+      [311, 0.18],
+      [392, 0.18],
+      [466, 0.18],
+      [622, 0.36],
+    ] as const) {
+      s.tone({ wave: 'sawtooth', from: f, to: f * 1.004, duration: d > 0.3 ? 0.6 : 0.16, volume: 0.1, delay: d, lowpass: 2400, attack: 0.01, vibrato: { rate: 6, depth: 4 } });
+    }
+  });
+  a.define('missile_launch', (s) => {
+    s.tone({ wave: 'sine', from: 90, to: 40, duration: 0.5, volume: 0.7 });
+    s.noise({ duration: 1.4, filter: 'lowpass', from: 3200, to: 500, volume: 0.55 });
+    s.noise({ duration: 1.1, delay: 0.1, filter: 'bandpass', from: 700, to: 1600, q: 1.2, volume: 0.3 });
+  });
+  a.define('missile_air', (s) => {
+    s.noise({ duration: 0.42, filter: 'bandpass', from: 900 * s.pitch, to: 1300 * s.pitch, q: 1.5, volume: 0.3 });
+    s.noise({ duration: 0.42, filter: 'lowpass', from: 420 * s.pitch, to: 380 * s.pitch, volume: 0.35 });
+  });
+  a.define('rotor', (s) => {
+    s.tone({ wave: 'sine', from: 78, to: 46, duration: 0.11, volume: 0.55 });
+    s.noise({ duration: 0.13, filter: 'lowpass', from: 520, to: 160, volume: 0.45 });
+  });
+  a.define('chopper_gun', (s) => shot(s, { punch: 85, body: 0.22, bright: 2600, crack: 0.25, tail: 0.3, loud: 0.9 }));
   // The Briefcase: its fuse ticking (a hard little beep, higher near the end), the latches
   // snapping shut as it's armed, and the wire snipped as it's cracked.
   a.define('case_beep', (s) => {

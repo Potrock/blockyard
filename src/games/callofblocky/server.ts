@@ -11,6 +11,8 @@ import { COLORS, fighterModel, shared } from './shared';
 import { BLURBS, defineWeapons, feedIcon, LETHAL_BLURBS, LETHAL_COUNT, LETHALS, PRIMARIES, WEAPONS, weaponName, type Lethal, type Primary } from './weapons';
 import { outfitId, setupProgression, type Progression } from './progression'; // [progression]
 import { killcam, killcamHolds } from './killcam';
+import { selfHarm, Streaks } from './streaks';
+import { STREAK_IDS, STREAKS } from './streaks/kinds';
 
 /**
  * Call of Blocky: fast pulp shootouts against bots and people, on Jackrabbit Lane (a
@@ -29,7 +31,9 @@ import { killcam, killcamHolds } from './killcam';
  *
  * Everyone carries a primary of their choosing (L), the Lucky 45, a katana and a lethal (G: two
  * Pineapple frags or a Mia firebomb). Three kills in a row light up the radar for you (UAV); five
- * get an Adrenaline Shot: faster, and patched up.
+ * get an Adrenaline Shot: faster, and patched up. In a free-for-all or Team Deathmatch, seven earn
+ * a Hellstorm missile to steer down onto them, and ten an Attack Chopper to fly and shoot from,
+ * each called in with 4 when you like (`streaks/`).
  */
 
 const TIME_LIMIT: Record<ModeId, number> = { ffa: 8 * 60, tdm: 10 * 60, case: Infinity };
@@ -50,6 +54,8 @@ let overAt = 0;
 let firstBlood = false;
 let bots: Bots;
 let rounds: CaseRounds;
+/** The killstreaks you steer: the Hellstorm and the Attack Chopper (`streaks/`). */
+let streaks: Streaks;
 /** Each map's walking grid (built once its blocks have loaded, the first time a match is on it). */
 let navs = new Map<string, NavGrid>();
 /** The map's hotspots, where bots drift (the array the bots read: refilled for each map). */
@@ -123,6 +129,7 @@ function addFighter(game: GameContext, p: Player): Fighter {
     uavUntil: 0,
     uavFor: 0,
     rushUntil: 0,
+    streaks: [],
     firedAt: -99,
     menu: null,
     radar: '',
@@ -368,6 +375,8 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
   const v = fighters.get(victim.id);
   if (!v || match.phase !== 'playing') return;
   const now = game.clock.now;
+  // Killed flying a streak: it's over.
+  streaks.died(victim);
   v.deaths++;
   v.streak = 0;
   v.diedAt = now;
@@ -418,6 +427,8 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
       killer.hud.banner('ADRENALINE SHOT', 'Faster and patched up, for fifteen seconds', { color: COLORS.pink, duration: 2 });
       killer.audio.play('heal');
     }
+    // The ones you call in (a free-for-all or Team Deathmatch): the Hellstorm at seven, the chopper at ten.
+    if (streaks.on) for (const id of STREAK_IDS) if (k.streak === STREAKS[id].kills) streaks.earn(k, id);
     game.hud.feed([
       { text: killer.name, color: nameColor(killer, killer.bot ? '#ffe7a3' : COLORS.gold) },
       ...(icon ? [{ icon }] : weapon ? [` ${killName(weapon)} `] : [' ✕ ']),
@@ -427,7 +438,7 @@ function onDeath(game: GameContext, victim: Player, source: unknown, weapon: str
     ]);
     victim.hud.banner('KILLED BY', `${killer.name}${weapon ? ` · ${killName(weapon)}` : ''}${headshot ? ' · headshot' : ''}${through > 0 ? ' · through the wall' : ''}`, { color: COLORS.red, duration: RESPAWN - 0.3 });
     // KILLCAM hook (killcam.ts): the victim sees it again through the killer's eyes, then respawns.
-    killcam(game, victim, killer, weapon, headshot, through);
+    killcam(game, victim, killer, weapon, headshot, through, streaks.killcamView(victim, killer, weapon));
     // (Hook: whatever else counts a kill, progression say, hears of it here: `k` got `points`.)
     // The mode's score.
     if (match.mode.id === 'ffa' && k.kills >= FFA_LIMIT) endMatch(game, killer);
@@ -456,6 +467,7 @@ function endMatch(game: GameContext, winner: Player | null, team?: Team) {
   if (match.phase === 'over') return;
   match.phase = 'over';
   overAt = game.clock.now;
+  streaks.reset();
   const table = standings();
   const teams = match.mode.teams;
   // A team match with no winner named (the clock ran out): the side ahead, if any.
@@ -658,8 +670,10 @@ function personalHud(game: GameContext, f: Fighter, dt: number) {
     teamColor: teams ? TEAMS[f.team!].color : '',
     role: isCase() && teams ? (f.team === rounds.attackers ? 'Attacking' : 'Defending') : 'Team',
     carrier: isCase() && rounds.carrier === f ? 'Hold F at A or B' : '',
-    pips: streakPips(f.streak),
-    extra: Math.max(0, f.streak - 5),
+    pips: streakPips(f.streak, streaks.on),
+    pipsClass: streaks.on ? 'long' : '',
+    extra: Math.max(0, f.streak - (streaks.on ? STREAKS.chopper.kills : 5)),
+    ready: streaks.ready(f),
     uav: Math.max(0, Math.ceil(f.uavUntil - now)),
     uavFor: f.uavFor,
     rush: Math.max(0, Math.ceil(f.rushUntil - now)),
@@ -781,6 +795,10 @@ export default defineServer(shared, {
     navs = new Map(MAPS.map((m) => [m.id, navGrid(game, { bounds: m.bounds })]));
     bots = makeBots(game, () => navs.get(match.map.id) ?? null, hotspots);
     rounds = new CaseRounds(game, { spawnAt: (f, at) => spawnAt(game, f, at), award, endMatch: (t) => endMatch(game, null, t) });
+    streaks = new Streaks(game, { bots, award });
+    streaks.setup();
+    // (Development: tests reach the match and the streaks.)
+    if (import.meta.env.DEV) (globalThis as unknown as { __cob: unknown }).__cob = { match, streaks };
     game.events.on('playerJoin', ({ player }) => {
       const f = fighters.get(player.id) ?? addFighter(game, player);
       if (player.bot) bots.add(player as Bot, 0.3 + game.rng.next() * 0.5);
@@ -800,19 +818,24 @@ export default defineServer(shared, {
       f?.menu?.close();
       fighters.delete(player.id);
       watching.delete(player.id);
+      streaks.died(player);
       bots.remove(player);
       boardDirty = true;
       if (f && isCase()) rounds.left(f);
       if (!player.bot) balanceBots(game);
     });
     game.events.on('playerDeath', ({ player, source, weapon, headshot, through }) => onDeath(game, player, source, weapon, !!headshot, through ?? 0));
-    game.events.on('shot', ({ player }) => {
+    game.events.on('shot', ({ player, weapon, from, dir }) => {
       const f = fighters.get(player.id);
       if (f) f.firedAt = game.clock.now;
+      // Up at a chopper: its hits count against it.
+      streaks.shot(player, weapon, from, dir);
     });
     // No friendly fire in a team mode (your own frag still hurts you).
     game.events.on('damage', (hit) => {
       const by = hit.source;
+      // A streak's blast spares its pilot.
+      if (selfHarm(hit.weapon, hit.target, by)) return hit.cancel();
       if (!match.mode.teams || !by || by === 'world' || by.kind !== 'player' || hit.target.kind !== 'player' || by === hit.target) return;
       if (!hostile(by, hit.target)) hit.cancel();
     });
@@ -831,6 +854,19 @@ export default defineServer(shared, {
         }
         return `${g.players.length} fighters`;
       },
+    });
+    game.commands.register('streak', {
+      usage: '<hellstorm|chopper>',
+      help: 'Earn a killstreak now (call it in with 4)',
+      cheat: true,
+      run: ([id], _g, p) => {
+        const f = fighterOf(p);
+        if (!f || !id || !(STREAK_IDS as string[]).includes(id)) return `streaks: ${STREAK_IDS.join(', ')}`;
+        if (!streaks.on) return 'streaks are for the free-for-all and Team Deathmatch';
+        streaks.earn(f, id as (typeof STREAK_IDS)[number]);
+        return `${STREAKS[id as (typeof STREAK_IDS)[number]].name} ready: press 4`;
+      },
+      complete: () => [...STREAK_IDS],
     });
     game.commands.register('win', { help: 'End the match now', cheat: true, run: (_a, g, p) => endMatch(g, p, match.mode.teams ? (fighterOf(p)?.team ?? 0) : undefined) });
     game.commands.register('team', {
@@ -887,9 +923,10 @@ export default defineServer(shared, {
     briefcase = null;
     bots.objective = null;
     watching.clear();
+    streaks.reset();
     nextBriefcase = game.clock.now + 35;
     for (const f of fighters.values()) {
-      Object.assign(f, { kills: 0, deaths: 0, score: 0, streak: 0, best: 0, headshots: 0, plants: 0, defuses: 0, diedAt: -1, uavUntil: 0, uavFor: 0, rushUntil: 0, firedAt: -99, radar: '', multi: 0 });
+      Object.assign(f, { kills: 0, deaths: 0, score: 0, streak: 0, best: 0, headshots: 0, plants: 0, defuses: 0, diedAt: -1, uavUntil: 0, uavFor: 0, rushUntil: 0, streaks: [], firedAt: -99, radar: '', multi: 0 });
     }
     for (const p of game.players) if (!fighters.has(p.id)) addFighter(game, p);
     if (match.mode.teams) formTeams(game);
@@ -925,6 +962,8 @@ export default defineServer(shared, {
     const between = isCase() && (rounds.phase === 'prep' || rounds.phase === 'post');
     bots.update(dt, match.phase !== 'playing' || between);
     if (isCase() && match.phase === 'playing') rounds.driveBots(bots);
+    // Killstreaks: calling them in (4), flying them, bots firing up at choppers.
+    streaks.update(dt);
 
     if (match.phase === 'over') {
       if (now - overAt > INTERMISSION) game.restart();

@@ -2,6 +2,7 @@ import type { MenuHandle, Player } from '@platform';
 import { MAPS, type MapSpec } from './map';
 import { MODES, type Mode, type Team } from './modes';
 import type { Lethal, Primary } from './weapons';
+import type { StreakId } from './streaks/kinds';
 
 /**
  * The match being played, as the server's parts share it (`server.ts` runs it, `briefcase.ts`
@@ -35,6 +36,8 @@ export interface Fighter {
   /** How long the UAV they have now lasts in all (its bar drains from full). */
   uavFor: number;
   rushUntil: number;
+  /** Killstreaks earned and not yet called in (4 calls in the last one): `streaks/`. */
+  streaks: StreakId[];
   /** Last shot: they show on everyone's radar for a moment. */
   firedAt: number;
   menu: MenuHandle | null;

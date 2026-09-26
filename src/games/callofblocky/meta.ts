@@ -17,6 +17,7 @@ export default defineMeta({
     ['C', 'crouch · slide'],
     ['1 2 3', 'weapons'],
     ['G', 'lethal (hold to cook)'],
+    ['4', 'call in a killstreak'],
     ['F', 'plant · crack the case (hold)'],
     ['L', 'loadout'],
     ['M', 'mode and map (your own game)'],
@@ -24,10 +25,11 @@ export default defineMeta({
   ],
   // Controllers: the platform's shooter layout (RT fire, LT aim, X reload, B crouch and slide,
   // L3 sprint, LB / Y switch weapons), with the lethal on RB (hold to cook), the loadout on the
-  // D-pad's up, planting and cracking the case on its down, the mode and map on its right, and
-  // the katana on R3.
+  // D-pad's up, planting and cracking the case on its down, the mode and map on its right,
+  // killstreaks on its left, and the katana on R3.
   gamepad: {
     R3: ['Digit3', 'katana'],
+    Left: ['Digit4', 'killstreak'],
     RB: ['KeyG', 'lethal'],
     Up: 'KeyL',
     Down: ['KeyF', 'plant · crack'],

@@ -1,4 +1,5 @@
 import type { GameContext, GunItem, IconRef, ItemDefinition, MeleeItem, ThrowableItem } from '@platform';
+import { isStreak, STREAKS } from './streaks/kinds';
 
 /**
  * The arsenal. Everyone carries a primary of their choosing, the Lucky 45 and the Hattori
@@ -186,7 +187,7 @@ export function defineWeapons(game: GameContext) {
  * The icon a weapon shows in the kill feed and the loadout menu: its own, as each screen has it
  * (`client/looks.ts`), side on (a lethal as it is).
  */
-export const feedIcon = (id: string): IconRef | null => (WEAPONS[id] ? { item: id, view: 'side' } : LETHALS[id] ? { item: id } : null);
+export const feedIcon = (id: string): IconRef | null => (WEAPONS[id] || isStreak(id) ? { item: id, view: 'side' } : LETHALS[id] ? { item: id } : null);
 
-/** A weapon's name, for the kill feed. */
-export const weaponName = (id: string) => WEAPONS[id]?.name ?? LETHALS[id]?.name ?? id;
+/** A weapon's name, for the kill feed (a killstreak's too). */
+export const weaponName = (id: string) => WEAPONS[id]?.name ?? LETHALS[id]?.name ?? (isStreak(id) ? STREAKS[id].name : id);
