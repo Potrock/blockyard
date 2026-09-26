@@ -117,8 +117,11 @@ export function briefcase(map = 'jackrabbit', seed = 5) {
   check(Math.max(...match.score) === ROUNDS, `a side should take ${ROUNDS} rounds (${match.score.join(' to ')})`);
   check(rounds >= ROUNDS, `at least ${ROUNDS} rounds (${rounds})`);
   check(swapped, 'the sides swap at the half');
-  check(planted >= 1, 'the case should get planted');
-  check(cracked + boomed >= 1, 'a planted case should be cracked or go off');
+  // Bots win many rounds by clearing the other side before a plant (as the mode allows), so a plant
+  // isn't certain in a bot match: plantAndBlow() plants one for sure. The case must see play,
+  // though (carried, dropped, picked up or planted), and a planted one must end cracked or gone off.
+  check(planted + dropped + picked >= 1, `the case should see play (planted ${planted}, dropped ${dropped}, picked up ${picked})`);
+  check(planted === 0 || cracked + boomed >= 1, 'a planted case should be cracked or go off');
   check(maxDeathsInRound <= 8, `one life a round (${maxDeathsInRound} deaths in a round)`);
 }
 
