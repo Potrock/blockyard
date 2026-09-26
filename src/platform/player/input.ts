@@ -123,7 +123,12 @@ export class Input {
     window.addEventListener('mouseup', (e) => {
       this.buttonsDown &= ~(1 << e.button);
     }, opts);
-    target.addEventListener('contextmenu', (e) => e.preventDefault(), opts);
+    // No browser menu on a right-click anywhere in the game: the canvas, and the menus and screens
+    // over it too. On Windows the menu comes as the button goes back up, so a right-click that
+    // opens a screen (a shopkeeper) would pop it over the screen. Text fields and selected text keep it.
+    window.addEventListener('contextmenu', (e) => {
+      if (!wantsMenu(e.target)) e.preventDefault();
+    }, opts);
     window.addEventListener('mousemove', (e) => {
       if (Math.abs(e.movementX) + Math.abs(e.movementY) > 6) this.use('mouse');
       if (!this.pointer) return;
@@ -407,6 +412,12 @@ export class Input {
     this.mouseDX = 0;
     this.mouseDY = 0;
   }
+}
+
+/** A right-click here should get the browser's menu: in a text field (paste), or over selected text (copy). */
+function wantsMenu(target: EventTarget | null): boolean {
+  if (target instanceof Element && target.closest('input, textarea, [contenteditable]')) return true;
+  return !!document.getSelection()?.toString();
 }
 
 function isGameKey(code: string): boolean {
