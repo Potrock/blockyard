@@ -1,9 +1,56 @@
 import { defineConfig, type Plugin } from 'vite';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+
+/**
+ * The files the games' server code names by URL (`import rifle from './rifle.glb?url'`: models,
+ * pictures), in the games a production server runs: following the server registry's static
+ * imports within `src/games` (the development games are dynamic imports, so they're left out).
+ * The server sends those URLs to players' screens as the build names them (`/assets/rifle-<hash>.glb`).
+ */
+function serverAssets(root = r('.')): string[] {
+  const games = join(root, 'src/games');
+  const asFile = (p: string) => ['', '.ts', '/index.ts'].map((e) => p + e).find((f) => existsSync(f) && statSync(f).isFile());
+  const seen = new Set<string>();
+  const assets = new Set<string>();
+  const queue = [join(games, 'server.ts')];
+  while (queue.length) {
+    const file = queue.shift()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const code = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const m of code.matchAll(/\b(?:import|export)\s+(type\s+)?(?:[\w$*{}\s,]*?\bfrom\s*)?['"](\.[^'"\n]*)['"]/g)) {
+      if (m[1]) continue;
+      const path = resolve(dirname(file), m[2].replace(/\?.*$/, ''));
+      if (!path.startsWith(games + sep)) continue;
+      if (m[2].endsWith('?url')) assets.add(path);
+      else {
+        const next = asFile(path);
+        if (next) queue.push(next);
+      }
+    }
+  }
+  return [...assets];
+}
+
+/**
+ * The site has every file the games' server code names by URL, although that code isn't in the
+ * browser's build (see `serverAssets`): a client build emits each, as the server's build names it
+ * (the same name and contents give the same hashed file name). In development Vite serves them
+ * from the source folders.
+ */
+function withServerAssets(): Plugin {
+  return {
+    name: 'server-assets',
+    apply: (_, env) => env.command === 'build' && !env.isSsrBuild,
+    buildStart() {
+      for (const file of serverAssets()) this.emitFile({ type: 'asset', name: basename(file), originalFileName: relative(r('.'), file), source: readFileSync(file) });
+    },
+  };
+}
 
 /** Each output chunk's modules (the page's and its workers'), for `scripts/check-bundle.mjs`. */
 const chunks: { file: string; worker: boolean; modules: { id: string; length: number }[] }[] = [];
@@ -45,7 +92,7 @@ export default defineConfig({
       { find: /^@engine\//, replacement: r('./engine/pkg/') },
     ],
   },
-  plugins: [bundleReport(false)],
+  plugins: [withServerAssets(), bundleReport(false)],
   server: { port: 5173, strictPort: false },
   worker: { format: 'es', plugins: () => [bundleReport(true)] },
   build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 1500 },

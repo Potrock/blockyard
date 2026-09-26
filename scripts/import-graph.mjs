@@ -36,15 +36,16 @@ const code = (file) =>
     .replace(/^\s*\/\/.*$/gm, '');
 
 /**
- * What a file imports: `{ spec, type }` for each static import or re-export (`type`: erased by
- * TypeScript), dynamic `import()`, and `new URL('./x.ts', import.meta.url)` (a worker's entry).
+ * What a file imports: `{ spec, type, dynamic }` for each static import or re-export (`type`:
+ * erased by TypeScript), dynamic `import()` (`dynamic`: loaded when it's called), and
+ * `new URL('./x.ts', import.meta.url)` (a worker's entry).
  */
 export function importsOf(file) {
   const src = code(file);
   const out = [];
-  for (const m of src.matchAll(/\b(import|export)\s+(type\s+)?(?:[\w$*{}\s,]*?\bfrom\s*)?['"]([^'"\n]+)['"]/g)) out.push({ spec: m[3], type: !!m[2] });
-  for (const m of src.matchAll(/\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g)) out.push({ spec: m[1], type: false });
-  for (const m of src.matchAll(/new\s+URL\s*\(\s*['"]([^'"\n]+)['"]\s*,\s*import\.meta\.url\s*\)/g)) out.push({ spec: m[1], type: false });
+  for (const m of src.matchAll(/\b(import|export)\s+(type\s+)?(?:[\w$*{}\s,]*?\bfrom\s*)?['"]([^'"\n]+)['"]/g)) out.push({ spec: m[3], type: !!m[2], dynamic: false });
+  for (const m of src.matchAll(/\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g)) out.push({ spec: m[1], type: false, dynamic: true });
+  for (const m of src.matchAll(/new\s+URL\s*\(\s*['"]([^'"\n]+)['"]\s*,\s*import\.meta\.url\s*\)/g)) out.push({ spec: m[1], type: false, dynamic: false });
   return out;
 }
 
@@ -111,7 +112,7 @@ export class ImportGraph {
     return `pkg:${pkg}`;
   }
 
-  /** A file's imports, resolved: `{ spec, to, type }`. */
+  /** A file's imports, resolved: `{ spec, to, type, dynamic }`. */
   edges(file) {
     let e = this.#edges.get(file);
     if (!e) {
@@ -123,11 +124,11 @@ export class ImportGraph {
 
   /**
    * Everything reachable from `entries` (included), following runtime imports (and type-only ones
-   * with `types`). `within(file)`: only follow imports out of files it accepts (the rest are
-   * reached, not entered). Returns a map from each file to the file it was first reached from
-   * (entries: null), so a path can be told (`path`).
+   * with `types`; not dynamic ones with `dynamic: false`). `within(file)`: only follow imports out
+   * of files it accepts (the rest are reached, not entered). Returns a map from each file to the
+   * file it was first reached from (entries: null), so a path can be told (`path`).
    */
-  reach(entries, { types = false, within = () => true } = {}) {
+  reach(entries, { types = false, dynamic = true, within = () => true } = {}) {
     const via = new Map();
     const queue = [];
     for (const e of entries) {
@@ -138,8 +139,8 @@ export class ImportGraph {
     while (queue.length) {
       const f = queue.shift();
       if (f.startsWith('pkg:') || !within(f)) continue;
-      for (const { to, type } of this.edges(f)) {
-        if (type && !types) continue;
+      for (const { to, type, dynamic: later } of this.edges(f)) {
+        if ((type && !types) || (later && !dynamic)) continue;
         if (via.has(to)) continue;
         via.set(to, f);
         queue.push(to);

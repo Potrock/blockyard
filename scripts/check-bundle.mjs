@@ -15,11 +15,15 @@
 // The platform's simulation modules the browser uses to predict (movement, guns, throwables,
 // hitscan, abilities, the world query, movers…) are fine: they're reached from the browser's code.
 //
+// It also fails if the output lacks a file the games' server code names by URL (a model, a
+// picture: `import rifle from './rifle.glb?url'`): the server sends players that URL, so the site
+// must have the file (vite.config.ts's `server-assets` emits them).
+//
 //   node scripts/check-bundle.mjs [--report dist/.bundle-report.json] [--root <project>] [--keep]
 //
 // The report is deleted after reading (it isn't part of the site), unless --keep.
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { ImportGraph, projectRoot, role, sourceFiles, under } from './import-graph.mjs';
 
 const args = process.argv.slice(2);
@@ -112,9 +116,30 @@ report_(
   [...shipped.keys()].filter((f) => !under(f, gamesDir) && serverOnly.has(f) && !client.has(f)).map((f) => `${rel(f)}  (${where(f)}): ${graph.path(serverOnly, f)}`),
 );
 
+// Files the production games' server code names by URL: each must be in the output, as the
+// server's build names it (`<name>-<hash><ext>`, in the site's assets).
+const outDir = dirname(reportFile);
+const assetsDir = join(outDir, 'assets');
+const built = existsSync(assetsDir) ? readdirSync(assetsDir) : [];
+const named = new Set();
+for (const f of graph.reach([at('src/games/server.ts')], { dynamic: false, within: (f) => under(f, gamesDir) }).keys()) {
+  for (const { spec, to } of graph.edges(f)) if (/\?url$/.test(spec) && under(to, gamesDir)) named.add(to);
+}
+const escape = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+report_(
+  "Files the games' server code names by URL (the server sends players their URL), missing from the site:",
+  [...named]
+    .filter((f) => {
+      const ext = extname(f);
+      const re = new RegExp(`^${escape(basename(f, ext))}-[\\w-]+${escape(ext)}$`);
+      return !built.some((b) => re.test(b));
+    })
+    .map(rel),
+);
+
 const modules = shipped.size;
 if (problems.length) {
   console.error(`Bundle check failed: the browser's build carries server code.\n\n  ${problems.join('\n\n  ')}\n`);
   process.exit(1);
 }
-console.log(`Bundle OK: ${report.chunks.length} chunks, ${modules} modules of this project, none of them the server's.`);
+console.log(`Bundle OK: ${report.chunks.length} chunks, ${modules} modules of this project, none of them the server's; the ${named.size} files the server names by URL are there.`);
