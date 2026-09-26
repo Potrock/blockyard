@@ -119,9 +119,18 @@ export function briefcase(map = 'jackrabbit', seed = 5) {
   check(swapped, 'the sides swap at the half');
   // Bots win many rounds by clearing the other side before a plant (as the mode allows), so a plant
   // isn't certain in a bot match: plantAndBlow() plants one for sure. The case must see play,
-  // though (carried, dropped, picked up or planted), and a planted one must end cracked or gone off.
+  // though (carried, dropped, picked up or planted), and a round with a plant ends one of three
+  // ways: cracked, gone off, or every defender down (the attackers win then; the case isn't waited on).
   check(planted + dropped + picked >= 1, `the case should see play (planted ${planted}, dropped ${dropped}, picked up ${picked})`);
-  check(planted === 0 || cracked + boomed >= 1, 'a planted case should be cracked or go off');
+  let plantedRound = false;
+  for (const l of lines) {
+    if (l.includes('planted the case')) plantedRound = true;
+    else if (l.includes(' take round ')) {
+      const ends = ['cracked the case', 'the case went off', 'no one left to stop them'];
+      check(!plantedRound || ends.some((e) => l.includes(e)), `a round with a plant ends cracked, gone off or with the defenders down: ${l}`);
+      plantedRound = false;
+    }
+  }
   check(maxDeathsInRound <= 8, `one life a round (${maxDeathsInRound} deaths in a round)`);
 }
 
