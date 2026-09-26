@@ -54,7 +54,8 @@ import { blockIcon } from './ui/icons';
 import { GRAPHICS, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
 import type { BlockRef, GunItem, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
-import type { GameEntry } from './api/client';
+import type { ClientDefinition, ClientGame, GameEntry, Me, Node } from './api/client';
+import { ClientRuntime } from './client/api/client';
 
 type Mode = 'title' | 'playing' | 'paused' | 'picker' | 'console';
 
@@ -111,6 +112,9 @@ export class Runtime {
   /** Every listener this game adds goes when it's aborted (switching games). */
   private life = new AbortController();
   private disposed = false;
+  /** The game's client code (its kits and frame) on this screen. */
+  private client!: ClientRuntime;
+  private clientStarted = false;
   private switching = false;
   /** Set by the app: told of each new runtime (a switch makes one). */
   static onStart: ((rt: Runtime) => void) | null = null;
@@ -230,6 +234,8 @@ export class Runtime {
     private ui: HTMLElement,
     /** The game: its shared definition (what this screen reads of it). */
     private def: SharedDefinition,
+    /** The game's code for this screen (its kits, its own frame). */
+    private clientDef: ClientDefinition,
     private games: GameEntry[],
     private hidden: GameEntry[],
     /** The connection to the game's server, where the game runs. */
@@ -293,16 +299,16 @@ export class Runtime {
     const early = base ? listed.load() : null;
     early?.catch(() => {});
     const link = await SocketLink.connect(address);
-    let def: SharedDefinition;
+    let game: ClientGame;
     try {
       const entry = find(link.welcome.game);
       if (!entry) throw new Error(`The server is running "${link.welcome.game}", which this client doesn't have.`);
-      def = (await (entry === listed && early ? early : entry.load())).shared;
+      game = await (entry === listed && early ? early : entry.load());
     } catch (err) {
       link.close();
       throw err;
     }
-    const rt = new Runtime(canvas, ui, def, games, hidden, link, title, carried);
+    const rt = new Runtime(canvas, ui, game.shared, game.client, games, hidden, link, title, carried);
     await rt.init();
     Runtime.onStart?.(rt);
     return rt;
@@ -581,6 +587,15 @@ export class Runtime {
     this.applySettings(this.settings, false);
     this.resize();
     this.renderer.warmup(this.camera);
+    // The game's code for this screen: its kits and its own frame.
+    this.client = new ClientRuntime(this.def, this.clientDef, {
+      view: { root: this.held.scene as unknown as Node },
+      figures: {},
+      hud: {},
+      item: (id) => this.content.items.get(id),
+      send: (name) => console.warn(`client.send('${name}'): game messages aren't wired yet`),
+    });
+    this.clientStarted = false;
     this.title.progress(0.1, 'Generating terrain…');
     requestAnimationFrame((t) => this.frame(t));
   }
@@ -938,6 +953,7 @@ export class Runtime {
    */
   private shutdown(): Carry {
     this.disposed = true;
+    this.client?.dispose();
     this.life.abort();
     if (document.pointerLockElement) document.exitPointerLock();
     this.link?.close();
@@ -1487,6 +1503,14 @@ export class Runtime {
     for (let i = this.blasts.length - 1; i >= 0; i--) if ((this.blasts[i].age += dt) > 0.3) this.blasts.splice(i, 1);
     this.fx.update(dt);
     this.held.setLight(this.probe);
+    // The game's client code: its kits, then its own frame (where the view model's own update
+    // was; kits take the engine's presentation over, piece by piece).
+    const mine = this.meOf(me, dt);
+    if (!this.clientStarted) {
+      this.clientStarted = true;
+      this.client.setup(mine);
+    }
+    this.client.frame(dt, mine);
     if (this.walker) this.updateHand(dt, me);
     this.drawOwnShots();
     this.gunHud(me);
@@ -1585,6 +1609,34 @@ export class Runtime {
       shells: def.shells ? this.guns.shellsToLoad : 0,
       sight: g.aim.sight,
       action: def.action,
+    };
+  }
+
+  /** The local player for the game's client code (`client.me`): as predicted and shown this frame. */
+  private meOf(me: PlayerFrame, dt: number): Me {
+    void dt;
+    const held = this.guns.state && this.guns.def ? this.gunView(me) : undefined;
+    const stack = me.hotbar?.slots[me.hotbar.selected] ?? null;
+    const heldItem = this.guns.def ? (stack?.item ?? null) : null;
+    return {
+      id: this.playerId,
+      position: { x: me.x, y: me.y, z: me.z },
+      velocity: { x: me.vx, y: me.vy, z: me.vz },
+      look: { yaw: this.view.yaw, pitch: this.view.pitch },
+      onGround: me.onGround,
+      flying: me.flying,
+      crouching: me.sneaking,
+      sprinting: me.sprinting,
+      sliding: me.sliding,
+      dead: me.dead,
+      inVehicle: !!me.vehicle,
+      health: me.health,
+      maxHealth: me.maxHealth,
+      bob: { phase: me.bob * Math.PI * 0.9, amount: this.settings.viewBobbing && me.onGround && !me.flying ? Math.min(1, Math.hypot(me.vx, me.vz) / 4.3) : 0 },
+      thirdPerson: this.view.thirdPerson,
+      hand: { item: stack?.item ?? null, count: stack?.count ?? 0, strength: this.itemMode ? me.hand.strength : 1, drawing: me.hand.drawing, charge: me.hand.charge },
+      held: held && heldItem ? { item: heldItem, def: this.content.items.get(heldItem), state: { ...held } } : null,
+      abilities: {},
     };
   }
 

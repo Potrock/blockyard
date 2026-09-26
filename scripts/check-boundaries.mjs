@@ -8,7 +8,8 @@
 // - `shared.ts`: '@platform', '@platform/art' and its folder's files, but never (however
 //   indirectly) its server or client code, '@platform/client' or '@platform/kits'. The server and
 //   every screen run it.
-// - Client code: '@platform', '@platform/art', '@platform/client' and its folder's files, but
+// - Client code: '@platform', '@platform/art', '@platform/client' (and its '/kits' and '/math')
+//   and its folder's files, but
 //   never (however indirectly) its server code or '@platform/kits' (server kits).
 // - `server.ts`: '@platform', '@platform/art', '@platform/kits' and its folder's files, but
 //   never (however indirectly) its client code or '@platform/client'.
@@ -18,6 +19,8 @@
 //
 // The indirect rules follow imports within the game's folder, types included.
 //
+// Client kits (src/platform/client-kits/) may import only '@platform', '@platform/art',
+// '@platform/client' and '@platform/client/math', and files in their own folder: a game can copy one.
 // Kits and the art toolkit (src/platform/kits/, src/platform/art/) may import only '@platform'
 // (and '@platform/art') and files inside their own folder: they get no access a game doesn't
 // have, so any kit could be copied into a game unchanged.
@@ -58,13 +61,14 @@ function check(folder, allowed, what, { relative: own = () => true } = {}) {
 // ---------------------------------------------------------------------------------------------
 
 const PUBLIC = ['@platform', '@platform/art'];
-const ALLOWED = { meta: ['@platform'], shared: PUBLIC, client: [...PUBLIC, '@platform/client'], server: [...PUBLIC, '@platform/kits'] };
+const CLIENT = ['@platform/client', '@platform/client/kits', '@platform/client/math'];
+const ALLOWED = { meta: ['@platform'], shared: PUBLIC, client: [...PUBLIC, ...CLIENT], server: [...PUBLIC, '@platform/kits'] };
 const NAMES = { meta: 'its meta', shared: 'its shared code', client: 'its client code', server: 'its server code' };
 /** What each part must never reach, however indirectly: other parts, and packages. */
 const NEVER = {
-  shared: { roles: ['server', 'client'], packages: ['@platform/client', '@platform/kits'] },
+  shared: { roles: ['server', 'client'], packages: [...CLIENT, '@platform/kits'] },
   client: { roles: ['server'], packages: ['@platform/kits'] },
-  server: { roles: ['client'], packages: ['@platform/client'] },
+  server: { roles: ['client'], packages: CLIENT },
 };
 
 const games = at('src/games');
@@ -91,6 +95,7 @@ for (const name of readdirSync(games)) {
 }
 
 check(at('src/platform/kits'), () => ['@platform', '@platform/art'], () => 'a kit');
+check(at('src/platform/client-kits'), () => ['@platform', '@platform/art', '@platform/client', '@platform/client/math'], () => 'a client kit');
 check(at('src/platform/art'), () => ['@platform'], () => 'the art toolkit');
 
 // ---------------------------------------------------------------------------------------------
@@ -124,7 +129,7 @@ never('the browser (src/main.ts)', ['src/main.ts'], (f) => {
 never('the server (src/serve.ts)', ['src/serve.ts', 'src/server.ts', ...sourceFiles(at('src/platform/host')).map(rel)], (f) => {
   if (f === at('src/main.ts') || f === at('src/games/browser.ts') || f === at('src/platform/runtime.ts')) return "the browser's code";
   if (under(f, at('src/platform/client')) || under(f, at('src/platform/render'))) return "the browser's code";
-  if (f === at('src/platform/api/client.ts')) return "'@platform/client'";
+  if (f === at('src/platform/api/client.ts') || under(f, at('src/platform/api/client')) || under(f, at('src/platform/client-kits'))) return "'@platform/client'";
   if (clientParts.has(f)) return "a game's client code";
   return null;
 });

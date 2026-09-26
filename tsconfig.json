@@ -33,6 +33,12 @@
       "@platform/client": [
         "./src/platform/api/client.ts"
       ],
+      "@platform/client/kits": [
+        "./src/platform/client-kits/index.ts"
+      ],
+      "@platform/client/math": [
+        "./src/platform/api/client/math.ts"
+      ],
       "@engine/*": [
         "./engine/pkg/*"
       ]

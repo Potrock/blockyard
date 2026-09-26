@@ -9,17 +9,12 @@
  * ```
  */
 import type { GameMeta, SharedDefinition } from './types';
+import type { ClientDefinition, ClientGame } from './client/core';
 
-/** What a game does on each player's screen, beyond its shared definition. */
-// (Filled in as the client API grows: the first-person layer, figures, local state, messages.)
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface ClientDefinition {}
-
-/** A game as a player's screen runs it: its shared definition and its client code. */
-export interface ClientGame {
-  readonly shared: SharedDefinition;
-  readonly client: ClientDefinition;
-}
+export type { Node, ClientKit, ClientDefinition, ClientGame, Client, Me, MeHeld, ClientEvent } from './client/core';
+export type { ViewLayer } from './client/view';
+export type { ClientFigures } from './client/figures';
+export type { ClientHud } from './client/hud';
 
 /** The game on each player's screen (`client.ts`). */
 export function defineClient(shared: SharedDefinition, client: ClientDefinition = {}): ClientGame {
