@@ -1032,9 +1032,11 @@ export class ViewModel implements ViewModelApi {
       m.visible = false;
     }
     this.arm.visible = !!this.skin;
+    // The flash is depth tested: what's nearer the eye than the muzzle (the support hand, the gun
+    // itself, seen end-on as it points in at the crosshair) stays in front of it.
     this.flash = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ map: flashTexture(), color: new THREE.Color(7, 5, 2.4), blending: THREE.AdditiveBlending, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ map: flashTexture(), color: new THREE.Color(7, 5, 2.4), blending: THREE.AdditiveBlending, transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide }),
     );
     this.flash.visible = false;
     this.flash.frustumCulled = false;
@@ -1475,7 +1477,8 @@ export class ViewModel implements ViewModelApi {
     if (this.styleName === 'gun' && h.kind === 'sprite') {
       const box = new THREE.Box3().setFromBufferAttribute(h.geometry.getAttribute('position') as THREE.BufferAttribute);
       this.gunPts = gunPoints(h.hold.model, h.points, box);
-      this.flash.position.copy(this.gunPts.muzzle);
+      // Just past the muzzle, clear of the barrel's tip.
+      this.flash.position.copy(this.gunPts.muzzle).z += FLASH_AHEAD;
       this.gunPose = gunPose(h.hold.gun, isCompact(this.gunPts));
     }
     this.refit();
@@ -1790,6 +1793,9 @@ export class ViewModel implements ViewModelApi {
     pyr(this.sway.y + this.dip * 0.2 + this.kickA * 0.15, this.sway.x, this.sway.x * 0.5 + Math.sin(input.bobPhase) * 0.02 * bob, this.root.quaternion);
   }
 }
+
+/** How far past the muzzle the flash sits, in the model's blocks (a pixel). */
+const FLASH_AHEAD = 1 / 16;
 
 let flashTex: THREE.Texture | null = null;
 
