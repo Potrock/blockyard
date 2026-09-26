@@ -1,6 +1,5 @@
-import { defineServer, HeldModels, HumanoidJoints, math, Models, type Entity } from '@platform';
+import { defineServer, HumanoidJoints, math, Models, type Entity } from '@platform';
 import auctioneer from './models/auctioneer_npc.gltf?url';
-import blockySword from './models/blocky_sword.gltf?url';
 import barrier from './models/barrier.gltf?url';
 import cards from './models/card_and_token.gltf?url';
 import monitor from './models/casino_monitor.gltf?url';
@@ -65,8 +64,9 @@ const MANNEQUINS: { id: string; label: string; model: ReturnType<typeof Models.g
  */
 export default defineServer(shared, {
   setup(game) {
-    game.items.define('blocky_sword', { kind: 'melee', name: 'Blocky Sword', icon: { gltf: blockySword }, damage: 6, cooldown: 0.45, reach: 3.5, hold: { model: HeldModels.gltf(blockySword, { grip: [0, 0, 2] }) } });
-    game.items.define('cards', { kind: 'misc', name: 'Cards and Tokens', icon: { gltf: cards }, hold: { model: HeldModels.gltf(cards, { scale: 0.3, grip: [0, -1, 0] }) } });
+    // (How they look and are held is each screen's: `client/looks.ts`.)
+    game.items.define('blocky_sword', { kind: 'melee', name: 'Blocky Sword', damage: 6, cooldown: 0.45, reach: 3.5 });
+    game.items.define('cards', { kind: 'misc', name: 'Cards and Tokens' });
     game.entities.define('runner', {
       name: 'Runner',
       model: BLOCKY,

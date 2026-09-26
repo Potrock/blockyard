@@ -1,8 +1,12 @@
-import type { GameContext } from '@platform';
+import type { Client } from '@platform/client';
 
-/** Sky Obby's own sounds, synthesised on each play. */
-export function defineSounds(game: GameContext) {
-  const a = game.audio;
+/**
+ * Sky Obby's own sounds, synthesised on each screen (`client.audio.define`): the checkpoint
+ * chime, the launch pad's boing, sand crumbling, the respawn, the cannons, the blinking
+ * platforms. The server plays them by name (`audio.play('boing')`).
+ */
+export function defineSounds(client: Client) {
+  const a = client.audio;
   // A checkpoint: a quick rising triad.
   a.define('checkpoint', (s) => {
     [523, 659, 784].forEach((f, i) => s.tone({ wave: 'triangle', from: f * s.pitch, duration: 0.22, delay: i * 0.07, volume: 0.3 }));

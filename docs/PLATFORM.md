@@ -33,13 +33,14 @@ src/games/
   skyship/              an airship crewed together: a solid prop the players walk on as it sails
     server.ts           the helm, sailing, beacons, overboard, the HUD
     ship.ts world.ts    the airship and the sky islands, as Blueprints
+    client/sounds.ts    the beacon's bell, the hull's thud (client.audio.define)
   starfighter/          a Star Fox-style dogfighter: no walking, the game flies the camera
     server.ts           waves, HUD, win/lose
     shared.ts flight.ts the X-wing as a vehicle (its step runs on the pilot's screen too)
     ships.ts            the fighters, as Blueprints (meshed into movable props)
     destroyer.ts        the capital ship, as a world structure
     craft.ts pilot.ts enemies.ts weapons.ts capital.ts   collisions, AI, lasers, the boss
-    sounds.ts           lasers, torpedoes, the TIE howl (audio.define)
+    client/sounds.ts    lasers, torpedoes, the capital ship's horn, the TIE howl (client.audio.define)
     layout.ts           where the battle is
     previews/           dev-only previews of the ships and the capital ship
   bedwars/              Bed Wars against three bots: sky islands, mining, building, a shop
@@ -65,7 +66,7 @@ src/games/
   obby/                 Sky Obby: a parkour course in the void, each player on their own clock
     server.ts           rules: checkpoints, falls, pads, blinking and crumbling blocks, cannons, times
     course.ts           the ten stages, laid out as Blueprints with every jump checked against the physics
-    sounds.ts           checkpoint chime, pad boing, crumbling sand, cannons
+    client/sounds.ts    checkpoint chime, pad boing, crumbling sand, cannons (client.audio.define)
   moves/                dev-only movement lab (`?game=moves`): a course for three movement abilities
     abilities.ts        a dash, a double jump, a wall-run with wall-jumps: pure steps to copy
 ```
@@ -111,8 +112,9 @@ let found = 0;
 
 export default defineServer(shared, {
   setup(game) {
+    // What a heart does; how it looks is each screen's (client.ts).
     game.items.define('heart', {
-      kind: 'misc', name: 'Heart', icon: 'heart',
+      kind: 'misc', name: 'Heart',
       onPickup: (g) => (found++, g.audio.play('pickup'), true), // consume on touch
     });
   },
@@ -133,13 +135,19 @@ export default defineServer(shared, {
 });
 ```
 
-And each player's screen (`client.ts`), which for now only names the shared definition:
+And each player's screen (`client.ts`): the platform's kits it uses (the standard voices, the first-person view, other players' figures; see "Client code") and how its item looks there:
 
 ```ts
 import { defineClient } from '@platform/client';
+import { figures, firstPerson, sounds } from '@platform/client/kits';
 import { shared } from './shared';
 
-export default defineClient(shared);
+export default defineClient(shared, {
+  kits: [...sounds.standard(), ...firstPerson.standard(), figures.humanoid()],
+  setup(client) {
+    client.items.look('heart', { icon: 'heart' }); // the built-in heart sprite
+  },
+});
 ```
 
 Register it in both registries: `src/games/browser.ts` (its meta, and `() => import('./heart-hunt/client')`) and `src/games/server.ts` (its `server.ts`). Then `npm run dev` and open `http://localhost:5173/?game=heart-hunt`. The launcher lists every game in `browser.ts`.

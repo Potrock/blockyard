@@ -1,8 +1,12 @@
-import type { GameContext } from '@platform';
+import type { Client } from '@platform/client';
 
-/** Starfighter's weapons and engines, synthesised on each play. */
-export function defineSounds(game: GameContext) {
-  const a = game.audio;
+/**
+ * Starfighter's own sounds, synthesised on each screen (`client.audio.define`): the lasers (ours
+ * and the Empire's), the proton torpedo, the capital ship's horn, the TIE howl. The server plays
+ * them by name (`audio.play('laser')`).
+ */
+export function defineSounds(client: Client) {
+  const a = client.audio;
   // Blaster "pew": a fast falling zap with a bright click.
   a.define('laser', (s) => {
     s.tone({ wave: 'square', from: 2400 * s.pitch, to: 260 * s.pitch, duration: 0.17, volume: 0.22, lowpass: 3800 });

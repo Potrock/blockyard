@@ -1,5 +1,6 @@
 import { defineClient } from '@platform/client';
-import { standardKits } from '@platform/client/kits';
+import { figures, firstPerson, sounds } from '@platform/client/kits';
 import { shared } from './map.shared';
 
-export default defineClient(shared, { kits: standardKits() });
+/** Jackrabbit Lane to fly round: an empty hand, and its swing. */
+export default defineClient(shared, { kits: [...sounds.standard(), ...firstPerson.standard(), figures.humanoid()] });

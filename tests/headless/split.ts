@@ -17,9 +17,8 @@ const SERVER_ONLY: Record<string, string[]> = {
   bedwars: ['bots.ts', 'fireballs.ts', 'items.ts', 'nav.ts', 'shop.ts', 'state.ts'],
   callofblocky: ['bots.ts', 'hud.ts', 'weapons.ts'],
   highnoon: ['bots.ts', 'hud.ts', 'sounds.ts', 'weapons.ts'],
-  obby: ['sounds.ts'],
   skyship: ['ship.ts'],
-  starfighter: ['capital.ts', 'enemies.ts', 'pilot.ts', 'sounds.ts', 'weapons.ts'],
+  starfighter: ['capital.ts', 'enemies.ts', 'pilot.ts', 'weapons.ts'],
 };
 
 /**
@@ -31,6 +30,10 @@ const CLIENT_ONLY: Record<string, string[]> = {
   arena: ['client/looks.ts', 'client/sounds.ts'],
   bedwars: ['client/looks.ts', 'client/sounds.ts'],
   callofblocky: ['models/index.ts', 'client/looks.ts', 'client/sounds.ts'],
+  gallery: ['client/looks.ts', 'models/blocky_sword.gltf'],
+  obby: ['client/sounds.ts'],
+  skyship: ['client/sounds.ts'],
+  starfighter: ['client/sounds.ts'],
 };
 
 /** What a file imports (static, dynamic, re-exports and type-only alike), comments aside. */
