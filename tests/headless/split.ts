@@ -86,6 +86,9 @@ function parts() {
  * (server files, bots, match state, `@platform/kits`); the server never reaches client code. And
  * both registries list the same games, in the same order, with the same shared definitions.
  */
+/** The client API's packages: client code imports them; server and shared code never do. */
+const CLIENT_PKGS = ['@platform/client', '@platform/client/kits', '@platform/client/math'];
+
 export default async function split() {
   const all = parts();
   const walked = new Set<string>();
@@ -93,21 +96,23 @@ export default async function split() {
     const meta = imports(g.meta);
     check(meta.every((s) => s === '@platform'), `${name(g.meta)} may import only '@platform', not ${meta.filter((s) => s !== '@platform').join(', ')}`);
 
+    // The client API (and its kits and math), the public API, its shared code and its own client files.
+    const clientOk = (m: string) => CLIENT_PKGS.includes(m) || m === '@platform' || m === '@platform/art' || m === g.shared || isClient(m);
     const client = imports(g.client).map((s) => resolveSpec(g.client, s));
-    check(client.every((m) => m === '@platform/client' || m === g.shared), `${name(g.client)} may import only '@platform/client' and its shared code, not ${client.filter((m) => m !== '@platform/client' && m !== g.shared).map(name).join(', ')}`);
+    check(client.every(clientOk), `${name(g.client)} may import only the client API, the public API, its shared code and its client files, not ${client.filter((m) => !clientOk(m)).map(name).join(', ')}`);
 
     const shared = graph(g.shared);
     const serverOnly = (SERVER_ONLY[g.folder] ?? []).map((f) => join(GAMES, g.folder, f));
     for (const m of shared) {
       check(!isServer(m) && !isClient(m), `${name(g.shared)} reaches ${name(m)}`);
-      check(m !== '@platform/kits' && m !== '@platform/client', `${name(g.shared)} reaches '${m}' (shared code imports neither side)`);
+      check(m !== '@platform/kits' && !CLIENT_PKGS.includes(m), `${name(g.shared)} reaches '${m}' (shared code imports neither side)`);
       check(!serverOnly.includes(m), `${name(g.shared)} reaches ${name(m)}, which only the server may`);
     }
     for (const m of graph(g.client)) check(!isServer(m) && !serverOnly.includes(m) && m !== '@platform/kits', `${name(g.client)} reaches ${name(m)}`);
     for (const m of graph(g.meta)) check(m === g.meta || m === '@platform', `${name(g.meta)} reaches ${name(m)}`);
 
     const rules = graph(g.server);
-    for (const m of rules) check(!isClient(m) && m !== '@platform/client', `${name(g.server)} reaches ${name(m)}`);
+    for (const m of rules) check(!isClient(m) && !CLIENT_PKGS.includes(m), `${name(g.server)} reaches ${name(m)}`);
     for (const m of [...shared, ...rules]) walked.add(m);
   }
   for (const [folder, list] of Object.entries(SERVER_ONLY)) {
