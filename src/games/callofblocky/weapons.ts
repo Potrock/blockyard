@@ -157,7 +157,7 @@ export const LETHALS: Record<string, ThrowableItem> = {
     kind: 'throwable',
     name: 'The Pineapple',
     icon: { gltf: url('frag') },
-    hold: held('frag', [0, 0, 0]),
+    hold: held('frag', [0, 0, -2]),
     key: 'KeyG',
     fuse: 3.2,
     speed: 21,
