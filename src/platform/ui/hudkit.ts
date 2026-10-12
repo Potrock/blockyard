@@ -96,6 +96,11 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
   private earned = new Set<string>();
   /** They changed (the pause menu lists them). */
   onAchievements: ((earned: ReadonlySet<string>, kept: boolean) => void) | null = null;
+  /**
+   * Whether the platform's pause menu is up (over a screen of the game's, at its asking): the game's
+   * menus and modal widgets leave Escape to it then (it resumes), rather than closing under it.
+   */
+  paused: () => boolean = () => false;
   private achievementTimer = 0;
   private flashEl: HTMLElement;
   private hitEl: HTMLElement;
@@ -786,6 +791,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
       );
     };
     const onKey = (ev: KeyboardEvent) => {
+      if (this.paused()) return;
       if (ev.key === 'Escape' || ev.code === 'KeyE') {
         ev.stopPropagation();
         close();
@@ -1039,7 +1045,7 @@ export class GameHud implements Omit<HudApi, 'marker' | 'radar' | 'scoreboard' |
       this.onWidgetClosed?.(name);
     };
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== 'Escape') return;
+      if (ev.key !== 'Escape' || this.paused()) return;
       ev.stopPropagation();
       close();
     };
