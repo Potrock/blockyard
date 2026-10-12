@@ -740,7 +740,7 @@ export class Runtime {
       keys: { bound: this.settings.keys, game: this.input.keysFor },
       achievements: def.achievements,
     };
-    this.pause = new PauseMenu(this.ui, this.settings, pauseGame, this.input.keysFor, (s) => this.applySettings(s), () => this.input.lock());
+    this.pause = new PauseMenu(this.ui, this.settings, pauseGame, this.input.keysFor, (s) => this.applySettings(s), () => this.resume());
     this.pause.onTime = (t) => this.link.send({ t: 'env', time: t });
     this.gameHud.onAchievements = (earned, kept) => this.pause.setAchieved(earned, kept);
     this.pause.onRestart = () => {
@@ -813,7 +813,7 @@ export class Runtime {
     const taken = this.taken;
     const settings = () => this.settings;
     const walker = this.walker;
-    this.clientHud = new ClientHudService(this.hud, this.gameHud, def.hud?.theme);
+    this.clientHud = new ClientHudService(this.hud, this.gameHud, def.hud?.theme, { open: (pane) => this.openPause(pane), isOpen: () => this.mode === 'paused' });
     this.client = new ClientRuntime(this.def, this.clientDef, {
       services: {
         // First person.
@@ -1234,18 +1234,42 @@ export class Runtime {
       this.pause.hide();
       this.picker?.hide();
       this.mode = 'playing';
-    } else if (this.mode === 'playing' && !this.gameHud.screenOpen) {
-      this.mode = 'paused';
-      this.pause.setPlayers((this.frameData?.players ?? []).map((p) => ({ name: p.name, bot: p.bot, me: p.id === this.playerId })));
-      this.pause.show(this.frameData?.time ?? 0);
-    }
+    } else if (this.mode === 'playing' && !this.gameHud.screenOpen) this.showPause('help');
+  }
+
+  /** The pause menu up, at how to play or the settings. */
+  private showPause(pane: 'help' | 'settings') {
+    this.mode = 'paused';
+    this.pause.setPlayers((this.frameData?.players ?? []).map((p) => ({ name: p.name, bot: p.bot, me: p.id === this.playerId })));
+    this.pause.show(this.frameData?.time ?? 0, pane);
+  }
+
+  /**
+   * The pause menu at the game's asking (`client.hud.pause`): for a game that keeps the mouse free (a
+   * screen of its own up throughout, a board game), which never loses the pointer lock that opens it.
+   */
+  private openPause(pane: 'help' | 'settings') {
+    if (this.mode !== 'playing') return;
+    if (this.input.pointerLocked) this.input.unlock();
+    this.showPause(pane);
+  }
+
+  /**
+   * Back to the game from the pause menu: the pointer locked again for a game that holds it; for one
+   * with a screen of its own up (the mouse free), straight back to that screen.
+   */
+  private resume() {
+    if (!this.gameHud.screenOpen) return this.input.lock();
+    this.pause.hide();
+    this.mode = 'playing';
   }
 
   private onKey(code: string, e?: KeyboardEvent) {
     if (this.mode === 'console') return;
-    // Paused, Escape steps back out of the settings (the browser keeps it from resuming: a click does).
+    // Paused, Escape steps back out of the settings (the browser keeps it from resuming a game that
+    // holds the pointer: a click does). Over a screen of the game's own, it resumes.
     if (code === 'Escape' && this.mode === 'paused') {
-      this.pause.back();
+      if (!this.pause.back() && this.gameHud.screenOpen) this.resume();
       return;
     }
     // Playing with a controller there's no pointer lock for Esc to leave: it pauses here.
@@ -1293,15 +1317,18 @@ export class Runtime {
   private onPadButton(b: PadButton, a: PadAction) {
     if (this.mode === 'console') return;
     const back = () => {
+      if (this.mode === 'paused') {
+        if (!this.pause.back()) this.resume();
+        return;
+      }
       if (this.gameHud.back()) return;
-      if (this.mode === 'paused' && !this.pause.back()) this.input.lock();
-      else if (this.mode === 'picker') this.closePicker();
+      if (this.mode === 'picker') this.closePicker();
     };
     if (a === 'pause') {
       if (this.mode === 'playing' && this.input.locked && !this.gameHud.screenOpen) this.input.unlock();
       else if (this.mode === 'title') this.play();
       else if (this.mode === 'playing' && !this.gameHud.screenOpen) this.input.lock();
-      else if (this.mode === 'paused') this.input.lock();
+      else if (this.mode === 'paused') this.resume();
       else back();
       return;
     }

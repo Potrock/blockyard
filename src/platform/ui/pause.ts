@@ -43,6 +43,7 @@ export class PauseMenu {
   readonly root: HTMLElement;
   private settings: Settings;
   private timeSlider!: HTMLInputElement;
+  private title!: HTMLElement;
   private padKeys = h('div.pad-only');
   private touchKeys = h('div.touch-only');
   private roomLine = h('div.pause-room');
@@ -285,7 +286,7 @@ export class PauseMenu {
       invite.title = text;
       window.setTimeout(() => (invite.textContent = 'Invite friends'), 2000);
     });
-    const title = h('h2.pause-title', {}, game.title);
+    const title = (this.title = h('h2.pause-title', {}, game.title));
     this.root = h(
       'div.screen.pause-screen.hidden',
       { style: `--game: ${game.accent ?? '#7fd46b'}` },
@@ -391,12 +392,25 @@ export class PauseMenu {
     return true;
   }
 
-  show(time: number) {
+  /** Up, at how to play (or the settings: `pane`), with the world's clock at `time`. */
+  show(time: number, pane: Pane = 'help') {
     this.timeSlider.value = String(time);
     const clock = this.timeSlider.parentElement?.querySelector('.value');
     if (clock) clock.textContent = clockText(time);
-    this.showPane('help');
+    this.showPane(pane);
     this.root.classList.remove('hidden');
+    this.fitTitle();
+  }
+
+  /** A long name in a big face (one word can't wrap) shrinks until it fits the rail, rather than being cut off. */
+  private fitTitle() {
+    const t = this.title;
+    t.style.fontSize = '';
+    let size = parseFloat(getComputedStyle(t).fontSize);
+    while (t.scrollWidth > t.clientWidth + 1 && size > 16) {
+      size -= 2;
+      t.style.fontSize = `${size}px`;
+    }
   }
 
   hide() {
