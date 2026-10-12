@@ -15,6 +15,8 @@ export class ClientHudService implements ClientHud {
     private base: Hud,
     private game: GameHud,
     readonly theme: HudTheme | undefined,
+    /** The platform's pause menu: open it, and whether it's up. */
+    private menu: { open: (pane: 'help' | 'settings') => void; isOpen: () => boolean },
   ) {
     this.crosshair = {
       get wanted() {
@@ -61,6 +63,14 @@ export class ClientHudService implements ClientHud {
 
   toast(text: string) {
     this.game.toast(text);
+  }
+
+  pause(pane: 'help' | 'settings' = 'help') {
+    this.menu.open(pane);
+  }
+
+  get paused(): boolean {
+    return this.menu.isOpen();
   }
 
   pop(text: string, opts?: { color?: string; big?: boolean; sub?: string }) {

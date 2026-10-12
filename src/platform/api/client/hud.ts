@@ -53,6 +53,16 @@ export interface ClientHud {
   pop(text: string, opts?: { color?: string; big?: boolean; sub?: string }): void;
   feed(text: string | FeedPart[], opts?: { color?: string }): void;
   /**
+   * Open the platform's pause menu (how to play, settings, invite friends, leave) over the game, at
+   * how to play or the settings (`pane`). A game that holds the mouse gets it from Escape anyway;
+   * this is for one that keeps the mouse free (a board game, a menu always up), which never loses
+   * the pointer lock that opens it: a button of its own, or Escape with nothing of its own open.
+   * Resume, or Escape, goes back to the game as it was.
+   */
+  pause(pane?: 'help' | 'settings'): void;
+  /** The pause menu is up: the game's own keys and clicks should leave it be until it's gone. */
+  readonly paused: boolean;
+  /**
    * A value of this screen's that the game's widgets bind as `$name` (`{{$gun.mag}}`,
    * `data-if="$gun.reloading"`): the local player's own, as a kit has it this frame (null: none).
    */
