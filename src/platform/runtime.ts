@@ -743,6 +743,7 @@ export class Runtime {
     this.pause = new PauseMenu(this.ui, this.settings, pauseGame, this.input.keysFor, (s) => this.applySettings(s), () => this.resume());
     this.pause.onTime = (t) => this.link.send({ t: 'env', time: t });
     this.gameHud.onAchievements = (earned, kept) => this.pause.setAchieved(earned, kept);
+    this.gameHud.paused = () => this.mode === 'paused';
     this.pause.onRestart = () => {
       this.pause.hide();
       this.restart();
