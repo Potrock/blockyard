@@ -889,6 +889,10 @@ export class Runtime {
           trace: (from, dir, range, opts = {}) => this.trace(from, dir, range, opts.penetration ?? null),
           blockColor: (id) => this.debris.blockColor(id),
           carvable: (block, at, normal) => this.carvable(block, at, normal),
+          wrap: (w) => {
+            if (w && !(w.x % 16 === 0 && w.period % 16 === 0 && w.period > 0)) throw new Error(`world.wrap: x and period must be whole chunks (multiples of 16), the period above 0 (got ${w.x}, ${w.period})`);
+            this.chunks.setWrap(w && { cx0: w.x / 16, n: w.period / 16 });
+          },
         },
       },
       item: (id) => this.content.items.get(id),
@@ -1754,6 +1758,8 @@ export class Runtime {
     this.client.frame(dt, mine);
     // The camera as the client code has taken it (or easing back to ours), over the one placed above.
     this.taken.apply(this.camera, dt);
+    // (A wrapped world's copies round it now, where the world loads round the camera.)
+    if (!(this.walker && !ride && !rp && !this.taken.active)) this.chunks.follow(this.camera.position.x, this.camera.position.z);
     // The figures as client code posed them (the figures kit), animated.
     this.entityView.finish();
     // The world's effects move on by the frame's time (what the client code made just now, too).

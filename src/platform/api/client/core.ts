@@ -376,6 +376,17 @@ export interface ClientWorld {
   blockColor(block: number): [number, number, number];
   /** A hit at `at` on `block` (its face `normal`) would carve it (a world whose blocks carve, `world.destructible`). */
   carvable(block: number, at: PlainVec3, normal: PlainVec3 | null): boolean;
+  /**
+   * Draw the world repeated along x: from now on, the block column at any x shows the column at
+   * x0 + mod(x - x0, period) — the world's columns in [x0, x0 + period) again every `period` blocks,
+   * both ways, as far as the screen sees. `x0` and `period` are multiples of 16 (whole chunks).
+   * Only what's drawn: the server, collisions, raycasts and the game's own models are as they were
+   * (the game places its own things at the copy it wants). Null: drawn as it is again.
+   *
+   * The copies are drawn round the camera, wherever it goes, from one mesh of each column: a camera
+   * moved by a whole period sees the same picture at once, with nothing to load or mesh.
+   */
+  wrap?(wrap: { x: number; period: number } | null): void;
 }
 
 /** Where a traced bullet ended on this screen (`ClientWorld.trace`). */
