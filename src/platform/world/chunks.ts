@@ -28,6 +28,25 @@ interface Column {
   slot: number;
   dist2: number;
   failures: number;
+  /** Its mesh's layout (the mesher's header), kept for the culler: for showing it again, or its copies. */
+  header: Uint32Array | null;
+  /** Its grass tint (16x16 sRGB), kept for the places it's shown. */
+  tint: Uint8Array | null;
+  /** While the world is wrapped (`setWrap`), the places a base column is drawn. */
+  copies: Copy[];
+}
+
+/**
+ * A place a base column is drawn while the world is wrapped (`ChunkManager.setWrap`): meshes of
+ * its own holding the column's geometry (the same buffers on the GPU), culled as a column there.
+ */
+interface Copy {
+  cx: number;
+  cz: number;
+  key: number;
+  col: Column;
+  meshes: (THREE.Mesh | null)[];
+  slot: number;
 }
 
 interface Batch {
@@ -43,6 +62,22 @@ interface PendingMesh {
 }
 
 const keyOf = (cx: number, cz: number) => (cx + 32768) * 65536 + (cz + 32768);
+
+/** A world drawn repeated along x (`ChunkManager.setWrap`), in chunks: the `n` columns from `cx0`, again every `n`. */
+export interface ChunkWrap {
+  cx0: number;
+  n: number;
+}
+
+/** The column drawn at chunk x `cx` of a wrapped world: the base column it repeats, in [cx0, cx0 + n). */
+export function wrapColumn(cx: number, w: ChunkWrap): number {
+  return w.cx0 + ((((cx - w.cx0) % w.n) + w.n) % w.n);
+}
+
+/** The copy of base column `cx` nearest chunk x `near`: `cx` again a whole number of periods away. */
+export function nearestCopy(cx: number, near: number, w: ChunkWrap): number {
+  return cx + w.n * Math.round((near - cx) / w.n);
+}
 
 export interface ChunkStats {
   loaded: number;
@@ -75,6 +110,16 @@ export class ChunkManager {
   private viewZ = -1;
   /** Columns blocks were shot into since the last remesh (see `applyDamage`): whether light changed too. */
   private damaged = new Map<number, [number, number, boolean]>();
+  /** The world drawn repeated along x (`setWrap`), or null: drawn as it is. */
+  private wrap: ChunkWrap | null = null;
+  /** While wrapped, the places base columns are drawn (their own too), by place; those with a culler slot; by slot. */
+  private copies = new Map<number, Copy>();
+  private copiesShown: Copy[] = [];
+  private copyBySlot: (Copy | null)[] = [];
+  /** Where the screen last drew from, while wrapped (`follow`), for the next `update`. */
+  private followed = false;
+  private followX = 0;
+  private followZ = 0;
 
   constructor(
     private pool: WorkerPool,
@@ -119,6 +164,12 @@ export class ChunkManager {
 
   /** Per-frame: stream columns around the player, dispatch jobs, apply finished meshes. */
   update(px: number, pz: number, viewX: number, viewZ: number) {
+    // (Wrapped, round where the screen last drew from instead, if it said: `follow`.)
+    if (this.wrap && this.followed) {
+      px = this.followX;
+      pz = this.followZ;
+      this.followed = false;
+    }
     const ccx = Math.floor(px / 16);
     const ccz = Math.floor(pz / 16);
     const vl = Math.hypot(viewX, viewZ) || 1;
@@ -135,43 +186,81 @@ export class ChunkManager {
     this.applyPending();
   }
 
+  /**
+   * Wrapped: where the screen draws from this frame, once the camera's placed (by client code,
+   * after `update`). The copies round it are there at once, if it's moved to another chunk (a
+   * whole period, say), and the next `update` streams round it too: the world loads where it's
+   * seen, not where the camera was before client code moved it.
+   */
+  follow(px: number, pz: number) {
+    if (!this.wrap) return;
+    this.followed = true;
+    this.followX = px;
+    this.followZ = pz;
+    const ccx = Math.floor(px / 16);
+    const ccz = Math.floor(pz / 16);
+    if (ccx === this.centerX && ccz === this.centerZ) return;
+    this.centerX = ccx;
+    this.centerZ = ccz;
+    this.refreshWanted();
+  }
+
   private refreshWanted() {
     const R = this.renderDistance + 1;
     const r2 = (R + 0.5) * (R + 0.5);
+    // (Wrapped, a copy wherever a column would be meshed.)
+    const shown = (this.renderDistance + 0.5) * (this.renderDistance + 0.5);
     for (let dz = -R; dz <= R; dz++) {
       for (let dx = -R; dx <= R; dx++) {
         if (dx * dx + dz * dz > r2) continue;
-        const cx = this.centerX + dx;
-        const cz = this.centerZ + dz;
-        const k = keyOf(cx, cz);
-        if (!this.cols.has(k)) {
-          this.cols.set(k, {
-            cx,
-            cz,
-            key: k,
-            state: STATE_QUEUED,
-            version: 0,
-            shownVersion: -1,
-            requestedVersion: -1,
-            inflight: 0,
-            meshes: [null, null, null],
-            slot: -1,
-            dist2: 0,
-            failures: 0,
-          });
-        }
+        this.want(this.centerX + dx, this.centerZ + dz);
+        if (this.wrap && dx * dx + dz * dz <= shown) this.wantCopy(this.centerX + dx, this.centerZ + dz);
       }
     }
     const drop = (R + 2.5) * (R + 2.5);
     for (const col of this.cols.values()) {
-      const dx = col.cx - this.centerX;
+      // (A base column of a wrapped world is as far as its nearest copy.)
+      const dx = (this.wrap && this.isBase(col.cx) ? nearestCopy(col.cx, this.centerX, this.wrap) : col.cx) - this.centerX;
       const dz = col.cz - this.centerZ;
       col.dist2 = dx * dx + dz * dz;
       if (col.dist2 > drop) this.unload(col);
     }
+    for (const c of this.copies.values()) {
+      const dx = c.cx - this.centerX;
+      const dz = c.cz - this.centerZ;
+      if (dx * dx + dz * dz > drop) this.dropCopy(c);
+    }
+  }
+
+  private want(cx: number, cz: number): Column {
+    const k = keyOf(cx, cz);
+    let col = this.cols.get(k);
+    if (!col) {
+      col = {
+        cx,
+        cz,
+        key: k,
+        state: STATE_QUEUED,
+        version: 0,
+        shownVersion: -1,
+        requestedVersion: -1,
+        inflight: 0,
+        meshes: [null, null, null],
+        slot: -1,
+        dist2: 0,
+        failures: 0,
+        header: null,
+        tint: null,
+        copies: [],
+      };
+      this.cols.set(k, col);
+    }
+    return col;
   }
 
   private unload(col: Column) {
+    // (Its copies hold its geometry: they go first.)
+    while (col.copies.length) this.dropCopy(col.copies[col.copies.length - 1]);
     this.disposeMeshes(col);
     if (col.slot >= 0) {
       this.culler.remove_column(col.cx, col.cz);
@@ -200,7 +289,7 @@ export class ChunkManager {
   private neighborsReady(col: Column): boolean {
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
-        const n = this.cols.get(keyOf(col.cx + dx, col.cz + dz));
+        const n = this.cols.get(keyOf(this.baseOf(col.cx + dx), col.cz + dz));
         if (!n || n.state !== STATE_READY) return false;
       }
     }
@@ -212,6 +301,7 @@ export class ChunkManager {
     return (
       col.state === STATE_READY &&
       col.requestedVersion < col.version &&
+      this.isBase(col.cx) &&
       col.dist2 <= (R + 0.5) * (R + 0.5) &&
       this.neighborsReady(col)
     );
@@ -224,7 +314,8 @@ export class ChunkManager {
     cands.length = 0;
     for (const col of this.cols.values()) {
       if (col.state === STATE_QUEUED) {
-        cands.push({ col, score: this.score(col, px, pz), mesh: false });
+        // (Wrapped, a column past the base columns is never drawn: its blocks are for collisions, after what's seen.)
+        cands.push({ col, score: this.score(col, px, pz) * (this.isBase(col.cx) ? 1 : 4), mesh: false });
       } else if (col.state === STATE_READY && col.inflight === 0 && this.meshable(col)) {
         cands.push({ col, score: this.score(col, px, pz) * 0.45, mesh: true });
       }
@@ -245,7 +336,7 @@ export class ChunkManager {
   }
 
   private score(col: Column, px: number, pz: number): number {
-    const dx = col.cx * 16 + 8 - px;
+    const dx = (this.wrap && this.isBase(col.cx) ? nearestCopy(col.cx, this.centerX, this.wrap) : col.cx) * 16 + 8 - px;
     const dz = col.cz * 16 + 8 - pz;
     const d = Math.hypot(dx, dz) + 1;
     const facing = (dx * this.viewX + dz * this.viewZ) / d;
@@ -268,12 +359,17 @@ export class ChunkManager {
     const col = this.cols.get(keyOf(res.cx, res.cz));
     if (!col || col.state !== STATE_GENERATING) return;
     this.world.insert_column(res.cx, res.cz, res.data);
-    this.biome.upload(res.cx, res.cz, res.data.subarray(TINT_OFFSET, TINT_OFFSET + 768));
+    col.tint = res.data.slice(TINT_OFFSET, TINT_OFFSET + 768);
+    // (Wrapped, a base column's tint is where its copies are, and a column past them shows a copy's.)
+    if (!this.wrap) this.biome.upload(res.cx, res.cz, col.tint);
+    else for (const c of col.copies) this.biome.upload(c.cx, c.cz, col.tint);
     col.state = STATE_READY;
   }
 
   private requestMesh(col: Column) {
-    const region = this.world.extract_region(col.cx, col.cz);
+    const w = this.wrap;
+    // (Wrapped, the base columns at the ends are each other's neighbours.)
+    const region = w ? this.world.extract_region_wrapped(col.cx, col.cz, w.cx0, w.n) : this.world.extract_region(col.cx, col.cz);
     const version = col.version;
     col.requestedVersion = version;
     col.inflight++;
@@ -343,9 +439,12 @@ export class ChunkManager {
 
   private applyMesh(col: Column, version: number, data: Uint32Array) {
     if (version <= col.shownVersion) return;
+    // (Wrapped, only base columns have meshes: elsewhere their copies are drawn.)
+    if (!this.isBase(col.cx)) return;
     col.shownVersion = version;
     this.disposeMeshes(col);
     const header = data.subarray(0, MESH_HEADER);
+    col.header = header.slice();
     let off = data[0];
     const mats = [this.renderer.materials.opaque, this.renderer.materials.cutout, this.renderer.materials.water];
     for (let l = 0; l < 3; l++) {
@@ -359,33 +458,169 @@ export class ChunkManager {
       geo.setAttribute('aData', attr);
       geo.setIndex(this.indexFor(quads));
       geo.setDrawRange(0, quads * 6);
-      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(8, 128, 8), 130);
-      geo.boundingBox = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(16, 256, 16));
-      const mesh = new THREE.Mesh(geo, mats[l]);
-      mesh.position.set(col.cx * 16, 0, col.cz * 16);
-      mesh.matrixAutoUpdate = false;
-      mesh.updateMatrix();
-      mesh.matrixWorld.copy(mesh.matrix);
-      mesh.matrixWorldAutoUpdate = false;
-      mesh.frustumCulled = false;
-      mesh.layers.set(LAYER_CHUNKS);
-      col.meshes[l] = mesh;
+      col.meshes[l] = this.placeMesh(geo, mats[l], col.cx, col.cz);
+      // (Wrapped, a base column's meshes are drawn only as its copies.)
+      if (!this.wrap) (l === 2 ? this.renderer.waterScene : this.renderer.opaqueScene).add(col.meshes[l]!);
+    }
+    if (this.wrap) {
+      for (const c of col.copies) this.showCopy(c);
+      return;
+    }
+    this.claim(col, this.culler.set_column(col.cx, col.cz, header), this.bySlot, this.meshed);
+  }
+
+  /** A chunk mesh of `geo` at column (cx, cz): placed once, culled by the culler rather than three.js. */
+  private placeMesh(geo: THREE.BufferGeometry, material: THREE.Material, cx: number, cz: number): THREE.Mesh {
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(8, 128, 8), 130);
+    geo.boundingBox = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(16, 256, 16));
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.position.set(cx * 16, 0, cz * 16);
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    mesh.matrixWorld.copy(mesh.matrix);
+    mesh.matrixWorldAutoUpdate = false;
+    mesh.frustumCulled = false;
+    mesh.layers.set(LAYER_CHUNKS);
+    return mesh;
+  }
+
+  /** A column or a copy takes the culler's slot (whatever had it before was evicted, out of reach). */
+  private claim<T extends { slot: number }>(d: T, slot: number, bySlot: (T | null)[], list: T[]) {
+    if (d.slot === slot) return;
+    if (d.slot >= 0 && bySlot[d.slot] === d) bySlot[d.slot] = null;
+    // Another column may have been evicted from this slot.
+    const prev = bySlot[slot];
+    if (prev && prev !== d) {
+      prev.slot = -1;
+      const i = list.indexOf(prev);
+      if (i >= 0) list.splice(i, 1);
+    }
+    d.slot = slot;
+    bySlot[slot] = d;
+    if (!list.includes(d)) list.push(d);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The world drawn repeated along x
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Draw the world repeated along x (`ClientWorld.wrap`): from now on the columns at any chunk x
+   * show the base column `wrapColumn` gives, its blocks and its mesh, or (null) the world as it is.
+   * Only what's drawn changes: the blocks here (collisions, raycasts) are the world's as ever.
+   *
+   * A base column is meshed once, wherever the camera is, and drawn at each of its places in
+   * view by a copy: meshes of the copy's own holding the base column's geometry (the same buffers
+   * on the GPU, so a copy costs a culler slot and a draw), culled as a column there. A base
+   * column stays loaded while any of its places is near; columns past the base columns load as
+   * ever, for their blocks, but are never meshed. Meshing looks across the ends (the engine's
+   * `extract_region_wrapped`), so the seam is lit and meshed exactly as inside.
+   */
+  setWrap(wrap: ChunkWrap | null) {
+    const was = this.wrap;
+    if (was?.cx0 === wrap?.cx0 && was?.n === wrap?.n) return;
+    // Everything drawn comes off the screen and out of the culler, to be shown again the new way.
+    for (const c of [...this.copies.values()]) this.dropCopy(c);
+    for (const col of this.cols.values()) {
+      for (const m of col.meshes) m?.removeFromParent();
+      if (col.slot < 0) continue;
+      this.culler.remove_column(col.cx, col.cz);
+      this.bySlot[col.slot] = null;
+      col.slot = -1;
+    }
+    this.meshed.length = 0;
+    const before = (cx: number) => (was ? wrapColumn(cx, was) : cx);
+    this.wrap = wrap;
+    for (const col of this.cols.values()) {
+      if (!this.isBase(col.cx)) {
+        // Shown by copies now: meshed again only once drawn itself again.
+        this.disposeMeshes(col);
+        col.shownVersion = col.requestedVersion = -1;
+        continue;
+      }
+      // Its neighbours across an end changed: meshed again (shown as it was meanwhile).
+      if (before(col.cx - 1) !== this.baseOf(col.cx - 1) || before(col.cx + 1) !== this.baseOf(col.cx + 1)) col.version++;
+      if (wrap) continue;
+      if (col.tint) this.biome.upload(col.cx, col.cz, col.tint);
+      if (col.shownVersion < 0 || !col.header) continue;
+      for (let l = 0; l < 3; l++) {
+        const m = col.meshes[l];
+        if (m) (l === 2 ? this.renderer.waterScene : this.renderer.opaqueScene).add(m);
+      }
+      this.claim(col, this.culler.set_column(col.cx, col.cz, col.header), this.bySlot, this.meshed);
+    }
+    // The copies come at the next update.
+    this.centerX = Number.NaN;
+    this.followed = false;
+  }
+
+  /** Whether a column is meshed and drawn: any, or in a wrapped world, a base column. */
+  private isBase(cx: number): boolean {
+    const w = this.wrap;
+    return !w || (cx >= w.cx0 && cx < w.cx0 + w.n);
+  }
+
+  /** The column whose blocks are drawn at chunk x `cx`: itself, or in a wrapped world the base column it repeats. */
+  private baseOf(cx: number): number {
+    return this.wrap ? wrapColumn(cx, this.wrap) : cx;
+  }
+
+  /** A place to draw (wrapped): a copy of its base column there, loaded if it isn't. */
+  private wantCopy(cx: number, cz: number) {
+    const k = keyOf(cx, cz);
+    if (this.copies.has(k)) return;
+    const col = this.want(this.baseOf(cx), cz);
+    const copy: Copy = { cx, cz, key: k, col, meshes: [null, null, null], slot: -1 };
+    col.copies.push(copy);
+    this.copies.set(k, copy);
+    if (col.tint) this.biome.upload(cx, cz, col.tint);
+    if (col.shownVersion >= 0) this.showCopy(copy);
+  }
+
+  /** Show a copy as its base column's mesh is now: the same geometry, at the copy's place, culled there. */
+  private showCopy(copy: Copy) {
+    const col = copy.col;
+    this.disposeCopy(copy);
+    for (let l = 0; l < 3; l++) {
+      const m = col.meshes[l];
+      if (!m) continue;
+      const data = m.geometry.getAttribute('aData');
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('aData', data);
+      geo.setIndex(m.geometry.index);
+      geo.setDrawRange(0, (data.count / 4) * 6);
+      const mesh = this.placeMesh(geo, m.material as THREE.Material, copy.cx, copy.cz);
+      copy.meshes[l] = mesh;
       (l === 2 ? this.renderer.waterScene : this.renderer.opaqueScene).add(mesh);
     }
-    const slot = this.culler.set_column(col.cx, col.cz, header);
-    if (col.slot !== slot) {
-      if (col.slot >= 0 && this.bySlot[col.slot] === col) this.bySlot[col.slot] = null;
-      // Another column may have been evicted from this slot.
-      const prev = this.bySlot[slot];
-      if (prev && prev !== col) {
-        prev.slot = -1;
-        const i = this.meshed.indexOf(prev);
-        if (i >= 0) this.meshed.splice(i, 1);
-      }
-      col.slot = slot;
-      this.bySlot[slot] = col;
-      if (!this.meshed.includes(col)) this.meshed.push(col);
+    if (col.header) this.claim(copy, this.culler.set_column(copy.cx, copy.cz, col.header), this.copyBySlot, this.copiesShown);
+  }
+
+  /** A copy's meshes go (their buffers are its base column's: they stay, for it). */
+  private disposeCopy(copy: Copy) {
+    for (let l = 0; l < 3; l++) {
+      const m = copy.meshes[l];
+      if (!m) continue;
+      m.removeFromParent();
+      m.geometry.setIndex(null);
+      m.geometry.deleteAttribute('aData');
+      m.geometry.dispose();
+      copy.meshes[l] = null;
     }
+  }
+
+  private dropCopy(copy: Copy) {
+    this.disposeCopy(copy);
+    if (copy.slot >= 0) {
+      this.culler.remove_column(copy.cx, copy.cz);
+      this.copyBySlot[copy.slot] = null;
+      copy.slot = -1;
+      const i = this.copiesShown.indexOf(copy);
+      if (i >= 0) this.copiesShown.splice(i, 1);
+    }
+    const i = copy.col.copies.indexOf(copy);
+    if (i >= 0) copy.col.copies.splice(i, 1);
+    this.copies.delete(copy.key);
   }
 
   /**
@@ -412,11 +647,14 @@ export class ChunkManager {
   private remeshNear(x: number, z: number) {
     const cx = Math.floor(x / 16);
     const cz = Math.floor(z / 16);
+    // (Wrapped, a block past the base columns isn't drawn.)
+    if (!this.isBase(cx)) return;
     const batch: Batch = { need: new Map(), ready: new Map(), created: performance.now() };
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
-        const col = this.cols.get(keyOf(cx + dx, cz + dz));
-        if (!col || col.state !== STATE_READY) continue;
+        // (Wrapped, the neighbour across an end is the base column at the other; with only a column or two, one of these again.)
+        const col = this.cols.get(keyOf(this.baseOf(cx + dx), cz + dz));
+        if (!col || col.state !== STATE_READY || batch.need.has(col.key)) continue;
         // Light changes spread at most 15 blocks (Manhattan); the mesh also samples a 1-block border.
         const x0 = (cx + dx) * 16 - 1;
         const x1 = (cx + dx) * 16 + 16;
@@ -478,7 +716,7 @@ export class ChunkManager {
     const batch: Batch = { need: new Map(), ready: new Map(), created: performance.now() };
     const seen = new Set<number>();
     const remesh = (cx: number, cz: number) => {
-      const col = this.cols.get(keyOf(cx, cz));
+      const col = this.cols.get(keyOf(this.baseOf(cx), cz));
       if (!col || col.state !== STATE_READY || seen.has(col.key)) return;
       seen.add(col.key);
       col.version++;
@@ -487,8 +725,9 @@ export class ChunkManager {
         this.requestMesh(col);
       }
     };
-    for (const [cx, cz] of columns) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) remesh(cx + dx, cz + dz);
-    for (const [cx, cz] of only) remesh(cx, cz);
+    // (Wrapped, blocks past the base columns aren't drawn.)
+    for (const [cx, cz] of columns) if (this.isBase(cx)) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) remesh(cx + dx, cz + dz);
+    for (const [cx, cz] of only) if (this.isBase(cx)) remesh(cx, cz);
     if (batch.need.size > 0) this.batches.push(batch);
   }
 
@@ -507,7 +746,7 @@ export class ChunkManager {
     this.culler.cull(this.vpArray, p.x, p.y, p.z, this.renderDistance + 1, this.occlusion);
     const out = new Uint32Array(wasmMemory().buffer, this.culler.out_ptr(), this.culler.capacity() * 6);
     let water = false;
-    for (const col of this.meshed) {
+    for (const col of this.wrap ? this.copiesShown : this.meshed) {
       const o = col.slot * 6;
       for (let l = 0; l < 3; l++) {
         const m = col.meshes[l];
@@ -526,7 +765,7 @@ export class ChunkManager {
     this.vpArray.set(vp.elements);
     this.culler.cull_shadow(this.vpArray, center.x, center.y, center.z, Math.ceil(radiusBlocks / 16) + 2);
     const out = new Uint32Array(wasmMemory().buffer, this.culler.out_shadow_ptr(), this.culler.capacity() * 4);
-    for (const col of this.meshed) {
+    for (const col of this.wrap ? this.copiesShown : this.meshed) {
       const o = col.slot * 4;
       for (let l = 0; l < 2; l++) {
         const m = col.meshes[l];
@@ -549,7 +788,7 @@ export class ChunkManager {
       for (let dx = -radius; dx <= radius; dx++) {
         if (dx * dx + dz * dz > radius * radius) continue;
         total++;
-        const c = this.cols.get(keyOf(ccx + dx, ccz + dz));
+        const c = this.cols.get(keyOf(this.baseOf(ccx + dx), ccz + dz));
         if (c && c.shownVersion >= 0) done++;
       }
     }
@@ -565,7 +804,7 @@ export class ChunkManager {
     }
     return {
       loaded: this.world.column_count(),
-      meshed: this.meshed.length,
+      meshed: this.wrap ? this.copiesShown.length : this.meshed.length,
       generating,
       meshing,
       pending: this.pending.length,

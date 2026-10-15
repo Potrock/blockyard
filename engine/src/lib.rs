@@ -234,6 +234,12 @@ impl VoxelWorld {
         self.inner.extract_region(cx, cz)
     }
 
+    /// `extract_region` for a world drawn repeated along x (`period` columns from column `x0`): a
+    /// neighbour past either end is the column at the other end.
+    pub fn extract_region_wrapped(&self, cx: i32, cz: i32, x0: i32, period: i32) -> Vec<u8> {
+        self.inner.extract_region_wrapped(cx, cz, Some((x0, period)))
+    }
+
     pub fn export_edits(&self) -> Vec<u8> {
         self.inner.export_edits()
     }
