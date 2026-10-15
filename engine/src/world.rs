@@ -71,6 +71,15 @@ fn key(cx: i32, cz: i32) -> u64 {
     ((cx as u32 as u64) << 32) | cz as u32 as u64
 }
 
+/// Column `cx` of a world drawn repeated along x (`World::extract_region_wrapped`): the one it repeats.
+#[inline(always)]
+fn wrap_x(cx: i32, wrap: Option<(i32, i32)>) -> i32 {
+    match wrap {
+        Some((x0, n)) if n > 0 => x0 + (cx - x0).rem_euclid(n),
+        _ => cx,
+    }
+}
+
 /// Which blocks can be carved (`World::carve`): by id, and only higher up than `above`.
 #[derive(Clone)]
 pub struct Destructible {
@@ -422,12 +431,19 @@ impl World {
 
     /// 3x3 neighbourhood of columns around (cx, cz) in the mesher's region format.
     pub fn extract_region(&self, cx: i32, cz: i32) -> Vec<u8> {
+        self.extract_region_wrapped(cx, cz, None)
+    }
+
+    /// `extract_region` for a world drawn repeated along x: `wrap` is (its first column, how many
+    /// columns), and a neighbour past either end is the column at the other end, so a column at the
+    /// seam is lit and meshed exactly as one inside.
+    pub fn extract_region_wrapped(&self, cx: i32, cz: i32, wrap: Option<(i32, i32)>) -> Vec<u8> {
         let mut size = REGION_HEADER;
         let mut cols: [Option<&Column>; 9] = [None; 9];
         for dz in -1..=1 {
             for dx in -1..=1 {
                 let k = ((dz + 1) * 3 + dx + 1) as usize;
-                cols[k] = self.cols.get(&key(cx + dx, cz + dz));
+                cols[k] = self.cols.get(&key(wrap_x(cx + dx, wrap), cz + dz));
                 if let Some(c) = cols[k] {
                     size += c.mask().count_ones() as usize * 4096;
                 }
@@ -444,7 +460,7 @@ impl World {
                 }
             }
         }
-        self.region_damage(cx, cz, &mut out);
+        self.region_damage(cx, cz, wrap, &mut out);
         out
     }
 
@@ -452,7 +468,7 @@ impl World {
     /// the border it looks across), appended to the region (see `mesher`): [count u32, then per
     /// block its region index u32 and what's left, 256 u16]. Nothing at all when there are none,
     /// so a region with no damage is exactly what it always was.
-    fn region_damage(&self, cx: i32, cz: i32, out: &mut Vec<u8>) {
+    fn region_damage(&self, cx: i32, cz: i32, wrap: Option<(i32, i32)>, out: &mut Vec<u8>) {
         if self.damage.is_empty() {
             return;
         }
@@ -460,7 +476,7 @@ impl World {
         let mut n = 0u32;
         for dz in -1..=1 {
             for dx in -1..=1 {
-                let Some(m) = self.damage.get(&key(cx + dx, cz + dz)) else { continue };
+                let Some(m) = self.damage.get(&key(wrap_x(cx + dx, wrap), cz + dz)) else { continue };
                 for (&local, d) in m {
                     let (x, y, z) = ((local & 15) as usize, (local >> 8) as usize, ((local >> 4) & 15) as usize);
                     let (rx, rz) = (((dx + 1) * 16) as usize + x, ((dz + 1) * 16) as usize + z);
@@ -1738,6 +1754,36 @@ mod tests {
         w2.import_edits(&e);
         w2.insert_column(0, 0, &d);
         assert_eq!(w2.get(3, 200, 4), GLOWSTONE_B);
+    }
+
+    #[test]
+    fn wrapped_regions_see_the_other_end() {
+        // Columns 0 to 3 repeated: column 0's west neighbour is column 3 and column 3's east is
+        // column 0, exactly as if copies of them stood there; inside, nothing changes.
+        let mut g = Generator::new(11);
+        let mut wrapped = World::new();
+        let mut copied = World::new();
+        for cz in -1..=1 {
+            for cx in 0..4 {
+                let d = g.generate(cx, cz);
+                wrapped.insert_column(cx, cz, &d);
+                copied.insert_column(cx, cz, &d);
+                if cx == 3 {
+                    copied.insert_column(-1, cz, &d);
+                }
+                if cx == 0 {
+                    copied.insert_column(4, cz, &d);
+                }
+            }
+        }
+        assert!(wrapped.set(63, 120, 5, GLOWSTONE_B) && copied.set(63, 120, 5, GLOWSTONE_B) && copied.set(-1, 120, 5, GLOWSTONE_B));
+        for cx in 0..4 {
+            assert!(wrapped.extract_region_wrapped(cx, 0, Some((0, 4))) == copied.extract_region(cx, 0), "column {cx}");
+            // Any copy's place asks for the same.
+            assert!(wrapped.extract_region_wrapped(cx + 8, 0, Some((0, 4))) == copied.extract_region(cx, 0), "column {cx} two periods on");
+        }
+        // Not wrapped, the ends see nothing past them.
+        assert!(wrapped.extract_region(0, 0) != copied.extract_region(0, 0));
     }
 
     /// A flat world (3x3 columns round the origin) and the height of its first air block.
