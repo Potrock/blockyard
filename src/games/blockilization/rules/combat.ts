@@ -7,7 +7,7 @@ import { distance, line, neighbours, within } from './hex';
 import { campHooks, civiliansAt, occupants } from './movement';
 import { fromPromotions, PROMOTIONS, type PromotionWhen } from './promotions';
 import type { City, Game, Unit } from './state';
-import { FEATURES, HILLS, IMPROVEMENTS, TERRAINS } from './terrain';
+import { FALLOUT, FEATURES, HILLS, IMPROVEMENTS, TERRAINS } from './terrain';
 import { canFortify, isGreatPerson, isMilitary, UNITS } from './units';
 
 /**
@@ -510,10 +510,39 @@ export function citadelTurn(game: Game) {
   });
 }
 
+/** Each turn, fallout hurts every unit that ends its turn in it (Civ V's, `FEATURES.fallout.hurts`). */
+export function falloutTurn(game: Game) {
+  const hurts = FEATURES.fallout.hurts ?? 0;
+  for (const u of [...game.units]) {
+    if (game.tiles[u.tile]?.feature !== 'fallout' || !game.units.includes(u)) continue;
+    u.hp -= hurts;
+    if (u.hp <= 0) die(game, u, null, 'nuclear fallout');
+  }
+}
+
+/**
+ * Where a nuclear blast leaves fallout (Civ V's): on the blast's land, its forests, jungles and
+ * marshes burnt away, and fallout on each tile by `FALLOUT.chance` (not on a city, a mountain, a
+ * natural wonder, or under flood plains, an oasis, ice or an atoll). The tiles it fell on.
+ */
+export function falloutFrom(game: Game, area: number[]): number[] {
+  const out: number[] = [];
+  for (const t of area) {
+    const tile = game.tiles[t];
+    if (TERRAINS[tile.terrain].water || tile.elevation === 'mountain' || tile.wonder || cityAt(game, t)) continue;
+    if (tile.feature && FALLOUT.burns.includes(tile.feature)) tile.feature = undefined;
+    if (tile.feature || random(game) >= FALLOUT.chance) continue;
+    tile.feature = 'fallout';
+    out.push(t);
+  }
+  return out;
+}
+
 /**
  * A nuclear strike on a tile in range: every unit in the blast is badly hurt or destroyed (civilians
- * destroyed), every city loses half its people and its hit points, every improvement is ruined; the
- * weapon is spent. Only where everyone it would hit is at war with its owner.
+ * destroyed), every city loses half its people and its hit points, every improvement is ruined, and
+ * fallout is left on much of its land (`falloutFrom`); the weapon is spent. Only where everyone it
+ * would hit is at war with its owner.
  */
 export function nuke(game: Game, u: Unit, target: number): CombatResult | null {
   const type = UNITS[u.type];
@@ -547,6 +576,7 @@ export function nuke(game: Game, u: Unit, target: number): CombatResult | null {
       note(game, city.owner, { text: `${city.name} has been struck by a nuclear weapon!`, at: t, kind: 'war' });
     } else if (game.tiles[t].improvement || game.tiles[t].road) game.tiles[t].pillaged = true;
   }
+  falloutFrom(game, area);
   for (const c of game.cities) if (within(game.grid, c.tile, 3).some((t) => area.includes(t))) assignCitizens(game, c);
   for (const o of hit) note(game, o, { text: `${game.players[u.owner].name} has used a nuclear weapon!`, at: target, kind: 'war' });
   return { attacker: u.id, dealt, taken: 0, killed, died: true, at: target };

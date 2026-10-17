@@ -559,7 +559,7 @@ export interface FightWire {
 
 const TERRAIN_CODES = ['grassland', 'plains', 'desert', 'tundra', 'snow', 'coast', 'ocean', 'lake'] as const;
 const ELEVATION_CODES = ['flat', 'hills', 'mountain'] as const;
-const FEATURE_CODES = ['', 'forest', 'jungle', 'marsh', 'oasis', 'floodplains', 'ice', 'atoll'] as const;
+const FEATURE_CODES = ['', 'forest', 'jungle', 'marsh', 'oasis', 'floodplains', 'ice', 'atoll', 'fallout'] as const;
 
 export const packStatic = (t: { terrain: string; elevation: string; feature?: string; river?: boolean; height: number }) =>
   `${TERRAIN_CODES.indexOf(t.terrain as never)}${ELEVATION_CODES.indexOf(t.elevation as never)}${FEATURE_CODES.indexOf((t.feature ?? '') as never)}${t.river ? 1 : 0}${String.fromCharCode(48 + Math.min(40, t.height))}`;

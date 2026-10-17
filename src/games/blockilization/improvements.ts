@@ -29,7 +29,7 @@ export type Placed = [x: number, y: number, z: number, block: string, under: str
 /** Blocks that are the land's surface (a column's top): units stand on these, among anything else. */
 export const SURFACE_BLOCKS = new Set([
   'civ_grass', 'civ_plains', 'civ_desert', 'civ_tundra', 'civ_snow', 'civ_floodplain', 'civ_marsh', 'civ_dirt', 'civ_rock', 'civ_coast_floor', 'civ_ocean_floor',
-  'water', 'ice', 'civ_farmland', 'civ_road', 'civ_rail_x', 'civ_rail_z', 'civ_ash', 'spruce_planks', 'civ_bank', 'gravel',
+  'water', 'ice', 'civ_farmland', 'civ_road', 'civ_rail_x', 'civ_rail_z', 'civ_ash', 'civ_fallout', 'spruce_planks', 'civ_bank', 'gravel',
 ]);
 
 /** The top of the land at every column of the map, as the world was built (`terrain.ts`'s blocks, trees aside), and the plant on it. */
@@ -67,13 +67,13 @@ export class Ground {
   }
 }
 
-/** What a tile shows, in a word: it changes when its improvement, pillage, road (or its neighbours' roads) or city does. */
+/** What a tile shows, in a word: it changes when its improvement, pillage, road (or its neighbours' roads), fallout or city does. */
 export function decorKey(game: Game, t: number): string {
   const tile = game.tiles[t];
   if (cityOn(game, t)) return 'city';
   let links = 0;
   if (tile.road) for (let d = 0; d < 6; d++) if (linked(game, neighbour(game.grid, t, d))) links |= 1 << d;
-  return `${tile.improvement ?? ''}|${tile.pillaged ? 1 : 0}|${tile.road ?? ''}|${links}|${tile.resource ?? ''}|${ruinSites(game).has(t) ? 1 : 0}|${wallEdges(game, t)}`;
+  return `${tile.improvement ?? ''}|${tile.pillaged ? 1 : 0}|${tile.road ?? ''}|${links}|${tile.resource ?? ''}|${ruinSites(game).has(t) ? 1 : 0}|${wallEdges(game, t)}|${tile.feature === 'fallout' ? 1 : 0}`;
 }
 
 /**
@@ -331,11 +331,26 @@ function lookOf(game: Game, ground: Ground, t: number): Look {
   const imp = tile.improvement;
   if (!imp) {
     if (ruinSites(game).has(t)) cityRuins(look);
-    return look;
-  }
-  const build = LOOKS[imp];
-  if (build) build(look, { ruined, resource: tile.resource ?? '', hills: tile.elevation === 'hills', water: !!TERRAINS[tile.terrain]?.water });
+  } else LOOKS[imp]?.(look, { ruined, resource: tile.resource ?? '', hills: tile.elevation === 'hills', water: !!TERRAINS[tile.terrain]?.water });
+  if (tile.feature === 'fallout') fallout(look);
   return look;
+}
+
+/**
+ * Nuclear fallout over a tile: a sickly crust on most of its open ground (round whatever else
+ * stands there, which keeps its own columns), its grass and reeds dead under it, and here and
+ * there a glowing speck. It all goes when a worker scrubs the tile.
+ */
+function fallout(look: Look) {
+  const taken = new Set(look.out.map(([x, , z]) => key(x, z)));
+  for (const c of look.columns) {
+    if (taken.has(key(c.x, c.z)) || !look.free(c.x, c.z)) continue;
+    const r = look.rand(c.x * 13 + c.z * 29 + 300);
+    if (r >= 0.75) continue;
+    look.surface(c.x, c.z, 'civ_fallout');
+    if (r < 0.1 && look.open(c.x, c.z)) look.on(c.x, c.z, 'civ_fallout_glow');
+    else look.clear(c.x, c.z);
+  }
 }
 
 // -------------------------------------------------------------------------------------------------

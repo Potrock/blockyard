@@ -18,7 +18,7 @@ export const addYields = (a: Yields, b: Yields | undefined, k = 1): Yields => {
 export type TerrainId = 'grassland' | 'plains' | 'desert' | 'tundra' | 'snow' | 'coast' | 'ocean' | 'lake';
 /** Land's shape over its terrain: flat, hills, or mountains (impassable). */
 export type Elevation = 'flat' | 'hills' | 'mountain';
-export type FeatureId = 'forest' | 'jungle' | 'marsh' | 'oasis' | 'floodplains' | 'ice' | 'atoll';
+export type FeatureId = 'forest' | 'jungle' | 'marsh' | 'oasis' | 'floodplains' | 'ice' | 'atoll' | 'fallout';
 
 export interface Terrain {
   name: string;
@@ -56,6 +56,8 @@ export interface Feature {
   impassable?: boolean;
   /** A worker can clear it (and what clearing it gives the nearest city's production). */
   removable?: { tech: string; turns: number; prod?: number };
+  /** Damage to a unit ending its turn on it (fallout's). */
+  hurts?: number;
 }
 
 export const FEATURES: Record<FeatureId, Feature> = {
@@ -66,7 +68,18 @@ export const FEATURES: Record<FeatureId, Feature> = {
   floodplains: { name: 'Flood Plains', yields: { food: 2 }, move: 1, defense: -10 },
   ice: { name: 'Ice', yields: {}, replace: true, move: Infinity, defense: 0, impassable: true },
   atoll: { name: 'Atoll', yields: { food: 1, prod: 1 }, move: 1, defense: 0 },
+  // Left by a nuclear blast (Civ V's): -3 food, -3 production, -10 gold (next to nothing is left), and it
+  // hurts units that end their turn in it; a worker scrubs it away (`FALLOUT`).
+  fallout: { name: 'Fallout', yields: { food: -3, prod: -3, gold: -10 }, move: 2, defense: 0, hurts: 15 },
 };
+
+/**
+ * Nuclear fallout (Civ V's): each land tile of a blast (not a city's, a mountain or a natural
+ * wonder's) gets it by this chance, the blast's forests, jungles and marshes burnt away whether or
+ * not; flood plains, oases, ice and atolls are left as they are, and keep it off. Workers scrub it
+ * away in this many turns (before the game's speed), and nothing else is built or mended under it.
+ */
+export const FALLOUT = { chance: 0.5, scrubTurns: 6, burns: ['forest', 'jungle', 'marsh'] as FeatureId[] };
 
 // -------------------------------------------------------------------------------------------------
 // Resources

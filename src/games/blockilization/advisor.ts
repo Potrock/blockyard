@@ -305,7 +305,7 @@ export function adviseWork(game: Game, p: Player, worker: Unit): Omit<WorkAdvice
 function gainOf(game: Game, p: Player, t: number, what: BuildWhat): Yields {
   const tile = game.tiles[t];
   if (what === 'road' || what === 'rail') return {};
-  const after: Tile = what === 'remove_feature' ? { ...tile, feature: undefined } : what === 'repair' ? { ...tile, pillaged: false } : { ...tile, improvement: what as ImprovementId };
+  const after: Tile = what === 'remove_feature' || what === 'scrub_fallout' ? { ...tile, feature: undefined } : what === 'repair' ? { ...tile, pillaged: false } : { ...tile, improvement: what as ImprovementId };
   const tiles = game.tiles.slice();
   tiles[t] = after;
   const was = tileYields(game, t, p);
@@ -320,6 +320,7 @@ function workWhy(game: Game, p: Player, job: Job, worked: Set<number>, luxNeeded
   const tile = game.tiles[job.tile];
   const city = tile.city !== undefined ? game.cities.find((c) => c.id === tile.city) : undefined;
   const r = tile.resource && seesResource(p, tile.resource) ? RESOURCES[tile.resource] : undefined;
+  if (job.what === 'scrub_fallout') return 'Scrubs away the fallout: the tile yields again, and can be improved';
   if (job.what === 'repair') return 'Mends what was pillaged: its yields come back';
   if (r && tapsWith(tile) === job.what) {
     if (r.kind === 'luxury') return luxNeeded.has(tile.resource!) ? `Your first ${r.name}: happiness in every city` : `More ${r.name}, to trade`;

@@ -1,7 +1,7 @@
 import { airStrike, carry, isAircraft, rebase, strandedAircraft } from './air';
 import { BUILDINGS, type Building } from './buildings';
 import { CIVS, unitFor } from './civs';
-import { canPillage, capture, citadelTurn, cityHeal, cityMaxHp, cityFire, cityHooks, melee, nuke, pillage, ranged, rangeOf, type CombatResult } from './combat';
+import { canPillage, capture, citadelTurn, cityHeal, falloutTurn, cityMaxHp, cityFire, cityHooks, melee, nuke, pillage, ranged, rangeOf, type CombatResult } from './combat';
 import { aName, atWar, canStand, capitalOf, cityAt, cityById, citiesOf, civEffects, civOf, endWars, has, inSentence, knows, knowsOf, maxMoves, nameTo, note, noteAll, random, removeUnit, seesResource, spawnUnit, speed, techCost, unitById, unitsOf, updateAllVisibility, updateVisibility } from './core';
 import { assignCitizens, cityEffects, cityYields, claim, coastal, foodKept, goldUpkeep, goldenCost, greatCost, greatPeopleBonus, growthThreshold, happiness, isBuilding, luxuries, nextTile, policyCost, purchaseCost, scaled, SPECIALIST_YIELD, specialistSlots, strategic, tileCultureCost, tileGoldCost, workable, dissent, preferredIdeology } from './economy';
 import { CHOOSABLE, type Effects, type GreatKind, type SpecialistKind } from './effects';
@@ -25,7 +25,7 @@ import type { City, Game, Player, Production, Unit } from './state';
 import { sideName, sides, teamOf, teammates } from './teams';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { startSequence, waitsFor, warBegun } from './turns';
-import { FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, type ImprovementId } from './terrain';
+import { FALLOUT, FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, type ImprovementId } from './terrain';
 import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNIT_LIST, UNITS } from './units';
 
 /**
@@ -41,7 +41,7 @@ export type Order =
   | { t: 'attack'; unit: number; target: number }
   | { t: 'rebase'; unit: number; to: number }
   | { t: 'found'; unit: number }
-  | { t: 'build'; unit: number; what: ImprovementId | 'road' | 'rail' | 'remove_feature' | 'repair' | 'artifact' }
+  | { t: 'build'; unit: number; what: ImprovementId | 'road' | 'rail' | 'remove_feature' | 'scrub_fallout' | 'repair' | 'artifact' }
   | { t: 'pillage'; unit: number }
   | { t: 'paradrop'; unit: number; to: number }
   | { t: 'airlift'; unit: number; to: number }
@@ -152,6 +152,8 @@ function buildWhy(game: Game, u: Unit, what: BuildWhat): string {
   if (cityAt(game, u.tile) && what !== 'road') return 'Nothing but a road is built in a city';
   if (what === 'road') return !knows(p, 'the_wheel') ? 'Roads come with The Wheel' : tile.road ? 'There is a road here already' : 'No road is built on the water';
   if (what === 'rail') return !knows(p, 'railroad') ? 'Railroads come with Railroad' : 'A railroad is laid over a road: build the road first';
+  if (what === 'scrub_fallout') return 'There is no fallout here';
+  if (tile.feature === 'fallout') return 'Scrub the Fallout first';
   if (what === 'repair') return 'Nothing here is pillaged';
   if (what === 'remove_feature') {
     const f = tile.feature ? FEATURES[tile.feature] : undefined;
@@ -737,6 +739,9 @@ export function canBuild(game: Game, u: Unit, what: BuildWhat): boolean {
   if (cityAt(game, u.tile) && what !== 'road') return false;
   if (what === 'road') return knows(p, 'the_wheel') && !tile.road && !TERRAINS[tile.terrain].water;
   if (what === 'rail') return knows(p, 'railroad') && tile.road === 'road';
+  // Fallout: scrubbed away (anywhere), and nothing built or mended under it until it is (roads aside).
+  if (what === 'scrub_fallout') return tile.feature === 'fallout';
+  if (tile.feature === 'fallout') return false;
   if (what === 'repair') return !!tile.pillaged;
   if (what === 'remove_feature') {
     const f = tile.feature && FEATURES[tile.feature];
@@ -778,7 +783,7 @@ export function canDig(game: Game, u: Unit, what: 'landmark' | 'artifact'): bool
 }
 
 export function workTurns(game: Game, what: string): number {
-  const base = what === 'road' ? 3 : what === 'rail' ? 4 : what === 'repair' ? 3 : what === 'remove_feature' ? 4 : what === 'artifact' || what === 'landmark' ? 6 : IMPROVEMENTS[what as ImprovementId]?.turns ?? 5;
+  const base = what === 'road' ? 3 : what === 'rail' ? 4 : what === 'repair' ? 3 : what === 'remove_feature' ? 4 : what === 'scrub_fallout' ? FALLOUT.scrubTurns : what === 'artifact' || what === 'landmark' ? 6 : IMPROVEMENTS[what as ImprovementId]?.turns ?? 5;
   return Math.max(1, Math.round(base * speed(game)));
 }
 
@@ -1688,6 +1693,7 @@ export function endTurn(game: Game) {
   // Units: fresh moves, healing, work done, paths followed.
   for (const u of [...game.units]) unitTurn(game, u);
   citadelTurn(game);
+  falloutTurn(game);
   for (const p of game.players) {
     for (let i = 0; i < game.players.length; i++) {
       if (p.diplomacy.peaceTurns[i] > 0) p.diplomacy.peaceTurns[i]--;
@@ -1976,7 +1982,9 @@ function unitTurn(game: Game, u: Unit) {
       if (w === 'road') tile.road = 'road';
       else if (w === 'rail') tile.road = 'rail';
       else if (w === 'repair') tile.pillaged = false;
-      else if (w === 'remove_feature') {
+      else if (w === 'scrub_fallout') {
+        if (tile.feature === 'fallout') tile.feature = undefined;
+      } else if (w === 'remove_feature') {
         const f = tile.feature && FEATURES[tile.feature];
         if (f?.removable?.prod) {
           const near = citiesOf(game, u.owner).sort((a, b) => distance(game.grid, a.tile, u.tile) - distance(game.grid, b.tile, u.tile))[0];
@@ -1990,7 +1998,7 @@ function unitTurn(game: Game, u: Unit) {
       }
       u.work = undefined;
       // (An automated worker's work goes unsaid: that's what automating it is for.)
-      const what = w === 'road' ? 'built a Road' : w === 'rail' ? 'laid a Railroad' : w === 'repair' ? 'repaired what was pillaged' : w === 'remove_feature' ? `cleared the ${cleared}` : `built ${aName(IMPROVEMENTS[w as ImprovementId]?.name ?? w)}`;
+      const what = w === 'road' ? 'built a Road' : w === 'rail' ? 'laid a Railroad' : w === 'repair' ? 'repaired what was pillaged' : w === 'remove_feature' ? `cleared the ${cleared}` : w === 'scrub_fallout' ? 'scrubbed the Fallout' : `built ${aName(IMPROVEMENTS[w as ImprovementId]?.name ?? w)}`;
       if (!u.auto) note(game, u.owner, { text: `A Worker has ${what}.`, at: u.tile, kind: 'info' });
       for (const c of citiesOf(game, u.owner)) assignCitizens(game, c);
     }
