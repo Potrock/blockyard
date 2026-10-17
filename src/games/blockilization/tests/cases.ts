@@ -28,7 +28,6 @@ import { adoptable, ALL_POLICIES } from '../rules/policies';
 import { previewAttack, previewCityFire } from '../rules/preview';
 import { promotionsDue } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
-import { CIV_LIST } from '../rules/civs';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
 import { allyOf, cannotBully, cannotCoup, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
@@ -3050,7 +3049,7 @@ test('an inland sea: one great sea in the middle with land all round it; highlan
     const m = MAP_SIZES.standard;
     const g = { width: m.width, height: m.height };
     const { tiles } = generate(g, seed, 'inland_sea', m.players, m.cityStates);
-    const water = (t: number) => TERRAINS[tiles[t].terrain].water;
+    const water = (t: number) => !!TERRAINS[tiles[t].terrain].water;
     ok(water(tileAt(g, Math.floor(g.width / 2), Math.floor(g.height / 2))), `${seed}: sea in the middle`);
     const land = tiles.filter((_, t) => !water(t)).length;
     ok(land > tiles.length * 0.5, `${seed}: mostly land (${land} of ${tiles.length})`);
