@@ -18,7 +18,8 @@ export const games: GameDefinition[] = [callofblocky, blockfront, blockjam, bloc
 /**
  * Development-only games (a development server hosts them when named; the headless tests use
  * them): the art previews, the model gallery, the movement lab, High Noon and Laser Tag (the item-kit litmus), and the
- * built-in Siege Night (the community's upload, siege-night-ops, is the one played). Whether a server
+ * built-in Siege Night (the community's upload, siege-night-ops, is the one played), and
+ * Blockilization's source (its upload is the one played). Whether a server
  * offers them is its own decision.
  */
 export async function devGames(): Promise<GameDefinition[]> {
@@ -36,6 +37,7 @@ export async function devGames(): Promise<GameDefinition[]> {
     import('./highnoon/server'),
     import('./lasertag/server'),
     import('./siege/server'),
+    import('./blockilization/server'),
   ]);
   return loaded.map((m) => m.default);
 }
