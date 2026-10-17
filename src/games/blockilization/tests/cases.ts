@@ -45,10 +45,10 @@ import { blank, city, techsTo, unit, war } from './world';
 import { liberation, LIBERATE_INFLUENCE } from '../rules/liberation';
 import { cannotPledge, pledged, PLEDGE_BROKEN, PLEDGE_REST } from '../rules/pledges';
 import { restingInfluence } from '../rules/citystates';
-import { conquests } from '../rules/ai/strategy';
-import { pledges as botPledges } from '../rules/ai/liberation';
-import { startProject, type WorldProject } from '../rules/projects';
-import { expectedTier, worldProject } from '../rules/ai/projects';
+import { conquests, wantsPeace } from '../rules/ai/strategy';
+import { forsakes, freeable, pledges as botPledges, turnsOn } from '../rules/ai/liberation';
+import { openProject, startProject, type WorldProject } from '../rules/projects';
+import { expectedTier, leavesProject, projectPlan, worldProject } from '../rules/ai/projects';
 
 /**
  * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
@@ -4354,4 +4354,175 @@ test('teammates at war with people play their segment together; a side gone, or 
   game.players[1].alive = false;
   startSequence(game);
   eq(game.sequence, undefined, 'its enemy fallen: no order to keep');
+});
+
+test('a bot brings back a fallen civ with a city it took from their common enemy; a conqueror keeps the original capital, but gives back a lesser city', () => {
+  for (const aim of ['science', 'domination'] as const) {
+    const { game, at } = blank(['egypt', 'babylon', 'china'], { size: 'small' });
+    city(game, 0, at(3, 3));
+    city(game, 1, at(28, 3));
+    const beijing = city(game, 2, at(16, 12), { pop: 5 });
+    const town = city(game, 2, at(10, 16), { pop: 4 });
+    war(game, 1, 2);
+    storm(game, 1, town);
+    storm(game, 1, beijing);
+    ok(!game.players[2].alive, 'China is destroyed');
+    war(game, 0, 1);
+    storm(game, 0, beijing);
+    storm(game, 0, town);
+    const egypt = game.players[0];
+    egypt.ai = { aim, aimed: game.turn, wars: {}, orders: {} };
+    conquests(makeCtx(game, egypt));
+    ok(game.players[2].alive, `${aim}: China lives again`);
+    if (aim === 'science') eq(beijing.owner, 2, 'science: Beijing given back, against Babylon');
+    else {
+      eq(beijing.owner, 0, 'domination: Beijing, an original capital, kept');
+      eq(town.owner, 2, 'domination: the lesser city given back');
+    }
+    ok(relationsOf(game).events.some((e) => e.kind === 'liberate' && e.by === 0 && e.to === 2), 'China remembers it');
+  }
+});
+
+test('a bot gives a city-state back its small city, and a friend’s city it took back from their enemy is one it would go to war to free', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(16, 18));
+  const home = city(game, cs.index, at(16, 9), { pop: 3 });
+  const town = city(game, 2, at(22, 12), { pop: 4 });
+  war(game, 1, cs.index);
+  war(game, 1, 2);
+  storm(game, 1, home);
+  storm(game, 1, town);
+  const egypt = game.players[0];
+  egypt.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+  ok(!freeable(makeCtx(game, egypt), town), 'a stranger’s city: nothing to free');
+  egypt.diplomacy.friends[2] = game.players[2].diplomacy.friends[0] = 20;
+  ok(freeable(makeCtx(game, egypt), town), 'a friend’s, held by Babylon: one to free');
+  war(game, 0, 1);
+  storm(game, 0, home);
+  conquests(makeCtx(game, egypt));
+  ok(cs.alive && home.owner === cs.index, 'the city-state lives again');
+  eq(allyOf(game, cs.index), 0, 'Egypt its ally');
+});
+
+test('a warmonger whose interests change breaks its pledge to a city-state, and pays for it; a peaceful leader keeps it', () => {
+  for (const civ of ['china', 'india']) {
+    const { game, at } = blank([civ, 'babylon'], { cityStates: 1 });
+    const p = game.players[0];
+    const cs = game.players.find((x) => x.cityState)!;
+    city(game, 0, at(4, 4));
+    const home = city(game, cs.index, at(14, 9));
+    p.explored.fill(1);
+    p.influence[cs.index] = 35;
+    ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok, `${civ} pledges`);
+    p.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+    for (const t of neighbours(game.grid, home.tile).slice(0, 3)) unit(game, 'swordsman', 0, t);
+    eq(forsakes(makeCtx(game, p), cs.index), null, 'still its friend: the pledge holds');
+    // Its influence there has waned, and it's short of gold: the city-state's tribute is wanted.
+    p.influence[cs.index] = 10;
+    p.gold = 0;
+    const why = forsakes(makeCtx(game, p), cs.index);
+    civilians(makeCtx(game, p));
+    if (civ === 'india') {
+      eq(why, null, 'Gandhi never breaks his word');
+      ok(pledged(game, 0, cs.index), 'his pledge holds');
+      continue;
+    }
+    ok(!!why, `Wu Zetian would break it (${why})`);
+    ok(!pledged(game, 0, cs.index), 'she demands its tribute: the pledge is broken');
+    ok(p.gold > 0, 'its gold taken');
+    ok(p.influence[cs.index] <= 10 - PLEDGE_BROKEN - TRIBUTE_COST.gold, 'the influence lost, the pledge’s with the tribute’s');
+    p.influence[cs.index] = 35;
+    ok(/lately/.test(cannotPledge(game, p, cs.index) ?? ''), 'and no pledging again for a while');
+  }
+});
+
+test('a pledged city-state allied with a bot’s enemy, or at war with its friend, is forsaken; a warmonger pledges only to its allies', () => {
+  const { game, at } = blank(['aztec', 'babylon', 'egypt'], { cityStates: 1, size: 'small' });
+  const [aztec, babylon, egypt] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(3, 18));
+  city(game, cs.index, at(16, 10));
+  for (const p of [aztec, babylon, egypt]) p.explored.fill(1);
+  aztec.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+  aztec.influence[cs.index] = 40;
+  botPledges(makeCtx(game, aztec));
+  ok(!pledged(game, 0, cs.index), 'a friend only: Montezuma doesn’t pledge');
+  aztec.influence[cs.index] = 70;
+  botPledges(makeCtx(game, aztec));
+  ok(pledged(game, 0, cs.index), 'its ally: he pledges');
+  eq(forsakes(makeCtx(game, aztec), cs.index), null, 'and keeps it while it serves him');
+  // Babylon courts it away and goes to war with him.
+  babylon.influence[cs.index] = 90;
+  war(game, 0, 1);
+  ok(/enemy/.test(forsakes(makeCtx(game, aztec), cs.index) ?? ''), 'allied with his enemy: forsaken');
+  endWar(game, aztec, babylon);
+  babylon.influence[cs.index] = 0;
+  aztec.diplomacy.friends[2] = egypt.diplomacy.friends[0] = 20;
+  war(game, 2, cs.index);
+  ok(/friend/.test(forsakes(makeCtx(game, aztec), cs.index) ?? ''), 'at war with his friend: forsaken');
+});
+
+test('a bot goes for the tier of a World Congress project worth its cities: one city for bronze while it lacks it, moved on once it has it', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india'], { size: 'small' });
+  const [egypt] = game.players;
+  const homes = [0, 1, 2].map((i) => city(game, i, at(4 + i * 9, 4), { pop: 8 }));
+  const towns = [city(game, 0, at(4, 12), { pop: 6 }), city(game, 0, at(10, 16), { pop: 6 })];
+  game.congress = { host: 0, next: game.turn + 30, proposals: [], active: [] };
+  startProject(game, 'worlds_fair');
+  const x = openProject(game, 'worlds_fair')!;
+  // Babylon and India far ahead, their capitals building it: gold and silver are theirs.
+  x.put = { 1: Math.round(x.cost * 0.35), 2: Math.round(x.cost * 0.3) };
+  for (const c of homes.slice(1)) c.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  egypt.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+  let plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  eq(plan.tier, 'bronze', 'bronze is what it can reach');
+  eq(plan.cities.length, 1, 'one city for it');
+  const chosen = plan.cities[0];
+  eq(worldProject(makeCtx(game, egypt), chosen, 0)?.id, 'worlds_fair', 'that city builds it');
+  ok([homes[0], ...towns].filter((c) => c !== chosen).every((c) => worldProject(makeCtx(game, egypt), c, 0) === null), 'the others don’t');
+  chosen.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  ok(!leavesProject(makeCtx(game, egypt), chosen), 'it stays on it till it has its bronze');
+  x.put[0] = Math.ceil(x.cost / 20) + 5;
+  plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  eq(`${plan.tier} ${plan.cities.length}`, 'bronze 0', 'its bronze had: no more cities on it');
+  ok(leavesProject(makeCtx(game, egypt), chosen), 'the city moves on');
+  // Ahead of the others, it goes for gold with more of its cities.
+  x.put = { 0: Math.round(x.cost * 0.3), 1: Math.round(x.cost * 0.1), 2: Math.round(x.cost * 0.1) };
+  plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  eq(plan.tier, 'gold', 'gold in reach');
+  ok(plan.cities.length >= 1, 'cities on it for gold');
+  // The others have stopped: no reward till it's done, so it carries it to the end itself.
+  for (const c of homes.slice(1)) c.queue = [];
+  chosen.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  ok(plan.tier === 'gold' && plan.cities.length >= 1, 'the others stopped: it finishes it itself');
+});
+
+test('a warmonger at war with the ally of a city-state it pledged to protect, close by, turns on it: war, the pledge broken, kept up while its ally fights on', () => {
+  const { game, at } = blank(['china', 'babylon', 'egypt'], { cityStates: 1, size: 'small' });
+  const [china, babylon] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, 0, at(6, 6));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(3, 18));
+  city(game, cs.index, at(11, 8));
+  china.explored.fill(1);
+  china.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+  china.influence[cs.index] = 35;
+  ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok, 'China pledges');
+  turnsOn(makeCtx(game, china));
+  ok(pledged(game, 0, cs.index) && !atWar(game, 0, cs.index), 'at peace with everyone: it keeps its pledge');
+  babylon.influence[cs.index] = 90;
+  war(game, 0, 1);
+  turnsOn(makeCtx(game, china));
+  ok(atWar(game, 0, cs.index), 'Babylon’s ally, at war with it: China declares war');
+  ok(!pledged(game, 0, cs.index), 'its pledge broken');
+  ok(!wantsPeace(makeCtx(game, china), cs.index), 'no peace while its ally fights on');
+  endWar(game, china, babylon);
+  ok(wantsPeace(makeCtx(game, china), cs.index), 'then peace');
 });
