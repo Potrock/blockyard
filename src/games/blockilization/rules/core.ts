@@ -3,7 +3,7 @@ import { CITY_STATES, CIVS, unitFor } from './civs';
 import { handicapEffects, handicapOf } from './difficulty';
 import type { Effects } from './effects';
 import { distance, line, neighbours, within, type Grid } from './hex';
-import { generate, Rng } from './mapgen';
+import { generate, placeVolcanoes, Rng } from './mapgen';
 import { FIRST_FINDER_GOLDEN, FOUND_HAPPINESS, NATURAL_WONDERS, wondersBeside } from './nature';
 import { policyEffects } from './policies';
 import { fromPromotions } from './promotions';
@@ -83,6 +83,8 @@ export function createGame(settings: Settings, seats: Seat[], seed: number): Gam
   // (On the Earth with true starts, each seat's civ and each city-state's own, to start where it began.)
   const trueStarts = settings.type === 'earth' && settings.trueStarts ? [...seats.map((s) => s.civ), ...cityStates.map((cs) => cs.civ.id)] : undefined;
   const { tiles, starts } = generate(grid, seed, settings.type, seats.length, cityStates.length, trueStarts);
+  // (The volcanoes after the rest, the world as the seed made it before there were any: `disasters.ts`.)
+  if (settings.disasters) placeVolcanoes(grid, tiles, seed, starts);
   const game: Game = {
     version: 1,
     seed,

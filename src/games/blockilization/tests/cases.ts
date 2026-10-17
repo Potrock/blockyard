@@ -9,8 +9,8 @@ import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unit
 import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
 import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
-import { distance, line, neighbour, neighbours, tileAt, within } from '../rules/hex';
-import { generate, START_ISLAND } from '../rules/mapgen';
+import { colOf, distance, line, neighbour, neighbours, tileAt, within } from '../rules/hex';
+import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
 import { IMPROVEMENTS, TERRAINS, type ImprovementId } from '../rules/terrain';
 import { makeCtx } from '../rules/ai/context';
@@ -32,19 +32,22 @@ import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest,
 import { allyOf, cannotBully, cannotCoup, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
 import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
-import { MAP_SIZES, TURN_LIMITS, type Game, type MapSize } from '../rules/state';
+import { MAP_SIZES, SPEEDS, TURN_LIMITS, type Game, type MapSize, type Settings } from '../rules/state';
 import { lonLatOf, TRUE_STARTS, tileOfLonLat } from '../rules/earth';
 import { cityTourism, longGameTurn, maxRoutes, routesGold, routesOf, routeYield, spiesOf, spyCount, startRoute, surveillanceTurns, theft, THEFT_COST, unVote } from '../rules/trade';
 import { TECHS } from '../rules/techs';
 import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasMet, makeDeal, relationsOf, remember, spareIncome } from '../rules/diplomacy';
 import { bindTeams } from '../rules/teams';
 import { cityInfo, mapWire, viewFor } from '../views';
-import { unpackKnown, type KnownTile } from '../protocol';
+import { packStatic, unpackKnown, unpackStatic, type KnownTile } from '../protocol';
 import { SaveThrottle } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
 import { riverLinks, terrainEdits } from '../terrain';
+import { reshapeEdits } from '../seasons';
+import { batter, disasterTurn, erupt, flood, seasonAt, seasonOf, seasonTurns, SOIL_MAX } from '../rules/disasters';
+import { climateTurn, emissions, MAX_RISES, riseAt, submerge } from '../rules/climate';
 import { corners, GROWN, KINDS, PEN_SCALE, spotsFor } from '../client/spots';
 import { blank, city, techsTo, unit, war } from './world';
 import { liberation, LIBERATE_INFLUENCE } from '../rules/liberation';
@@ -4608,4 +4611,215 @@ test('the Inca: a hill is a single move; roads on hills cost no upkeep and half 
   eq(roads('egypt', false), 4, 'half a gold a road');
   eq(roads('inca', false), 2, 'a quarter for the Inca');
   eq(roads('inca', true), 0, 'none on hills');
+});
+
+// -------------------------------------------------------------------------------------------------
+// A living world: seasons, disasters, the rising sea
+// -------------------------------------------------------------------------------------------------
+
+/** A duel's settings for a real map (its land as the seed makes it), with disasters as asked. */
+const worldSettings = (disasters?: boolean): Settings => ({ size: 'duel', type: 'continents', speed: 'quick', timer: 0, cityStates: 0, barbarians: false, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330, ...(disasters === undefined ? {} : { disasters }) });
+const worldSeats = [
+  { user: null, name: 'A', civ: 'egypt', bot: true },
+  { user: null, name: 'B', civ: 'babylon', bot: true },
+];
+
+test('seasons: spring, summer, autumn, winter and round again, a season five turns at standard speed and fewer at quick', () => {
+  eq([1, 6, 11, 16, 21].map((t) => seasonAt(t)).join(','), 'spring,summer,autumn,winter,spring', 'by the turn');
+  eq(seasonAt(5), 'spring', 'the fifth turn still spring');
+  eq(seasonTurns(SPEEDS.quick), 3, 'three turns a season at quick speed');
+  eq(seasonAt(4, SPEEDS.quick), 'summer', 'so summer comes sooner');
+  const { game } = blank();
+  game.turn = 10;
+  eq(seasonOf(game), 'winter', 'a game’s season from its turn and speed (blank worlds are quick: winter by turn 10)');
+});
+
+test('a volcano erupting hurts what’s beside it, buries improvements, and leaves the land round it rich for good', () => {
+  const { game, at } = blank();
+  const v = at(8, 8);
+  Object.assign(game.tiles[v], { elevation: 'mountain', volcano: true, height: 7 });
+  const next = neighbours(game.grid, v);
+  const c = city(game, 0, next[0], { pop: 3 });
+  const w = unit(game, 'warrior', 1, next[1]);
+  for (const t of next.slice(2)) game.tiles[t].improvement = 'farm';
+  const before = tileYields(game, next[1], null).food ?? 0;
+  erupt(game, v, new Rng(3));
+  eq(c.pop, 2, 'the city beside it loses a citizen');
+  ok(!game.units.includes(w) || w.hp < 100, 'the warrior beside it is hurt');
+  ok(next.slice(2).some((t) => game.tiles[t].pillaged), 'improvements are buried in ash');
+  ok(next.slice(1).every((t) => (game.tiles[t].soil?.food ?? 0) >= 1), 'the land beside it is richer');
+  eq(tileYields(game, next[1], null).food ?? 0, before + (game.tiles[next[1]].soil?.food ?? 0), 'its soil is food there');
+  ok(!game.tiles[c.tile].pillaged, 'the city’s own tile isn’t pillaged');
+  // Again and again: the soil grows no richer than its most.
+  for (let i = 0; i < 6; i++) erupt(game, v, new Rng(10 + i));
+  ok(next.every((t) => (game.tiles[t].soil?.food ?? 0) <= SOIL_MAX.food! && (game.tiles[t].soil?.prod ?? 0) <= SOIL_MAX.prod!), 'rich soil is capped');
+  ok(packStatic(game.tiles[v]).length === 6 && unpackStatic(packStatic(game.tiles[v])).volcano, 'the screens are told it’s a volcano');
+  ok(unpackStatic(packStatic(game.tiles[next[1]])).soil && !unpackStatic(packStatic(game.tiles[at(1, 1)])).soil, 'and where the soil is rich');
+  eq(packStatic(game.tiles[at(1, 1)]).length, 5, 'a tile with no marks packs as it always did');
+});
+
+test('a river flood washes away improvements on its banks and leaves silt that feeds them for good', () => {
+  const { game, at } = blank();
+  const banks = [at(4, 6), at(5, 6), at(6, 6), at(7, 6), at(8, 6)];
+  for (const t of banks) Object.assign(game.tiles[t], { river: true, improvement: 'farm' });
+  game.tiles[banks[2]].feature = 'floodplains';
+  let wrecked = 0;
+  for (let i = 0; i < 4; i++) {
+    for (const t of banks) game.tiles[t].pillaged = undefined;
+    const reached = flood(game, banks[2], new Rng(i + 1));
+    ok(reached.includes(banks[2]) && reached.every((t) => game.tiles[t].river), 'it runs along the river');
+    ok(reached.every((t) => distance(game.grid, banks[2], t) <= 2), 'two tiles off at most');
+    wrecked += banks.filter((t) => game.tiles[t].pillaged).length;
+  }
+  ok(wrecked > 0, 'improvements are washed away');
+  eq(game.tiles[banks[2]].soil?.food, SOIL_MAX.food, 'the flood plain is the richer (to its most)');
+  ok(!game.tiles[at(4, 9)].soil, 'land off the river is untouched');
+  const p = game.players[0];
+  ok((tileYields(game, banks[2], p).food ?? 0) >= 2 + 2, 'its food: the flood plain’s and the silt’s');
+});
+
+test('a storm at sea batters ships and embarked units (never sinking them), wrecks the coast, blows about and blows out', () => {
+  const { game, at } = blank();
+  for (let col = 0; col < game.grid.width; col++) for (let row = 0; row < 12; row++) Object.assign(game.tiles[at(col, row)], { terrain: col < 2 || row < 11 ? 'ocean' : 'coast', height: 0 });
+  const eye = at(10, 5);
+  const ship = unit(game, 'trireme', 0, eye);
+  const boat = unit(game, 'warrior', 1, neighbour(game.grid, eye, 0), { embarked: true });
+  const far = unit(game, 'trireme', 0, at(20, 2));
+  const weak = unit(game, 'trireme', 1, neighbour(game.grid, eye, 3), { hp: 8 });
+  const storm = { tile: eye, dir: 0, turns: 3 };
+  batter(game, storm, new Rng(1));
+  ok(ship.hp < 100 && ship.hp >= 10, `the ship is battered (${ship.hp})`);
+  ok(boat.hp < 100, 'and the embarked warrior');
+  eq(far.hp, 100, 'a ship far off is not');
+  ok(game.units.includes(weak) && weak.hp === 8, 'a ship already low is left as it was, not sunk');
+  // The coast's improvements: a storm by the shore, again and again.
+  const shore = neighbours(game.grid, at(10, 11)).find((n) => !TERRAINS[game.tiles[n].terrain].water)!;
+  game.tiles[shore].improvement = 'farm';
+  let wrecked = false;
+  for (let i = 0; i < 20 && !wrecked; i++) {
+    batter(game, { tile: at(10, 11), dir: 0, turns: 1 }, new Rng(Math.imul(i + 1, 0x9e3779b1) >>> 0));
+    wrecked = !!game.tiles[shore].pillaged;
+  }
+  ok(wrecked, 'a coastal improvement is wrecked');
+  // Its turns: it blows on over the water, and is gone once spent.
+  game.turn = 40;
+  game.storms = [storm];
+  disasterTurn(game);
+  ok(game.storms?.[0] ? game.storms[0].tile !== eye && !!TERRAINS[game.tiles[game.storms[0].tile].terrain].water : true, 'it blows on over the sea');
+  for (let i = 0; i < 5; i++) {
+    game.turn++;
+    disasterTurn(game);
+  }
+  ok(!game.storms || !game.storms.some((s) => s === storm), 'spent, it’s gone');
+});
+
+test('the coal and oil the world burns raise the sea: the low coast floods, then drowns; a city holds its tile; units go to dry land', () => {
+  const { game, at } = blank();
+  for (let row = 0; row < game.grid.height; row++) Object.assign(game.tiles[at(0, row)], { terrain: 'ocean', height: 0 });
+  const port = city(game, 0, at(1, 4), { pop: 4 });
+  port.buildings.push('factory');
+  for (let row = 0; row < game.grid.height; row++) if (row !== 4) Object.assign(game.tiles[at(1, row)], { improvement: 'farm', road: 'road' });
+  eq(emissions(game, game.players[0]), 1, 'a Factory burns Coal');
+  eq(emissions(game, game.players[1]), 0, 'and a civ without industry burns none');
+  game.climate = { co2: riseAt(game, 1) - 2, rises: 0 };
+  eq(climateTurn(game).length, 0, 'below the threshold the sea stays');
+  const events = climateTurn(game);
+  eq(game.climate.rises, 1, 'past it, the sea rises');
+  eq(events[0]?.kind, 'sea', 'the screens are told');
+  const flooded = game.tiles.flatMap((tile, t) => (tile.flooded ? [t] : []));
+  ok(flooded.length > 0 && flooded.every((t) => colOf(game.grid, t) === 1), `the low coast floods (${flooded.length})`);
+  ok(!game.tiles[port.tile].flooded, 'never a city’s own tile');
+  ok(flooded.every((t) => game.tiles[t].pillaged), 'its improvements ruined');
+  ok(game.players[0].notes.length === 0 || game.players[0].notes.some((n) => n.topic === 'disasters'), 'news of it is the disasters’ (a bot hears none)');
+  const t = flooded[0];
+  const w = unit(game, 'warrior', 1, t);
+  const owner = game.tiles[t].owner;
+  game.climate.co2 = riseAt(game, 2);
+  climateTurn(game);
+  eq(game.climate.rises, 2, 'it rises again');
+  eq(game.tiles[t].terrain, 'coast', 'what it flooded is under the sea');
+  ok(!game.tiles[t].improvement && !game.tiles[t].road && !game.tiles[t].flooded, 'nothing of the land left on it');
+  eq(game.tiles[t].owner, owner, 'still its owner’s water');
+  ok(!TERRAINS[game.tiles[w.tile].terrain].water && !w.embarked, 'the warrior on it went to dry land');
+  eq(game.tiles[port.tile].terrain, 'grassland', 'the city stands');
+  ok(port.worked.every((x) => workable(game, port).includes(x)), 'and works what it has');
+  game.climate.co2 = riseAt(game, MAX_RISES + 3);
+  for (let i = 0; i < 6; i++) climateTurn(game);
+  eq(game.climate.rises, MAX_RISES, 'no more than its most');
+});
+
+test('disasters off: no volcanoes on the map, no eruptions, floods, storms or rising sea', () => {
+  const off = createGame(worldSettings(false), worldSeats, 11);
+  const on = createGame(worldSettings(true), worldSeats, 11);
+  eq(off.tiles.filter((t) => t.volcano).length, 0, 'no volcanoes without disasters');
+  ok(on.tiles.filter((t) => t.volcano).length >= 1, 'some with them');
+  // The world the seed makes is the same, but for its volcanoes.
+  const land = (g: Game) => JSON.stringify(g.tiles.map((t) => ({ ...t, volcano: undefined })));
+  eq(land(on), land(off), 'the same land either way');
+  const { game, at } = blank();
+  game.settings.disasters = false;
+  Object.assign(game.tiles[at(8, 8)], { elevation: 'mountain', volcano: true });
+  for (const t of [at(3, 3), at(4, 3)]) Object.assign(game.tiles[t], { river: true, feature: 'floodplains' });
+  Object.assign(game.tiles[at(20, 10)], { terrain: 'ocean', height: 0 });
+  game.storms = [{ tile: at(20, 10), dir: 0, turns: 3 }];
+  city(game, 0, at(12, 12)).buildings.push('factory');
+  game.climate = { co2: riseAt(game, 1), rises: 0 };
+  for (game.turn = 20; game.turn < 600; game.turn++) {
+    eq(disasterTurn(game).length, 0, `no disasters at turn ${game.turn}`);
+    eq(climateTurn(game).length, 0, 'and the sea stays');
+  }
+  eq(game.climate.rises, 0, 'it never rose');
+  ok(game.tiles.every((t) => !t.soil && !t.pillaged), 'nothing touched');
+});
+
+test('the same seed has the same disasters (a saved game goes on as it would have); they don’t move the game’s own random numbers', () => {
+  const run = (seed: number) => {
+    const game = createGame(worldSettings(true), worldSeats, seed);
+    const rng = game.rng;
+    const seen: string[] = [];
+    for (game.turn = 1; game.turn < 400; game.turn++) for (const e of disasterTurn(game)) seen.push(`${game.turn}:${e.kind}:${e.tile}`);
+    eq(game.rng, rng, 'the game’s own random numbers untouched');
+    return { seen: seen.join(' '), land: JSON.stringify(game.tiles.map((t) => [t.soil, t.pillaged, t.feature])) };
+  };
+  const a = run(21);
+  const b = run(21);
+  ok(a.seen.length > 0, 'some disasters in four hundred turns');
+  eq(a.seen, b.seen, 'the same disasters on the same turns');
+  eq(a.land, b.land, 'and the same land after');
+  ok(run(22).seen !== a.seen, 'another seed, others');
+  // A game saved midway and carried on has the same ones.
+  const whole = createGame(worldSettings(true), worldSeats, 21);
+  const half = createGame(worldSettings(true), worldSeats, 21);
+  const wholeSeen: string[] = [];
+  const halfSeen: string[] = [];
+  for (whole.turn = 1; whole.turn < 200; whole.turn++) for (const e of disasterTurn(whole)) wholeSeen.push(`${whole.turn}:${e.kind}:${e.tile}`);
+  for (half.turn = 1; half.turn < 100; half.turn++) for (const e of disasterTurn(half)) halfSeen.push(`${half.turn}:${e.kind}:${e.tile}`);
+  const loaded: Game = JSON.parse(JSON.stringify(half));
+  for (; loaded.turn < 200; loaded.turn++) for (const e of disasterTurn(loaded)) halfSeen.push(`${loaded.turn}:${e.kind}:${e.tile}`);
+  eq(halfSeen.join(' '), wholeSeen.join(' '), 'a save carried on');
+});
+
+test('the world’s changes reach the screens: the map sent marks them, the view has the storms and the turn’s disasters, the land is built again', () => {
+  const { game, at } = blank();
+  for (let row = 0; row < game.grid.height; row++) Object.assign(game.tiles[at(0, row)], { terrain: 'ocean', height: 0 });
+  game.storms = [{ tile: at(0, 5), dir: 0, turns: 2 }];
+  game.events = [{ kind: 'flood', tile: at(4, 4), tiles: [at(4, 4), at(5, 4)] }];
+  for (const o of game.players) o.explored.fill(0);
+  const p = game.players[0];
+  p.explored[at(0, 5)] = 1;
+  p.explored[at(4, 4)] = 1;
+  const v = viewFor(game, p, null);
+  eq(JSON.stringify(v.storms), JSON.stringify([at(0, 5)]), 'storms in waters they know');
+  eq(JSON.stringify(v.events?.[0]?.tiles), JSON.stringify([at(4, 4)]), 'a flood where they know the land');
+  eq(viewFor(game, game.players[1], null).storms?.length, 0, 'not in waters they don’t');
+  const before = terrainEdits(game.grid, game.tiles);
+  const t = at(1, 5);
+  submerge(game, t);
+  eq(unpackStatic(mapWire(game).tiles[t]).terrain, 'coast', 'the map sent has the sea over it');
+  const after = terrainEdits(game.grid, game.tiles);
+  const built = reshapeEdits(game.grid, game.tiles, [t], after);
+  ok(built.tiles.includes(t), 'the tile is built again');
+  ok(built.edits.every((e) => tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5) === t || built.tiles.includes(tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5))), 'only its own columns');
+  ok(built.edits.some((e) => e[1] === SEA_Y && e[3] === 'water') && !built.edits.some((e) => e[1] > SEA_Y && e[3] !== 'air'), 'as open sea');
+  ok(before.some((e) => tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5) === t && e[1] > SEA_Y), 'where there was land');
 });

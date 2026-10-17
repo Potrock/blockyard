@@ -1,18 +1,18 @@
 import { defineClient, type Client, type ClientKit } from '@platform/client';
 import { centre, period } from './geometry';
-import type { CityInfo, DealCheck, FightWire, LobbyView, MapWire, OrderResult, PreviewReply, ResearchAdvice, StatsInfo, View, WorkAdvice, FameEntry, DealHelp } from './protocol';
+import type { CityInfo, DealCheck, FightWire, LobbyView, MapWire, OrderResult, ReshapeWire, PreviewReply, ResearchAdvice, StatsInfo, View, WorkAdvice, FameEntry, DealHelp } from './protocol';
 import { setAdvice } from './client/advice';
 import { cam, frameCamera } from './client/camera';
 import { drawFog, mountFog } from './client/fog';
 import { frameHandover, handoverView, holdFights, mountHandover } from './client/handover';
 import { bindInput, previewAsk } from './client/input';
 import { drawOverlay, mountOverlay } from './client/overlay';
-import { defineModelLooks, drawModels, resetModels } from './client/models3d';
+import { defineModelLooks, drawModels, forgetGround, resetModels } from './client/models3d';
 import { drawResources } from './client/resources3d';
 import { drawTraffic } from './client/traffic';
 import { drawLife, resetLife } from './client/life';
 import { drawNatureFx } from './client/naturefx';
-import { me, resetGame, setMap, setView, setYields, store } from './client/store';
+import { me, reshapeMap, resetGame, setMap, setView, setYields, store } from './client/store';
 import { bindPrefs, loadPrefs, prefs, type Prefs } from './client/prefs';
 import { mountUI, renderUI, selectNextIdle } from './client/ui';
 import { moments } from './client/moments';
@@ -20,6 +20,7 @@ import { marchTurn } from './client/march';
 import { defineMusic, playMusic } from './client/music';
 import { defineSounds, frameSounds, play } from './client/sound';
 import { frameWorld, worldMoments } from './client/worldfx';
+import { disasterMoments, drawWeather } from './client/weatherfx';
 import { frameMoments } from './client/splash';
 import { shared } from './shared';
 import { askWorkAdvice, followWorkPlans, resetWorkPlans, setWorkAdvice } from './client/workadvice';
@@ -113,6 +114,7 @@ function board(): ClientKit {
         // The turn waiting on this player after a wait: a bell.
         turnAlerts(prev, store.view!, client.time);
         worldMoments(client, prev, store.view!);
+        disasterMoments(client, prev, store.view!);
         // The city on screen changed (a new turn, it grew, its citizens moved, it finished something): its screen again.
         const open = store.selectedCity;
         if (open !== null) {
@@ -179,6 +181,11 @@ function board(): ClientKit {
         store.changed++;
       });
       client.on('yields', (d) => setYields(d as string));
+      // The land the world has changed (the sea risen over it, rich soil): as it now is.
+      client.on('reshape', (d) => {
+        reshapeMap(d as ReshapeWire);
+        forgetGround();
+      });
       client.on('dealCheck', (d) => {
         store.diplo.check = d as DealCheck;
         store.changed++;
@@ -210,6 +217,7 @@ function board(): ClientKit {
       drawLife(client);
       drawResources(client, dt);
       drawNatureFx(client, dt);
+      drawWeather(client, dt);
       drawFog(client.time);
       // Where we're looking, now and then: the world loads round there (a big map's far side too).
       if (store.grid && client.time - told.at > 0.5 && !(Math.hypot(cam.x - told.x, cam.z - told.z) < 8)) {

@@ -25,6 +25,8 @@ import { GOLDEN_SPEEDS, type City, type Game, type Player, type Production, type
 import { sideName, sides, teamOf, teammates } from './teams';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { startSequence, waitsFor, warBegun } from './turns';
+import { climateTurn } from './climate';
+import { disasterTurn } from './disasters';
 import { FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, type ImprovementId } from './terrain';
 import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNIT_LIST, UNITS } from './units';
 
@@ -1708,6 +1710,10 @@ export function endTurn(game: Game) {
   congressTurn(game, eraOf);
   barbarianTurn(game);
   raze(game);
+  // The world's own turn: its disasters and its climate (what they did kept for the screens to show).
+  const events = [...disasterTurn(game), ...climateTurn(game)];
+  if (events.length) game.events = events;
+  else delete game.events;
   // (Science and techs the turn brought after the civs' own turns, a research agreement's or a spy's, shared again.)
   shareResearch(game);
   game.turn++;

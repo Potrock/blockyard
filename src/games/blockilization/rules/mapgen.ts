@@ -287,6 +287,31 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
 }
 
 /**
+ * The volcanoes (`disasters.ts`), set on a few of a new world's mountains after the rest of it is
+ * made (in a game with disasters), by a stream of random numbers of their own (so the map a seed made before is the same, but for them): mountains
+ * with land beside them for the ash to fall on, not by a start, and spread apart.
+ */
+export function placeVolcanoes(g: Grid, tiles: Tile[], seed: number, starts: number[]) {
+  const rng = new Rng((seed ^ 0x766f6c63) >>> 0);
+  const count = Math.max(2, Math.round((g.width * g.height) / 260));
+  const sites = tiles
+    .map((_, t) => t)
+    .filter((t) => {
+      const tile = tiles[t];
+      if (tile.elevation !== 'mountain' || tile.wonder || tile.feature === 'ice' || TERRAINS[tile.terrain].water) return false;
+      if (starts.some((s) => distance(g, s, t) <= 2)) return false;
+      return neighbours(g, t).filter((n) => !TERRAINS[tiles[n].terrain].water && tiles[n].elevation !== 'mountain' && !tiles[n].wonder).length >= 2;
+    });
+  const placed: number[] = [];
+  while (placed.length < count && sites.length) {
+    const t = sites.splice(Math.floor(rng.next() * sites.length), 1)[0];
+    if (placed.some((p) => distance(g, p, t) < 5)) continue;
+    tiles[t].volcano = true;
+    placed.push(t);
+  }
+}
+
+/**
  * Civ V's Strategic Balance: every civ's start has Horses and Iron within about four tiles (a near
  * spot first), and Coal and Oil on its own landmass within ten, unless there's no ground for them
  * (Oil may lie just off the coast). Each is placed only where the civ has none in reach already.

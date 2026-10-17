@@ -45,6 +45,7 @@ import { fitRibbon, renderRibbon, RIBBON_CSS } from './ribbon';
 import { replayPanel, REPLAY_CSS } from './replay';
 import { splashCard, splashSeconds, SPLASH_CSS } from './splash';
 import { ask, attackable, cityAt, enemyAt, me, myCity, myUnit, outOfReach, reachOf, store, teammate, tone, unitsAt, wallsOver } from './store';
+import { seasonName } from './weatherfx';
 import { chargeFrom, previewPath, routeOf, swapsWith, whyNot, type Route } from './path';
 import { leaveMarch, marchOf, marching } from './march';
 import { CITYSTATES_CSS } from './citystates';
@@ -693,6 +694,8 @@ function renderLobby(): El | null {
     chips('Turns', TURN_CHOICES.map((n): [number, string] => [n, String(n)]), s.turnLimit, (v) => lobby({ a: 'settings', turnLimit: v })),
     chips('City-states', [[0, 'None'], [2, '2'], [4, '4'], [6, '6'], [8, '8'], [12, '12']] as [number, string][], s.cityStates, (v) => lobby({ a: 'settings', cityStates: v })),
     chips('Barbarians', [[1, 'On'], [0, 'Off']] as [number, string][], s.barbarians ? 1 : 0, (v) => lobby({ a: 'settings', barbarians: v === 1 })),
+    // (Volcanoes, floods, storms and the rising sea: `rules/disasters.ts`.)
+    chips('Disasters', [[1, 'On'], [0, 'Off']] as [number, string][], s.disasters ? 1 : 0, (v) => lobby({ a: 'settings', disasters: v === 1 })),
     h(
       'div.row',
       {},
@@ -753,7 +756,7 @@ function renderTop(): El {
     s.tourism > 0 && stat('tourism', 'y-tourism', String(s.tourism), null, `${s.tourism} tourism a turn`, 'concept:tourism'),
     ...Object.entries(s.strategic).map(([id, r]) => h('span.cv-stat', { 'data-pedia': `resource:${id}`, 'data-note': `${r.have - r.used} free of ${r.have}`, style: `color:${RESOURCES[id]?.color}` }, icon(resourceGlyph(id), 16), `${r.have - r.used}`)),
     h('span.spacer'),
-    h('div.when', {}, h('b', {}, `${ERA_NAMES[ERAS[s.era]]}`), h('small', {}, `Turn ${v.turn} · ${year(v.turn)}`)),
+    h('div.when', {}, h('b', {}, `${ERA_NAMES[ERAS[s.era]]}`), h('small', {}, `Turn ${v.turn} · ${year(v.turn)} · ${seasonName(v)}`)),
     h(
       'div.menu',
       {},
@@ -2404,7 +2407,7 @@ function renderTip() {
     const line = (glyph: string, colour: string, text: string) => h('div.ln', {}, icon(glyph, 13, colour), text);
     const nature = k.wonder ? NATURAL_WONDERS[k.wonder] : undefined;
     const bits: (El | string)[] = [
-      h('b', {}, nature ? nature.name : `${s.elevation === 'mountain' ? 'Mountain' : TERRAINS[s.terrain].name}${s.elevation === 'hills' ? ' Hills' : ''}${s.feature ? ` · ${FEATURES[s.feature].name}` : ''}${s.river ? ' · River' : ''}`),
+      h('b', {}, nature ? nature.name : `${s.elevation === 'mountain' ? 'Mountain' : TERRAINS[s.terrain].name}${s.elevation === 'hills' ? ' Hills' : ''}${s.feature ? ` · ${FEATURES[s.feature].name}` : ''}${s.river ? ' · River' : ''}${s.volcano ? ' · Volcano' : ''}${s.soil ? ' · Rich Soil' : ''}${s.flooded ? ' · Flooded' : ''}`),
     ];
     if (nature) bits.push(line('peak', nature.color, `Natural wonder${nature.passable ? '' : ' (impassable)'}`), ...natureEffects(nature).map((x) => line('golden', '#f2c14e', x)));
     if (k.resource) bits.push(line(resourceGlyph(k.resource), RESOURCES[k.resource].color, `${RESOURCES[k.resource].name} (${RESOURCES[k.resource].kind})`));

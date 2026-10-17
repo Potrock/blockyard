@@ -30,6 +30,7 @@ export function blank(civs: string[] = ['egypt', 'babylon'], opts: { cityStates?
     victories: { domination: false, science: false, culture: false, diplomatic: false, score: false },
     turnLimit: 9999,
     wrap: opts.wrap ?? false,
+    disasters: true,
   };
   const seats = civs.map((id) => {
     const civ = CIV_LIST.find((c) => c.id === id)!;
@@ -43,7 +44,7 @@ export function blank(civs: string[] = ['egypt', 'babylon'], opts: { cityStates?
     tile.elevation = 'flat';
     tile.height = 1;
     tile.owner = -1;
-    for (const k of ['feature', 'resource', 'amount', 'river', 'improvement', 'pillaged', 'road', 'city', 'ruin', 'camp', 'wonder', 'antiquity', 'hiddenAntiquity'] as const) delete tile[k];
+    for (const k of ['feature', 'resource', 'amount', 'river', 'improvement', 'pillaged', 'road', 'city', 'ruin', 'camp', 'wonder', 'antiquity', 'hiddenAntiquity', 'volcano', 'soil', 'flooded'] as const) delete tile[k];
   }
   // (Natural wonders found on the map it began with are gone with them.)
   delete game.found;

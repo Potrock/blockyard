@@ -183,6 +183,8 @@ export function tileYields(game: Game, t: number, p: Player | null): Yields {
   }
   if (tile.river) y = addYields(y, { gold: 1 });
   y = addYields(y, aroundYields(game, t));
+  // (The rich soil an eruption or a flood has left: `disasters.ts`.)
+  y = addYields(y, tile.soil);
   for (const k of YIELD_KEYS) if ((y[k] ?? 0) < 0) y[k] = 0;
   return y;
 }

@@ -6,7 +6,7 @@ import type { Quest } from './quests';
 import type { Replay } from './replay';
 import type { GreatKind, SpecialistKind } from './effects';
 import type { Grid } from './hex';
-import type { Elevation, FeatureId, ImprovementId, TerrainId } from './terrain';
+import type { Elevation, FeatureId, ImprovementId, TerrainId, Yields } from './terrain';
 
 /**
  * A game of Blockilization as plain data: the map, the civilizations, their cities and units, whose
@@ -38,6 +38,12 @@ export interface Tile {
   hiddenAntiquity?: boolean;
   /** Its height in blocks over the sea (for the voxel map and the camera). */
   height: number;
+  /** A mountain that's a live volcano (`disasters.ts`): now and then it erupts, harming what's next to it and leaving the land richer. */
+  volcano?: boolean;
+  /** Rich soil an eruption's ash or a river's flood has left: yields on top of the land's, for good (`disasters.ts`). */
+  soil?: Yields;
+  /** Flooded by the rising sea, its improvement ruined: the next rise takes it (`climate.ts`). */
+  flooded?: boolean;
 }
 
 export interface Unit {
@@ -261,7 +267,7 @@ export interface Note {
   /** A tile to look at, if it's about somewhere. */
   at?: number;
   kind?: 'info' | 'good' | 'bad' | 'war' | 'tech' | 'city' | 'religion' | 'great' | 'wonder' | 'citystate';
-  /** News of the world a player may quieten (their settings): others' wonders, city-state quests, the World Congress, religion news, others' wars. Never a choice to make. */
+  /** News of the world a player may quieten (their settings): others' wonders, city-state quests, the World Congress, religion news, others' wars, the world's disasters. Never a choice to make. */
   topic?: NoteTopic;
   /** A reminder of a choice still to make (research, a policy, production...), said each turn it waits: the screens pin those choices themselves. */
   remind?: boolean;
@@ -270,7 +276,7 @@ export interface Note {
 }
 
 /** The kinds of news a player may quieten (`Note.topic`). */
-export const NOTE_TOPICS = ['wonders', 'quests', 'congress', 'religion', 'wars'] as const;
+export const NOTE_TOPICS = ['wonders', 'quests', 'congress', 'religion', 'wars', 'disasters'] as const;
 export type NoteTopic = (typeof NOTE_TOPICS)[number];
 
 export type MapSize = 'duel' | 'small' | 'standard' | 'large' | 'huge';
@@ -300,6 +306,8 @@ export interface Settings {
   wrap?: boolean;
   /** On the Earth map, each civ starts where it really began (`earth.ts`). */
   trueStarts?: boolean;
+  /** Volcanoes, floods, storms and the rising sea (`disasters.ts`, `climate.ts`): a new game's are on unless the lobby turns them off; a game saved before them has none, so it plays on as it began. */
+  disasters?: boolean;
 }
 
 export interface Game {
@@ -338,8 +346,30 @@ export interface Game {
   sequence?: { sides: number[][]; at: number };
   /** When the game began (the server's time, ISO): with its seed, which game it is (a Hall of Fame entry's), the same seed played again another. */
   started?: string;
+  /** Storms at sea now (`disasters.ts`): where each is, the way it's blowing (a `hex.ts` direction), turns left. */
+  storms?: Storm[];
+  /** The world's climate (`climate.ts`): the carbon its civs have burnt, all told, and how many times the sea has risen. */
+  climate?: { co2: number; rises: number };
+  /** What the world did at the end of the last turn (eruptions, floods, storms, the sea), for the screens to show. */
+  events?: WorldEvent[];
   /** Pins people have put on the map (the server's, `server.ts`: nothing in the rules looks at them). */
   pins?: MapPin[];
+}
+
+export interface Storm {
+  tile: number;
+  dir: number;
+  turns: number;
+}
+
+/** Something the world did to a tile at a turn's end (`disasters.ts`, `climate.ts`). */
+export interface WorldEvent {
+  kind: 'eruption' | 'flood' | 'storm' | 'sea';
+  tile: number;
+  /** All the tiles it reached (a flood's banks, the coast the sea took), where it's more than one. */
+  tiles?: number[];
+  /** A storm that rose this turn. */
+  rose?: boolean;
 }
 
 /** A pin on the map, Civilization VI's: a tile a player marked with an icon and a short label, for them and their team. */
