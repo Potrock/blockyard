@@ -1,0 +1,236 @@
+import { botTurn } from '../rules/ai';
+import { CIV_LIST } from '../rules/civs';
+import { createGame } from '../rules/core';
+import { endTurn, eraOf, score } from '../rules/game';
+import { Rng } from '../rules/mapgen';
+import { DIFFICULTIES, type Difficulty } from '../rules/difficulty';
+import { MAP_SIZES, TURN_LIMITS, type Game, type MapSize, type MapType, type Settings } from '../rules/state';
+import { spiesOf, stolen } from '../rules/trade';
+import { ERAS } from '../rules/techs';
+
+/**
+ * The bots' benchmark: bot-only games on several seeds and map sizes, played to the end, with what
+ * tells how well the bots play (cities by turns 60 and 120, wars declared, cities taken, how and when
+ * each game was won, turns spent broke, when religions were founded, how happy the civs were, how fast
+ * new cities grow, what spies stole) and how fast they think (milliseconds per bot turn, of the
+ * processor's time: other work on a busy machine doesn't count).
+ *
+ * Bundle and run from the platform's folder (it has esbuild):
+ *   npx esbuild tests/ai-bench.ts --bundle --platform=node --format=esm --outfile=bench.mjs
+ *   node bench.mjs small 1-8 [difficulty] [teams] [standard] [map type]
+ * Sizes and seeds: `small 1-8`, `standard 1,2,3,4`, `large 1-2`. A game per line, then the totals.
+ * `teams`: the civs in two teams (the first half and the second: 2v2 on a small map). `standard`: at
+ * standard speed (turn limit 500) rather than quick (330). A map type (`pangaea`, `archipelago`,
+ * `fractal`) instead of continents. `flat`: a world with edges east and west (new games wrap round).
+ */
+
+const size = (process.argv[2] ?? 'small') as MapSize;
+const seeds = parseSeeds(process.argv[3] ?? '1-4');
+const difficulty = process.argv.slice(4).find((x) => x in DIFFICULTIES) as Difficulty | undefined;
+const teams = process.argv.slice(4).includes('teams');
+const standard = process.argv.slice(4).includes('standard');
+const flat = process.argv.slice(4).includes('flat');
+const MAP_TYPES: MapType[] = ['continents', 'pangaea', 'archipelago', 'fractal'];
+const mapType = (process.argv.slice(4).find((x) => MAP_TYPES.includes(x as MapType)) as MapType | undefined) ?? 'continents';
+if (process.argv.slice(4).some((x) => !(x in DIFFICULTIES) && x !== 'teams' && x !== 'standard' && x !== 'flat' && !MAP_TYPES.includes(x as MapType))) throw new Error(`Unknown option in ${process.argv.slice(4).join(' ')}`);
+
+/** The processor time this process has used, in milliseconds (unlike the clock, not slowed by other work). */
+function cpuNow(): number {
+  const { user, system } = process.cpuUsage();
+  return (user + system) / 1000;
+}
+
+/** Seeds from `1-8` or `1,5,9`. */
+function parseSeeds(s: string): number[] {
+  if (s.includes('-')) {
+    const [a, b] = s.split('-').map(Number);
+    return Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  }
+  return s.split(',').map(Number);
+}
+
+interface Result {
+  seed: number;
+  /** Each major civ's cities at turns 60 and 120 (in seat order). */
+  cities60: number[];
+  cities120: number[];
+  /** World wonders built by turns 40, 70 and 100. */
+  wonders: number[];
+  wars: number;
+  captured: number;
+  /** Civs destroyed. */
+  eliminated: number;
+  how: string;
+  winner: string;
+  turn: number;
+  /** Turns a civ ended with no gold and less coming in (a unit disbanded for want of pay). */
+  broke: number;
+  /** Turns a civ ended with less gold coming in than going out. */
+  negative: number;
+  ms: number[];
+  /** Bot turns after turn 200, for how fast they are late in the game. */
+  lateMs: number[];
+  endMs: number[];
+  /** The turn each religion was founded on, in order. */
+  religions: number[];
+  /** Each major civ's happiness at the end of each turn, and how many of those turns it was below zero. */
+  mood: number[];
+  unhappy: number;
+  /** Turns each new city (not a capital) took to reach size 5. */
+  toFive: number[];
+  /** Techs stolen by spies, and spies caught. */
+  stolen: number;
+  caught: number;
+  /** City-state quests done (each civ's doing of one counted), and World Congress resolutions passed. */
+  quests: number;
+  passed: number;
+  /** The turn each era was first reached by the leader, and by the median civ (by era index). */
+  eraLeader: number[];
+  eraMedian: number[];
+  errors: string[];
+}
+
+function play(seed: number): Result {
+  const settings: Settings = {
+    size,
+    type: mapType,
+    speed: standard ? 'standard' : 'quick',
+    timer: 0,
+    cityStates: MAP_SIZES[size].cityStates,
+    barbarians: true,
+    victories: { domination: true, science: true, culture: true, diplomatic: true, score: true },
+    turnLimit: TURN_LIMITS[standard ? 'standard' : 'quick'],
+    wrap: !flat,
+  };
+  if (difficulty) settings.difficulty = difficulty;
+  // A different set of civs each seed, so every leader gets played.
+  const rng = new Rng(seed * 7919);
+  const civs = CIV_LIST.map((c) => ({ c, k: rng.next() })).sort((a, b) => a.k - b.k).map((x) => x.c);
+  const n = MAP_SIZES[size].players;
+  const seats = civs.slice(0, n).map((c, i) => ({ user: null, name: c.leader, civ: c.id, bot: true, team: teams ? (i < n / 2 ? 0 : 1) : undefined }));
+  const g: Game = createGame(settings, seats, seed);
+  const majors = g.players.filter((p) => !p.cityState && p.civ !== 'barbarian');
+  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, eraLeader: [], eraMedian: [], errors: [] };
+  const owners = new Map<number, number>();
+  // When each city was first seen (its founding), and the spies each civ had last turn (one fewer: caught).
+  const founded = new Map<number, number>();
+  let spies = majors.map((p) => spiesOf(p).length);
+  const questsSeen = new Set<string>();
+  let lastSession = -1;
+  // The turn each civ first reached each era.
+  const reached = majors.map(() => [] as number[]);
+  const learn = stolen.learn;
+  stolen.learn = (game, p, tech) => {
+    r.stolen++;
+    learn(game, p, tech);
+  };
+  const cityCount = () => majors.map((p) => g.cities.filter((c) => c.owner === p.index).length);
+  let war = majors.map((p) => majors.map((o) => p.diplomacy.war[o.index]));
+  // Wars declared and religions founded since last looked (after each bot's turn and the turn's end).
+  const countWars = () => {
+    majors.forEach((p, i) => majors.forEach((o, j) => (r.wars += j > i && !war[i][j] && p.diplomacy.war[o.index] ? 1 : 0)));
+    war = majors.map((p) => majors.map((o) => p.diplomacy.war[o.index]));
+    while (r.religions.length < Object.keys(g.religions).length) r.religions.push(g.turn);
+  };
+  while (!g.over && g.turn < 600) {
+    const alive = majors.filter((p) => p.alive).length;
+    for (const p of g.players) {
+      if (!p.bot || !p.alive) continue;
+      const t0 = cpuNow();
+      try {
+        botTurn(g, p);
+      } catch (e) {
+        if (r.errors.length < 5) r.errors.push(`T${g.turn} ${p.civ}: ${(e as Error).stack?.split('\n').slice(0, 3).join(' | ')}`);
+      }
+      const ms = cpuNow() - t0;
+      countWars();
+      if (p.cityState || p.civ === 'barbarian') continue;
+      r.ms.push(ms);
+      if (g.turn > 200) r.lateMs.push(ms);
+    }
+    const t0 = cpuNow();
+    endTurn(g);
+    r.endMs.push(cpuNow() - t0);
+    countWars();
+    r.eliminated += alive - majors.filter((p) => p.alive).length;
+    for (const c of g.cities) {
+      const was = owners.get(c.id);
+      if (was !== undefined && was !== c.owner && !g.players[c.owner].cityState && g.players[c.owner].civ !== 'barbarian') r.captured++;
+      owners.set(c.id, c.owner);
+    }
+    for (const p of majors) {
+      if (!p.alive) continue;
+      if ((p.lastIncome?.gold ?? 0) < 0) r.negative++;
+      if ((p.lastIncome?.gold ?? 0) < 0 && p.gold === 0) r.broke++;
+      const mood = p.lastIncome?.happiness ?? 0;
+      r.mood.push(mood);
+      if (mood < 0) r.unhappy++;
+    }
+    for (const c of g.cities) {
+      if (!founded.has(c.id)) founded.set(c.id, c.capital || g.players[c.owner].cityState ? -1 : g.turn);
+      const at = founded.get(c.id)!;
+      if (at >= 0 && c.pop >= 5) {
+        r.toFive.push(g.turn - at);
+        founded.set(c.id, -1);
+      }
+    }
+    majors.forEach((p, i) => (r.caught += Math.max(0, spies[i] - spiesOf(p).length)));
+    // Quests done since last looked (a quest's civs that have done it, new ones), and a session's resolutions passed.
+    for (const cs of g.players) for (const q of cs.cityState?.quests ?? []) for (const d of q.done) {
+      const key = `${cs.index}:${q.kind}:${q.until}:${d}`;
+      if (!questsSeen.has(key)) (questsSeen.add(key), r.quests++);
+    }
+    if (g.congress?.last && g.congress.last.turn !== lastSession) {
+      lastSession = g.congress.last.turn;
+      r.passed += g.congress.last.results.filter((x) => x.passed).length;
+    }
+    majors.forEach((p, i) => {
+      if (p.alive) for (let e = 0; e <= eraOf(p); e++) reached[i][e] ??= g.turn;
+    });
+    spies = majors.map((p) => spiesOf(p).length);
+    if (g.turn === 60) r.cities60 = cityCount();
+    if (g.turn === 120) r.cities120 = cityCount();
+    if (g.turn === 40 || g.turn === 70 || g.turn === 100) r.wonders.push(Object.keys(g.wonders).length);
+  }
+  stolen.learn = learn;
+  for (let e = 1; e < ERAS.length; e++) {
+    const turns = reached.map((x) => x[e]).filter((t): t is number => t !== undefined).sort((a, b) => a - b);
+    if (turns.length) r.eraLeader[e] = turns[0];
+    if (turns.length * 2 > majors.length) r.eraMedian[e] = turns[Math.floor(majors.length / 2)];
+  }
+  r.how = g.over?.how ?? 'none';
+  r.winner = g.over ? `${g.players[g.over.winner].civ}${teams ? ` (team ${(g.players[g.over.winner].team ?? 0) + 1})` : ''}` : '';
+  r.turn = g.turn;
+  const scores = majors.map((p) => `${p.civ}${p.alive ? '' : '†'}:${g.cities.filter((c) => c.owner === p.index).length}c/${p.techs.length}t/${score(g, p)}`).join(' ');
+  console.log(`seed ${seed}: ${r.how} by ${r.winner} T${r.turn} | c60 [${r.cities60.join(',')}] c120 [${r.cities120.join(',')}] wonders [${r.wonders.join(',')}] wars ${r.wars} taken ${r.captured} dead ${r.eliminated} broke ${r.broke} neg ${r.negative} religions [${r.religions.join(',')}] mood ${avg(r.mood).toFixed(1)} unhappy ${pct(r.unhappy, r.mood.length)} size5 ${avg(r.toFive).toFixed(0)}t steals ${r.stolen} caught ${r.caught} quests ${r.quests} passed ${r.passed} | bot ms avg ${avg(r.ms).toFixed(1)} max ${Math.max(...r.ms).toFixed(0)} late avg ${avg(r.lateMs).toFixed(1)} | ${scores}`);
+  for (const e of r.errors) console.log('  ERROR', e);
+  return r;
+}
+
+const avg = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+const pct = (n: number, of: number) => `${of ? Math.round((100 * n) / of) : 0}%`;
+const fmt = (xs: number[]) => `${avg(xs).toFixed(1)} (${Math.min(...xs)}-${Math.max(...xs)})`;
+
+const results = seeds.map(play);
+const all = (f: (r: Result) => number[]) => results.flatMap(f);
+const hows = new Map<string, number>();
+for (const r of results) hows.set(r.how, (hows.get(r.how) ?? 0) + 1);
+const winners = new Set(results.map((r) => r.winner));
+console.log(`\n== ${size} × ${results.length} seeds${mapType !== 'continents' ? ` on ${mapType}` : ''}${difficulty ? ` (${difficulty})` : ''}${teams ? ' (two teams)' : ''}${standard ? ' (standard speed)' : ''}${flat ? ' (flat)' : ' (wraps)'}`);
+console.log(`cities T60   ${fmt(all((r) => r.cities60))}`);
+console.log(`cities T120  ${fmt(all((r) => r.cities120))}`);
+console.log(`wonders      T40 ${fmt(results.map((r) => r.wonders[0] ?? 0))}   T70 ${fmt(results.map((r) => r.wonders[1] ?? 0))}   T100 ${fmt(results.map((r) => r.wonders[2] ?? 0))}`);
+console.log(`wars/game    ${avg(results.map((r) => r.wars)).toFixed(1)}   cities taken/game ${avg(results.map((r) => r.captured)).toFixed(1)}   civs destroyed/game ${avg(results.map((r) => r.eliminated)).toFixed(1)}`);
+console.log(`victories    ${[...hows].map(([k, v]) => `${k} ${v}`).join(', ')}   before the limit ${results.filter((r) => r.how !== 'score' && r.how !== 'none').length}/${results.length}   end turn avg ${avg(results.map((r) => r.turn)).toFixed(0)}   ${winners.size} different winners`);
+const nth = Array.from({ length: Math.max(0, ...results.map((r) => r.religions.length)) }, (_, i) => results.flatMap((r) => r.religions.slice(i, i + 1)));
+console.log(`religions    ${nth.map((ts, i) => `#${i + 1} T${avg(ts).toFixed(0)} (${ts.length}/${results.length})`).join('  ')}`);
+console.log(`happiness    avg ${avg(all((r) => r.mood)).toFixed(1)}   unhappy ${pct(results.reduce((s, r) => s + r.unhappy, 0), all((r) => r.mood).length)} of civ-turns   new cities reach size 5 in ${avg(all((r) => r.toFive)).toFixed(0)} turns (${all((r) => r.toFive).length} cities)`);
+const era = (f: (r: Result) => number | undefined) => {
+  const ts = results.map(f).filter((t): t is number => t !== undefined);
+  return ts.length ? `T${avg(ts).toFixed(0)}${ts.length < results.length ? ` (${ts.length}/${results.length})` : ''}` : '-';
+};
+console.log(`eras (first civ / median civ)  ${ERAS.slice(1).map((name, i) => `${name} ${era((r) => r.eraLeader[i + 1])}/${era((r) => r.eraMedian[i + 1])}`).join('  ')}`);
+console.log(`spies        ${avg(results.map((r) => r.stolen)).toFixed(1)} techs stolen/game   ${avg(results.map((r) => r.caught)).toFixed(1)} spies caught/game   quests ${avg(results.map((r) => r.quests)).toFixed(1)} done/game   resolutions ${avg(results.map((r) => r.passed)).toFixed(1)} passed/game`);
+console.log(`broke turns  ${avg(results.map((r) => r.broke)).toFixed(1)}/game   negative-income turns ${avg(results.map((r) => r.negative)).toFixed(1)}/game`);
+console.log(`bot turn ms  avg ${avg(all((r) => r.ms)).toFixed(1)}  max ${Math.max(...all((r) => r.ms)).toFixed(0)}  after T200 avg ${avg(all((r) => r.lateMs)).toFixed(1)} max ${Math.max(0, ...all((r) => r.lateMs)).toFixed(0)}   endTurn avg ${avg(all((r) => r.endMs)).toFixed(1)}`);
+console.log(`exceptions   ${results.reduce((s, r) => s + r.errors.length, 0)}`);
