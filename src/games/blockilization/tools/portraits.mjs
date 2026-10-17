@@ -4,6 +4,7 @@
  * by `pictures.mjs` with the units; never models in the world.
  */
 import { Model, person } from './shapes.mjs';
+import { cellOf } from './voxel.mjs';
 
 // ---------------------------------------------------------------------------------------------
 // The leaders
@@ -293,6 +294,64 @@ function dome(m, x, z, y, r, c) {
   for (let j = 0; j <= r; j++) m.disc(x, z, Math.sqrt(Math.max(0, r * r - j * j)), y + j, y + j + 1, c);
 }
 
+/** Clear the cells [lo, hi): a doorway, a courtyard, a recess. */
+const cut = (m, lo, hi) => m.vox.paint('m', lo, hi, () => false);
+
+/** A hipped roof over [x0, x1) × [z0, z1) from y: up to `n` layers, each a voxel in from the last. */
+function hip(m, x0, x1, z0, z1, y, n, c) {
+  for (let j = 0; j < n && x0 + j < x1 - j && z0 + j < z1 - j; j++) m.box([x0 + j, y + j, z0 + j], [x1 - j, y + j + 1, z1 - j], c);
+}
+
+/** An Eastern roof over [x0, x1) × [z0, z1) at y: eaves two voxels out, their corners turned up, hipped in `n` layers. */
+function eaves(m, x0, x1, z0, z1, y, n, c) {
+  m.box([x0 - 2, y, z0 - 2], [x1 + 2, y + 1, z1 + 2], c);
+  for (const x of [x0 - 2, x1 + 1]) for (const z of [z0 - 2, z1 + 1]) m.set(x, y + 1, z, c);
+  hip(m, x0 - 1, x1 + 1, z0 - 1, z1 + 1, y + 1, n, c);
+}
+
+/** A ring of `n` columns of radius r round (x, z), from y0 to y1. */
+function ring(m, x, z, r, n, y0, y1, c) {
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const [cx, cz] = [Math.floor(x + Math.cos(a) * r), Math.floor(z + Math.sin(a) * r)];
+    m.box([cx, y0, cz], [cx + 1, y1, cz + 1], c);
+  }
+}
+
+/** An onion dome at (x, z) from y, r across and h tall: swelling out, then drawn in to a point; striped round in c2 if given. */
+function onion(m, x, z, y, r, h, c, c2) {
+  for (let j = 0; j < h; j++) {
+    const t = j / h;
+    const rr = t < 0.35 ? r * (0.75 + 0.25 * Math.sin((t / 0.35) * (Math.PI / 2))) : r * Math.cos(((t - 0.35) / 0.65) * (Math.PI / 2)) ** 1.2 + 0.5;
+    for (let k = Math.floor(z - rr); k <= Math.ceil(z + rr); k++)
+      for (let i = Math.floor(x - rr); i <= Math.ceil(x + rr); i++) {
+        const [dx, dz] = [i + 0.5 - x, k + 0.5 - z];
+        if (dx * dx + dz * dz > rr * rr) continue;
+        const band = Math.floor(((Math.atan2(dz, dx) + Math.PI) / (Math.PI * 2)) * 8 + j * 0.5);
+        m.set(i, y + j, k, c2 && band % 2 ? c2 : c);
+      }
+  }
+  m.disc(x, z, 0.75, y + h, y + h + 2, 'gold');
+}
+
+/** A lotus-bud tower (Angkor's): square layers of half-width r, then drawn in to a point over h, ribbed in two colours. */
+function bud(m, x, z, y, r, h, c, c2) {
+  for (let j = 0; j < h; j++) {
+    const t = j / h;
+    const half = Math.max(1, Math.round(r * (t < 0.3 ? 1 : Math.cos(((t - 0.3) / 0.7) * (Math.PI / 2)) + 0.15)));
+    m.box([x - half, y + j, z - half], [x + half, y + j + 1, z + half], j % 2 ? c2 : c);
+  }
+}
+
+/** Djenné's wooden spikes (torons): a voxel out from the walls' sides, at every cell that `at(i, j, k)` picks. */
+function spikes(m, c, at) {
+  for (const key of [...m.vox.parts.get('m').keys()]) {
+    const [i, j, k] = cellOf(key);
+    if (!at(i, j, k)) continue;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (!m.vox.get('m', i + dx, j, k + dz) && !m.vox.get('m', i + dx, j - 1, k + dz)) m.set(i + dx, j, k + dz, c);
+  }
+}
+
 const make = (id, fn) => {
   const m = new Model(id);
   fn(m);
@@ -350,12 +409,35 @@ export const WONDERS = [
     for (let j = 0; j < 4; j++) m.box([-15 + j * 3, 16 + j * 2, -9 + j * 2], [15 - j * 3, 18 + j * 2, 9 - j * 2], 'roof');
     m.box([-3, 3, 9], [3, 9, 11], 'gold');
   }),
+  // The Great Wall: crenellated, climbing up over a hill and down again, watchtowers along it.
   make('w_wall', (m) => {
-    for (let z = -16; z < 16; z++) {
-      const x = Math.round(Math.sin(z / 5) * 5);
-      m.box([x - 2, 0, z], [x + 3, 9, z + 1], 'stone');
-      if (z % 2 === 0) m.box([x - 2, 9, z], [x - 1, 11, z + 1], 'stone').box([x + 2, 9, z], [x + 3, 11, z + 1], 'stone');
-      if ((z + 16) % 10 === 0) m.box([x - 4, 0, z - 2], [x + 5, 15, z + 3], 'stoneDark').box([x - 4, 15, z - 2], [x + 5, 18, z + 3], 'roofDark');
+    // Its way runs corner to corner (front left to back right, across the picture), swinging as it goes, along the crest
+    // of a ridge that rises to a peak and a lesser one; its walk four voxels up.
+    const way = (x) => -0.8 * x + 7 * Math.sin(x / 5);
+    const slope = (x) => -0.8 + 1.4 * Math.cos(x / 5);
+    const crest = (x) => 1 + 15 * Math.exp(-((x + 4) ** 2) / 50) + 8 * Math.exp(-((x - 10) ** 2) / 20);
+    const off = (x, z) => Math.abs(z - way(x)) / Math.hypot(1, slope(x));
+    const hill = (x, z) => Math.round(1 + (crest(x) - 1) * Math.exp(-(off(x, z) ** 2) / 90));
+    const walk = (x) => Math.round(crest(x)) + 4;
+    for (let x = -16; x < 16; x++)
+      for (let z = -16; z < 16; z++) {
+        const h = hill(x + 0.5, z + 0.5);
+        m.box([x, 0, z], [x + 1, h - 1, z + 1], 'mud').set(x, h - 1, z, h % 4 === 0 ? 'olive' : 'green');
+        const d = off(x + 0.5, z + 0.5);
+        if (d >= 6 && (x * 7 + z * 13) % 17 === 0) m.box([x, h, z], [x + 1, h + 2, z + 1], 'cypress');
+        if (d >= 1.8) continue;
+        const y = walk(x + 0.5);
+        m.box([x, h - 1, z], [x + 1, y, z + 1], 'stone');
+        if (d < 0.9) m.set(x, y - 1, z, 'stoneDark');
+        else if ((x + z) % 2 === 0) m.set(x, y, z, 'stone');
+      }
+    for (const x of [-12, -3, 10]) {
+      const [z, y] = [Math.round(way(x)), walk(x) + 4];
+      m.box([x - 2, 1, z - 2], [x + 3, y, z + 3], 'stone').box([x - 1, y - 1, z - 1], [x + 2, y, z + 2], 'stoneDark');
+      for (let i = -2; i < 3; i += 2) for (const [a, b] of [[x + i, z - 2], [x + i, z + 2], [x - 2, z + i], [x + 2, z + i]]) m.set(a, y, b, 'stone');
+      // An arched window on each side.
+      for (const [a, b] of [[x, z + 2], [x, z - 2], [x + 2, z], [x - 2, z]]) m.box([a, y - 4, b], [a + 1, y - 2, b + 1], 'black');
+      if (x === -3) hip(m, x - 1, x + 2, z - 1, z + 2, y, 2, 'roofDark');
     }
   }),
   make('w_arena', (m) => {
@@ -485,5 +567,405 @@ export const WONDERS = [
         const t = (i / 80) * Math.PI * 2;
         m.set(Math.round(Math.cos(t) * 13 * a), Math.round(17 + Math.sin(t) * 13), Math.round(Math.cos(t) * 13 * b), 'orange');
       }
+  }),
+  // The Mausoleum at Halicarnassus: a tall podium, a colonnade round the tomb, a stepped pyramid, a chariot of four horses on top.
+  make('w_mausoleum', (m) => {
+    m.box([-13, 0, -13], [13, 2, 13], 'stoneDark');
+    m.box([-11, 2, -11], [11, 15, 11], 'marbleWhite').box([-11, 12, -11], [11, 14, 11], 'sandDark');
+    m.box([-10, 15, -10], [11, 16, 11], 'marbleWhite');
+    columns(m, 9, 9, 9, 16, 'marbleWhite');
+    m.box([-7, 16, -7], [8, 25, 8], 'stoneDark');
+    m.box([-10, 25, -10], [11, 27, 11], 'marbleWhite');
+    for (let j = 0; j < 7; j++) m.box([-9 + j, 27 + j, -9 + j], [10 - j, 28 + j, 10 - j], j % 2 ? 'stone' : 'marbleWhite');
+    // The quadriga: four horses abreast before the chariot and its driver.
+    for (const x of [-3, -1, 1, 3]) {
+      m.box([x, 34, 0], [x + 1, 36, 1], 'bronze').box([x, 34, 3], [x + 1, 36, 4], 'bronze');
+      m.box([x, 36, 0], [x + 1, 38, 4], 'bronze').box([x, 38, 3], [x + 1, 40, 5], 'bronze');
+    }
+    m.box([-3, 34, -3], [4, 37, -1], 'bronze').box([0, 37, -3], [1, 41, -2], 'bronze');
+  }),
+  // The Oracle at Delphi: the round tholos on a terrace of the mountain, a tripod's fire before it, the ruined columns of Apollo's temple above.
+  make('w_oracle', (m) => {
+    m.box([-15, 0, -15], [15, 3, 15], 'stoneDark').box([-15, 3, -15], [15, 8, -7], 'stoneDark').box([-15, 8, -15], [15, 9, -7], 'green');
+    m.box([-15, 3, -7], [15, 4, 15], 'green');
+    [12, 7, 12, 4, 12, 9, 12].forEach((h, i) => m.box([-13 + i * 4, 9, -12], [-11 + i * 4, 9 + h, -10], 'marbleWhite'));
+    m.box([-13, 21, -12], [-7, 23, -10], 'marbleWhite').box([3, 21, -12], [11, 23, -10], 'marbleWhite');
+    m.disc(0, 4, 9.5, 4, 6, 'marbleWhite');
+    m.disc(0, 4, 5.5, 6, 16, 'stone');
+    ring(m, 0, 4, 8, 20, 6, 17, 'marbleWhite');
+    m.disc(0, 4, 9, 17, 19, 'marbleWhite');
+    for (const [r, y] of [[7.5, 19], [5.5, 20], [3.5, 21], [1.5, 22]]) m.disc(0, 4, r, y, y + 1, 'roof');
+    // The tripod, its bowl on fire.
+    for (const [x, z] of [[-2, 13], [1, 13], [-1, 11]]) m.box([x, 4, z], [x + 1, 8, z + 1], 'bronze');
+    m.box([-2, 8, 11], [2, 9, 14], 'bronze').box([-1, 9, 12], [1, 11, 13], 'fire');
+  }),
+  // The Parthenon: eight columns across its end, its gable's sculpted pediment to the front, on the rock of the Acropolis.
+  make('w_parthenon', (m) => {
+    // The rock: a plateau, its cliffs falling unevenly round it.
+    for (let x = -16; x < 16; x++)
+      for (let z = -15; z < 15; z++) {
+        const edge = Math.min(15.5 - Math.abs(x + 0.5), 14.5 - Math.abs(z + 0.5));
+        const h = Math.max(1, Math.min(6, Math.floor(1 + edge * 1.5 + Math.sin(x * 0.9) + Math.cos(z * 0.7))));
+        m.box([x, 0, z], [x + 1, h - 1, z + 1], 'stoneDark').set(x, h - 1, z, h < 6 ? 'stoneDark' : 'sandDark');
+      }
+    m.box([-9, 6, -13], [10, 7, 14], 'stone').box([-8, 7, -12], [9, 8, 13], 'marbleWhite');
+    columns(m, 7, 11, 11, 8, 'marbleWhite', 2);
+    // Roofless now: the cella's walls broken off, the entablature round the top, a pediment at either end.
+    for (let x = -5; x < 6; x++) m.box([x, 8, -9], [x + 1, 11 + ((x * 7) % 4 + 4) % 4, -8], 'stone').box([x, 8, 8], [x + 1, 10 + ((x * 5) % 3 + 3) % 3, 9], 'stone');
+    m.box([-5, 8, -9], [-4, 12, 9], 'stone').box([5, 8, -9], [6, 13, 9], 'stone');
+    m.box([-8, 19, -12], [9, 21, 13], 'marbleWhite');
+    cut(m, [-6, 19, -10], [7, 21, 11]);
+    for (let j = 0; j < 5; j++) for (const z of [11, -12]) m.box([-8 + j * 2, 21 + j, z], [9 - j * 2, 22 + j, z + 2], 'marbleWhite');
+    // Its pediment's figures.
+    for (const x of [-5, -2, 1, 3, 6]) m.set(x, 21, 12, 'sand');
+    m.set(0, 22, 12, 'sand').set(1, 22, 12, 'sand').set(0, 23, 12, 'sand');
+    m.box([10, 6, 4], [13, 8, 6], 'marbleWhite').box([12, 6, -8], [14, 7, -6], 'marbleWhite');
+  }),
+  // The Great Mosque of Djenné: mud walls, three towers on its front, buttresses and pinnacles, its wooden spikes sticking out all over.
+  make('w_great_mosque', (m) => {
+    m.box([-15, 0, -13], [15, 3, 13], 'adobeDark');
+    m.box([-14, 3, -11], [14, 14, 10], 'adobe');
+    for (let x = -14; x < 14; x += 4) m.box([x, 3, -12], [x + 2, 17, -11], 'adobe').box([x, 17, -12], [x + 1, 19, -11], 'adobe');
+    for (let z = -11; z < 9; z += 4) for (const x of [-15, 14]) m.box([x, 3, z], [x + 1, 17, z + 2], 'adobe').box([x, 17, z], [x + 1, 19, z + 1], 'adobe');
+    for (const [x, h] of [[-9, 23], [0, 27], [9, 23]]) {
+      m.box([x - 3, 3, 9], [x + 3, h, 13], 'adobe').box([x - 2, h, 10], [x + 2, h + 2, 12], 'adobe').box([x - 1, h + 2, 10], [x + 1, h + 4, 12], 'adobe');
+      m.box([x - 1, h + 4, 10], [x + 1, h + 5, 12], 'white');
+      for (const dx of [-3, 2]) m.box([x + dx, h, 9], [x + dx + 1, h + 2, 10], 'adobe').box([x + dx, h, 12], [x + dx + 1, h + 2, 13], 'adobe');
+    }
+    m.box([-1, 3, 12], [1, 8, 13], 'woodDark');
+    spikes(m, 'wood', (i, j, k) => j > 5 && j % 4 === 1 && (i + k) % 3 === 0);
+  }),
+  // The Alhambra: red fort walls and square towers on a green hill, the tall Comares tower, a court with a long pool and arcades.
+  make('w_alhambra', (m) => {
+    m.box([-16, 0, -14], [16, 3, 14], 'green');
+    m.box([-14, 3, -12], [14, 12, 12], 'ochre');
+    cut(m, [-12, 4, -10], [12, 12, 10]);
+    m.box([-12, 3, -10], [12, 4, 10], 'sand');
+    for (let x = -14; x < 14; x += 2) for (const z of [-12, 11]) m.set(x, 12, z, 'ochre');
+    for (let z = -12; z < 12; z += 2) for (const x of [-14, 13]) m.set(x, 12, z, 'ochre');
+    for (const [x, z] of [[-15, -13], [11, -13], [-15, 9], [11, 9], [-2, 9]]) m.box([x, 3, z], [x + 4, 15, z + 4], 'ochre').box([x + 1, 15, z], [x + 3, 16, z + 4], 'ochre');
+    m.box([-4, 3, -12], [4, 22, -5], 'ochre').box([-4, 22, -12], [4, 23, -5], 'roofDark');
+    for (const x of [-3, 0, 2]) m.box([x, 16, -5], [x + 1, 19, -4], 'black');
+    // The Court of the Myrtles: its pool between hedges, an arcade of white columns at its end.
+    m.box([-2, 3, -4], [2, 4, 8], 'water');
+    for (const x of [-4, 3]) m.box([x, 4, -4], [x + 1, 5, 8], 'cypress');
+    for (let x = -8; x < 9; x += 2) m.box([x, 4, -5], [x + 1, 9, -4], 'marbleWhite');
+    m.box([-9, 9, -6], [10, 10, -4], 'marbleWhite');
+    for (const [x, z] of [[-9, 2], [7, 2], [-9, -2], [7, -2]]) m.box([x, 4, z], [x + 2, 11, z + 2], 'cypress');
+  }),
+  // The Taj Mahal: on its white plinth, the tomb with a tall arch on each face, its onion dome and little cupolas, a minaret at each corner.
+  make('w_taj_mahal', (m) => {
+    m.box([-15, 0, -15], [15, 3, 15], 'marbleWhite').box([-15, 2, -15], [15, 3, 15], 'stone');
+    m.box([-9, 3, -9], [9, 17, 9], 'marbleWhite');
+    m.box([-4, 3, -10], [4, 20, 10], 'marbleWhite').box([-10, 3, -4], [10, 20, 4], 'marbleWhite');
+    m.vox.paint('m', [-10, 3, -10], [10, 20, 10], (i, j, k) => (Math.abs(i + 0.5) + Math.abs(k + 0.5) > 15 ? false : undefined));
+    // The pointed arches, a voxel deep into each face (shadowed inside).
+    const arch = (u, y) => y >= 4 && (Math.abs(u) < 1 ? y < 18 : Math.abs(u) < 2 ? y < 17 : Math.abs(u) < 3 && y < 15);
+    m.vox.paint('m', [-10, 3, -10], [10, 20, 10], (i, j, k) => {
+      for (const [u, d] of [[i + 0.5, 9.5 - k - 0.5], [i + 0.5, k + 0.5 + 9.5], [k + 0.5, 9.5 - i - 0.5], [k + 0.5, i + 0.5 + 9.5]]) {
+        if (!arch(u, j)) continue;
+        if (d < 1) return false;
+        if (d < 2) return 'sandDark';
+      }
+    });
+    m.disc(0, 0, 5.5, 17, 21, 'marbleWhite');
+    onion(m, 0, 0, 21, 7.5, 15, 'marbleWhite');
+    for (const [x, z] of [[-6, -6], [6, -6], [-6, 6], [6, 6]]) m.disc(x, z, 1.5, 17, 20, 'marbleWhite'), dome(m, x, z, 20, 2, 'marbleWhite');
+    for (const [x, z] of [[-13, -13], [13, -13], [-13, 13], [13, 13]]) {
+      m.disc(x, z, 1.5, 3, 30, 'marbleWhite');
+      for (const y of [12, 20, 27]) m.disc(x, z, 2.2, y, y + 1, 'stone');
+      dome(m, x, z, 30, 1.8, 'marbleWhite');
+      m.disc(x, z, 0.75, 32, 34, 'gold');
+    }
+  }),
+  // Borobudur: square terraces (their corners stepped in), round terraces ringed with little bell stupas, the great stupa on top.
+  make('w_borobudur', (m) => {
+    let y = 0;
+    for (const h of [15, 13, 11, 9]) {
+      m.box([-h + 2, y, -h], [h - 2, y + 3, h], 'stoneDark').box([-h, y, -h + 2], [h, y + 3, h - 2], 'stoneDark');
+      m.box([-h + 2, y + 2, -h], [h - 2, y + 3, h], 'greyDark').box([-h, y + 2, -h + 2], [h, y + 3, h - 2], 'greyDark');
+      // Stairs up the middle of each side.
+      m.box([-1, 0, -h - 1], [1, y + 3, h + 1], 'stone').box([-h - 1, 0, -1], [h + 1, y + 3, 1], 'stone');
+      y += 3;
+    }
+    for (const [r, rr, n] of [[8, 7, 16], [6.5, 5.5, 12], [5, 4, 8]]) {
+      m.disc(0, 0, r, y, y + 2, 'stoneDark');
+      y += 2;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + 0.2;
+        const [x, z] = [Math.round(Math.cos(a) * rr), Math.round(Math.sin(a) * rr)];
+        m.box([x - 1, y, z - 1], [x + 1, y + 2, z + 1], 'stone').set(x, y + 2, z, 'stone');
+      }
+    }
+    dome(m, 0, 0, y, 3.5, 'stone');
+    m.disc(0, 0, 1, y + 3, y + 7, 'stone');
+  }),
+  // Angkor Wat: across its moat on a causeway, three galleried terraces and five lotus-bud towers, the middle one the tallest.
+  make('w_angkor_wat', (m) => {
+    m.box([-16, 0, -16], [16, 1, 16], 'water');
+    m.box([-13, 0, -13], [13, 4, 13], 'stoneDark').box([-13, 4, -13], [13, 5, 13], 'greyDark');
+    m.box([-2, 0, 13], [2, 2, 16], 'stone').box([-3, 4, 11], [3, 8, 13], 'stoneDark');
+    hip(m, -3, 3, 11, 14, 8, 2, 'greyDark');
+    m.box([-10, 5, -10], [10, 9, 10], 'stone').box([-10, 9, -10], [10, 10, 10], 'stoneDark');
+    m.box([-7, 10, -7], [7, 14, 7], 'stone');
+    for (const [x, z] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) bud(m, x, z, 14, 2, 12, 'stone', 'stoneDark');
+    bud(m, 0, 0, 14, 3, 20, 'stone', 'stoneDark');
+    for (let x = -12; x < 13; x += 3) m.box([x, 4, 12], [x + 1, 5, 13], 'black');
+  }),
+  // Machu Picchu: grass terraces stepping down the ridge, little stone houses thatched on top, the peak of Huayna Picchu behind.
+  make('w_machu_picchu', (m) => {
+    for (let t = 0; t < 6; t++) {
+      const [x0, x1, z1, y1] = [-15 + t, 15 - t, 15 - t * 3, 2 + t * 2];
+      m.box([x0, 0, -15], [x1, y1, z1], 'green');
+      m.box([x0, 0, z1 - 1], [x1, y1 - 1, z1], 'stone').box([x0, 0, -15], [x0 + 1, y1 - 1, z1], 'stone').box([x1 - 1, 0, -15], [x1, y1 - 1, z1], 'stone');
+    }
+    for (let j = 0; j < 26; j++) {
+      const r = 6 * (1 - j / 26) ** 0.7 + 0.5;
+      for (let k = Math.floor(-9 - r); k <= Math.ceil(-9 + r); k++)
+        for (let i = Math.floor(-6 - r); i <= Math.ceil(-6 + r); i++)
+          if ((i + 6.5) ** 2 + (k + 9.5) ** 2 <= r * r) m.set(i, 12 + j, k, j > 18 || (i * 3 + j * 5 + k * 7) % 3 === 0 ? 'stoneDark' : 'green');
+    }
+    for (const [x, z] of [[3, -3], [8, -3], [3, -10], [8, -10], [-3, -1]]) {
+      m.box([x - 2, 12, z - 2], [x + 2, 15, z + 2], 'stone').box([x - 1, 12, z + 2], [x, 14, z + 3], 'black');
+      for (let j = 0; j < 3; j++) m.box([x - 3 + j, 15 + j, z - 2], [x + 3 - j, 16 + j, z + 2], 'straw');
+    }
+  }),
+  // The Great Library of Alexandria: a sandstone hall, its wall of scrolls in their pigeonholes behind a portico, an obelisk either side.
+  make('w_great_library', (m) => {
+    m.box([-15, 0, -11], [15, 2, 13], 'sandDark').box([-14, 2, -10], [14, 4, 11], 'sand');
+    m.box([-13, 4, -10], [13, 18, 6], 'sand');
+    m.vox.paint('m', [-12, 5, 5], [12, 17, 6], (i, j) => (j % 3 === 1 || i % 3 === 0 ? 'woodDark' : (i + j) % 2 ? 'cloth' : 'leather'));
+    for (const x of [-13, -8, 6, 11]) m.box([x, 4, 9], [x + 2, 18, 11], 'sand');
+    m.box([-14, 18, -11], [14, 20, 11], 'sand').box([-14, 19, 10], [14, 20, 11], 'sandDark');
+    for (let j = 0; j < 7; j++) m.box([-14 + j * 2, 20 + j, -11], [14 - j * 2, 21 + j, 11], 'sandDark');
+    for (const x of [-16, 14]) m.box([x, 0, 13], [x + 2, 14, 15], 'sandDark').box([x, 14, 13], [x + 2, 15, 15], 'gold');
+  }),
+  // The Forbidden Palace: the Hall of Supreme Harmony, red under a double golden roof, its corners turned up, on three white terraces.
+  make('w_forbidden_palace', (m) => {
+    [[15, 12], [13, 10], [11, 8]].forEach(([x, z], t) => m.box([-x, t * 2, -z], [x, t * 2 + 2, z], 'marbleWhite').box([-x, t * 2 + 1, -z], [x, t * 2 + 2, z], 'stone'));
+    for (let s = 0; s < 6; s++) m.box([-3, 0, 8], [3, s + 1, 14 - s], 'stone');
+    m.box([-9, 6, -6], [9, 14, 5], 'red');
+    m.vox.paint('m', [-8, 7, 4], [8, 13, 5], (i, j) => ((i + j) % 2 ? 'gold' : 'redDark'));
+    for (let x = -9; x < 10; x += 3) m.box([x, 6, 5], [x + 1, 14, 6], 'red');
+    m.box([-9, 13, -6], [9, 14, 6], 'teal');
+    eaves(m, -9, 9, -6, 6, 14, 1, 'gold');
+    m.box([-7, 16, -4], [7, 19, 4], 'red').box([-7, 18, -4], [7, 19, 4], 'teal');
+    eaves(m, -8, 8, -5, 5, 19, 6, 'gold');
+    for (const x of [-4, 3]) m.box([x, 26, -1], [x + 1, 28, 1], 'roofDark');
+  }),
+  // The Uffizi: two long arcaded wings round a narrow court, joined at the river end, the battlemented tower of the Palazzo Vecchio behind.
+  make('w_uffizi', (m) => {
+    m.box([-16, 0, -16], [16, 1, 16], 'stoneDark');
+    m.box([-14, 1, -12], [-6, 15, 14], 'sand').box([6, 1, -12], [14, 15, 14], 'sand').box([-14, 1, -12], [14, 15, -6], 'sand');
+    // The loggia along the court: hollowed under the wings, columns along its front.
+    cut(m, [-8, 1, -8], [-6, 5, 14]);
+    cut(m, [6, 1, -8], [8, 5, 14]);
+    cut(m, [-6, 1, -8], [6, 5, -6]);
+    for (let z = -8; z < 14; z += 3) m.box([-7, 1, z], [-6, 5, z + 1], 'stone').box([6, 1, z], [7, 5, z + 1], 'stone');
+    for (let x = -5; x < 6; x += 3) m.box([x, 1, -7], [x + 1, 5, -6], 'stone');
+    m.vox.paint('m', [-14, 6, -12], [14, 14, 14], (i, j, k) => {
+      if (j % 4 > 1) return;
+      const face = i === -14 || i === 13 || i === -7 || i === 6 || k === 13 || k === -7;
+      return face && (i + k) % 2 === 0 && m.vox.get('m', i, j, k) ? 'woodDark' : undefined;
+    });
+    hip(m, -15, -5, -13, 15, 15, 2, 'roof');
+    hip(m, 5, 15, -13, 15, 15, 2, 'roof');
+    hip(m, -15, 15, -13, -5, 15, 2, 'roof');
+    m.box([-16, 1, -16], [-11, 28, -11], 'sand').box([-17, 28, -17], [-10, 30, -10], 'sand');
+    for (let i = 0; i < 7; i += 2) for (const [x, z] of [[-17 + i, -17], [-17 + i, -11], [-17, -17 + i], [-11, -17 + i]]) m.set(x, 30, z, 'sand');
+    m.box([-15, 30, -15], [-12, 36, -12], 'sand').box([-15, 32, -12], [-12, 34, -11], 'black');
+    m.box([-15, 22, -11], [-12, 25, -10], 'white');
+    m.disc(-13.5, -13.5, 2, 36, 37, 'roof');
+    m.box([-14, 37, -14], [-13, 41, -13], 'bronze');
+  }),
+  // The Louvre: palace wings round a court under slate mansard roofs, the glass pyramid in the middle with pools beside it.
+  make('w_louvre', (m) => {
+    m.box([-16, 0, -16], [16, 1, 16], 'stone');
+    for (const [lo, hi] of [[[-15, -15], [15, -9]], [[-15, -15], [-9, 8]], [[9, -15], [15, 8]]]) {
+      m.box([lo[0], 1, lo[1]], [hi[0], 11, hi[1]], 'sand');
+      m.box([lo[0], 11, lo[1]], [hi[0], 12, hi[1]], 'slate');
+      hip(m, lo[0] + 1, hi[0] - 1, lo[1] + 1, hi[1] - 1, 12, 2, 'slate');
+    }
+    m.vox.paint('m', [-15, 3, -15], [15, 10, 8], (i, j, k) => ((j === 4 || j === 5 || j === 8) && (i + k) % 3 === 0 && m.vox.get('m', i, j, k) === 'sand' ? 'slate' : undefined));
+    for (const [x, z] of [[-3, -15], [-15, 3], [9, 3]]) m.box([x, 1, z], [x + 6, 14, z + 6], 'sand'), hip(m, x, x + 6, z, z + 6, 14, 3, 'slate');
+    // The pyramid: glass, its four edges of steel.
+    for (let j = 0; j < 8; j++) {
+      const h = 8 - j;
+      m.box([-h, 1 + j, 2 - h], [h, 2 + j, 2 + h], 'glass');
+      for (const [x, z] of [[-h, 2 - h], [h - 1, 2 - h], [-h, 1 + h], [h - 1, 1 + h]]) m.set(x, 1 + j, z, 'steel');
+    }
+    for (const x of [-8, 4]) m.box([x, 1, 11], [x + 4, 2, 15], 'water');
+  }),
+  // The Sistine Chapel: a tall plain brick hall, high arched windows, battlements and a low roof, the conclave's chimney sending up white smoke.
+  make('w_sistine_chapel', (m) => {
+    m.box([-8, 0, -15], [8, 1, 14], 'stone');
+    m.box([-7, 1, -14], [7, 22, 13], 'mud').box([-8, 21, -15], [8, 22, 14], 'stone');
+    for (let z = -12; z < 12; z += 4) for (const x of [-7, 6]) m.box([x, 13, z], [x + 1, 19, z + 2], 'slate');
+    for (let x = -5; x < 5; x += 4) m.box([x, 13, 12], [x + 2, 19, 13], 'slate');
+    for (let z = -15; z < 14; z += 2) for (const x of [-8, 7]) m.set(x, 22, z, 'mud');
+    for (let x = -8; x < 8; x += 2) for (const z of [-15, 13]) m.set(x, 22, z, 'mud');
+    hip(m, -6, 6, -13, 12, 22, 3, 'roof');
+    m.box([2, 22, -6], [3, 30, -5], 'greyDark');
+    for (const [x, z, r, y] of [[2.5, -5.5, 1.2, 31], [3.5, -6.5, 1.8, 33], [5, -7.5, 2.2, 36]]) m.disc(x, z, r, y, y + 2, 'white');
+  }),
+  // The Leaning Tower of Pisa: a round white tower of six arcaded galleries and its bell chamber, leaning over on its lawn.
+  make('w_leaning_tower', (m) => {
+    m.disc(0, 0, 9, 0, 1, 'green');
+    for (let y = 1; y < 46; y++) {
+      const x = Math.round((y - 1) * 0.14);
+      if (y < 9) m.disc(x, 0, 5, y, y + 1, y % 4 === 0 ? 'stone' : 'marbleWhite');
+      else if (y < 39 && (y - 9) % 5 === 0) m.disc(x, 0, 5.5, y, y + 1, 'marbleWhite');
+      else if (y < 39) m.disc(x, 0, 3.6, y, y + 1, 'stoneDark'), ring(m, x, 0, 5, 12, y, y + 1, 'marbleWhite');
+      else if (y < 45) m.disc(x, 0, 2.6, y, y + 1, 'stoneDark'), ring(m, x, 0, 3.5, 8, y, y + 1, 'marbleWhite');
+      else m.disc(x, 0, 3.8, y, y + 1, 'marbleWhite');
+    }
+  }),
+  // Himeji Castle, the White Heron: on its sloping stone base, a white keep of tier on tier of grey roofs and gables, a lesser keep beside it.
+  make('w_himeji_castle', (m) => {
+    [0, 0, 1, 1, 2, 3, 4].forEach((d, j) => m.box([-14 + d, j, -10 + d], [14 - d, j + 1, 10 - d], j % 2 ? 'stoneDark' : 'stone'));
+    const keep = (cx, cz, tiers, y) => {
+      tiers.forEach(([hx, hz, h], t) => {
+        m.box([cx - hx, y, cz - hz], [cx + hx, y + h, cz + hz], 'marbleWhite');
+        for (let x = cx - hx + 1; x < cx + hx; x += 3) m.set(x, y + h - 2, cz + hz - 1, 'black');
+        const last = t === tiers.length - 1;
+        eaves(m, cx - hx, cx + hx, cz - hz, cz + hz, y + h, last ? 4 : 1, 'slate');
+        // A gable on the front of every other roof.
+        if (t % 2 === 0 && !last)
+          for (let j = 0; j < 4; j++) {
+            m.box([cx - 3 + j, y + h + 1 + j, cz + hz], [cx + 3 - j, y + h + 2 + j, cz + hz + 2], j === 3 ? 'slate' : 'marbleWhite');
+            m.box([cx - 4 + j, y + h + 1 + j, cz + hz], [cx - 3 + j, y + h + 2 + j, cz + hz + 2], 'slate').box([cx + 3 - j, y + h + 1 + j, cz + hz], [cx + 4 - j, y + h + 2 + j, cz + hz + 2], 'slate');
+          }
+        y += h + 2;
+      });
+      return y;
+    };
+    keep(-4, 1, [[8, 6, 6], [7, 5, 5], [6, 4, 5], [5, 3, 4], [4, 2, 4]], 7);
+    keep(9, -4, [[3, 3, 5], [2, 2, 4]], 7);
+    // The golden fish (shachi) at the ends of the topmost ridge.
+    const cells = [...m.vox.parts.get('m').keys()].map(cellOf);
+    const top = Math.max(...cells.map(([, j]) => j));
+    const ridge = cells.filter(([, j]) => j === top);
+    for (const [i, j, k] of ridge) if (!m.vox.get('m', i - 1, j, k) || !m.vox.get('m', i + 1, j, k)) m.set(i, j + 1, k, 'gold');
+  }),
+  // Broadway: a theatre's marquee in lights under its tall sign, billboards on the buildings round it, a yellow cab in the street.
+  make('w_broadway', (m) => {
+    m.box([-15, 0, -12], [15, 1, 12], 'greyDark').box([-15, 1, 9], [15, 2, 12], 'concrete');
+    for (const [x0, x1, h, c] of [[-15, -6, 30, 'brick'], [-6, 5, 22, 'stone'], [5, 15, 38, 'concrete']]) {
+      m.box([x0, 1, -12], [x1, h, -3], c);
+      m.vox.paint('m', [x0, 2, -12], [x1, h - 1, -2], (i, j, k) => ((i - x0) % 2 === 1 && j % 3 === 1 && (k === -4 || i === x1 - 1) && m.vox.get('m', i, j, k) ? 'glass' : undefined));
+    }
+    m.box([-14, 17, -3], [-7, 26, -2], 'feather3').box([-13, 19, -2], [-8, 24, -1], 'white');
+    m.box([-5, 14, -3], [4, 20, -2], 'gold').box([6, 26, -3], [14, 34, -2], 'feather2').box([15, 8, -11], [16, 20, -4], 'jade');
+    m.box([-10, 1, -3], [10, 12, 5], 'redDark').box([-10, 12, -3], [10, 13, 5], 'gold');
+    for (const x of [-7, -4, 2, 5]) m.box([x, 1, 5], [x + 2, 6, 6], 'gold');
+    // The marquee, bulbs round its edges.
+    m.box([-11, 7, 5], [11, 10, 9], 'black').box([-10, 8, 9], [10, 9, 10], 'white');
+    for (let x = -11; x < 11; x++) if (x % 2 === 0) m.set(x, 9, 9, 'fire').set(x, 7, 9, 'fire');
+    m.box([-1, 10, 5], [1, 28, 7], 'neon');
+    for (let y = 11; y < 28; y += 2) m.set(-1, y, 7, 'fire').set(0, y, 7, 'fire');
+    m.box([4, 2, 9], [12, 4, 12], 'gold').box([6, 4, 9], [10, 6, 12], 'gold').box([6, 4, 11], [10, 5, 12], 'glass');
+    for (const x of [5, 10]) m.box([x, 1, 8], [x + 2, 2, 9], 'black').box([x, 1, 12], [x + 2, 2, 13], 'black');
+  }),
+  // The CN Tower: a slender concrete shaft on three fins, the round pod with its glass band, the SkyPod and the mast to its red tip.
+  make('w_cn_tower', (m) => {
+    m.box([-11, 0, -11], [11, 2, 11], 'concrete');
+    m.disc(0, 0, 2.6, 2, 40, 'concrete');
+    for (const a of [Math.PI / 2, (Math.PI * 7) / 6, (Math.PI * 11) / 6])
+      for (let d = 2; d < 10; d++) {
+        const [x, z] = [Math.round(Math.cos(a) * d), Math.round(Math.sin(a) * d)];
+        m.box([x - 1, 2, z - 1], [x + 1, 2 + Math.round(24 * (1 - d / 10) ** 1.5), z + 1], 'concrete');
+      }
+    m.disc(0, 0, 4.5, 26, 27, 'concrete').disc(0, 0, 6.5, 27, 29, 'concrete').disc(0, 0, 6.5, 29, 31, 'glass').disc(0, 0, 5.5, 31, 32, 'concrete').disc(0, 0, 3.5, 32, 33, 'white');
+    m.disc(0, 0, 3.5, 38, 40, 'glass').disc(0, 0, 3, 40, 41, 'concrete');
+    m.disc(0, 0, 1, 41, 53, 'grey').disc(0, 0, 1, 53, 55, 'red');
+  }),
+  // Petra: the Treasury carved out of rose-red rock: two storeys of columns, a pediment and a round tholos between broken pediments.
+  make('w_petra', (m) => {
+    for (let x = -16; x < 16; x++) {
+      const h = 34 + ((x * 7) % 5 + 5) % 5 + (Math.abs(x) > 11 ? 4 : 0);
+      m.box([x, 0, -6], [x + 1, h, 2], 'roseDark');
+      if (Math.abs(x) > 11) m.box([x, 0, 2], [x + 1, h - 2 - (Math.abs(x) % 3), 6 + (x & 1)], 'roseDark');
+    }
+    m.box([-16, 0, 2], [16, 1, 14], 'sand');
+    m.box([-11, 0, 2], [11, 32, 3], 'rose');
+    m.box([-1, 2, 2], [1, 8, 3], 'black');
+    for (const x of [-10, -7, -4, 2, 5, 8]) m.box([x, 1, 3], [x + 2, 14, 5], 'roseLight');
+    m.box([-11, 1, 3], [11, 2, 6], 'roseLight').box([-11, 14, 3], [11, 16, 5], 'roseLight');
+    for (let j = 0; j < 3; j++) m.box([-5 + j * 2, 16 + j, 3], [5 - j * 2, 17 + j, 5], 'roseLight');
+    // Upstairs: the tholos between two half pediments, each on its columns.
+    for (const x of [-10, -7, 5, 8]) m.box([x, 19, 3], [x + 2, 28, 5], 'roseLight');
+    m.box([-10, 28, 3], [-5, 29, 5], 'roseLight').box([5, 28, 3], [10, 29, 5], 'roseLight');
+    m.box([-10, 29, 3], [-7, 30, 5], 'roseLight').box([7, 29, 3], [10, 30, 5], 'roseLight');
+    m.disc(0, 4, 3, 19, 29, 'roseLight');
+    m.disc(0, 4, 3.5, 29, 30, 'roseLight').disc(0, 4, 2.5, 30, 31, 'roseLight').disc(0, 4, 1, 31, 34, 'roseLight');
+  }),
+  // The United Nations: the Secretariat's tall slab, glass on its broad faces, beside the low General Assembly with its dome, a row of flags before them.
+  make('w_united_nations', (m) => {
+    m.box([-16, 0, -12], [16, 1, 13], 'concrete');
+    m.box([-11, 1, -8], [1, 46, -2], 'marbleWhite');
+    m.vox.paint('m', [-10, 1, -8], [0, 46, -2], (i, j, k) => (k === -8 || k === -3 ? (j % 3 === 0 ? 'greyDark' : 'copper') : undefined));
+    m.box([-11, 46, -8], [1, 47, -2], 'concrete');
+    m.box([3, 1, -9], [15, 7, 5], 'marbleWhite').box([5, 7, -9], [13, 8, 5], 'marbleWhite').box([3, 7, -9], [5, 10, 5], 'marbleWhite').box([13, 7, -9], [15, 10, 5], 'marbleWhite');
+    m.box([4, 2, 5], [14, 6, 6], 'glass');
+    dome(m, 9, -2, 8, 3, 'concrete');
+    const flags = ['red', 'blue', 'green', 'gold', 'white', 'feather2', 'jade', 'orange', 'purple', 'feather3', 'crimson'];
+    for (let i = 0; i < 11; i++) {
+      const x = -16 + i * 3;
+      m.box([x, 1, 10], [x + 1, 10, 11], 'grey').box([x + 1, 7, 10], [x + 3, 10, 11], flags[i]);
+    }
+  }),
+  // The Pentagon: five rings of offices round a five-sided court, light wells between them, a single flat face toward the front.
+  make('w_pentagon', (m) => {
+    // How far a cell is out from the middle, measured square to the nearest of the five sides.
+    const out = (x, z) => {
+      const s = (Math.PI * 2) / 5;
+      const a = ((((Math.atan2(x, z) + s / 2) % s) + s) % s) - s / 2;
+      return Math.hypot(x, z) * Math.cos(a);
+    };
+    m.vox.paint('m', [-16, 0, -16], [16, 8, 16], (i, j, k) => {
+      const d = out(i + 0.5, k + 0.5);
+      if (d > 15) return;
+      if (j === 0) return d < 4.5 ? 'green' : 'concrete';
+      const h = d < 4.5 ? 0 : d < 6.5 ? 6 : d < 7.5 ? 2 : d < 9.5 ? 6 : d < 10.5 ? 2 : d < 14.5 ? 7 : 1;
+      if (j < h) return j < h - 1 ? 'concrete' : h > 2 ? 'grey' : 'slate';
+    });
+    m.disc(0, 0, 1.5, 1, 3, 'woodDark');
+  }),
+  // The Kremlin: red battlemented walls and towers under green spires, a white cathedral of golden domes and the tall bell tower inside; St Basil's bright domes on Red Square in front.
+  make('w_kremlin', (m) => {
+    m.box([-16, 0, -15], [16, 1, 2], 'green').box([-16, 0, 2], [16, 1, 15], 'greyDark');
+    for (const [lo, hi] of [[[-15, -14], [15, -12]], [[-15, 0], [15, 2]], [[-15, -14], [-13, 2]], [[13, -14], [15, 2]]]) {
+      m.box([lo[0], 1, lo[1]], [hi[0], 8, hi[1]], 'red');
+      for (let x = lo[0]; x < hi[0]; x++) for (let z = lo[1]; z < hi[1]; z++) if ((x + z) % 2 === 0) m.set(x, 8, z, 'red');
+    }
+    for (const [x, z] of [[-14, -13], [14, -13], [-14, 1], [14, 1]]) {
+      m.box([x - 2, 1, z - 2], [x + 2, 12, z + 2], 'red');
+      hip(m, x - 2, x + 2, z - 2, z + 2, 12, 2, 'green');
+      m.box([x, 14, z], [x + 1, 17, z + 1], 'green');
+    }
+    // The Spasskaya tower over the gate, its clock, its spire with a red star.
+    m.box([-7, 1, -1], [-1, 16, 4], 'red').box([-7, 10, -1], [-1, 11, 4], 'white');
+    m.box([-6, 11, 4], [-2, 15, 5], 'white').box([-4, 12, 5], [-3, 14, 6], 'black');
+    m.box([-6, 16, 0], [-2, 21, 3], 'red').box([-6, 20, 0], [-2, 21, 3], 'white');
+    hip(m, -6, -2, 0, 3, 21, 2, 'green');
+    m.box([-5, 23, 1], [-3, 28, 2], 'green').box([-5, 28, 1], [-3, 31, 2], 'red').box([-6, 29, 1], [-2, 30, 2], 'red');
+    m.box([-5, 1, 3], [-3, 7, 4], 'black');
+    // The cathedral, the bell tower of Ivan the Great, the yellow palace.
+    m.box([-12, 1, -10], [-3, 10, -4], 'marbleWhite');
+    onion(m, -7.5, -7, 10, 2.6, 6, 'gold');
+    for (const [x, z] of [[-10.5, -9], [-4.5, -9], [-10.5, -5], [-4.5, -5]]) m.disc(x, z, 1.2, 10, 12, 'marbleWhite'), onion(m, x, z, 12, 1.6, 4, 'gold');
+    for (const [r, y0, y1] of [[2.6, 1, 14], [2.1, 14, 23], [1.6, 23, 29]]) m.disc(0, -8, r, y0, y1, 'marbleWhite');
+    onion(m, 0, -8, 29, 2.2, 6, 'gold');
+    m.box([3, 1, -12], [12, 9, -4], 'sand').box([3, 4, -4], [12, 5, -3], 'white');
+    hip(m, 3, 12, -12, -4, 9, 2, 'green');
+    // St Basil's: its red walls, its central tent spire and four striped onion domes.
+    m.box([5, 1, 4], [15, 6, 13], 'red').box([5, 5, 4], [15, 6, 13], 'white');
+    m.disc(10, 8.5, 2.5, 6, 16, 'red');
+    for (let j = 0; j < 7; j++) m.disc(10, 8.5, 2.5 - j * 0.33, 16 + j, 17 + j, j % 2 ? 'gold' : 'green');
+    onion(m, 10, 8.5, 23, 1.2, 3, 'gold');
+    for (const [x, z, c, c2] of [[6.5, 5, 'red', 'green'], [13.5, 5, 'feather3', 'white'], [6.5, 12, 'gold', 'green'], [13.5, 12, 'jade', 'gold']]) {
+      m.disc(x, z, 1.4, 6, 10, 'red');
+      onion(m, x, z, 10, 2.2, 6, c, c2);
+    }
   }),
 ];

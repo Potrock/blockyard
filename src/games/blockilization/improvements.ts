@@ -73,7 +73,27 @@ export function decorKey(game: Game, t: number): string {
   if (cityOn(game, t)) return 'city';
   let links = 0;
   if (tile.road) for (let d = 0; d < 6; d++) if (linked(game, neighbour(game.grid, t, d))) links |= 1 << d;
-  return `${tile.improvement ?? ''}|${tile.pillaged ? 1 : 0}|${tile.road ?? ''}|${links}|${tile.resource ?? ''}|${ruinSites(game).has(t) ? 1 : 0}`;
+  return `${tile.improvement ?? ''}|${tile.pillaged ? 1 : 0}|${tile.road ?? ''}|${links}|${tile.resource ?? ''}|${ruinSites(game).has(t) ? 1 : 0}|${wallEdges(game, t)}`;
+}
+
+/**
+ * The Great Wall's run along a tile's edges (a bit for each neighbour it faces): round the land of
+ * the civ that holds it, wherever that land meets land that isn't theirs (not along the coast, nor
+ * round a city, which has walls of its own). It follows the borders as they grow, and goes to
+ * whoever takes the wonder's city.
+ */
+export function wallEdges(game: Game, t: number): number {
+  const by = game.wonders.great_wall;
+  const tile = game.tiles[t];
+  if (by === undefined || by < 0 || tile.owner !== by || TERRAINS[tile.terrain]?.water || cityOn(game, t)) return 0;
+  let edges = 0;
+  for (let d = 0; d < 6; d++) {
+    const n = neighbour(game.grid, t, d);
+    if (n < 0) continue;
+    const other = game.tiles[n];
+    if (other.owner !== by && !TERRAINS[other.terrain]?.water) edges |= 1 << d;
+  }
+  return edges;
 }
 
 /** Where cities stood that are gone, from the game's story (`rules/replay.ts`): worked out again only when it's grown. */
@@ -306,6 +326,8 @@ function lookOf(game: Game, ground: Ground, t: number): Look {
   if (cityOn(game, t)) return look;
   const ruined = !!tile.pillaged;
   if (tile.road) roads(game, look, tile.road, ruined);
+  const edges = wallEdges(game, t);
+  if (edges) greatWall(game, look, edges);
   const imp = tile.improvement;
   if (!imp) {
     if (ruinSites(game).has(t)) cityRuins(look);
@@ -679,6 +701,35 @@ function cityRuins(look: Look) {
     for (const k of at) taken.add(k);
     for (const [dx, dz] of square)
       if ((dx !== 1 || dz !== 1) && !stubs.has(key(x0 + dx, z0 + dz)) && look.rand(120 + i * 9 + dx * 3 + dz) >= 0.35) look.on(x0 + dx, z0 + dz, look.rand(140 + i * 5 + dx + dz) < 0.3 ? 'mossy_cobblestone' : 'stone_bricks');
+  }
+}
+
+/**
+ * The Great Wall along a tile's edges (`wallEdges`): a rampart of stone bricks two blocks high on
+ * the hex's outer ring, crenellated, with a watchtower at each of its corners; a road goes through it
+ * by a gate (the road's columns are left open). Its columns are kept from the tile's improvement.
+ */
+function greatWall(game: Game, look: Look, edges: number) {
+  const g = game.grid;
+  const way = new Map<number, number>();
+  for (let d = 0; d < 6; d++) way.set(neighbour(g, look.t, d), d);
+  for (const c of look.columns) {
+    if (!look.free(c.x, c.z)) continue;
+    // The neighbours it touches (the tiles of the columns beside it): an edge, or two by a corner.
+    const touches = new Set<number>();
+    for (const [i, k] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const n = tileAt(g, c.x + i + 0.5, c.z + k + 0.5);
+      if (n !== look.t && way.has(n)) touches.add(way.get(n)!);
+    }
+    if (![...touches].some((d) => edges & (1 << d))) continue;
+    const ground = look.land(c.x, c.z);
+    if (!ground) continue;
+    const corner = touches.size > 1;
+    const top = ground.y + (corner ? 4 : 2);
+    look.stack(c.x, c.z, top, 'stone_bricks');
+    if (corner) look.put(c.x, c.z, top + 1, 'cobblestone');
+    else if ((c.x + c.z) % 2 === 0) look.put(c.x, c.z, top + 1, 'stone_bricks');
+    look.road.add(key(c.x, c.z));
   }
 }
 

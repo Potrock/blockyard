@@ -389,15 +389,15 @@ export function buildingGlyph(id: string): { glyph: string; color: string } {
 
 /** The wonders' pictures: each drawn as one of a few kinds of great building (`tools/portraits.mjs`). */
 const WONDER_PICTURE: Record<string, string> = {
-  pyramids: 'w_pyramid', stonehenge: 'w_henge', temple_of_artemis: 'w_temple', great_library: 'w_palace', colossus: 'w_colossus',
-  hanging_gardens: 'w_gardens', great_lighthouse: 'w_lighthouse', mausoleum: 'w_temple', statue_of_zeus: 'w_zeus', oracle: 'w_temple', petra: 'w_gate',
-  terracotta_army: 'w_army', great_wall: 'w_wall', parthenon: 'w_temple', colosseum_flavian: 'w_arena', great_mosque: 'w_dome', hagia_sophia: 'w_dome',
-  borobudur: 'w_steps', angkor_wat: 'w_steps', chichen_itza: 'w_steps', machu_picchu: 'w_steps', notre_dame: 'w_cathedral', alhambra: 'w_dome',
-  himeji_castle: 'w_castle', forbidden_palace: 'w_palace', sistine_chapel: 'w_cathedral', leaning_tower: 'w_pagoda', porcelain_tower: 'w_pagoda',
-  taj_mahal: 'w_dome', uffizi: 'w_palace', globe_theatre: 'w_theatre', kremlin: 'w_wall', big_ben: 'w_clock', louvre: 'w_palace',
-  brandenburg_gate: 'w_gate', neuschwanstein: 'w_castle', statue_of_liberty: 'w_liberty', eiffel_tower: 'w_spire', broadway: 'w_theatre',
-  cristo_redentor: 'w_cristo', pentagon: 'w_modern', sydney_opera_house: 'w_opera', cn_tower: 'w_spire', hubble: 'w_dish', great_firewall: 'w_modern',
-  united_nations: 'w_modern', manhattan_project: 'w_atom', apollo_program: 'w_rocket',
+  pyramids: 'w_pyramid', stonehenge: 'w_henge', temple_of_artemis: 'w_temple', great_library: 'w_great_library', colossus: 'w_colossus',
+  hanging_gardens: 'w_gardens', great_lighthouse: 'w_lighthouse', mausoleum: 'w_mausoleum', statue_of_zeus: 'w_zeus', oracle: 'w_oracle', petra: 'w_petra',
+  terracotta_army: 'w_army', great_wall: 'w_wall', parthenon: 'w_parthenon', colosseum_flavian: 'w_arena', great_mosque: 'w_great_mosque', hagia_sophia: 'w_dome',
+  borobudur: 'w_borobudur', angkor_wat: 'w_angkor_wat', chichen_itza: 'w_steps', machu_picchu: 'w_machu_picchu', notre_dame: 'w_cathedral', alhambra: 'w_alhambra',
+  himeji_castle: 'w_himeji_castle', forbidden_palace: 'w_forbidden_palace', sistine_chapel: 'w_sistine_chapel', leaning_tower: 'w_leaning_tower', porcelain_tower: 'w_pagoda',
+  taj_mahal: 'w_taj_mahal', uffizi: 'w_uffizi', globe_theatre: 'w_theatre', kremlin: 'w_kremlin', big_ben: 'w_clock', louvre: 'w_louvre',
+  brandenburg_gate: 'w_gate', neuschwanstein: 'w_castle', statue_of_liberty: 'w_liberty', eiffel_tower: 'w_spire', broadway: 'w_broadway',
+  cristo_redentor: 'w_cristo', pentagon: 'w_pentagon', sydney_opera_house: 'w_opera', cn_tower: 'w_cn_tower', hubble: 'w_dish', great_firewall: 'w_modern',
+  united_nations: 'w_united_nations', manhattan_project: 'w_atom', apollo_program: 'w_rocket',
 };
 export const wonderPicture = (id: string): string | null => WONDER_PICTURE[id] ?? (BUILDINGS[id]?.kind === 'national' ? 'w_palace' : null);
 

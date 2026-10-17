@@ -21,9 +21,11 @@ export const COLOURS = {
   skin3: 0xe8b894, skin4: 0x8a5a3a, nemes: 0x2a5aa8, jade: 0x3aa874, feather: 0x2a9a5a, feather2: 0xd04030, feather3: 0x2a6ad0, purpleDark: 0x4a2466,
   ermine: 0xf6f4ee, hairWhite: 0xdedad2, hairGrey: 0x9a968e, crimson: 0x9a1a2a, teal: 0x2a8a8a, sand: 0xe0c890, sandDark: 0xc0a468, copper: 0x5aa890,
   marbleWhite: 0xf0ece4, slate: 0x4a5560, lattice: 0x6a5040, orange: 0xe07a2a,
+  adobe: 0xc08a58, adobeDark: 0x9a6a40, rose: 0xc8806a, roseDark: 0xa0604e, roseLight: 0xdc9c82, ochre: 0xc0704a, cypress: 0x3a5a2e,
+  neon: 0xff4fa0,
 };
 export const P = new Palette();
-for (const [name, hex] of Object.entries(COLOURS)) P.add(name, hex, { rough: 0.85, metal: 0, glow: name === 'fire' ? 0.8 : 0, vary: 0 });
+for (const [name, hex] of Object.entries(COLOURS)) P.add(name, hex, { rough: 0.85, metal: 0, glow: name === 'fire' || name === 'neon' ? 0.8 : 0, vary: 0 });
 
 // ---------------------------------------------------------------------------------------------
 // A model: voxels in one part, boxes and helpers
