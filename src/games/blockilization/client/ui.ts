@@ -963,7 +963,7 @@ function renderCorner(now: number): El {
     // At war with another person: their side plays its segment, then (if yours is to come) yours.
     const w = sequenceWait(v)!;
     label = w.done ? 'Turn over' : 'Their turn';
-    sub = w.done ? `${w.names} ${w.names.includes(' and ') ? 'are' : 'is'} taking their turn` : `${w.names} first: at war, you take turns in order`;
+    sub = w.done ? `${w.names} ${w.names.includes(' and ') ? 'are' : 'is'} taking their turn` : `${w.names} first (at war: turns in order)`;
     cls = 'wait';
     glyph = 'war';
   } else if (s.ready) {
@@ -983,7 +983,12 @@ function renderCorner(now: number): El {
     sub = `${needOrders(idle)}${touchScreen() ? '' : ' (Space)'}`;
   }
   // (Your side's segment, with people at war taking turns in order: the others at war wait on you.)
-  if (!v.over && !v.spectator && !s.ready && sequenceMine(v) && v.sequence!.sides.length > 1) sub = sub ? `your move, then theirs · ${sub}` : 'your move: those at war with you wait';
+  const q = v.sequence;
+  if (!v.over && !v.spectator && !s.ready && q && sequenceMine(v) && q.sides.length > 1) {
+    // (A side at war with you still to move after yours, or every one of them done.)
+    const after = q.at < q.sides.length - 1;
+    sub = sub ? `${after ? 'your move, then theirs' : 'your move: theirs is done'} · ${sub}` : after ? 'your move: those at war with you wait' : 'your move: those at war have moved';
+  }
   const left = timerLeft(now);
   // (The clock first: the line may be cut short.)
   if (left !== null && !v.over) sub = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left${sub ? ` · ${sub}` : ''}`;
