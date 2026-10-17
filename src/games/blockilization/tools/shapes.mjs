@@ -23,9 +23,13 @@ export const COLOURS = {
   marbleWhite: 0xf0ece4, slate: 0x4a5560, lattice: 0x6a5040, orange: 0xe07a2a,
   adobe: 0xc08a58, adobeDark: 0x9a6a40, rose: 0xc8806a, roseDark: 0xa0604e, roseLight: 0xdc9c82, ochre: 0xc0704a, cypress: 0x3a5a2e,
   neon: 0xff4fa0,
+  // The Great Firewall's server farm: dark racks, their status lights and the glowing grid of its wall.
+  rack: 0x2a2e36, led: 0x5cff7a, ledBlue: 0x4ac4ff, ledAmber: 0xffb02a, grid: 0xff4a2a,
 };
+/** The colours that glow (in the world: the models' emissive map). */
+const GLOWS = new Set(['fire', 'neon', 'led', 'ledBlue', 'ledAmber', 'grid']);
 export const P = new Palette();
-for (const [name, hex] of Object.entries(COLOURS)) P.add(name, hex, { rough: 0.85, metal: 0, glow: name === 'fire' || name === 'neon' ? 0.8 : 0, vary: 0 });
+for (const [name, hex] of Object.entries(COLOURS)) P.add(name, hex, { rough: 0.85, metal: 0, glow: GLOWS.has(name) ? 0.8 : 0, vary: 0 });
 
 // ---------------------------------------------------------------------------------------------
 // A model: voxels in one part, boxes and helpers
