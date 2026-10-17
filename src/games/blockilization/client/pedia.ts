@@ -258,6 +258,7 @@ const WHEN: Record<string, string> = {
   friendly_land: 'in your land',
   vs_cities: 'against cities',
   vs_barbarians: 'against barbarians',
+  vs_city_states: 'against city-states',
   beside_friend: 'beside another of your units',
   faithful_land: 'in your land around cities of your religion',
   faithful_enemy_land: "in enemy land around cities of your religion",

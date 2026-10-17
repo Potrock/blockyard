@@ -68,6 +68,8 @@ export type CombatWhen =
   /** Attacking a city. */
   | 'vs_cities'
   | 'vs_barbarians'
+  /** Fighting a city-state's units or its city. */
+  | 'vs_city_states'
   /** Another of its owner's military units is next to it. */
   | 'beside_friend'
   /** In its own land around a city that follows its owner's religion, or an enemy's that does. */
