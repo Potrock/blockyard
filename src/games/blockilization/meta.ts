@@ -1,0 +1,66 @@
+import { defineMeta } from '@platform';
+import cover from './cover.webp?url';
+
+/**
+ * Blockilization: a turn-based game of empires on a voxel world, in the way of Civilization V.
+ * Found cities, research from Agriculture to the Information Era, raise wonders, spread a religion,
+ * and win by conquest, science, culture, diplomacy or score. Up to eight players, people and bots,
+ * taking their turns at the same time.
+ */
+export default defineMeta({
+  id: 'blockilization',
+  title: 'Blockilization',
+  tagline: 'Build an empire to stand the test of time, one block at a time.',
+  accent: '#e8b84a',
+  cover,
+  controls: [
+    ['Left click', 'select a unit or city; click a tile to move or attack'],
+    ['Right click', 'move or attack with the selected unit'],
+    ['Shift + click', 'gather more units with it, to send them together'],
+    ['WASD / arrows / drag', 'move the view'],
+    ['Wheel', 'zoom'],
+    ['Enter', 'end the turn'],
+    ['Space', 'next unit that needs orders'],
+    ['F', 'fortify · Z sleep · X skip · B found a city'],
+    ['T', 'technology tree · P social policies · R religion'],
+    ['Y', 'the yields lens: what every tile yields'],
+    ['H', 'hide the interface, to look at your empire (again to bring it back)'],
+    ['O', 'overview · N notifications · V victory'],
+    ['F1', 'the Civilopedia · ? every shortcut'],
+    ['Esc', 'close a panel (with nothing open: the menu)'],
+  ],
+  instances: true,
+  // (Awarded by the server, `server.ts` `feats` and `victories`.)
+  achievements: {
+    first_city: { title: 'Founder', description: 'Found your first city' },
+    wonder: { title: 'Wonder of the World', description: 'Build a world wonder' },
+    conqueror: { title: 'Conqueror', description: 'Take a city from another civilization' },
+    victory: { title: 'Stand the Test of Time', description: 'Win a game of Blockilization' },
+    win_domination: { title: 'World Conqueror', description: 'Win by domination: hold every original capital' },
+    win_science: { title: 'To the Stars', description: 'Win a science victory: launch the spaceship' },
+    win_culture: { title: 'Cultural Hegemony', description: 'Win a culture victory' },
+    win_diplomatic: { title: 'World Leader', description: 'Win a diplomatic victory in the United Nations' },
+    win_score: { title: 'Time Will Tell', description: 'Win on score when the last turn comes' },
+    win_king: { title: 'Long Live the King', description: 'Win at King difficulty or above' },
+    win_deity: { title: 'Deity', description: 'Win at Deity difficulty' },
+    wonders_5: { title: 'Age of Wonders', description: 'Build five world wonders in one game' },
+    religion: { title: 'Prophet', description: 'Found a religion' },
+    capital: { title: 'Fall of a Capital', description: "Take another civilization's original capital" },
+    city_20: { title: 'Metropolis', description: 'Grow a city to size 20' },
+    natural_wonder: { title: 'Wonder of Nature', description: 'Find a natural wonder' },
+    ally: { title: 'Friend of the City-States', description: "Become a city-state's ally" },
+    golden_age: { title: 'Golden Age', description: 'Begin a golden age' },
+    win_egypt: { title: 'Eternal Egypt', description: 'Win as Egypt' },
+    win_babylon: { title: 'Gate of the Gods', description: 'Win as Babylon' },
+    win_china: { title: 'Mandate of Heaven', description: 'Win as China' },
+    win_india: { title: 'Soul of India', description: 'Win as India' },
+    win_persia: { title: 'King of Kings', description: 'Win as Persia' },
+    win_korea: { title: 'Land of the Morning Calm', description: 'Win as Korea' },
+    win_arabia: { title: 'A Thousand and One Nights', description: 'Win as Arabia' },
+    win_germany: { title: 'Iron and Blood', description: 'Win as Germany' },
+    win_iroquois: { title: 'The Great Law of Peace', description: 'Win as the Iroquois' },
+    win_aztec: { title: 'The Fifth Sun', description: 'Win as the Aztecs' },
+    win_russia: { title: 'Mother Russia', description: 'Win as Russia' },
+    win_france: { title: 'Vive la France', description: 'Win as France' },
+  },
+});

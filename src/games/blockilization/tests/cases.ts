@@ -1,0 +1,4278 @@
+import { adviseResearch, adviseWork } from '../advisor';
+import { BUILDINGS } from '../rules/buildings';
+import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, leadership, strength } from '../rules/combat';
+import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
+import { assignCitizens, cityEffects, cityYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
+import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
+import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
+import { distance, line, neighbour, neighbours, within } from '../rules/hex';
+import { generate, START_ISLAND } from '../rules/mapgen';
+import { NATURAL_WONDERS } from '../rules/nature';
+import { IMPROVEMENTS, TERRAINS, type ImprovementId } from '../rules/terrain';
+import { makeCtx } from '../rules/ai/context';
+import { opinionOf } from '../rules/ai/opinion';
+import { planWar } from '../rules/ai/strategy';
+import { workers } from '../rules/ai/workers';
+import { civilians } from '../rules/ai/civilians';
+import { congressProposal, congressVote } from '../rules/ai/congress';
+import { moveUnits } from '../rules/ai/military';
+import { exploreSea } from '../rules/ai/navy';
+import { pickProduction } from '../rules/ai/production';
+import { siteValue } from '../rules/ai/settle';
+import { canEnter, occupants, planPath, stepCost } from '../rules/movement';
+import { adoptable, ALL_POLICIES } from '../rules/policies';
+import { previewAttack, previewCityFire } from '../rules/preview';
+import { promotionsDue } from '../rules/promotions';
+import { BELIEF_LIST } from '../rules/religion';
+import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
+import { allyOf, cannotBully, cannotCoup, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
+import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
+import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
+import { MAP_SIZES, type Game, type MapSize } from '../rules/state';
+import { cityTourism, longGameTurn, maxRoutes, routesGold, routesOf, routeYield, spiesOf, spyCount, startRoute, surveillanceTurns, theft, THEFT_COST, unVote } from '../rules/trade';
+import { TECHS } from '../rules/techs';
+import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasMet, makeDeal, relationsOf, remember, spareIncome } from '../rules/diplomacy';
+import { bindTeams } from '../rules/teams';
+import { cityInfo, mapWire, viewFor } from '../views';
+import { unpackKnown, type KnownTile } from '../protocol';
+import { SaveThrottle } from '../saves';
+import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
+import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
+import { riverLinks, terrainEdits } from '../terrain';
+import { corners, GROWN, KINDS, PEN_SCALE, spotsFor } from '../client/spots';
+import { blank, city, techsTo, unit, war } from './world';
+import { liberation, LIBERATE_INFLUENCE } from '../rules/liberation';
+import { cannotPledge, pledged, PLEDGE_BROKEN, PLEDGE_REST } from '../rules/pledges';
+import { restingInfluence } from '../rules/citystates';
+import { conquests } from '../rules/ai/strategy';
+import { pledges as botPledges } from '../rules/ai/liberation';
+import { startProject, type WorldProject } from '../rules/projects';
+import { expectedTier, worldProject } from '../rules/ai/projects';
+
+/**
+ * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
+ * mechanism many effects share) changes what it should, usually by measuring the same thing with
+ * and without it. `tests/effects.ts` runs them; `tests/effects-coverage.ts` runs them too, to see
+ * that every effect in the data is read.
+ */
+
+export interface Case {
+  name: string;
+  run: () => void;
+}
+
+export const CASES: Case[] = [];
+const test = (name: string, run: () => void) => CASES.push({ name, run });
+
+/** A failed expectation. */
+export class Failure extends Error {}
+function eq<T>(actual: T, expected: T, what: string) {
+  if (actual !== expected) throw new Failure(`${what}: expected ${String(expected)}, got ${String(actual)}`);
+}
+function ok(cond: boolean, what: string) {
+  if (!cond) throw new Failure(what);
+}
+const near = (a: number, b: number, what: string) => ok(Math.abs(a - b) < 1e-6, `${what}: expected ${b}, got ${a}`);
+
+/** Adopt policies without their once-only effects (the lasting ones are what's measured). */
+const adopt = (game: Game, p: number, ...ids: string[]) => {
+  for (const id of ids) {
+    ok(!!ALL_POLICIES[id], `no policy ${id}`);
+    game.players[p].policies.push(id);
+  }
+};
+
+// -------------------------------------------------------------------------------------------------
+// Where effects reach
+// -------------------------------------------------------------------------------------------------
+
+test('a capital-only policy works in the capital and nowhere else (Tradition)', () => {
+  const { game, at } = blank();
+  const capital = city(game, 0, at(5, 5));
+  const other = city(game, 0, at(12, 5));
+  const before = [cityYields(game, capital).culture, cityYields(game, other).culture];
+  const border = tileCultureCost(game, capital);
+  adopt(game, 0, 'tradition');
+  eq(cityYields(game, capital).culture - before[0], 3, 'capital culture');
+  eq(cityYields(game, other).culture - before[1], 0, 'other city culture');
+  ok(tileCultureCost(game, capital) < border, 'cheaper borders in the capital');
+});
+
+test('city filters: size, coast, fresh water, garrison, specialists, holy city, techs', () => {
+  const { game, at } = blank(['france', 'babylon']);
+  const c = city(game, 0, at(5, 5), { pop: 2 });
+  const p = game.players[0];
+  const prod = () => cityYields(game, c).prod;
+  // God of Craftsmen: from 3 citizens.
+  let base = prod();
+  p.pantheon = 'god_of_craftsmen';
+  eq(prod() - base, 0, 'craftsmen at 2');
+  c.pop = 3;
+  base = prod();
+  p.pantheon = undefined;
+  eq(base - prod(), 1, 'craftsmen at 3');
+  // Merchant Navy: coastal cities.
+  adopt(game, 0, 'merchant_navy');
+  base = prod();
+  game.tiles[at(6, 5)].terrain = 'coast';
+  eq(prod() - base, 3, 'merchant navy on the coast');
+  // Sacred Waters: a river.
+  p.pantheon = 'sacred_waters';
+  const mood = happiness(game, p);
+  game.tiles[c.tile].river = true;
+  eq(happiness(game, p) - mood, 1, 'sacred waters by a river');
+  // Military Caste: a garrison.
+  adopt(game, 0, 'military_caste');
+  const culture = cityYields(game, c).culture;
+  unit(game, 'warrior', 0, c.tile);
+  eq(cityYields(game, c).culture - culture, 2, 'military caste garrison culture');
+  // Guruship: a specialist (a follower belief of the city's religion).
+  game.religions.r1 = { founder: 1, holyCity: -1, name: 'Test', beliefs: ['tithe', 'guruship'] };
+  c.followers = { r1: c.pop };
+  const withSpecialist = prod();
+  c.specialists = {};
+  ok(withSpecialist === prod(), 'no specialists yet in a city of 3 without slots');
+  c.specialists = { scientist: 1 };
+  eq(prod() - withSpecialist, 2, 'guruship with a specialist');
+  // France: +1 culture until Steam Power.
+  const before = cityYields(game, c).culture;
+  p.techs.push('steam_power');
+  eq(before - cityYields(game, c).culture, 1, 'french culture ends with steam power');
+});
+
+test('Piety finished: +3 happiness in the holy city only', () => {
+  const { game, at } = blank();
+  const holy = city(game, 0, at(5, 5));
+  city(game, 0, at(12, 5));
+  const p = game.players[0];
+  game.religions.r1 = { founder: 0, holyCity: holy.id, name: 'Test', beliefs: ['tithe', 'mosques'] };
+  p.religion = 'r1';
+  const mood = happiness(game, p);
+  adopt(game, 0, 'piety_done');
+  eq(happiness(game, p) - mood, 3, 'holy city happiness');
+});
+
+test('per-building effects count each building, a civ’s own version too (Organized Religion)', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const c = city(game, 0, at(5, 5), { buildings: ['monument', 'shrine', 'burial_tomb'] });
+  const faith = cityYields(game, c).faith;
+  adopt(game, 0, 'organized_religion');
+  eq(cityYields(game, c).faith - faith, 3, 'a faith for each of monument, shrine, burial tomb');
+});
+
+test('a wonder’s empire part reaches every city; its own part only its city (Temple of Artemis)', () => {
+  const { game, at } = blank();
+  const a = city(game, 0, at(5, 5), { pop: 6 });
+  const b = city(game, 0, at(12, 5), { pop: 6 });
+  const ranged = productionToward(game, b, { kind: 'unit', id: 'archer' });
+  const sistine = cityYields(game, b).culture;
+  a.buildings.push('temple_of_artemis', 'sistine_chapel');
+  ok(cityEffects(game, b).some((e) => e.percent?.food === 10), 'other city has +10% food');
+  eq(productionToward(game, b, { kind: 'unit', id: 'archer' }), ranged, 'no ranged production bonus elsewhere');
+  ok(cityYields(game, b).culture >= sistine, 'sistine culture reaches the other city');
+});
+
+test('civ-wide effects come from wonders anywhere: combat, moves, sight, purchases', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(5, 5));
+  const other = city(game, 0, at(12, 5));
+  const p = game.players[0];
+  game.tiles[at(8, 8)].terrain = 'coast';
+  const ship = unit(game, 'trireme', 0, at(8, 8));
+  const soldier = unit(game, 'warrior', 0, at(6, 6));
+  const moves = maxMoves(game, ship);
+  const sight = unitSight(game, ship);
+  const defence = strength(game, soldier, 'defend', null, soldier.tile);
+  const price = purchaseCost(game, p, 100, 'unit');
+  other.buildings.push('great_lighthouse', 'himeji_castle', 'big_ben');
+  eq(maxMoves(game, ship) - moves, 1, 'great lighthouse moves');
+  eq(unitSight(game, ship) - sight, 1, 'great lighthouse sight');
+  ok(game.tiles[soldier.tile].owner === 0, 'the soldier is in its own land');
+  near(strength(game, soldier, 'defend', null, soldier.tile) / defence, 1.15, 'himeji in own land');
+  ok(purchaseCost(game, p, 100, 'unit') < price, 'big ben makes buying cheaper');
+  void c;
+});
+
+// -------------------------------------------------------------------------------------------------
+// Yields, growth, happiness, costs
+// -------------------------------------------------------------------------------------------------
+
+test('production boosts for particular buildings and wonders (Piety, Monument to the Gods)', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(5, 5), { pop: 4, buildings: ['shrine'] });
+  const p = game.players[0];
+  const temple = productionToward(game, c, { kind: 'building', id: 'temple' });
+  const monument = productionToward(game, c, { kind: 'building', id: 'monument' });
+  adopt(game, 0, 'piety');
+  eq(productionToward(game, c, { kind: 'building', id: 'temple' }), temple * 2, 'temples twice as fast');
+  eq(productionToward(game, c, { kind: 'building', id: 'monument' }), monument, 'monuments as before');
+  const pyramids = productionToward(game, c, { kind: 'building', id: 'pyramids' });
+  const taj = productionToward(game, c, { kind: 'building', id: 'taj_mahal' });
+  p.pantheon = 'monument_to_the_gods';
+  ok(productionToward(game, c, { kind: 'building', id: 'pyramids' }) > pyramids, 'ancient wonders faster');
+  eq(productionToward(game, c, { kind: 'building', id: 'taj_mahal' }), taj, 'renaissance wonders as before');
+  const part = productionToward(game, c, { kind: 'project', id: 'ss_booster' });
+  c.buildings.push('spaceship_factory');
+  ok(productionToward(game, c, { kind: 'project', id: 'ss_booster' }) > part, 'spaceship factory');
+});
+
+test('specialists: extra yields, and Civil Society halves what they eat', () => {
+  const { game, at } = blank(['egypt', 'korea']);
+  const c = city(game, 0, at(5, 5), { pop: 4 });
+  c.specialists = { merchant: 2 };
+  const y = cityYields(game, c);
+  adopt(game, 0, 'secularism', 'civil_society');
+  const z = cityYields(game, c);
+  eq(z.science - y.science, 4, 'secularism +2 science each');
+  eq(y.eaten - z.eaten, 2, 'civil society: each eats 1 less');
+  const korea = city(game, 1, at(14, 5), { pop: 4 });
+  korea.specialists = { merchant: 1 };
+  const k = cityYields(game, korea).science;
+  korea.specialists = {};
+  eq(k - cityYields(game, korea).science, 2, "korea's specialists +2 science");
+  c.buildings.push('statue_of_liberty');
+  eq(cityYields(game, c).prod - z.prod, 2, 'statue of liberty +1 production a specialist');
+});
+
+test('great person rates: Garden (city), Leaning Tower (empire), Babylon, Aesthetics', () => {
+  const { game, at } = blank(['babylon', 'egypt']);
+  const a = city(game, 0, at(5, 5), { pop: 4 });
+  const b = city(game, 0, at(12, 5), { pop: 4 });
+  a.specialists = { scientist: 1 };
+  b.specialists = { artist: 1 };
+  near(cityYields(game, a).greatPeople.scientist ?? 0, 3.99, 'babylon: 3 points, a third again');
+  a.buildings.push('garden');
+  near(cityYields(game, a).greatPeople.scientist ?? 0, 4.74, 'garden +25% here');
+  eq(cityYields(game, b).greatPeople.artist, 3, 'no garden there');
+  a.buildings.push('leaning_tower');
+  eq(cityYields(game, b).greatPeople.artist, 3.75, 'leaning tower everywhere');
+  adopt(game, 0, 'aesthetics');
+  eq(cityYields(game, b).greatPeople.artist, 4.5, 'aesthetics +25% artists');
+  eq(greatPeopleBonus([{ special: ['merchants_faster_25', 'generals_faster_50'] }], 'merchant'), 25, 'merchant rate');
+});
+
+test('happiness: Aristocracy, Monarchy, courthouses, Meritocracy over roads', () => {
+  const { game, at } = blank();
+  const capital = city(game, 0, at(5, 5), { pop: 10 });
+  const other = city(game, 0, at(9, 5), { pop: 4 });
+  const p = game.players[0];
+  let mood = happiness(game, p);
+  adopt(game, 0, 'aristocracy');
+  eq(happiness(game, p) - mood, 1, 'aristocracy: one for 10 citizens');
+  mood = happiness(game, p);
+  adopt(game, 0, 'monarchy');
+  eq(happiness(game, p) - mood, 5, 'monarchy: 5 less from 10 in the capital');
+  ok(cityYields(game, capital).gold >= 5, 'monarchy gold');
+  other.occupied = true;
+  mood = happiness(game, p);
+  other.buildings.push('courthouse');
+  ok(happiness(game, p) > mood, 'a courthouse ends occupied unhappiness');
+  mood = happiness(game, p);
+  adopt(game, 0, 'meritocracy');
+  const less = happiness(game, p) - mood;
+  for (let col = 6; col <= 8; col++) game.tiles[at(col, 5)].road = 'road';
+  ok(connected(game, p).has(other.id), 'a road links the cities');
+  eq(happiness(game, p) - mood - less, 1, 'meritocracy: one for the connected city');
+  game.tiles[at(7, 5)].pillaged = true;
+  ok(!connected(game, p).has(other.id), 'a pillaged road breaks the link');
+});
+
+test('harbours link cities by sea; Messenger of the Gods follows the link', () => {
+  const { game, at } = blank();
+  for (let col = 0; col < 26; col++) game.tiles[at(col, 8)].terrain = 'coast';
+  const capital = city(game, 0, at(3, 7), { buildings: ['harbor'] });
+  const far = city(game, 0, at(20, 7));
+  const p = game.players[0];
+  p.pantheon = 'messenger_of_the_gods';
+  const science = cityYields(game, far).science;
+  far.buildings.push('harbor');
+  ok(connected(game, p).has(far.id), 'harbours connect');
+  eq(cityYields(game, far).science - science, 2, 'messenger +2 science when connected');
+  void capital;
+});
+
+test('growth, science and production that depend on how things stand', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(5, 5), { pop: 6, buildings: ['granary', 'hanging_gardens', 'library', 'national_college'] });
+  const p = game.players[0];
+  game.religions.r1 = { founder: 1, holyCity: -1, name: 'Test', beliefs: ['tithe', 'swords_into_plowshares'] };
+  c.followers = { r1: 6 };
+  const peace = cityYields(game, c).surplus;
+  war(game, 0, 1);
+  ok(cityYields(game, c).surplus < peace, 'plowshares only at peace');
+  game.religions.r1.beliefs = ['tithe', 'religious_community'];
+  const prod = cityYields(game, c);
+  ok(prod.prod >= 1, 'production');
+  adopt(game, 0, 'rationalism');
+  ok(happiness(game, p) >= 0, 'happy');
+  ok(cityYields(game, c).science > prod.science, 'rationalism +10% while happy');
+  adopt(game, 0, 'flourishing');
+  const culture = cityYields(game, c).culture;
+  p.goldenTurns = 5;
+  ok(cityYields(game, c).culture >= Math.floor(culture * 1.5), 'golden age culture, more with flourishing');
+});
+
+test('policy costs, upkeep: Representation, Oligarchy, Trade Unions', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(3, 3));
+  city(game, 0, at(10, 3));
+  const c3 = city(game, 0, at(17, 3));
+  for (let col = 4; col < 17; col++) game.tiles[at(col, 3)].road = 'road';
+  for (let col = 4; col < 17; col++) game.tiles[at(col, 3)].owner = 0;
+  p.policies = ['tradition', 'aristocracy', 'legalism', 'oligarchy', 'liberty'];
+  const cost = policyCost(game, p);
+  p.policies = ['tradition', 'aristocracy', 'legalism', 'oligarchy', 'representation'];
+  ok(policyCost(game, p) < cost, 'representation: cities add less');
+  for (let i = 0; i < 9; i++) unit(game, 'warrior', 0, at(4 + i, 6));
+  unit(game, 'warrior', 0, c3.tile);
+  p.policies = [];
+  const upkeep = goldUpkeep(game, p);
+  adopt(game, 0, 'oligarchy', 'trade_unions');
+  const less = goldUpkeep(game, p);
+  ok(less.units < upkeep.units, 'oligarchy: the garrison costs nothing');
+  ok(less.roads < upkeep.roads, 'trade unions: roads cost less');
+});
+
+test('strategic resources: Russia, Arabia’s oil, city-state allies, Cultural Diplomacy', () => {
+  const { game, at } = blank(['russia', 'arabia'], { cityStates: 1 });
+  const ru = city(game, 0, at(5, 5));
+  const ar = city(game, 1, at(15, 5));
+  const cs = game.players.findIndex((x) => x.cityState);
+  const home = city(game, cs, at(10, 12));
+  for (const [c, res] of [[ru, 'iron'], [ar, 'oil']] as const) {
+    const t = neighbours(game.grid, c.tile)[0];
+    Object.assign(game.tiles[t], { resource: res, amount: 2, improvement: res === 'oil' ? 'oil_well' : 'mine' });
+  }
+  game.players[0].techs.push('bronze_working');
+  game.players[1].techs.push('biology');
+  eq(strategic(game, game.players[0]).iron.have, 4, 'russia doubles');
+  eq(strategic(game, game.players[1]).oil.have, 4, 'arabia doubles oil');
+  Object.assign(game.tiles[neighbours(game.grid, home.tile)[0]], { resource: 'iron', amount: 3 });
+  game.players[1].techs.push('bronze_working');
+  game.players[1].influence[cs] = 80;
+  eq(strategic(game, game.players[1]).iron.have, 3, "an ally's iron");
+  adopt(game, 1, 'cultural_diplomacy');
+  eq(strategic(game, game.players[1]).iron.have, 6, 'cultural diplomacy doubles it');
+});
+
+test('free buildings in the first cities: Legalism now and for cities founded later', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(3, 3));
+  city(game, 0, at(10, 3));
+  applyOnce(game, p, ALL_POLICIES.legalism.effects, null);
+  eq(game.cities.filter((c) => c.buildings.includes('monument')).length, 2, 'two cities now');
+  for (const t of [at(17, 3), at(3, 10), at(10, 10)]) city(game, 0, t);
+  eq(game.cities.filter((c) => c.buildings.includes('monument')).length, 4, 'four in all');
+});
+
+test('free great person of one’s choosing: chosen by order, or for them at the turn’s end', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(5, 5));
+  applyOnce(game, p, ALL_POLICIES.liberty_done.effects, null);
+  eq(p.greatChoices, 1, 'a choice waits');
+  ok(apply(game, 0, { t: 'greatChoice', kind: 'engineer' }).ok, 'choose an engineer');
+  ok(game.units.some((u) => u.type === 'great_engineer'), 'an engineer is born');
+  ok(!apply(game, 0, { t: 'greatChoice', kind: 'engineer' }).ok, 'only one');
+  applyOnce(game, p, ALL_POLICIES.hero_of_the_people.effects, null);
+  p.greatPoints.merchant = 50;
+  endTurn(game);
+  ok(game.units.some((u) => u.type === 'great_merchant'), 'the nearest kind, unchosen');
+});
+
+test('weighing fights: a civ’s happiness worked out once while they’re weighed, afresh after', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(8, 8), { pop: 4 });
+  const before = happiness(game, p);
+  const [first, again] = weighing(game, () => {
+    const first = happiness(game, p);
+    // (A change weighing mustn't make: to show the happiness kept.)
+    c.pop += 6;
+    return [first, happiness(game, p)];
+  });
+  eq(first, before, 'as it was');
+  eq(again, first, 'kept while weighing');
+  ok(happiness(game, p) < before, 'and worked out afresh after');
+});
+
+test('a free great person is born in the capital itself with a worker in it (a soldier too), not beside it', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const capital = city(game, 0, at(5, 5));
+  unit(game, 'worker', 0, capital.tile);
+  applyOnce(game, p, { freeGreatPerson: 'scientist' }, capital);
+  eq(game.units.find((u) => u.type === 'great_scientist')?.tile, capital.tile, 'a great scientist, in the capital beside its worker');
+  unit(game, 'warrior', 0, capital.tile);
+  applyOnce(game, p, { freeGreatPerson: 'engineer' }, capital);
+  eq(game.units.find((u) => u.type === 'great_engineer')?.tile, capital.tile, 'a great engineer, with a warrior there too');
+  const settler = unit(game, 'settler', 0, neighbours(game.grid, capital.tile).find((t) => canStand(game, 'settler', t))!);
+  ok(!canEnter(game, settler, capital.tile), 'other civilians still one to a tile');
+});
+
+test('the Terracotta Army copies each land unit; Clausewitz’s Legacy runs out', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5));
+  unit(game, 'warrior', 0, at(7, 7));
+  unit(game, 'archer', 0, at(9, 7));
+  applyOnce(game, p, BUILDINGS.terracotta_army.effects, c);
+  eq(game.units.filter((u) => u.owner === 0).length, 4, 'copies');
+  const soldier = unit(game, 'warrior', 0, at(20, 15));
+  const enemy = unit(game, 'warrior', 1, at(21, 15));
+  const base = strength(game, soldier, 'attack', enemy, soldier.tile);
+  adopt(game, 0, 'clausewitzs_legacy');
+  p.policyTurns = { clausewitzs_legacy: game.turn };
+  near(strength(game, soldier, 'attack', enemy, soldier.tile) / base, 1.25, 'clausewitz attacking');
+  game.turn += 40;
+  near(strength(game, soldier, 'attack', enemy, soldier.tile) / base, 1, 'over after 50 turns (at quick speed, 34)');
+});
+
+test('workers: the Pyramids and Citizenship each a quarter faster', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5));
+  techsTo(game, 0, 1);
+  const w = unit(game, 'worker', 0, at(6, 5));
+  ok(apply(game, 0, { t: 'build', unit: w.id, what: 'farm' }).ok, 'build a farm');
+  endTurn(game);
+  eq(w.work?.done, 1, 'one turn');
+  c.buildings.push('pyramids');
+  adopt(game, 0, 'citizenship');
+  w.moves = 2;
+  endTurn(game);
+  eq(w.work?.done, 2.5, 'half again');
+  void p;
+});
+
+// -------------------------------------------------------------------------------------------------
+// Combat
+// -------------------------------------------------------------------------------------------------
+
+/** A fight laid out: an attacker of player 0 next to a defender of player 1, at war, on open ground. */
+function duel(attacker = 'warrior', defender = 'warrior') {
+  const w = blank(['egypt', 'babylon']);
+  war(w.game, 0, 1);
+  const a = unit(w.game, attacker, 0, w.at(10, 8));
+  const d = unit(w.game, defender, 1, w.at(11, 8));
+  return { ...w, a, d };
+}
+
+test('flanking: +10% for each other attacker beside the defender', () => {
+  const { game, at, a, d } = duel();
+  const base = strength(game, a, 'attack', d, a.tile);
+  const around = neighbours(game.grid, d.tile).filter((t) => t !== a.tile);
+  unit(game, 'warrior', 0, around[0]);
+  unit(game, 'archer', 0, around[1]);
+  near(strength(game, a, 'attack', d, a.tile) / base, 1.2, 'two flankers');
+  void at;
+});
+
+test('rivers and the sea: -20% attacking into a river, -50% from a boat; boats can’t fire', () => {
+  const { game, a, d } = duel();
+  const base = strength(game, a, 'attack', d, a.tile);
+  game.tiles[d.tile].river = true;
+  near(strength(game, a, 'attack', d, a.tile) / base, 0.8, 'across a river');
+  game.tiles[a.tile].river = true;
+  near(strength(game, a, 'attack', d, a.tile) / base, 1, 'along the river');
+  a.embarked = true;
+  near(strength(game, a, 'attack', d, a.tile) / base, 0.5, 'from the sea');
+  const { game: g2, a: archer, d: target } = duel('archer');
+  archer.embarked = true;
+  ok(!apply(g2, 0, { t: 'attack', unit: archer.id, target: target.tile }).ok, 'no fire from a boat');
+  target.embarked = true;
+  ok(strength(g2, target, 'defend', archer, target.tile) <= 3 + g2.players[1].techs.length * 0.2, 'embarked units are weak');
+});
+
+test('cover counts only against fire', () => {
+  const { game, a, d } = duel('warrior', 'warrior');
+  const archer = unit(game, 'archer', 0, neighbours(game.grid, d.tile).find((t) => t !== a.tile)!);
+  const melee = strength(game, d, 'defend', a, d.tile);
+  const fire = strength(game, d, 'defend', archer, d.tile);
+  d.promotions.push('cover_1');
+  near(strength(game, d, 'defend', a, d.tile) / melee, 1, 'no cover against a sword');
+  near(strength(game, d, 'defend', archer, d.tile) / fire, 1.25, 'cover against arrows');
+});
+
+test('terrain, fortifying, forts and citadels', () => {
+  const { game, at, a, d } = duel('warrior', 'spearman');
+  const open = strength(game, d, 'defend', a, d.tile);
+  game.tiles[d.tile].elevation = 'hills';
+  near(strength(game, d, 'defend', a, d.tile) / open, 1.25, 'hills');
+  game.tiles[d.tile].elevation = 'flat';
+  ok(apply(game, 1, { t: 'stance', unit: d.id, stance: 'fortify' }).ok, 'fortify');
+  near(strength(game, d, 'defend', a, d.tile) / open, 1, 'no bonus the turn it fortifies');
+  d.fortified = 1;
+  near(strength(game, d, 'defend', a, d.tile) / open, 1.25, 'a turn later');
+  d.fortified = 2;
+  near(strength(game, d, 'defend', a, d.tile) / open, 1.5, 'two turns later');
+  d.stance = undefined;
+  game.tiles[d.tile].owner = 1;
+  game.tiles[d.tile].improvement = 'fort';
+  near(strength(game, d, 'defend', a, d.tile) / open, 1.5, 'a fort');
+  game.tiles[d.tile].improvement = 'citadel';
+  near(strength(game, d, 'defend', a, d.tile) / open, 2, 'a citadel');
+  const hp = a.hp;
+  endTurn(game);
+  ok(a.hp < hp || !game.units.includes(a), 'the citadel hurts the enemy beside it');
+  const horse = unit(game, 'horseman', 1, at(3, 15));
+  ok(!apply(game, 1, { t: 'stance', unit: horse.id, stance: 'fortify' }).ok, "horsemen can't fortify");
+  const flat = strength(game, horse, 'defend', null, horse.tile);
+  game.tiles[horse.tile].elevation = 'hills';
+  near(strength(game, horse, 'defend', null, horse.tile) / flat, 1, 'no hill bonus for horsemen');
+  game.tiles[horse.tile].feature = 'marsh';
+  near(strength(game, horse, 'defend', null, horse.tile) / flat, 0.85, 'but the marsh still hurts');
+});
+
+test('great generals and admirals lead units within two tiles (China’s, twice as well)', () => {
+  const { game, at, a } = duel();
+  eq(leadership(game, a, a.tile), 0, 'no general');
+  const g = unit(game, 'great_general', 0, at(8, 8));
+  eq(leadership(game, a, a.tile), 15, 'a general two tiles off');
+  g.tile = at(6, 8);
+  eq(leadership(game, a, a.tile), 0, 'too far');
+  g.tile = at(9, 8);
+  game.tiles[at(9, 9)].terrain = 'coast';
+  const ship = unit(game, 'trireme', 0, at(9, 9));
+  eq(leadership(game, ship, ship.tile), 0, 'generals lead land units only');
+  unit(game, 'great_admiral', 0, at(9, 9));
+  eq(leadership(game, ship, ship.tile), 15, 'admirals lead ships');
+  const china = blank(['china', 'egypt']);
+  const s = unit(china.game, 'warrior', 0, china.at(5, 5));
+  unit(china.game, 'great_general', 0, china.at(5, 6));
+  eq(leadership(china.game, s, s.tile), 30, "china's generals");
+});
+
+test('great general points come from fights with civs (not barbarians), and a general is born at the front', () => {
+  const { game, at, a, d } = duel('swordsman', 'warrior');
+  city(game, 0, at(2, 2));
+  const [p, q] = game.players;
+  ok(apply(game, 0, { t: 'attack', unit: a.id, target: d.tile }).ok, 'attack');
+  eq(p.greatPoints.general, 5, 'five points for attacking');
+  eq(q.greatPoints.general, 4, 'four for defending');
+  // (One fight short of a general.)
+  p.greatPoints.general = greatCost(game, p, 'general') - 1;
+  const foe = unit(game, 'warrior', 1, neighbours(game.grid, a.tile).find((t) => !game.units.some((u) => u.tile === t))!);
+  a.moves = 2;
+  a.attacks = 0;
+  ok(apply(game, 0, { t: 'attack', unit: a.id, target: foe.tile }).ok, 'attack again');
+  const general = game.units.find((u) => u.type === 'great_general');
+  ok(!!general && general.owner === 0, 'a general is born');
+  ok(Math.abs(general!.tile - a.tile) <= 2 * game.grid.width + 2, 'by the army, not at the capital');
+  ok(p.greatPoints.general! < 5, 'its points spent');
+  const sea = blank(['egypt', 'babylon']);
+  war(sea.game, 0, 1);
+  for (const t of [sea.at(10, 8), sea.at(11, 8)]) sea.game.tiles[t].terrain = 'coast';
+  const ship = unit(sea.game, 'trireme', 0, sea.at(10, 8));
+  const target = unit(sea.game, 'trireme', 1, sea.at(11, 8));
+  apply(sea.game, 0, { t: 'attack', unit: ship.id, target: target.tile });
+  eq(sea.game.players[0].greatPoints.admiral, 5, 'admiral points at sea');
+  const barb = blank(['egypt', 'babylon'], { barbarians: true });
+  const b = barb.game.players.findIndex((x) => x.civ === 'barbarian');
+  const me = unit(barb.game, 'swordsman', 0, barb.at(10, 8));
+  const them = unit(barb.game, 'warrior', b, barb.at(11, 8));
+  me.xp = 28;
+  apply(barb.game, 0, { t: 'attack', unit: me.id, target: them.tile });
+  eq(me.xp, 30, 'barbarian experience stops at 30');
+  eq(barb.game.players[0].greatPoints.general ?? 0, 0, 'no general points from barbarians');
+});
+
+test('an unhappy empire fights 2% worse for each point below zero', () => {
+  const { game, at, a, d } = duel();
+  city(game, 0, at(3, 3), { pop: 12 });
+  const p = game.players[0];
+  const mood = happiness(game, p);
+  ok(mood < 0, 'unhappy');
+  const s = strength(game, a, 'attack', d, a.tile);
+  p.cityState = { kind: 'maritime', personality: 'x' };
+  const calm = strength(game, a, 'attack', d, a.tile);
+  near(s / calm, 1 + (2 * mood) / 100, 'penalty');
+});
+
+test('combat effects: Discipline, Honor, Statue of Zeus, Heroic Epic, Defender of the Faith, Just War', () => {
+  const { game, at, a, d } = duel();
+  const base = strength(game, a, 'attack', d, a.tile);
+  adopt(game, 0, 'discipline');
+  near(strength(game, a, 'attack', d, a.tile) / base, 1, 'alone');
+  unit(game, 'archer', 0, at(9, 8));
+  ok(strength(game, a, 'attack', d, a.tile) / base > 1.14, 'beside a friend');
+  const barb = blank(['egypt', 'babylon'], { barbarians: true });
+  const b = barb.game.players.findIndex((x) => x.civ === 'barbarian');
+  const me = unit(barb.game, 'warrior', 0, barb.at(10, 8));
+  const them = unit(barb.game, 'warrior', b, barb.at(11, 8));
+  const vsBarb = strength(barb.game, me, 'attack', them, me.tile);
+  adopt(barb.game, 0, 'honor');
+  near(strength(barb.game, me, 'attack', them, me.tile) / vsBarb, 1.33, 'honor vs barbarians');
+  const town = city(game, 1, at(12, 9));
+  city(game, 0, at(2, 2));
+  const vsCity = strength(game, a, 'attack', town, a.tile);
+  game.cities.find((x) => x.tile === at(2, 2))!.buildings.push('statue_of_zeus');
+  near(strength(game, a, 'attack', town, a.tile) - vsCity, 8 * 0.15, 'statue of zeus vs cities');
+  const epic = city(game, 0, at(2, 12), { buildings: ['barracks', 'heroic_epic'] });
+  ok(apply(game, 0, { t: 'buy', city: epic.id, item: { kind: 'unit', id: 'warrior' }, with: 'gold' }).ok || (game.players[0].gold = 9999, apply(game, 0, { t: 'buy', city: epic.id, item: { kind: 'unit', id: 'warrior' }, with: 'gold' }).ok), 'buy a warrior');
+  const fresh = game.units.find((u) => u.owner === 0 && u.tile !== a.tile && cityAt(game, u.tile) === epic)!;
+  ok(fresh.promotions.includes('morale') && fresh.xp >= 15, 'morale and barracks experience');
+  eq(promotionsDue(fresh), 1, 'morale does not use up experience');
+  // The religion's enhancers.
+  const g = game;
+  g.religions.r1 = { founder: 0, holyCity: -1, name: 'Test', beliefs: ['tithe', 'mosques', 'defender_of_the_faith', 'just_war'] };
+  g.players[0].religion = 'r1';
+  town.followers = { r1: town.pop };
+  const inTheirs = strength(game, a, 'defend', d, a.tile);
+  game.tiles[a.tile].owner = 1;
+  game.tiles[a.tile].city = town.id;
+  near(strength(game, a, 'defend', d, a.tile) - inTheirs, 8 * 0.2, "just war in the faithful enemy's land");
+});
+
+test('promotions are data: terrain, range, moves, sight, attacks', () => {
+  const { game, a, d } = duel('swordsman', 'warrior');
+  const base = strength(game, a, 'attack', d, a.tile);
+  a.promotions.push('shock_1', 'drill_1');
+  near(strength(game, a, 'attack', d, a.tile) / base, 1.15, 'shock in the open, not drill');
+  game.tiles[d.tile].feature = 'forest';
+  near(strength(game, a, 'attack', d, a.tile) / base, 1.15, 'drill in the forest, not shock');
+  const moves = maxMoves(game, a);
+  const sight = unitSight(game, a);
+  a.promotions.push('mobility', 'sentry');
+  eq(maxMoves(game, a) - moves, 1, 'mobility');
+  eq(unitSight(game, a) - sight, 1, 'sentry');
+});
+
+test('the governor never starves a city it could feed, and keeps it growing on a balanced focus', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(10, 8), { pop: 3 });
+  // Three hills (no food, more production: the balanced focus's first pick) and three tundra (a little food).
+  neighbours(game.grid, c.tile).forEach((t, i) => Object.assign(game.tiles[t], i < 3 ? { elevation: 'hills' } : { terrain: 'tundra' }));
+  assignCitizens(game, c);
+  eq(c.worked.length, 3, 'citizens at work');
+  ok(cityYields(game, c).surplus >= 0, `it eats (works ${c.worked.map((t) => game.tiles[t].elevation === 'hills' ? 'hills' : game.tiles[t].terrain).join(', ')})`);
+  c.focus = 'prod';
+  assignCitizens(game, c);
+  ok(cityYields(game, c).surplus >= 0, 'it eats with a production focus too');
+  // A capital of one by a gold mine (its best tile, no food) and grassland: balanced, it grows.
+  const small = blank();
+  const capital = city(small.game, 0, small.at(10, 8), { pop: 1 });
+  const mine = neighbours(small.game.grid, capital.tile)[0];
+  Object.assign(small.game.tiles[mine], { elevation: 'hills', resource: 'gold_ore', improvement: 'mine' });
+  assignCitizens(small.game, capital);
+  ok(cityYields(small.game, capital).surplus >= 2, 'balanced, it grows');
+  capital.focus = 'gold';
+  assignCitizens(small.game, capital);
+  eq(capital.worked[0], mine, 'on a gold focus, the mine');
+});
+
+test('units pass through their own side’s units, but never stop on them', () => {
+  const { game, at } = blank();
+  const a = unit(game, 'swordsman', 0, at(10, 8));
+  const b = unit(game, 'warrior', 0, at(11, 8));
+  ok(apply(game, 0, { t: 'move', unit: a.id, to: at(12, 8) }).ok, 'a way past the warrior');
+  eq(a.tile, at(12, 8), 'it went through');
+  eq(b.tile, at(11, 8), 'the warrior stays');
+  // A tile it would have to stop on: it waits before it.
+  const w1 = unit(game, 'warrior', 0, at(13, 8));
+  const w2 = unit(game, 'warrior', 0, at(14, 8));
+  a.moves = 1;
+  ok(apply(game, 0, { t: 'move', unit: a.id, to: at(15, 8) }).ok, 'ordered on');
+  ok(a.tile !== w1.tile && a.tile !== w2.tile, 'one move left and two of its own ahead: it goes round them, never onto one');
+  ok(!!a.path?.length, 'and keeps its way for next turn');
+  apply(game, 0, { t: 'move', unit: b.id, to: at(13, 8) });
+  eq(b.tile, at(11, 8), 'never onto one of its own');
+  // Two of its own in a row: a knight (4 moves) goes through both.
+  const k = unit(game, 'knight', 0, at(11, 10));
+  unit(game, 'warrior', 0, at(12, 10));
+  unit(game, 'warrior', 0, at(13, 10));
+  ok(apply(game, 0, { t: 'move', unit: k.id, to: at(15, 10) }).ok, 'past two');
+  eq(k.tile, at(15, 10), 'through both, the same turn');
+  // A way that would end a turn on one of its own (hills there take all its moves): round it instead.
+  const w = unit(game, 'warrior', 0, at(4, 14));
+  unit(game, 'archer', 0, at(5, 14));
+  game.tiles[at(5, 14)].elevation = 'hills';
+  ok(apply(game, 0, { t: 'move', unit: w.id, to: at(7, 14) }).ok, 'ordered past the archer on the hill');
+  ok(w.tile !== at(4, 14) && w.tile !== at(5, 14), 'it went round, not stuck behind it');
+  // One of its own where a later turn would end: the straight way still (it'll have moved on by then, or it goes round it there).
+  const s = unit(game, 'swordsman', 0, at(4, 4));
+  // (A pass of hills, mountains on either side.)
+  for (let x = 3; x <= 9; x++) for (const y of [3, 5]) game.tiles[at(x, y)].elevation = 'mountain';
+  for (let x = 5; x <= 8; x++) game.tiles[at(x, 4)].elevation = 'hills';
+  unit(game, 'archer', 0, at(6, 4));
+  ok(apply(game, 0, { t: 'move', unit: s.id, to: at(8, 4) }).ok, 'ordered along the hills');
+  eq(s.tile, at(5, 4), 'a hill a turn, straight on');
+  ok(s.path?.[0] === at(6, 4), 'its way goes on through the archer’s hill, for next turn');
+  // Round one of its own where this turn would end, not round all those further on (a marching army).
+  const { game: g2, at: at2 } = blank();
+  const r = unit(g2, 'warrior', 0, at2(4, 8));
+  unit(g2, 'archer', 0, at2(5, 8));
+  g2.tiles[at2(5, 8)].elevation = 'hills';
+  for (let y = 0; y < 16; y++) unit(g2, 'warrior', 0, at2(8, y));
+  ok(apply(g2, 0, { t: 'move', unit: r.id, to: at2(10, 8) }).ok, 'ordered past the archer and on through the line of its own');
+  ok(r.tile !== at2(4, 8) && (r.path?.length ?? 0) <= 6, 'round the archer, then straight on through the line');
+  // Through one of its own to a fork, the turn ending on another of its own on the near way: the other way, through the first still.
+  const { game: g3, at: at3 } = blank();
+  const start = at3(10, 8);
+  const scout = unit(g3, 'warrior', 0, start);
+  const [gate, ...shut] = neighbours(g3.grid, start);
+  for (const t of shut) g3.tiles[t].elevation = 'mountain';
+  const fork = neighbours(g3.grid, gate).filter((t) => distance(g3.grid, t, start) === 2);
+  const [side, far, ...rest] = fork;
+  for (const t of rest) g3.tiles[t].elevation = 'mountain';
+  g3.tiles[far].elevation = 'hills';
+  unit(g3, 'spearman', 0, gate);
+  unit(g3, 'archer', 0, side);
+  const goal = neighbours(g3.grid, far).find((t) => distance(g3.grid, t, start) === 3 && g3.tiles[t].elevation === 'flat')!;
+  ok(apply(g3, 0, { t: 'move', unit: scout.id, to: goal }).ok, 'ordered through the gate');
+  eq(scout.tile, far, 'its turn ends on the free side of the fork, past its spearman');
+  // Behind two of its own in a pass, its turn would end on the second: it waits for them, its way kept (not the long way round).
+  const { game: g4, at: at4 } = blank();
+  for (let x = 2; x <= 12; x++) for (const y of [7, 9]) g4.tiles[at4(x, y)].elevation = 'mountain';
+  const back = unit(g4, 'warrior', 0, at4(4, 8));
+  unit(g4, 'spearman', 0, at4(5, 8));
+  unit(g4, 'archer', 0, at4(6, 8));
+  ok(apply(g4, 0, { t: 'move', unit: back.id, to: at4(10, 8) }).ok, 'ordered down the pass');
+  eq(back.tile, at4(4, 8), 'it waits behind them this turn');
+  eq(back.path?.length, 6, 'its way straight down the pass, kept for next turn');
+  // Both fortified there (they won't move on): round the mountains instead, never waiting on them.
+  const { game: g5, at: at5 } = blank();
+  for (let x = 2; x <= 12; x++) for (const y of [7, 9]) g5.tiles[at5(x, y)].elevation = 'mountain';
+  const round = unit(g5, 'warrior', 0, at5(4, 8));
+  unit(g5, 'spearman', 0, at5(5, 8)).stance = 'fortify';
+  unit(g5, 'archer', 0, at5(6, 8)).stance = 'fortify';
+  ok(apply(g5, 0, { t: 'move', unit: round.id, to: at5(10, 8) }).ok, 'ordered down the pass');
+  ok(round.tile !== at5(4, 8) && !round.path?.includes(at5(6, 8)), 'the way round, not through the archer set to stay');
+});
+
+test('a siege unit sets up as it fires when it has the moves for both (Civ V’s)', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  const t = unit(game, 'trebuchet', 0, at(10, 8));
+  const d = unit(game, 'warrior', 1, at(12, 8));
+  game.players[0].techs.push('physics');
+  t.moves = 1;
+  ok(!apply(game, 0, { t: 'attack', unit: t.id, target: d.tile }).ok, 'one move: no');
+  t.moves = 2;
+  ok(apply(game, 0, { t: 'attack', unit: t.id, target: d.tile }).ok, 'two moves: set up and fire');
+  ok(!!t.setUp && d.hp < 100, 'set up, and hit it');
+});
+
+test('a soldier stepping onto an enemy’s civilian takes it; at peace it can’t step there', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  const w = unit(game, 'warrior', 0, at(10, 8));
+  const worker = unit(game, 'worker', 1, at(12, 8));
+  ok(apply(game, 0, { t: 'move', unit: w.id, to: at(12, 8) }).ok, 'ordered onto it');
+  eq(w.tile, at(12, 8), 'it got there');
+  eq(worker.owner, 0, 'and took the worker');
+  const peace = blank();
+  const v = unit(peace.game, 'warrior', 0, peace.at(10, 8));
+  const theirs = unit(peace.game, 'worker', 1, peace.at(11, 8));
+  apply(peace.game, 0, { t: 'move', unit: v.id, to: theirs.tile });
+  ok(v.tile !== theirs.tile && theirs.owner === 1, 'at peace: not onto their worker');
+});
+
+test('a city struck by an enemy tells its owner, once for each city however many blows; a civilian is never sent at an enemy', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  game.players[0].bot = false;
+  const c = city(game, 0, at(10, 8));
+  game.players[0].notes = [];
+  for (const t of neighbours(game.grid, c.tile).slice(0, 2)) {
+    const a = unit(game, 'swordsman', 1, t);
+    apply(game, 1, { t: 'attack', unit: a.id, target: c.tile });
+  }
+  const told = game.players[0].notes.filter((n) => n.text.startsWith(`${c.name} is under attack`));
+  eq(told.length, 1, 'one note');
+  ok(told[0].text.includes(`down to ${c.hp} of`), 'with what its defences are down to now');
+  const w = unit(game, 'worker', 0, at(10, 11));
+  const foe = unit(game, 'warrior', 1, at(10, 13));
+  ok(!apply(game, 0, { t: 'move', unit: w.id, to: foe.tile }).ok, 'a worker isn’t sent at an enemy');
+});
+
+test('a caravan starts its route from a city of yours it stands next to (one with a civilian in it trains it outside)', () => {
+  const { game, at } = blank();
+  const home = city(game, 0, at(10, 8));
+  const other = city(game, 0, at(16, 8));
+  unit(game, 'great_general', 0, home.tile);
+  game.players[0].techs.push('animal_husbandry');
+  const c = unit(game, 'caravan', 0, at(11, 8));
+  const r = apply(game, 0, { t: 'trade', unit: c.id, to: other.id });
+  ok(r.ok, `a route from next door (${r.error ?? ''})`);
+  ok(!game.units.includes(c), 'the caravan is used');
+  const far = unit(game, 'caravan', 0, at(13, 12));
+  ok(!apply(game, 0, { t: 'trade', unit: far.id, to: other.id }).ok, 'not from out in the country');
+});
+
+test('a city ringed by its own civilians sends its new unit two tiles out, not waiting for room', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(10, 8));
+  for (const t of within(game.grid, c.tile, 1)) unit(game, 'worker', 0, t);
+  c.queue = [{ kind: 'unit', id: 'worker' }];
+  c.prod = 1000;
+  const before = game.units.length;
+  endTurn(game);
+  eq(game.units.length, before + 1, 'trained');
+  const made = game.units[game.units.length - 1];
+  eq(distance(game.grid, made.tile, c.tile), 2, 'two tiles out');
+  ok(neighbours(game.grid, made.tile).some((n) => distance(game.grid, n, c.tile) === 1 && game.tiles[n].terrain !== 'lake'), 'by land from the city');
+});
+
+test('a city taken takes the civilians in it too', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  const c = city(game, 1, at(10, 8));
+  const worker = unit(game, 'worker', 1, c.tile);
+  const caravan = unit(game, 'caravan', 1, c.tile);
+  c.hp = 1;
+  const s = unit(game, 'swordsman', 0, neighbours(game.grid, c.tile)[0]);
+  ok(apply(game, 0, { t: 'attack', unit: s.id, target: c.tile }).ok, 'attacked');
+  eq(c.owner, 0, 'the city is taken');
+  eq(worker.owner, 0, 'and its worker with it');
+  ok(!game.units.includes(caravan), 'and the caravan waiting there killed');
+});
+
+test('a caravan may wait in its own city beside a worker (other civilians one to a tile), and set off from it', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const home = city(game, 0, at(8, 8), { pop: 4 });
+  const abroad = city(game, 1, at(13, 8), { pop: 4 });
+  techsTo(game, 0, 3);
+  unit(game, 'worker', 0, home.tile);
+  const [a, b, c] = neighbours(game.grid, home.tile).filter((t) => canStand(game, 'caravan', t));
+  const caravan = unit(game, 'caravan', 0, a);
+  const settler = unit(game, 'settler', 0, b);
+  ok(!apply(game, 0, { t: 'move', unit: settler.id, to: home.tile }).ok, 'a settler waits outside while the worker is in');
+  ok(apply(game, 0, { t: 'move', unit: caravan.id, to: home.tile }).ok && caravan.tile === home.tile, 'a caravan goes in beside it');
+  ok(apply(game, 0, { t: 'trade', unit: caravan.id, to: abroad.id }).ok, 'and sets off from there');
+  const outsider = unit(game, 'caravan', 1, c);
+  ok(!canEnter(game, outsider, home.tile), 'not into another civ’s city');
+});
+
+test('a city taken can be razed (not an original capital): a citizen a turn, then gone', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  city(game, 0, at(4, 4));
+  const capital = city(game, 1, at(16, 12));
+  const town = city(game, 1, at(10, 8), { pop: 3 });
+  for (const c of [capital, town]) {
+    c.hp = 1;
+    const s = unit(game, 'swordsman', 0, neighbours(game.grid, c.tile)[0]);
+    ok(apply(game, 0, { t: 'attack', unit: s.id, target: c.tile }).ok, `${c.name} attacked`);
+  }
+  eq(town.owner, 0, 'taken');
+  ok(town.puppet === true, 'a puppet at first');
+  ok(!apply(game, 0, { t: 'cityChoice', city: capital.id, choice: 'raze' }).ok, 'not their original capital');
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'raze' }).ok, 'the town is razed');
+  const pop = town.pop;
+  for (let i = 0; i < pop; i++) endTurn(game);
+  ok(!game.cities.includes(town), 'burned to the ground');
+  ok(game.tiles[town.tile].owner === -1, 'its land is no one’s');
+});
+
+test('a settler whose site is taken on the way stops and says so; founding too close names the city', () => {
+  const { game, at } = blank();
+  game.players[0].bot = false;
+  city(game, 0, at(2, 2));
+  city(game, 1, at(24, 16));
+  const s = unit(game, 'settler', 0, at(4, 8));
+  ok(apply(game, 0, { t: 'move', unit: s.id, to: at(14, 8) }).ok, 'sent to a site');
+  const rival = city(game, 1, at(15, 8));
+  endTurn(game);
+  ok(!s.path, 'it stops');
+  ok(game.players[0].notes.some((n) => n.text.includes(`${rival.name} has been founded beside it`)), 'and says why');
+  s.tile = at(14, 8);
+  const r = apply(game, 0, { t: 'found', unit: s.id });
+  ok(!r.ok && !!r.error?.includes(rival.name), `the refusal names the city (${r.error})`);
+});
+
+test('a unit whose way is blocked on the way goes round; with no way round it stops and says so', () => {
+  const { game, at } = blank();
+  game.players[0].bot = false;
+  city(game, 0, at(2, 2));
+  city(game, 1, at(24, 16));
+  const w = unit(game, 'worker', 0, at(4, 8));
+  ok(apply(game, 0, { t: 'move', unit: w.id, to: at(12, 8) }).ok, 'sent off');
+  // Someone else's soldier stands on its way, at peace: round it.
+  const stand = w.path![2];
+  unit(game, 'warrior', 1, stand);
+  endTurn(game);
+  endTurn(game);
+  endTurn(game);
+  endTurn(game);
+  eq(w.tile, at(12, 8), 'it got there, round them');
+  // In a pass held by another's soldier: no way round, it stops and says so.
+  const { game: g2, at: b } = blank();
+  g2.players[0].bot = false;
+  city(g2, 0, b(2, 2));
+  city(g2, 1, b(24, 16));
+  for (let x = 0; x < g2.grid.width; x++) for (const y of [7, 9]) g2.tiles[b(x, y)].elevation = 'mountain';
+  const v = unit(g2, 'worker', 0, b(4, 8));
+  ok(apply(g2, 0, { t: 'move', unit: v.id, to: b(12, 8) }).ok, 'sent down the pass');
+  unit(g2, 'warrior', 1, b(8, 8));
+  endTurn(g2);
+  endTurn(g2);
+  ok(!v.path, 'it stops');
+  ok(g2.players[0].notes.some((n) => n.text.includes('way is blocked')), 'and says so');
+});
+
+test('a person’s unit moved onto one of its own of its kind next to it swaps places with it', () => {
+  const { game, at } = blank();
+  game.players[0].bot = false;
+  const c = city(game, 0, at(10, 8));
+  const worker = unit(game, 'worker', 0, c.tile);
+  // (A settler: a great person would simply join the worker in its city.)
+  const settler = unit(game, 'settler', 0, neighbours(game.grid, c.tile)[0]);
+  const from = settler.tile;
+  ok(apply(game, 0, { t: 'move', unit: settler.id, to: c.tile }).ok, 'ordered into the city');
+  eq(settler.tile, c.tile, 'the settler is in the city');
+  eq(worker.tile, from, 'the worker where it was');
+  // Not two tiles off, and not a soldier with a civilian.
+  const far = unit(game, 'worker', 0, at(14, 8));
+  ok(!apply(game, 0, { t: 'move', unit: far.id, to: from }).ok || far.tile !== from, 'no swap from afar');
+});
+
+test('two of a person’s units whose ways cross, each stopping on the other’s tile, swap places and go on', () => {
+  const { game, at } = blank();
+  game.players[0].bot = false;
+  city(game, 0, at(2, 2));
+  city(game, 1, at(24, 16));
+  // A pass between mountains, two hills in it: a step onto either takes a warrior's every move.
+  for (let x = 0; x < game.grid.width; x++) for (const y of [7, 9]) game.tiles[at(x, y)].elevation = 'mountain';
+  game.tiles[at(8, 8)].elevation = game.tiles[at(9, 8)].elevation = 'hills';
+  const east = unit(game, 'warrior', 0, at(8, 8));
+  const west = unit(game, 'warrior', 0, at(9, 8));
+  ok(apply(game, 0, { t: 'move', unit: east.id, to: at(13, 8) }).ok, 'one sent east');
+  eq(east.tile, at(8, 8), 'it waits: the other is on the hill ahead');
+  ok(apply(game, 0, { t: 'move', unit: west.id, to: at(4, 8) }).ok, 'the other sent west');
+  eq(west.tile, at(8, 8), 'they swap places');
+  eq(east.tile, at(9, 8), 'each where the other was');
+  for (let i = 0; i < 4; i++) endTurn(game);
+  eq(east.tile, at(13, 8), 'and each goes on its way');
+  eq(west.tile, at(4, 8), 'both of them');
+});
+
+test('the advisor’s research picks name no wonder someone has built already', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const [egypt] = game.players;
+  city(game, 0, at(4, 4));
+  city(game, 1, at(22, 15));
+  egypt.bot = false;
+  // (A wonder named in a pick's words: 'Hanging Gardens, a wonder; and the Granary'.)
+  const wonder = (why: string) => why.includes(', a wonder');
+  ok(adviseResearch(game, egypt).some((a) => wonder(a.why)), 'a wonder among them at first');
+  for (const b of Object.values(BUILDINGS)) if (b.kind === 'world') game.wonders[b.id] = 1;
+  const picks = adviseResearch(game, egypt);
+  ok(picks.length > 0 && !picks.some((a) => wonder(a.why)), `none once every wonder is built (${picks.map((a) => a.why).join('; ')})`);
+});
+
+test('a worker with no recommended work is told why: enemies in reach of the land, or nothing near it', () => {
+  const { game, at } = blank();
+  const egypt = game.players[0];
+  egypt.bot = false;
+  egypt.techs = ['agriculture'];
+  const home = city(game, 0, at(6, 6));
+  city(game, 1, at(22, 15));
+  const w = unit(game, 'worker', 0, home.tile);
+  updateAllVisibility(game);
+  const calm = adviseWork(game, egypt, w);
+  ok(calm.tips.length > 0 && !calm.quiet, 'work advised round its city');
+  war(game, 0, 1);
+  unit(game, 'swordsman', 1, at(8, 6));
+  updateAllVisibility(game);
+  const threatened = adviseWork(game, egypt, w);
+  eq(threatened.tips.length, 0, 'none with an enemy in reach of it all');
+  ok(!!threatened.quiet?.startsWith('Enemies could reach the land near it'), `and it says so (${threatened.quiet})`);
+  const away = adviseWork(game, egypt, unit(game, 'worker', 0, at(16, 2)));
+  ok(!!away.quiet?.startsWith('Nothing near it to improve'), `far from its cities: nothing near (${away.quiet})`);
+});
+
+test('Future Tech, all else known, goes on by itself once learned', () => {
+  const { game } = blank();
+  const p = game.players[0];
+  p.techs = Object.keys(TECHS).filter((t) => t !== 'future_tech');
+  p.researching = 'future_tech';
+  learn(game, p, 'future_tech');
+  eq(p.researching, 'future_tech', 'the next Future Tech under way');
+  eq(p.futureTechs, 1, 'one learned');
+});
+
+test('a long march stops when enemies come in sight', () => {
+  const { game, at } = blank();
+  game.players[0].bot = false;
+  war(game, 0, 1);
+  // (Each with a city, to stay in the game turn after turn.)
+  city(game, 0, at(1, 1));
+  city(game, 1, at(24, 16));
+  const t = unit(game, 'trebuchet', 0, at(4, 8));
+  ok(apply(game, 0, { t: 'move', unit: t.id, to: at(16, 8) }).ok, 'off it goes');
+  const where = t.tile;
+  unit(game, 'pikeman', 1, at(where % game.grid.width + 2, 8));
+  endTurn(game);
+  eq(t.tile, where, 'it waits');
+  ok(!t.path, 'for new orders');
+  ok(game.players[0].notes.some((n) => n.text.includes('has stopped')), 'and says why');
+  // Sent on again with that one in sight: it doesn't stop for it again, turn after turn.
+  game.players[0].notes = [];
+  ok(apply(game, 0, { t: 'move', unit: t.id, to: at(16, 11) }).ok, 'sent on');
+  endTurn(game);
+  endTurn(game);
+  ok(!game.players[0].notes.some((n) => n.text.includes('has stopped')), 'no stop for an enemy it has seen');
+  ok(t.tile !== where, 'it went on');
+  // Another enemy it hadn't seen: it stops for that one.
+  ok(!!t.path?.length, 'still on its way');
+  const at2 = t.tile;
+  unit(game, 'spearman', 1, neighbours(game.grid, t.tile).find((n) => !game.units.some((x) => x.tile === n) && distance(game.grid, n, where) > 2)!);
+  updateAllVisibility(game);
+  endTurn(game);
+  eq(t.tile, at2, 'a new one stops it');
+  ok(game.players[0].notes.some((n) => n.text.includes('Spearman')), 'and says which');
+  // One coming into sight on the way: it stops there and then, its moves kept.
+  const { game: g2, at: b } = blank();
+  g2.players[0].bot = false;
+  war(g2, 0, 1);
+  city(g2, 0, b(1, 1));
+  const w = unit(g2, 'warrior', 0, b(4, 8));
+  unit(g2, 'warrior', 1, b(6, 6));
+  updateAllVisibility(g2);
+  ok(apply(g2, 0, { t: 'move', unit: w.id, to: b(12, 8) }).ok, 'off it goes');
+  ok(w.tile !== b(4, 8) && (w.moves ?? 0) > 0 && !w.path, 'it stopped as the enemy came into sight, a move to spare');
+});
+
+test('meeting goes both ways, and lasts', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const [a, b] = game.players;
+  const scout = unit(game, 'scout', 0, at(10, 8));
+  city(game, 1, at(20, 14));
+  ok(!hasMet(game, a, b) && !hasMet(game, b, a), 'strangers at first');
+  scout.tile = at(18, 14);
+  updateAllVisibility(game);
+  ok(hasMet(game, a, b), 'the scout sees their land');
+  ok(hasMet(game, b, a), 'and they have met it too, seen or not');
+  scout.tile = at(2, 2);
+  updateAllVisibility(game);
+  ok(hasMet(game, a, b) && hasMet(game, b, a), 'out of sight, still met');
+});
+
+test('a soldier in land closed to it is moved out as the turn ends (it could never step anywhere there)', () => {
+  const { game, at } = blank();
+  const theirs = city(game, 1, at(10, 8));
+  const inside = neighbours(game.grid, theirs.tile)[0];
+  const w = unit(game, 'warrior', 0, inside);
+  const scout = unit(game, 'worker', 0, neighbours(game.grid, theirs.tile)[1]);
+  endTurn(game);
+  ok(game.tiles[w.tile].owner !== 1, 'the warrior is out of their land');
+  eq(distance(game.grid, w.tile, inside), 1, 'to the nearest tile outside (next door: their land is one ring)');
+  eq(game.tiles[scout.tile].owner, 1, 'civilians may stay');
+  w.tile = inside;
+  game.players[1].diplomacy.openBorders[0] = 10;
+  endTurn(game);
+  eq(w.tile, inside, 'with open borders it stays');
+});
+
+test('news names only civs the reader has met, and speaks to who it’s about', () => {
+  const { game } = blank(['egypt', 'babylon', 'germany']);
+  const [me, friend, stranger] = game.players;
+  me.bot = friend.bot = false;
+  me.met = [friend.index];
+  friend.met = [me.index, stranger.index];
+  stranger.faith = friend.faith = 999;
+  const said = (p: typeof me) => p.notes.splice(0).map((n) => n.text);
+  ok(apply(game, stranger.index, { t: 'pantheon', belief: 'god_of_war' }).ok, 'a pantheon');
+  eq(said(me).length, 0, 'no news of a pantheon from a civ never met');
+  ok(said(friend)[0]?.startsWith(stranger.name), 'named to one who has met them');
+  ok(apply(game, friend.index, { t: 'war', target: stranger.index }).ok, 'war');
+  const news = said(me)[0] ?? '';
+  ok(news.startsWith(friend.name) && news.includes("a civilization you haven't met"), `the stranger unnamed: ${news}`);
+  eq(said(friend).length, 0, 'the one declaring is not told');
+  stranger.met = [friend.index];
+  eq(denounce(game, stranger, friend), null, 'denounced');
+  const told = said(me)[0] ?? '';
+  ok(told.startsWith('A civilization you haven') && told.includes(friend.name), `my friend denounced by a stranger: ${told}`);
+  eq(said(friend)[0], `${stranger.name} has denounced you!`, 'the denounced is told in its own words');
+});
+
+test('happiness is told in parts that add up to it', () => {
+  const { game, at } = blank();
+  city(game, 0, at(10, 8), { pop: 6, buildings: ['colosseum'] });
+  city(game, 0, at(4, 4), { pop: 3 });
+  game.players[0].policies.push('liberty', 'meritocracy');
+  const parts: { label: string; value: number }[] = [];
+  const total = happiness(game, game.players[0], parts);
+  const sum = parts.reduce((s, x) => s + x.value, 0);
+  ok(Math.abs(sum - total) <= 1, `parts ${parts.map((x) => `${x.label} ${x.value}`).join(', ')} make ${sum}, not ${total}`);
+  ok(parts.some((x) => x.label.startsWith('Cities') && x.value === -2 * UNHAPPINESS_PER_CITY), 'two cities');
+  ok(parts.some((x) => x.label === 'Citizens' && x.value === -9), 'nine citizens');
+});
+
+test('a sensible empire is about content: four cities with two luxuries and a Circus; five with three, two Colosseums and Monarchy', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const sites = [at(4, 4), at(9, 4), at(4, 9), at(9, 9), at(14, 4)];
+  const cities = sites.slice(0, 4).map((t) => city(game, 0, t, { pop: 3, buildings: ['monument'] }));
+  const luxury = (i: number, res: string) => Object.assign(game.tiles[neighbours(game.grid, cities[i].tile)[0]], { resource: res, improvement: 'mine' });
+  luxury(0, 'gold_ore');
+  luxury(1, 'silver');
+  cities[0].buildings.push('circus');
+  const early = happiness(game, p);
+  ok(early >= 0 && early <= 3, `early on: four cities of three, two luxuries, a Circus (${early})`);
+  cities.push(city(game, 0, sites[4], { pop: 4, buildings: ['monument'] }));
+  cities[0].pop = 7;
+  for (const c of cities.slice(1)) c.pop = 4;
+  luxury(2, 'gems');
+  cities[0].buildings.push('colosseum');
+  cities[1].buildings.push('colosseum');
+  adopt(game, 0, 'monarchy');
+  const later = happiness(game, p);
+  ok(later >= 0 && later <= 3, `later: five cities (23 citizens), three luxuries, two Colosseums and Monarchy (${later})`);
+});
+
+test('a new city on open grassland reaches size 5 in about 25 turns at quick speed while its empire is content; unhappy, a quarter as fast (never stopped above -10)', () => {
+  const toFive = (unhappy: boolean) => {
+    const { game, at } = blank();
+    const capital = city(game, 0, at(3, 3), { pop: 1 });
+    neighbours(game.grid, capital.tile).slice(0, 2).forEach((t, i) => Object.assign(game.tiles[t], { resource: i ? 'silver' : 'gold_ore', improvement: 'mine' }));
+    if (unhappy) for (const t of [at(20, 3), at(20, 12)]) city(game, 0, t, { pop: 6 });
+    const c = city(game, 0, at(10, 8));
+    const mood = happiness(game, game.players[0]);
+    ok(unhappy ? mood < 0 && mood > -10 : mood >= 0, unhappy ? 'an unhappy empire' : 'a content one (two luxuries)');
+    let turns = 0;
+    while (c.pop < 5 && turns < 200) {
+      endTurn(game);
+      turns++;
+    }
+    return turns;
+  };
+  const content = toFive(false);
+  ok(content >= 20 && content <= 30, `content: ${content} turns`);
+  const unhappy = toFive(true);
+  ok(unhappy >= content * 3 && unhappy < 200, `unhappy: growth slowed to a quarter (${unhappy} turns), not stopped`);
+});
+
+test('going wide is braked: eleven cities on three luxuries and two Colosseums are deeply unhappy; luxuries, a Colosseum each and a policy make them content', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const cities: ReturnType<typeof city>[] = [];
+  for (let row = 0; row < 3; row++) for (let col = 0; col < 4 && cities.length < 11; col++) cities.push(city(game, 0, at(3 + col * 6, 3 + row * 6), { pop: 4, buildings: ['monument'] }));
+  const luxuries = ['gold_ore', 'silver', 'gems', 'copper', 'marble', 'pearls'];
+  const luxury = (i: number) => Object.assign(game.tiles[neighbours(game.grid, cities[i].tile)[0]], { resource: luxuries[i], improvement: luxuries[i] === 'marble' ? 'quarry' : luxuries[i] === 'pearls' ? 'fishing_boats' : 'mine' });
+  for (let i = 0; i < 3; i++) luxury(i);
+  cities[0].buildings.push('colosseum');
+  cities[1].buildings.push('colosseum');
+  const wide = happiness(game, p);
+  ok(wide <= -15, `eleven cities of four on three luxuries and two Colosseums: ${wide}`);
+  for (let i = 3; i < 5; i++) luxury(i);
+  for (const c of cities) if (!c.buildings.includes('colosseum')) c.buildings.push('colosseum');
+  adopt(game, 0, 'monarchy');
+  const built = happiness(game, p);
+  ok(built >= 0, `with five luxuries, a Colosseum in every city and Monarchy: ${built}`);
+});
+
+test('the happiness curve: a few cities with a luxury or two are content; going wide needs more', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const cities = [at(4, 4), at(9, 4), at(4, 9)].map((t) => city(game, 0, t, { pop: 3 }));
+  for (const [i, res] of ['gold_ore', 'silver'].entries()) Object.assign(game.tiles[neighbours(game.grid, cities[i].tile)[0]], { resource: res, improvement: 'mine' });
+  ok(happiness(game, p) >= 0, `three cities of three with two luxuries are content (${happiness(game, p)})`);
+  for (const t of [at(9, 9), at(14, 4), at(14, 9), at(19, 4), at(19, 9)]) city(game, 0, t, { pop: 4 });
+  ok(happiness(game, p) < -5, `eight cities on two luxuries and nothing built are not (${happiness(game, p)})`);
+  const mood = happiness(game, p);
+  cities[2].puppet = true;
+  eq(happiness(game, p) - mood, UNHAPPINESS_PER_CITY / 2, 'a puppet counts half');
+});
+
+test('what a city could train but for something missing is said, not hidden', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(10, 8), { pop: 1 });
+  game.players[0].techs.push('bronze_working', 'iron_working');
+  const why = (id: string) => trainOptions(game, game.players[0], c).find((o) => o.id === id)?.why ?? '';
+  ok(why('settler').includes('city of 2'), `a settler waits for a second citizen (${why('settler')})`);
+  ok(why('swordsman').includes('Iron'), `a swordsman waits for iron (${why('swordsman')})`);
+  ok(!trainable(game, game.players[0], c).includes('swordsman'), 'and neither can be trained');
+  c.pop = 2;
+  ok(trainable(game, game.players[0], c).includes('settler'), 'a city of 2 trains settlers');
+});
+
+test('a repeating city builds its units again', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(10, 8), { pop: 3 });
+  ok(apply(game, 0, { t: 'repeat', city: c.id, on: true }).ok, 'repeat on');
+  c.queue = [{ kind: 'unit', id: 'warrior' }];
+  c.prod = 999;
+  endTurn(game);
+  eq(c.queue.map((q) => q.id).join(), 'warrior', 'a warrior again');
+  ok(game.units.some((u) => u.type === 'warrior' && u.owner === 0), 'and the first one made');
+  ok(!apply(game, 0, { t: 'repeat', city: c.id, on: 'yes' as unknown as boolean }).ok, 'only yes or no');
+  ok(apply(game, 0, { t: 'repeat', city: c.id, on: false }).ok && !c.repeat, 'repeat off');
+});
+
+test('what’s bought leaves the queue: the building wherever it is, the unit only if it’s being built now', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(10, 8), { pop: 3 });
+  p.gold = 9999;
+  c.queue = [{ kind: 'building', id: 'monument' }, { kind: 'unit', id: 'warrior' }, { kind: 'unit', id: 'warrior' }];
+  c.prod = 10;
+  ok(apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'building', id: 'monument' }, with: 'gold' }).ok, 'buy the monument');
+  eq(c.queue.map((q) => q.id).join(), 'warrior,warrior', 'the monument is out of the queue');
+  eq(c.prod, 10, 'what was put into it goes to the warrior');
+  ok(apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'unit', id: 'warrior' }, with: 'gold' }).ok, 'buy a warrior');
+  eq(c.queue.map((q) => q.id).join(), 'warrior', 'the one being built is the one bought');
+  c.queue.push({ kind: 'unit', id: 'scout' });
+  game.units = game.units.filter((u) => u.tile !== c.tile);
+  ok(apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'unit', id: 'scout' }, with: 'gold' }).ok, 'buy a scout');
+  eq(c.queue.map((q) => q.id).join(), 'warrior,scout', 'a unit further down the queue stays in it');
+});
+
+test('pillage: only an enemy’s (or no one’s) improvement or road; heals, gold, no yields until repaired', () => {
+  const { game, at, a } = duel();
+  const theirs = city(game, 1, at(14, 8));
+  const farm = neighbours(game.grid, theirs.tile)[0];
+  Object.assign(game.tiles[farm], { improvement: 'farm' });
+  a.tile = farm;
+  a.hp = 50;
+  ok(canPillage(game, a), 'can pillage at war');
+  const gold = game.players[0].gold;
+  const food = cityYields(game, theirs).food;
+  theirs.locked = [farm];
+  assignCitizens(game, theirs);
+  const worked = cityYields(game, theirs).food;
+  ok(apply(game, 0, { t: 'pillage', unit: a.id }).ok, 'pillage');
+  ok(game.tiles[farm].pillaged === true, 'pillaged');
+  eq(a.hp, 75, 'heals 25');
+  ok(game.players[0].gold > gold, 'gold');
+  ok(cityYields(game, theirs).food < worked, 'the farm yields nothing');
+  ok(!canPillage(game, a), 'not twice');
+  void food;
+  const peace = blank();
+  const mine = city(peace.game, 1, peace.at(10, 8));
+  const t = neighbours(peace.game.grid, mine.tile)[0];
+  peace.game.tiles[t].road = 'road';
+  const s = unit(peace.game, 'warrior', 0, t);
+  ok(!canPillage(peace.game, s), 'not at peace');
+  const own = unit(peace.game, 'warrior', 1, neighbours(peace.game.grid, mine.tile)[1]);
+  peace.game.tiles[own.tile].improvement = 'farm';
+  ok(!canPillage(peace.game, own), 'not your own');
+  peace.game.tiles[peace.at(2, 2)].road = 'road';
+  const wild = unit(peace.game, 'warrior', 0, peace.at(2, 2));
+  ok(canPillage(peace.game, wild), "a road in no one's land");
+  const w = unit(game, 'worker', 1, farm);
+  game.tiles[farm].owner = 1;
+  ok(apply(game, 1, { t: 'build', unit: w.id, what: 'repair' }).ok, 'repair');
+  for (let i = 0; i < 3; i++) endTurn(game);
+  ok(!game.tiles[farm].pillaged, 'repaired');
+});
+
+test('healing by place: city, own land, no one’s, enemy land, ships, boats, medics', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  const home = city(game, 0, at(5, 5));
+  const theirs = city(game, 1, at(18, 5));
+  const s = unit(game, 'warrior', 0, home.tile);
+  eq(healing(game, s), 25, 'in a city');
+  s.tile = neighbours(game.grid, home.tile)[0];
+  eq(healing(game, s), 20, 'own land');
+  s.tile = at(11, 12);
+  eq(healing(game, s), 15, "no one's land");
+  s.tile = neighbours(game.grid, theirs.tile)[0];
+  eq(healing(game, s), 10, "the enemy's");
+  const medic = unit(game, 'warrior', 0, neighbours(game.grid, s.tile).find((t) => t !== theirs.tile && !cityAt(game, t))!, { promotions: ['medic_1', 'medic_2'] });
+  eq(healing(game, s), 20, 'beside a medic');
+  void medic;
+  game.tiles[at(11, 14)].terrain = 'coast';
+  const ship = unit(game, 'trireme', 0, at(11, 14));
+  eq(healing(game, ship), 0, 'ships heal only at home');
+  const admiral = unit(game, 'great_admiral', 0, at(11, 14));
+  eq(healing(game, ship), 15, 'beside an admiral');
+  void admiral;
+  s.embarked = true;
+  eq(healing(game, s), 0, 'at sea in a boat');
+  s.embarked = false;
+  s.hp = 50;
+  s.moves = 0;
+  const hp = s.hp;
+  endTurn(game);
+  eq(s.hp, hp, 'no healing after moving');
+  s.promotions.push('march');
+  s.moves = 0;
+  endTurn(game);
+  ok(s.hp > hp, 'march heals anyway');
+});
+
+test('a taken city: plunder (doubled by a Burial Tomb), and its wonders go to the captor', () => {
+  const { game, at, a } = duel('swordsman');
+  const c = city(game, 1, at(11, 9), { pop: 4, buildings: ['great_library'] });
+  c.wonders = ['great_library'];
+  game.wonders.great_library = 1;
+  const gold = plunder(game, c);
+  c.buildings.push('burial_tomb');
+  eq(plunder(game, c), 2 * gold, 'burial tomb doubles');
+  c.buildings.pop();
+  c.hp = 1;
+  a.tile = at(10, 9);
+  const before = game.players[0].gold;
+  const scoreBefore = score(game, game.players[0]);
+  for (const u of game.units.filter((x) => x.owner === 1)) game.units.splice(game.units.indexOf(u), 1);
+  ok(apply(game, 0, { t: 'attack', unit: a.id, target: c.tile }).ok, 'attack');
+  eq(c.owner, 0, 'taken');
+  ok(game.players[0].gold - before >= gold - 1, 'plundered');
+  eq(game.wonders.great_library, 0, 'the wonder is ours');
+  ok(score(game, game.players[0]) > scoreBefore + 20, 'and counts for our score');
+});
+
+test('upgrades: a move left, the resource, the price (a third less with Professional Army)', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(5, 5));
+  const w = unit(game, 'warrior', 0, at(6, 5));
+  p.techs.push('iron_working', 'bronze_working');
+  p.gold = 1000;
+  w.moves = 0;
+  ok(!apply(game, 0, { t: 'upgrade', unit: w.id }).ok, 'needs a move');
+  w.moves = 2;
+  ok(!apply(game, 0, { t: 'upgrade', unit: w.id }).ok, 'needs iron');
+  Object.assign(game.tiles[at(4, 5)], { resource: 'iron', amount: 2, improvement: 'mine', owner: 0 });
+  const cost = upgradeCost(game, p, w);
+  adopt(game, 0, 'professional_army');
+  ok(upgradeCost(game, p, w) < cost, 'cheaper');
+  ok(apply(game, 0, { t: 'upgrade', unit: w.id }).ok, 'upgraded');
+  eq(w.type, 'swordsman', 'a swordsman');
+});
+
+test('moving: the Great Wall, the Iroquois’ forest paths, zones of control by domain', () => {
+  const { game, at } = blank(['egypt', 'iroquois']);
+  war(game, 0, 1);
+  const wall = city(game, 0, at(10, 8), { buildings: ['great_wall'] });
+  const raider = unit(game, 'warrior', 1, at(13, 8));
+  const into = neighbours(game.grid, wall.tile)[0];
+  const outside = neighbours(game.grid, into).find((t) => game.tiles[t].owner < 0)!;
+  ok(stepCost(game, raider, outside, into) > 100, 'the wall takes every move');
+  game.players[0].techs.push('dynamite');
+  eq(stepCost(game, raider, outside, into), 1, 'not after dynamite');
+  const iro = blank(['iroquois', 'egypt']);
+  const home = city(iro.game, 0, iro.at(10, 8));
+  const [x, y] = neighbours(iro.game.grid, home.tile);
+  for (const t of [x, y]) iro.game.tiles[t].feature = 'forest';
+  const scout = unit(iro.game, 'warrior', 0, x);
+  ok(stepCost(iro.game, scout, x, y) < 1, 'forests as roads');
+});
+
+test('paths in a war keep out of enemy cities’ fire and from beside enemy soldiers, and go round by land rather than embark under the walls', () => {
+  // On land: round a city's reach, once it's been seen.
+  const { game, at } = blank();
+  war(game, 0, 1);
+  city(game, 0, at(2, 2));
+  const enemy = city(game, 1, at(13, 9));
+  const u = unit(game, 'swordsman', 0, at(7, 9));
+  const inReach = (way: number[], c: number) => way.filter((t) => distance(game.grid, t, c) <= 2).length;
+  ok(inReach(planPath(game, u, at(19, 9))!, enemy.tile) > 0, 'a city it hasn’t seen is no danger to it');
+  game.players[0].explored[enemy.tile] = 1;
+  const way = planPath(game, u, at(19, 9))!;
+  eq(inReach(way, enemy.tile), 0, 'round the reach of a city it has seen');
+  ok(way.length <= distance(game.grid, u.tile, at(19, 9)) + 4, `and not far round (${way.length} steps)`);
+  // Beside an enemy soldier in sight.
+  const foe = unit(game, 'warrior', 1, at(7, 14));
+  const s = unit(game, 'swordsman', 0, at(5, 14));
+  ok(planPath(game, s, at(10, 14))!.every((t) => distance(game.grid, t, foe.tile) > 1), 'not beside an enemy soldier');
+  // A bay with an enemy city on an island in it: the way across it by boat is shorter, but under the walls.
+  const sea = blank();
+  war(sea.game, 0, 1);
+  city(sea.game, 0, sea.at(2, 2));
+  for (let col = 8; col <= 17; col++) for (let row = 5; row <= 9; row++) sea.game.tiles[sea.at(col, row)].terrain = 'coast';
+  const port = city(sea.game, 1, sea.at(12, 7));
+  sea.game.players[0].techs.push('optics');
+  const walker = unit(sea.game, 'swordsman', 0, sea.at(6, 7));
+  const wet = (way: number[]) => way.filter((t) => sea.game.tiles[t].terrain === 'coast').length;
+  ok(wet(planPath(sea.game, walker, sea.at(19, 7))!) > 0, 'a city it hasn’t seen: across by boat');
+  sea.game.players[0].explored[port.tile] = 1;
+  eq(wet(planPath(sea.game, walker, sea.at(19, 7))!), 0, 'one it has: round by land');
+  ok(planPath(sea.game, walker, sea.at(19, 7))!.every((t) => distance(sea.game.grid, t, port.tile) > 2), 'out of its reach');
+});
+
+test('nuclear weapons: the Manhattan Project first, only at enemies, and what they do', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  techsTo(game, 0, 14);
+  const c = city(game, 0, at(5, 5));
+  Object.assign(game.tiles[at(4, 5)], { resource: 'uranium', amount: 4, improvement: 'mine', owner: 0 });
+  ok(!trainable(game, p, c).includes('atomic_bomb'), 'not before the Manhattan Project');
+  c.buildings.push('manhattan_project');
+  ok(trainable(game, p, c).includes('atomic_bomb'), 'after it');
+  const bomb = unit(game, 'atomic_bomb', 0, c.tile);
+  const target = city(game, 1, at(12, 5), { pop: 8 });
+  ok(!apply(game, 0, { t: 'attack', unit: bomb.id, target: target.tile }).ok, 'not at peace');
+  war(game, 0, 1);
+  const soldier = unit(game, 'warrior', 1, target.tile);
+  ok(apply(game, 0, { t: 'attack', unit: bomb.id, target: target.tile }).ok, 'at war');
+  eq(target.pop, 4, 'half the people');
+  ok(!game.units.includes(bomb), 'spent');
+  ok(!game.units.includes(soldier) || soldier.hp <= 40, 'the garrison is broken');
+});
+
+test('paratroopers and airlifts', () => {
+  const { game, at } = blank();
+  techsTo(game, 0, 13);
+  const a = city(game, 0, at(3, 5), { buildings: ['airport'] });
+  const b = city(game, 0, at(20, 5));
+  const para = unit(game, 'paratrooper', 0, a.tile);
+  game.players[0].explored.fill(1);
+  ok(!apply(game, 0, { t: 'paradrop', unit: para.id, to: at(15, 5) }).ok, 'too far');
+  ok(apply(game, 0, { t: 'paradrop', unit: para.id, to: at(8, 5) }).ok, 'drop');
+  eq(para.moves, 0, 'and done for the turn');
+  const inf = unit(game, 'infantry', 0, a.tile);
+  ok(!apply(game, 0, { t: 'airlift', unit: inf.id, to: b.tile }).ok, 'no airport there');
+  b.buildings.push('airport');
+  ok(apply(game, 0, { t: 'airlift', unit: inf.id, to: b.tile }).ok, 'airlifted');
+  eq(inf.tile, b.tile, 'there');
+});
+
+test('submarines are seen only from next to them, or by destroyers within two', () => {
+  const { game, at } = blank();
+  for (let col = 0; col < 26; col++) for (let row = 10; row < 18; row++) game.tiles[at(col, row)].terrain = 'ocean';
+  const sub = unit(game, 'submarine', 1, at(10, 14));
+  const ship = unit(game, 'trireme', 0, at(12, 14));
+  game.players[0].visible[sub.tile] = 1;
+  ok(!seesUnit(game, game.players[0], sub), 'unseen two tiles off');
+  ship.tile = at(11, 14);
+  ok(seesUnit(game, game.players[0], sub), 'seen next to it');
+  ship.type = 'destroyer';
+  ship.tile = at(12, 14);
+  ok(seesUnit(game, game.players[0], sub), 'destroyers hunt them');
+});
+
+test('rewards for kills: the Aztecs’ culture, Honor’s gold, God of War’s faith; the Jaguar heals', () => {
+  const { game, at } = blank(['aztec', 'egypt']);
+  war(game, 0, 1);
+  city(game, 0, at(8, 8));
+  const p = game.players[0];
+  adopt(game, 0, 'honor_done');
+  p.pantheon = 'god_of_war';
+  const j = unit(game, 'jaguar', 0, at(10, 8), { hp: 60 });
+  const victim = unit(game, 'worker', 1, at(11, 8));
+  victim.type = 'scout';
+  victim.hp = 1;
+  const before = { culture: p.culture, gold: p.gold, faith: p.faith };
+  ok(apply(game, 0, { t: 'attack', unit: j.id, target: victim.tile }).ok, 'attack');
+  ok(!game.units.includes(victim), 'killed');
+  ok(p.culture > before.culture, 'culture');
+  ok(p.gold > before.gold, 'gold');
+  ok(p.faith > before.faith, 'faith near our city');
+  ok(j.hp >= 60, 'the jaguar heals on a kill');
+  const forest = strength(game, j, 'defend', null, j.tile);
+  game.tiles[j.tile].feature = 'jungle';
+  ok(strength(game, j, 'defend', null, j.tile) / forest > 1.5, 'jaguars in the jungle (and its cover)');
+});
+
+test('cities’ strength: Goddess of Protection, the Kremlin; Oligarchy’s garrisoned fire', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(5, 5), { pop: 5 });
+  const p = game.players[0];
+  const s = cityStrength(game, c);
+  p.pantheon = 'goddess_of_protection';
+  near(cityStrength(game, c), Math.round(s * 1.3 * 10) / 10, 'goddess of protection');
+  p.pantheon = undefined;
+  city(game, 0, at(15, 5), { buildings: ['kremlin'] });
+  ok(cityStrength(game, c) > s * 1.2, 'the kremlin reaches every city');
+  const fire = cityFireStrength(game, c);
+  adopt(game, 0, 'oligarchy');
+  eq(cityFireStrength(game, c), fire, 'no garrison');
+  unit(game, 'warrior', 0, c.tile);
+  ok(cityFireStrength(game, c) > fire * 1.4, 'garrisoned');
+});
+
+test('siege: a catapult outlives two shots from a walled city; three and a swordsman take it in six turns', () => {
+  for (const seed of [11, 222, 3333]) {
+    const { game, at } = blank();
+    game.rng = seed;
+    techsTo(game, 0, 4);
+    techsTo(game, 1, 4);
+    city(game, 0, at(2, 2));
+    city(game, 1, at(22, 15));
+    const c = city(game, 1, at(14, 9), { pop: 5, buildings: ['walls'] });
+    c.hp = cityMaxHp(game, c);
+    unit(game, 'spearman', 1, c.tile, { stance: 'fortify', fortified: 2 });
+    war(game, 0, 1);
+    const ring = (n: number) => within(game.grid, c.tile, n).filter((t) => distance(game.grid, t, c.tile) === n);
+    const catapults = ring(2).slice(0, 3).map((t) => unit(game, 'catapult', 0, t));
+    const sword = unit(game, 'swordsman', 0, ring(1)[0]);
+    const shot = damageFor(cityFireStrength(game, c), strength(game, catapults[0], 'defend', c, catapults[0].tile), 36);
+    ok(shot * 2 < 100, `two of the city's hardest shots leave a catapult standing (${shot} each)`);
+    eq(previewCityFire(game, c, catapults[0].tile)?.defender.damage[1], shot, 'the preview shows the shot as fired');
+    let turns = 1;
+    for (; turns <= 6 && c.owner === 1; turns++) {
+      // The city fires at the most hurt catapult; the catapults fire; the swordsman goes in once it would take the city on an even roll.
+      const target = catapults.filter((u) => game.units.includes(u)).sort((a, b) => a.hp - b.hp)[0];
+      if (target) apply(game, 1, { t: 'cityFire', city: c.id, target: target.tile });
+      for (const u of catapults) if (game.units.includes(u)) apply(game, 0, { t: 'attack', unit: u.id, target: c.tile });
+      if (c.hp <= damageFor(strength(game, sword, 'attack', c, sword.tile), cityStrength(game, c), 30)) apply(game, 0, { t: 'attack', unit: sword.id, target: c.tile });
+      if (c.owner === 1) endTurn(game);
+    }
+    eq(c.owner, 0, `taken (seed ${seed}, ${turns - 1} turns)`);
+  }
+});
+
+test('a city under siege heals 8, surrounded none; two trebuchets, two crossbowmen and two longswordsmen marching in take a walled size-6 city in about five turns', () => {
+  for (const seed of [11, 222, 3333]) {
+    const { game, at } = blank();
+    game.rng = seed;
+    techsTo(game, 0, 6);
+    techsTo(game, 1, 6);
+    city(game, 0, at(2, 2));
+    city(game, 1, at(22, 15));
+    const c = city(game, 1, at(14, 9), { pop: 6, buildings: ['walls'] });
+    c.hp = cityMaxHp(game, c);
+    unit(game, 'pikeman', 1, c.tile, { stance: 'fortify', fortified: 2 });
+    war(game, 0, 1);
+    // Each starts three tiles further out than its post: the siege and the bows two from the city, the swords beside it.
+    const ring = (n: number) => within(game.grid, c.tile, n).filter((t) => distance(game.grid, t, c.tile) === n && t < c.tile);
+    const posts = [...ring(2).slice(0, 4), ...ring(1).slice(0, 2)];
+    const army = ['trebuchet', 'trebuchet', 'crossbowman', 'crossbowman', 'longswordsman', 'longswordsman'].map((type, i) => unit(game, type, 0, posts[i] - 3 * game.grid.width));
+    let turns = 1;
+    for (; turns <= 6 && c.owner === 1; turns++) {
+      // The city fires at the most hurt of its besiegers; each goes to its post, the siege and bows fire, a sword goes in once it would take the city on an even roll.
+      const near = army.filter((u) => game.units.includes(u) && distance(game.grid, u.tile, c.tile) <= 2).sort((a, b) => a.hp - b.hp);
+      if (near[0]) apply(game, 1, { t: 'cityFire', city: c.id, target: near[0].tile });
+      army.forEach((u, i) => game.units.includes(u) && u.tile !== posts[i] && apply(game, 0, { t: 'move', unit: u.id, to: posts[i] }));
+      for (const u of army.slice(0, 4)) if (game.units.includes(u) && posts.includes(u.tile)) apply(game, 0, { t: 'attack', unit: u.id, target: c.tile });
+      for (const u of army.slice(4)) if (game.units.includes(u) && c.owner === 1 && c.hp <= damageFor(strength(game, u, 'attack', c, u.tile), cityStrength(game, c), 30)) apply(game, 0, { t: 'attack', unit: u.id, target: c.tile });
+      if (c.owner === 1) {
+        const hp = c.hp;
+        const max = cityMaxHp(game, c);
+        endTurn(game);
+        if (hp < max - 20) eq(c.hp - hp, 8, 'a city attacked since its last turn heals 8');
+      }
+    }
+    eq(c.owner, 0, `taken (seed ${seed}, ${turns - 1} turns)`);
+  }
+  const { game, at } = blank();
+  city(game, 0, at(2, 2));
+  const c = city(game, 1, at(10, 8));
+  war(game, 0, 1);
+  c.hp = 100;
+  endTurn(game);
+  eq(c.hp, 120, 'left alone, 20');
+  for (const t of neighbours(game.grid, c.tile)) unit(game, game.tiles[t].terrain === 'grassland' ? 'warrior' : 'trireme', 0, t);
+  endTurn(game);
+  eq(c.hp, 120, 'surrounded, none');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Religion
+// -------------------------------------------------------------------------------------------------
+
+test('faith: Religious Tolerance, Mandate of Heaven, Holy Warriors, Messiah, the Great Mosque', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5), { pop: 6 });
+  game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'feed_the_world', 'holy_warriors'] };
+  game.religions.r2 = { founder: 1, holyCity: -1, name: 'Two', beliefs: ['church_property', 'peace_gardens'] };
+  p.religion = 'r1';
+  c.followers = { r1: 4, r2: 2 };
+  ok(!cityEffects(game, c).some((e) => e.perBuilding?.some((x) => x.buildings.includes('garden'))), 'no second religion');
+  adopt(game, 0, 'free_religion');
+  ok(cityEffects(game, c).some((e) => e.perBuilding?.some((x) => x.buildings.includes('garden'))), 'religious tolerance');
+  const cost = faithCost(game, 'missionary', p);
+  adopt(game, 0, 'mandate_of_heaven');
+  eq(faithCost(game, 'missionary', p), Math.floor(cost * 0.8), 'mandate of heaven');
+  p.faith = 1000;
+  p.techs.push('bronze_working');
+  ok(apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'unit', id: 'spearman' }, with: 'faith' }).ok, 'holy warriors');
+  const prophet = prophetCost(game, p);
+  const spreads = spreadsOf(game, p, 'great_prophet');
+  game.religions.r1.beliefs.push('messiah');
+  ok(prophetCost(game, p) < prophet, 'messiah: cheaper prophets');
+  eq(spreadsOf(game, p, 'great_prophet'), spreads + 1, 'messiah: one more spread');
+  c.buildings.push('great_mosque');
+  eq(spreadsOf(game, p, 'missionary'), 3, 'great mosque: one more for missionaries');
+});
+
+test('religions: prophets come with a pantheon; a prophet born keeps its civ’s place among the few there’s room for', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india', 'china']);
+  eq(maxReligions(game), 3, 'room for three among four civs');
+  const homes = game.players.map((p) => city(game, p.index, at(3 + p.index * 6, 4)));
+  const prophetOf = (p: number) => game.units.find((u) => u.owner === p && u.type === 'great_prophet');
+  const [egypt, babylon] = game.players;
+  egypt.faith = 1000;
+  faithTurn(game);
+  ok(!prophetOf(0), 'faith without a pantheon brings no prophet');
+  egypt.pantheon = 'god_king';
+  faithTurn(game);
+  const waiting = prophetOf(0)!;
+  ok(!!waiting, 'with one, a prophet');
+  // India and China found the second and third religions while Egypt's prophet is on its way.
+  const founders = BELIEF_LIST.filter((b) => b.kind === 'founder').map((b) => b.id);
+  const followers = BELIEF_LIST.filter((b) => b.kind === 'follower').map((b) => b.id);
+  for (const p of [2, 3]) {
+    const u = unit(game, 'great_prophet', p, homes[p].tile);
+    eq(foundReligion(game, game.players[p], u, '', [founders[p], followers[p]]), null, `${game.players[p].civ} founds one`);
+  }
+  eq(religionsLeft(game, babylon), 0, 'the last place is kept for Egypt’s prophet');
+  babylon.pantheon = 'desert_folklore';
+  babylon.faith = 1000;
+  faithTurn(game);
+  ok(!prophetOf(1), 'so no prophet for Babylon');
+  const late = unit(game, 'great_prophet', 1, homes[1].tile);
+  ok(foundReligion(game, babylon, late, '', [founders[1], followers[1]]) !== null, 'nor a religion from one it had another way');
+  eq(foundReligion(game, egypt, waiting, '', [founders[0], followers[0]]), null, 'Egypt founds its religion');
+  eq(religionsLeft(game, babylon), 0, 'and the world is full');
+});
+
+test('faith buys great people from the Industrial Era: the kinds a finished tree allows (every kind with To the Glory of God), each half again dearer', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(8, 8));
+  const greats = () => faithPurchases(game, p, c).filter((x) => x.kind === 'unit' && x.id.startsWith('great_')).map((x) => x.id);
+  adopt(game, 0, 'rationalism_done');
+  eq(greats().length, 0, 'not before the Industrial Era');
+  techsTo(game, 0, 9);
+  eq(greats().join(), 'great_scientist', 'Rationalism finished: scientists');
+  eq(faithCost(game, 'great_scientist', p), Math.floor(1000 * 0.67), 'a thousand faith at standard speed');
+  p.faith = 5000;
+  ok(apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'unit', id: 'great_scientist' }, with: 'faith' }).ok, 'bought');
+  ok(game.units.some((u) => u.owner === 0 && u.type === 'great_scientist'), 'and born');
+  eq(p.faith, 5000 - Math.floor(1000 * 0.67), 'for its price');
+  eq(faithCost(game, 'great_scientist', p), Math.floor(1500 * 0.67), 'the next half again as dear');
+  ok(!apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'unit', id: 'great_engineer' }, with: 'faith' }).ok, 'no engineers without Tradition or Liberty');
+  adopt(game, 0, 'tradition_done');
+  ok(greats().includes('great_engineer'), 'with Tradition, engineers');
+  game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'mosques', 'to_the_glory_of_god'] };
+  p.religion = 'r1';
+  eq(greats().length, 8, 'To the Glory of God: every kind');
+});
+
+test('religion spreads: Religious Texts, Itinerant Preachers, trade routes (Arabia’s twice)', () => {
+  const { game, at } = blank(['arabia', 'egypt']);
+  const source = city(game, 0, at(2, 2), { pop: 6 });
+  const target = city(game, 1, at(14, 2), { pop: 6 });
+  game.religions.r1 = { founder: 0, holyCity: -1, name: 'One', beliefs: ['tithe', 'mosques'] };
+  source.followers = { r1: 6 };
+  endTurn(game);
+  eq(target.pressure?.r1 ?? 0, 0, 'twelve tiles is too far');
+  game.religions.r1.beliefs.push('itinerant_preachers');
+  endTurn(game);
+  eq(target.pressure?.r1, 1, 'reaches further');
+  game.religions.r1.beliefs.push('religious_texts');
+  endTurn(game);
+  near(target.pressure!.r1, 2.34, 'religious texts');
+  game.players[0].routes = [{ from: source.id, to: target.id, turns: 10, sea: false }];
+  endTurn(game);
+  near(target.pressure!.r1, 2.34 + 1.34 + 2, "arabia's route carries it twice as strongly");
+});
+
+test('Reformation: a belief to choose, or one chosen at the turn’s end', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5));
+  game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'mosques'] };
+  p.religion = 'r1';
+  ok(!apply(game, 0, { t: 'reformation', belief: 'sacred_sites' }).ok, 'not without Reformation');
+  adopt(game, 0, 'reformation');
+  ok(!apply(game, 0, { t: 'reformation', belief: 'tithe' }).ok, 'only a reformation belief');
+  ok(apply(game, 0, { t: 'reformation', belief: 'charitable_missions' }).ok, 'chosen');
+  ok(!apply(game, 0, { t: 'reformation', belief: 'sacred_sites' }).ok, 'only one');
+  const q = blank();
+  const qp = q.game.players[0];
+  const qc = city(q.game, 0, q.at(5, 5));
+  q.game.religions.r1 = { founder: 0, holyCity: qc.id, name: 'One', beliefs: ['tithe', 'mosques'] };
+  qp.religion = 'r1';
+  adopt(q.game, 0, 'reformation');
+  endTurn(q.game);
+  eq(q.game.religions.r1.beliefs.length, 3, 'chosen for them');
+});
+
+test('great people used: the Mausoleum’s gold, Reliquary’s faith, Rationalism’s science, Commerce’s gold', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5), { buildings: ['mausoleum'] });
+  game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'mosques', 'reliquary'] };
+  p.religion = 'r1';
+  p.researching = 'pottery';
+  const m = unit(game, 'great_merchant', 0, c.tile);
+  const gold = p.gold;
+  ok(apply(game, 0, { t: 'greatPerson', unit: m.id, action: 'trade' }).ok, 'trade mission');
+  const mission = p.gold - gold - 100;
+  ok(p.faith >= 50, 'reliquary');
+  adopt(game, 0, 'commerce_done');
+  const m2 = unit(game, 'great_merchant', 0, c.tile);
+  const gold2 = p.gold;
+  apply(game, 0, { t: 'greatPerson', unit: m2.id, action: 'trade' });
+  eq(p.gold - gold2 - 100, 2 * mission, 'commerce finished doubles it');
+  const s = unit(game, 'great_scientist', 0, c.tile);
+  const research = p.research.pottery ?? 0;
+  adopt(game, 0, 'rationalism_done');
+  apply(game, 0, { t: 'greatPerson', unit: s.id, action: 'discover' });
+  ok((p.research.pottery ?? 0) - research >= 60 || p.techs.includes('pottery'), 'half again');
+  const a = unit(game, 'great_artist', 0, at(6, 5));
+  game.tiles[at(6, 5)].owner = 0;
+  ok(apply(game, 0, { t: 'greatPerson', unit: a.id, action: 'improvement' }).ok, 'artists build landmarks');
+  eq(game.tiles[at(6, 5)].improvement, 'landmark', 'a landmark');
+});
+
+// -------------------------------------------------------------------------------------------------
+// City-states, trade, spies, research agreements
+// -------------------------------------------------------------------------------------------------
+
+test('city-states: Patronage, Consulates, Papal Primacy, Gunboat Diplomacy, gifts and unit gifts', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const cs = game.players.findIndex((x) => x.cityState);
+  const home = city(game, cs, at(12, 8));
+  city(game, 0, at(3, 3));
+  const p = game.players[0];
+  p.influence[cs] = 50;
+  endTurn(game);
+  eq(p.influence[cs], 49, 'falls a point');
+  adopt(game, 0, 'patronage');
+  endTurn(game);
+  eq(p.influence[cs], 48.25, 'a quarter slower');
+  p.influence[cs] = 0;
+  adopt(game, 0, 'consulates');
+  endTurn(game);
+  eq(p.influence[cs], 1, 'rises to rest at 20');
+  p.gold = 1000;
+  const before = p.influence[cs];
+  apply(game, 0, { t: 'gift', target: cs, gold: 100 });
+  const plain = p.influence[cs] - before;
+  adopt(game, 0, 'philanthropy');
+  const mid = p.influence[cs];
+  apply(game, 0, { t: 'gift', target: cs, gold: 100 });
+  ok(p.influence[cs] - mid > plain, 'philanthropy');
+  const s = unit(game, 'swordsman', 0, neighbours(game.grid, home.tile)[0]);
+  const inf = p.influence[cs];
+  ok(apply(game, 0, { t: 'giftUnit', unit: s.id, target: cs }).ok, 'a unit given');
+  eq(s.owner, cs, 'theirs now');
+  ok(p.influence[cs] > inf, 'influence for it');
+});
+
+test('trade routes’ gold comes with the turn’s income (its own route’s, and one for the city at the other end), once', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const mine = city(game, 0, at(3, 3), { pop: 4 });
+  const theirs = city(game, 1, at(12, 3), { pop: 6 });
+  const [egypt, babylon] = game.players;
+  egypt.gold = babylon.gold = 100;
+  const route = { from: mine.id, to: theirs.id, turns: 10, sea: false };
+  const pay = routeYield(game, egypt, route).gold;
+  ok(pay > 0, 'the route pays');
+  const without: Game = JSON.parse(JSON.stringify(game));
+  routesOf(egypt).push(route);
+  eq(routesGold(game, egypt), pay, 'Egypt’s route');
+  eq(routesGold(game, babylon), 1, 'one for Babylon, at the other end');
+  endTurn(game);
+  endTurn(without);
+  eq(egypt.lastIncome!.gold - without.players[0].lastIncome!.gold, pay, 'in Egypt’s income');
+  eq(egypt.gold - without.players[0].gold, pay, 'and its treasury, once');
+  eq(babylon.gold - without.players[1].gold, 1, 'and Babylon’s one');
+});
+
+test('trade routes: Trade Unions, Treasure Fleets, Merchant Confederacy, Economic Union; caravansaries reach further', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const cs = game.players.findIndex((x) => x.cityState);
+  const mine = city(game, 0, at(3, 3), { pop: 4 });
+  const theirs = city(game, 1, at(12, 3), { pop: 4 });
+  const csCity = city(game, cs, at(12, 12), { pop: 4 });
+  const p = game.players[0];
+  const r = (to: number, sea = false) => routeYield(game, p, { from: mine.id, to, turns: 10, sea }).gold;
+  const base = r(theirs.id);
+  adopt(game, 0, 'trade_unions');
+  eq(r(theirs.id) - base, 2, 'trade unions');
+  adopt(game, 0, 'treasure_fleets');
+  eq(r(theirs.id, true) - r(theirs.id), 4, 'sea routes: +2, and +2 more');
+  const toCs = r(csCity.id);
+  adopt(game, 0, 'merchant_confederacy');
+  eq(r(csCity.id) - toCs, 3, 'merchant confederacy');
+  p.ideology = 'freedom';
+  game.players[1].ideology = 'freedom';
+  const same = r(theirs.id);
+  adopt(game, 0, 'economic_union');
+  eq(r(theirs.id) - same, 3, 'economic union');
+  const routes = maxRoutes(game, p);
+  mine.buildings.push('colossus');
+  eq(maxRoutes(game, p) - routes, 1, 'the colossus: a route more');
+});
+
+test('spies: the Great Firewall, constabularies, Covert Action, counterspies, the NIA', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const p = game.players[0];
+  const them = game.players[1];
+  city(game, 0, at(3, 3));
+  const target = city(game, 1, at(14, 3), { pop: 8 });
+  techsTo(game, 1, 6);
+  techsTo(game, 0, 4);
+  const spy = { id: 999, city: target.id, progress: 0 };
+  p.spies = [spy];
+  endTurn(game);
+  const pace = spy.progress;
+  ok(pace > 0, 'a spy at work');
+  target.buildings.push('constabulary');
+  spy.progress = 0;
+  endTurn(game);
+  near(spy.progress, Math.max(2, Math.floor(pace)) * 0.75 || spy.progress, 'constabulary slows it');
+  adopt(game, 0, 'covert_action');
+  const slowed = spy.progress;
+  spy.progress = 0;
+  endTurn(game);
+  ok(spy.progress > slowed * 1.2, 'covert action speeds it');
+  them.policies.push('double_agents');
+  target.buildings.push('great_firewall');
+  spy.progress = 0;
+  endTurn(game);
+  eq(spy.progress, 0, 'the great firewall stops it');
+  eq(spyCount(game, p, 4), 2, 'two spies in the industrial era');
+  game.cities[0].buildings.push('national_intelligence_agency');
+  eq(spyCount(game, p, 4), 3, 'one more with the NIA');
+});
+
+test('spies steal as in Civ V: only from a civ ahead, the dearest tech it could learn at the city’s science (taking two and a half times its cost), after watching the city; a counterspy catches half', () => {
+  const world = (seed: number) => {
+    const { game, at } = blank(['egypt', 'babylon']);
+    game.rng = seed;
+    city(game, 0, at(3, 3));
+    const target = city(game, 1, at(14, 3), { pop: 8 });
+    techsTo(game, 0, 4);
+    techsTo(game, 1, 4);
+    game.players[0].explored[target.tile] = 1;
+    return { game, target, p: game.players[0], them: game.players[1] };
+  };
+  const { game, target, p, them } = world(1);
+  ok('why' in theft(game, p, target), 'nothing from a civ no further ahead');
+  techsTo(game, 1, 6);
+  const plan = theft(game, p, target);
+  if (!('tech' in plan)) throw new Failure('a theft from a civ ahead');
+  const learnable = Object.keys(TECHS).filter((t) => them.techs.includes(t) && !p.techs.includes(t) && TECHS[t].needs.every((n) => p.techs.includes(n)));
+  ok(learnable.every((t) => techCost(game, p, t) <= techCost(game, p, plan.tech)), 'the dearest tech it could learn');
+  near(plan.need, techCost(game, p, plan.tech) * THEFT_COST, 'a multiple of what it costs');
+  near(plan.rate, Math.max(1, cityYields(game, target).science), 'gathered at the city’s science');
+  p.spies = [{ id: 999, city: null, progress: 0 }];
+  ok(apply(game, 0, { t: 'spy', spy: 999, target: target.id }).ok, 'sent');
+  const spy = p.spies[0];
+  eq(spy.watch, surveillanceTurns(game), 'it watches the city first');
+  for (let t = 0; t < surveillanceTurns(game); t++) endTurn(game);
+  eq(spy.progress, 0, 'gathering nothing meanwhile');
+  endTurn(game);
+  ok(spy.progress > 0, 'then at work');
+  // Each theft is caught half the time with a counterspy there: the spy dies and its civ is known.
+  let caught = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const w = world(seed * 7919);
+    techsTo(w.game, 1, 6);
+    w.p.spies = [{ id: 999, city: w.target.id, progress: 1e9 }];
+    w.them.spies = [{ id: 998, city: w.target.id, progress: 0 }];
+    const known = w.p.techs.length;
+    endTurn(w.game);
+    if (w.p.spies.length) eq(w.p.techs.length, known + 1, 'not caught: it steals');
+    else {
+      caught++;
+      ok(relationsOf(w.game).events.some((e) => e.kind === 'spy' && e.by === 0 && e.to === 1), 'caught: remembered against its civ');
+    }
+  }
+  ok(caught >= 12 && caught <= 28, `caught about half the time (${caught} of 40)`);
+});
+
+test('no caravan to train or buy with every trade route running or spoken for by one waiting', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(8, 8), { pop: 4 });
+  techsTo(game, 0, 3);
+  p.gold = 10000;
+  const max = maxRoutes(game, p);
+  ok(max >= 1, 'routes to fill');
+  const caravans = Array.from({ length: max }, () => unit(game, 'caravan', 0, c.tile));
+  const train = { t: 'produce', city: c.id, item: { kind: 'unit', id: 'caravan' } } as const;
+  ok(!apply(game, 0, train).ok, 'every route spoken for: no training one');
+  ok(!apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'unit', id: 'caravan' }, with: 'gold' }).ok, 'nor buying one');
+  ok(!!trainOptions(game, p, c).find((o) => o.id === 'caravan')?.why, 'and the city says why');
+  game.units.splice(game.units.indexOf(caravans[0]), 1);
+  ok(apply(game, 0, train).ok, 'one route free: a caravan');
+});
+
+test('the World Leader vote: a team’s delegates stand together, given to the one of them given most, more than two thirds needed of the delegates the world began with (half without teams); city-states with no ally abstain', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india', 'china'], { cityStates: 2 });
+  game.players.forEach((p, i) => {
+    if (i < 4) {
+      p.team = i < 2 ? 0 : 1;
+      city(game, i, at(3 + i * 6, 3));
+    }
+  });
+  const alone = unVote(game, () => -1);
+  eq([...alone.votes.values()].join(), '4,4', 'each team’s four delegates together');
+  ok(alone.votes.has(0) && alone.votes.has(2), 'for its first civ when none is given more');
+  eq(alone.needed, 7, 'more than two thirds of the world’s ten delegates, in a game of teams (the city-states’ too, though they abstain)');
+  const backed = unVote(game, () => 3);
+  eq(backed.votes.get(3), 6, 'city-states behind China: India’s two go to China too');
+  ok(!backed.votes.has(2), 'and none stand apart for India');
+  eq(backed.needed, 7, 'with the city-states voting, the same');
+  game.players[3].alive = false;
+  game.players.find((x) => x.cityState)!.alive = false;
+  eq(unVote(game, () => -1).needed, 7, 'a fallen civ’s and a fallen city-state’s delegates still among those needed');
+  game.players.forEach((p) => delete p.team);
+  eq(unVote(game, () => -1).needed, 5, 'without teams, half of them');
+});
+
+test('a World Leader: half the world’s delegates and more than anyone else (two at half each is neither)', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india', 'china'], { cityStates: 2 });
+  game.players.forEach((_, i) => i < 4 && city(game, i, at(3 + i * 6, 3)));
+  const [egypt, babylon, india, china] = game.players;
+  game.settings.victories.diplomatic = true;
+  game.wonders['united_nations'] = egypt.index;
+  game.cities.find((c) => c.owner === egypt.index)!.buildings.push('united_nations');
+  game.turn = 100;
+  const toEgypt = () => egypt.index;
+  // Egypt: the UN's four and both city-states; Babylon: its own two and India's and China's.
+  (india as typeof india & { vote?: number }).vote = babylon.index;
+  (china as typeof china & { vote?: number }).vote = babylon.index;
+  eq(unVote(game, toEgypt).needed, 6, 'half of twelve');
+  longGameTurn(game, () => 0, toEgypt);
+  ok(!game.over, 'six each: no World Leader');
+  (china as typeof china & { vote?: number }).vote = egypt.index;
+  longGameTurn(game, () => 0, toEgypt);
+  eq(game.over?.how, 'diplomatic', 'China’s two to Egypt: eight against four');
+  eq(game.over?.winner, egypt.index, 'Egypt elected');
+});
+
+test('city-state quests: done for influence, once each (the camp and the wonder by the first only); they lapse, and only those who have met it are asked', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const [egypt, babylon] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  const home = city(game, cs.index, at(14, 9));
+  city(game, 0, at(4, 4));
+  city(game, 1, at(22, 15));
+  egypt.met = [cs.index];
+  const quests = questsOf(cs);
+  const ask = (q: Partial<Quest> & { kind: QuestKind }) => quests.push({ until: game.turn + 30, done: [], ...q });
+  const inf = () => egypt.influence[cs.index] ?? 0;
+  // A trade route to it.
+  ask({ kind: 'route' });
+  let before = inf();
+  routesOf(egypt).push({ from: game.cities.find((c) => c.owner === 0)!.id, to: home.id, turns: 20, sea: false });
+  questsTurn(game);
+  eq(inf() - before, QUEST_REWARD.route, 'a trade route to it: its influence');
+  before = inf();
+  questsTurn(game);
+  eq(inf(), before, 'once only');
+  ok(!(babylon.influence[cs.index] ?? 0), 'Babylon has never met it: asked nothing');
+  // A wonder: the first to build it.
+  ask({ kind: 'wonder', target: 'pyramids' });
+  game.wonders.pyramids = 0;
+  before = inf();
+  questsTurn(game);
+  eq(inf() - before, QUEST_REWARD.wonder, 'the wonder built');
+  ok(!quests.some((q) => q.kind === 'wonder'), 'and the quest is over');
+  // A camp: cleared by the civ.
+  const camp = at(16, 9);
+  game.tiles[camp].camp = true;
+  ask({ kind: 'camp', target: camp });
+  before = inf();
+  game.tiles[camp].camp = false;
+  campCleared(game, egypt, camp);
+  eq(inf() - before, QUEST_REWARD.camp, 'the camp cleared');
+  questsTurn(game);
+  ok(!quests.some((q) => q.kind === 'camp'), 'and gone');
+  // A resource, a natural wonder, a religion.
+  ask({ kind: 'resource', target: 'silver' });
+  ask({ kind: 'nature', target: 'sky_pillar' });
+  before = inf();
+  Object.assign(game.tiles[neighbours(game.grid, game.cities.find((c) => c.owner === 0)!.tile)[0]], { resource: 'silver', improvement: 'mine' });
+  (game.found ??= {}).sky_pillar = { tile: 0, by: [0] };
+  questsTurn(game);
+  eq(inf() - before, QUEST_REWARD.resource + QUEST_REWARD.nature, 'silver brought in, a natural wonder found');
+  ask({ kind: 'religion' });
+  game.religions.r1 = { founder: 0, holyCity: -1, name: 'One', beliefs: ['tithe', 'mosques'] };
+  egypt.religion = 'r1';
+  home.followers = { r1: home.pop };
+  before = inf();
+  questsTurn(game);
+  eq(inf() - before, QUEST_REWARD.religion, 'its city follows your religion');
+  // A quest lapses.
+  quests.length = 0;
+  ask({ kind: 'route', until: game.turn });
+  questsTurn(game);
+  eq(quests.filter((q) => q.kind === 'route').length, 0, 'out of time');
+  // Asked in time: a city-state with room asks something it can.
+  quests.length = 0;
+  routesOf(egypt).length = 0;
+  egypt.techs.push('animal_husbandry');
+  for (let i = 0; i < 80 && !quests.length; i++) questsTurn(game);
+  ok(quests.length > 0, 'it asks');
+  eq(questsFor(game, egypt, cs).length, quests.length, 'and the asked civ sees it');
+  const seen = questsFor(game, egypt, cs)[0];
+  eq(seen.at, home.tile, 'shown at the city-state');
+  ok(seen.text.length > 0 && seen.reward > 0 && seen.turns > 0 && !seen.done, 'in words, with its reward and turns');
+  eq(questsFor(game, babylon, cs).length, 0, 'not one who hasn’t met it');
+});
+
+test('a camp a city-state clears itself ends its request, met by no one', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const [egypt] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, cs.index, at(14, 9));
+  city(game, 0, at(4, 4));
+  city(game, 1, at(22, 15));
+  egypt.met = [cs.index];
+  egypt.bot = false;
+  const camp = at(16, 9);
+  questsOf(cs).push({ kind: 'camp', target: camp, until: game.turn + 30, done: [] });
+  egypt.notes = [];
+  campCleared(game, cs, camp);
+  eq(questsOf(cs)[0].done.length, 0, 'not done by the city-state itself');
+  questsTurn(game);
+  ok(egypt.notes.some((n) => n.text === `${cs.name} no longer asks: clear the barbarian camp near us.`), 'Egypt told it no longer asks');
+});
+
+test('a city-state’s request met first by another civ: the others are told who; its notes are city-states’ notes', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const [egypt, babylon] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, cs.index, at(14, 9));
+  city(game, 0, at(4, 4));
+  city(game, 1, at(22, 15));
+  egypt.met = [cs.index, 1];
+  babylon.met = [cs.index, 0];
+  egypt.bot = babylon.bot = false;
+  const camp = at(16, 9);
+  game.tiles[camp].camp = true;
+  questsOf(cs).push({ kind: 'camp', target: camp, until: game.turn + 30, done: [] });
+  egypt.notes = [];
+  babylon.notes = [];
+  game.tiles[camp].camp = false;
+  campCleared(game, babylon, camp);
+  questsTurn(game);
+  ok(egypt.notes.some((n) => n.text.includes(`met first by ${babylon.name}`) && n.kind === 'citystate'), 'Egypt told Babylon met it first, in a city-state’s note');
+  // A route to it: the thanks name its city as it's written.
+  const home = game.cities.find((c) => c.owner === cs.index)!;
+  questsOf(cs).push({ kind: 'route', until: game.turn + 30, done: [] });
+  routesOf(egypt).push({ from: game.cities.find((c) => c.owner === 0)!.id, to: home.id, turns: 20, sea: false });
+  questsTurn(game);
+  ok(egypt.notes.some((n) => n.text.includes(`thanks you (open a trade route to ${home.name})`)), 'the thanks keep the city’s name as it is');
+  ok(babylon.notes.some((n) => n.text.includes('thanks you') && n.kind === 'citystate'), 'and Babylon thanked, in one');
+});
+
+test('a resolution’s proposer is for it until they say otherwise', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const [egypt] = game.players;
+  city(game, 0, at(4, 4));
+  city(game, 1, at(22, 15));
+  egypt.bot = false;
+  game.congress = { host: 0, next: game.turn + 5, proposals: [], active: [] };
+  eq(proposeResolution(game, egypt, { kind: 'arts_funding' }), null, 'Egypt proposes');
+  eq(game.congress.proposals[0].votes[0], 'yes', 'and is for it');
+  castVote(game, egypt, game.congress.proposals[0].id, 'abstain');
+  eq(game.congress.proposals[0].votes[0], 'abstain', 'until it says otherwise');
+});
+
+test('the World Congress: another person’s vote is theirs until the session (not in the forecast, nor its totals)', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india']);
+  const [egypt, babylon] = game.players;
+  [at(4, 4), at(22, 15), at(12, 9)].forEach((t, i) => city(game, i, t));
+  egypt.bot = babylon.bot = false;
+  egypt.met = [1, 2];
+  babylon.met = [0, 2];
+  game.congress = { host: 0, next: game.turn + 5, proposals: [], active: [] };
+  eq(proposeResolution(game, egypt, { kind: 'arts_funding' }), null, 'Egypt proposes (and is for it)');
+  const id = game.congress.proposals[0].id;
+  castVote(game, babylon, id, 'no');
+  const seen = (p: typeof egypt) => viewFor(game, p, null).congress!.proposals[0];
+  const mine = seen(egypt);
+  eq(mine.vote, 'yes', 'Egypt sees its own vote');
+  eq(mine.forecast.find((f) => f.player === 0)?.vote, 'yes', 'in the forecast too');
+  eq(mine.forecast.find((f) => f.player === 1)?.vote, null, 'not Babylon’s');
+  eq(mine.projected.no, 0, 'nor counts it');
+  const theirs = seen(babylon);
+  eq(theirs.forecast.find((f) => f.player === 0)?.vote, null, 'and Babylon doesn’t see Egypt’s');
+  eq(theirs.projected.no, delegates(game, babylon), 'but counts its own');
+  ok(theirs.forecast.find((f) => f.player === 2)?.vote !== null, 'a bot’s expected vote is shown');
+});
+
+test('the World Congress’s news names a civ only to those who have met it', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india']);
+  const [egypt, babylon, india] = game.players;
+  [egypt, babylon, india].forEach((p, i) => city(game, p.index, at(3 + i * 8, 4)));
+  for (const p of game.players) p.bot = false;
+  egypt.met = [1];
+  babylon.met = [0];
+  india.met = [];
+  game.congress = { host: 0, next: game.turn + 5, proposals: [], active: [] };
+  eq(proposeResolution(game, egypt, { kind: 'embargo', civ: 1 }), null, 'Egypt puts an embargo on Babylon');
+  ok(egypt.notes.some((n) => n.text.startsWith('You have put a resolution') && n.text.includes(`Embargo on ${babylon.name}`)), 'to Egypt: its own resolution');
+  ok(babylon.notes.some((n) => n.text.startsWith(`${egypt.name} has put a resolution`)), 'to Babylon: Egypt’s');
+  ok(india.notes.some((n) => n.text.startsWith("A civilization you haven't met has put a resolution") && n.text.includes("Embargo on a civilization you haven't met")), 'to India: neither named');
+});
+
+test('the World Congress: founded in the Renaissance, its host and the civ with most delegates propose, delegates vote, resolutions in force until repealed', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india'], { cityStates: 1 });
+  const [egypt, babylon, india] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  [egypt, babylon, india].forEach((p, i) => city(game, p.index, at(3 + i * 8, 4)));
+  city(game, cs.index, at(12, 12));
+  for (const p of game.players) p.bot = false;
+  endTurn(game);
+  ok(!game.congress, 'none before the Renaissance');
+  techsTo(game, 1, 7);
+  endTurn(game);
+  const c = game.congress!;
+  ok(!!c, 'founded');
+  eq(c.host, 1, 'its host the first in the Renaissance');
+  eq(c.next, game.turn + sessionTurns(game) - 1, 'it meets in thirty turns (at speed)');
+  // City-state allies' delegates go with their ally.
+  egypt.influence[cs.index] = 80;
+  eq(delegates(game, egypt), 3, 'two, one more for a city-state ally');
+  eq(delegates(game, babylon), 4, 'the host two more');
+  eq(proposers(game).join(), '1,0', 'the host and the civ with most delegates besides');
+  ok(cannotPropose(game, india, { kind: 'arts_funding' }) !== null, 'nobody else');
+  eq(proposeResolution(game, babylon, { kind: 'embargo', civ: 2 }), null, 'the host puts an embargo on India');
+  eq(proposeResolution(game, egypt, { kind: 'ban_luxury', luxury: 'silver' }), null, 'Egypt a ban on silver');
+  ok(proposeResolution(game, egypt, { kind: 'arts_funding' }) !== null, 'one each');
+  const [embargo, ban] = c.proposals;
+  castVote(game, babylon, embargo.id, 'yes');
+  castVote(game, india, embargo.id, 'no');
+  castVote(game, egypt, ban.id, 'yes');
+  castVote(game, india, ban.id, 'no');
+  castVote(game, babylon, ban.id, 'no');
+  // Silver of India's, and a route of Egypt's to India, before the session.
+  Object.assign(game.tiles[neighbours(game.grid, game.cities.find((x) => x.owner === 2)!.tile)[0]], { resource: 'silver', improvement: 'mine' });
+  const india0 = happiness(game, india);
+  routesOf(egypt).push({ from: game.cities.find((x) => x.owner === 0)!.id, to: game.cities.find((x) => x.owner === 2)!.id, turns: 20, sea: false });
+  c.next = game.turn;
+  endTurn(game);
+  ok(embargoed(game, 0, 2), 'the embargo passes: 4 for, 2 against');
+  ok(!banned(game, 'silver'), 'the ban fails: 3 for, 6 against');
+  endTurn(game);
+  eq(routesOf(egypt).length, 0, 'the embargo ends trade routes with India');
+  ok(startRoute(game, egypt, unit(game, 'caravan', 0, game.cities.find((x) => x.owner === 0)!.tile), game.cities.find((x) => x.owner === 2)!.id) !== null, 'and opens none');
+  eq(c.proposals.length, 0, 'the proposals are done with');
+  // Resolutions' effects.
+  c.active.push({ kind: 'ban_luxury', luxury: 'silver' });
+  ok(happiness(game, india) < india0, 'a banned luxury gives no happiness');
+  const capital = game.cities.find((x) => x.owner === 0)!;
+  capital.specialists.scientist = 1;
+  capital.specialists.artist = 1;
+  const before = cityYields(game, capital).greatPeople;
+  c.active.push({ kind: 'arts_funding' });
+  const after = cityYields(game, capital).greatPeople;
+  near(after.artist ?? 0, (before.artist ?? 0) * 1.33, 'arts funding: artists a third faster');
+  near(after.scientist ?? 0, (before.scientist ?? 0) * 0.67, 'scientists a third slower');
+  for (let i = 0; i < 12; i++) unit(game, 'warrior', 0, at(1, 10));
+  const upkeep = goldUpkeep(game, egypt).units;
+  c.active.push({ kind: 'standing_army_tax' });
+  ok(goldUpkeep(game, egypt).units > upkeep, 'a standing army tax: more upkeep');
+  egypt.techs.push(...Object.keys(TECHS));
+  capital.buildings.push('manhattan_project');
+  ok(trainOptions(game, egypt, capital).some((o) => o.id === 'atomic_bomb'), 'nuclear weapons, with the Manhattan Project');
+  c.active.push({ kind: 'non_proliferation' });
+  ok(!trainOptions(game, egypt, capital).some((o) => o.id === 'atomic_bomb'), 'none with Non-Proliferation');
+  // Repealed.
+  c.host = 0;
+  eq(proposeResolution(game, egypt, { kind: 'non_proliferation', repeal: true }), null, 'a repeal proposed');
+  castVote(game, egypt, c.proposals[0].id, 'yes');
+  c.next = game.turn;
+  endTurn(game);
+  ok(!inForce(game, 'non_proliferation'), 'and passed');
+});
+
+test('a trade route home carries food or production, as it’s sent', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const from = city(game, 0, at(4, 4), { pop: 8 });
+  const to = city(game, 0, at(10, 4), { pop: 2 });
+  techsTo(game, 0, 1);
+  ok(!startRoute(game, p, unit(game, 'caravan', 0, from.tile), to.id, 'prod'), 'production sent');
+  eq(routeYield(game, p, routesOf(p)[0]).prod, 4, 'two, and one for every four people where it comes from');
+  eq(routeYield(game, p, routesOf(p)[0]).food, 0, 'no food with it');
+  const prod = to.prod;
+  game.players[0].routes = [{ ...routesOf(p)[0] }];
+  endTurn(game);
+  ok(to.prod >= prod + 4, 'the city gets it');
+  routesOf(p).length = 0;
+  ok(!startRoute(game, p, unit(game, 'caravan', 0, from.tile), to.id), 'food, by default');
+  eq(routeYield(game, p, routesOf(p)[0]).food, 3 + Math.floor(from.pop / 4), 'three, and one for every four people');
+  routesOf(p).length = 0;
+  const sent = apply(game, 0, { t: 'trade', unit: unit(game, 'caravan', 0, at(4, 4)).id, to: city(game, 0, at(4, 10)).id, cargo: 'prod' });
+  ok(sent.ok, `the order carries the choice (${sent.ok ? '' : sent.error})`);
+  eq(routesOf(p)[0].cargo, 'prod', 'kept on the route');
+});
+
+test('tribute from a city-state (Civ V’s bullying): soldiers near enough outmatching it, gold or a worker for influence, then not again for a while', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const egypt = game.players[0];
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, 0, at(4, 4));
+  const home = city(game, cs.index, at(14, 9));
+  ok(cannotBully(game, egypt, cs.index) !== null, 'no soldiers near: no tribute');
+  const ring = neighbours(game.grid, home.tile);
+  for (const t of ring.slice(0, 3)) unit(game, 'swordsman', 0, t);
+  eq(cannotBully(game, egypt, cs.index), null, 'three swordsmen beside it outmatch it');
+  const gold = egypt.gold;
+  ok(apply(game, 0, { t: 'tribute', target: cs.index, take: 'gold' }).ok, 'gold demanded');
+  eq(egypt.gold - gold, tributeGold(game, egypt), 'and paid');
+  eq(egypt.influence[cs.index], -TRIBUTE_COST.gold, 'for influence');
+  ok(!apply(game, 0, { t: 'tribute', target: cs.index, take: 'worker' }).ok, 'not again so soon');
+  cs.cityState!.tributeAt = game.turn - tributeTurns(game);
+  const workers = game.units.filter((u) => u.owner === 0 && u.type === 'worker').length;
+  ok(apply(game, 0, { t: 'tribute', target: cs.index, take: 'worker' }).ok, 'later, a worker');
+  eq(game.units.filter((u) => u.owner === 0 && u.type === 'worker').length, workers + 1, 'given');
+  eq(egypt.influence[cs.index], -TRIBUTE_COST.gold - TRIBUTE_COST.worker, 'for more influence');
+});
+
+test('great people: the Admiral’s Repair Fleet heals the ships round it; the Musician’s Concert Tour wins tourism in another civ’s land', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const [egypt, babylon] = game.players;
+  city(game, 0, at(4, 4));
+  const theirs = city(game, 1, at(16, 4));
+  const sea = [at(10, 10), at(11, 10), at(13, 10)];
+  for (const t of sea) game.tiles[t].terrain = 'coast';
+  const ships = sea.map((t) => unit(game, 'trireme', 0, t, { hp: 40 }));
+  const admiral = unit(game, 'great_admiral', 0, sea[0]);
+  ok(apply(game, 0, { t: 'greatPerson', unit: admiral.id, action: 'repair' }).ok, 'the fleet repaired');
+  eq(ships.map((s) => s.hp).join(), '100,100,40', 'on its tile and beside it, not two away');
+  ok(!game.units.includes(admiral), 'the Admiral spent');
+  const musician = unit(game, 'great_musician', 0, at(4, 5));
+  ok(!apply(game, 0, { t: 'greatPerson', unit: musician.id, action: 'concert' }).ok, 'not at home');
+  musician.tile = neighbours(game.grid, theirs.tile)[0];
+  ok(apply(game, 0, { t: 'greatPerson', unit: musician.id, action: 'concert' }).ok, 'in their land');
+  eq(egypt.tourism[babylon.index], Math.round(200 * 0.67), 'tourism toward them (at least 200, at speed)');
+});
+
+test('diplomats in capitals (delegates with Globalization, word of war plans) and coups in city-states (the ally overthrown, or the spy killed)', () => {
+  const world = (seed: number) => {
+    const { game, at } = blank(['egypt', 'babylon', 'india'], { cityStates: 1 });
+    game.rng = seed;
+    const [egypt, babylon] = game.players;
+    const cs = game.players.find((x) => x.cityState)!;
+    const homes = [0, 1, 2].map((i) => city(game, i, at(3 + i * 8, 4)));
+    const other = city(game, 1, at(11, 12));
+    const csHome = city(game, cs.index, at(20, 12));
+    for (const c of [...homes, other, csHome]) egypt.explored[c.tile] = 1;
+    egypt.spies = [{ id: 901, city: null, progress: 0 }];
+    return { game, egypt, babylon, cs, homes, other, csHome };
+  };
+  const { game, egypt, babylon, homes, other, csHome } = world(1);
+  ok(!apply(game, 0, { t: 'spy', spy: 901, target: other.id, diplomat: true }).ok, 'a diplomat only to a capital');
+  ok(!apply(game, 0, { t: 'spy', spy: 901, target: csHome.id, diplomat: true }).ok, 'not to a city-state');
+  ok(apply(game, 0, { t: 'spy', spy: 901, target: homes[1].id, diplomat: true }).ok, "to Babylon's capital");
+  game.congress = { host: 2, next: game.turn + 30, proposals: [], active: [] };
+  eq(delegateSources(game, egypt).diplomats, 0, 'no delegate without Globalization');
+  egypt.techs.push('globalization');
+  eq(delegateSources(game, egypt).diplomats, 1, 'one with it');
+  egypt.techs = egypt.techs.filter((t) => t !== 'globalization');
+  egypt.bot = false;
+  babylon.ai = { aim: 'domination', aimed: 0, wars: {}, orders: {}, plan: { target: 2, city: homes[2].id, stage: 'muster', since: game.turn, rally: homes[1].tile } };
+  const known = egypt.techs.length;
+  endTurn(game);
+  ok(egypt.notes.some((n) => n.text.includes('preparing a war on')), 'word of a war plan');
+  eq(egypt.techs.length, known, 'and no theft');
+  war(game, 0, 1);
+  endTurn(game);
+  eq(egypt.spies![0].city, null, 'sent home by a war');
+  // A coup: Babylon is the ally; Egypt's spy there.
+  let won = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const w = world(seed * 7919);
+    w.babylon.influence[w.cs.index] = 70;
+    w.egypt.influence[w.cs.index] = 50;
+    ok(cannotCoup(w.game, w.egypt, 901) !== null, 'a spy must be there first');
+    w.egypt.spies![0].city = w.csHome.id;
+    near(coupChance(w.game, w.egypt, w.cs.index), 0.3, 'twenty points behind: three in ten');
+    ok(apply(w.game, 0, { t: 'coup', spy: 901 }).ok, 'attempted');
+    if ((w.egypt.influence[w.cs.index] ?? 0) === 70) {
+      won++;
+      eq(w.babylon.influence[w.cs.index], 50, 'the influence swapped');
+      eq(w.egypt.spies!.length, 1, 'the spy stays');
+    } else eq(w.egypt.spies!.length, 0, 'failed: the spy killed');
+  }
+  ok(won >= 5 && won <= 20, `about three in ten won (${won} of 40)`);
+});
+
+test('a city’s screen: what each focus would make (the city left as it was), its great person points, the pressure on it', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const p = game.players[0];
+  const c = city(game, 0, at(6, 6), { pop: 5, buildings: ['library'] });
+  c.specialists = { scientist: 1 };
+  const before = JSON.stringify({ worked: c.worked, specialists: c.specialists, focus: c.focus });
+  const info = cityInfo(game, p, c);
+  eq(JSON.stringify({ worked: c.worked, specialists: c.specialists, focus: c.focus }), before, 'the city left as it was');
+  const of = (f: string) => info.focuses.find((x) => x.focus === f)!;
+  eq(info.focuses.length, 7, 'every focus');
+  ok(of('food').surplus >= of('prod').surplus && of('prod').prod >= of('food').prod, 'food favours food, production production');
+  ok((info.greatPeople.scientist ?? 0) >= 3, 'its scientist’s great scientist points');
+  // A religion's city near it presses it.
+  const holy = city(game, 1, at(12, 6), { pop: 3 });
+  game.religions.r1 = { founder: 1, holyCity: holy.id, name: 'Faith', beliefs: [] };
+  holy.followers = { r1: 3 };
+  const press = cityInfo(game, p, c).pressure;
+  eq(press.find((x) => x.religion === 'r1')?.perTurn, 2, 'its holy city nearby: twice the pressure');
+  eq(cityInfo(game, p, c).conversionNeed, 10 + 5 * 4, 'and what a convert takes');
+});
+
+test('influence with a city-state falls a point a turn, a quarter slower with Patronage, and the screen is told so', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const p = game.players[0];
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, cs.index, at(12, 9));
+  city(game, 0, at(4, 4));
+  p.met = [cs.index];
+  eq(influenceFall(game, p), 1, 'a point a turn');
+  p.policies.push('patronage');
+  eq(influenceFall(game, p), 0.75, 'a quarter slower with Patronage');
+  eq(viewFor(game, p, null).players[cs.index].cityState!.fall, 0.75, 'as the city-state’s card is told');
+});
+
+test('research agreements pay out more with Scientific Revolution and the Porcelain Tower', () => {
+  const payout = (setup: (game: Game) => void) => {
+    const { game, at } = blank();
+    city(game, 0, at(3, 3));
+    city(game, 1, at(14, 3));
+    for (const x of game.players) {
+      x.researching = 'pottery';
+      x.lastIncome = { gold: 0, science: 20, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+    }
+    setup(game);
+    relationsOf(game).running.push({ a: 0, b: 1, item: { kind: 'research' }, turns: 1 });
+    diplomacyTurn(game);
+    return game.players[0].research.pottery ?? 0;
+  };
+  const plain = payout(() => {});
+  ok(plain > 0, 'science at the end');
+  eq(payout((game) => game.players[0].policies.push('scientific_revolution')), 2 * plain, 'twice with scientific revolution');
+  eq(payout((game) => game.cities[0].buildings.push('porcelain_tower')), Math.round(1.5 * plain), 'half again with the porcelain tower');
+});
+
+test('tourism: France’s art, hotels, Sacred Sites, Media Culture, The Internet, Cultural Exchange', () => {
+  const { game, at } = blank(['france', 'egypt']);
+  const c = city(game, 0, at(5, 5), { buildings: ['museum'] });
+  c.works = { museum: ['Art 1'] };
+  eq(cityTourism(game, c), 6, "france's art in the capital: 6");
+  c.works = { museum: ['Art 1', 'Art 2'] };
+  eq(cityTourism(game, c), 15, 'a full museum: themed, 3 more');
+  c.works = { museum: ['Art 1'] };
+  c.buildings.push('hotel');
+  eq(cityTourism(game, c), 9, 'a hotel: +50%');
+  c.buildings.push('broadcast_tower');
+  game.players[0].policies.push('media_culture');
+  near(cityTourism(game, c), 6 * 1.84, 'media culture with a broadcast tower');
+  game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'mosques', 'sacred_sites'] };
+  game.players[0].religion = 'r1';
+  c.buildings.push('mosque');
+  near(cityTourism(game, c), 8 * 1.84, 'sacred sites');
+  game.players[0].techs.push('the_internet');
+  near(cityTourism(game, c), 8 * 2.34, 'the internet: +50%');
+});
+
+test('a revolution (Civ V’s): with enough dissent from a rival ideology, a civ may take it; its tenets lost, two fewer free, two turns of anarchy', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india']);
+  const [egypt, babylon, india] = game.players;
+  game.players.forEach((_, i) => city(game, i, at(3 + i * 8, 4)));
+  egypt.ideology = 'freedom';
+  egypt.policies.push('creative_expression', 'civil_society', 'avant_garde');
+  babylon.ideology = 'order';
+  india.ideology = 'order';
+  egypt.lifetimeCulture = 300;
+  babylon.tourism[0] = 120;
+  eq(ideologySwitch(game, egypt), null, 'one rival pressing: not enough dissent');
+  ok(!apply(game, 0, { t: 'switchIdeology', id: 'order' }).ok, 'no revolution yet');
+  india.tourism[0] = 120;
+  eq(dissent(game, egypt), SWITCH_DISSENT, 'two pressing');
+  eq(ideologySwitch(game, egypt), 'order', 'its people lean to Order');
+  ok(!apply(game, 0, { t: 'switchIdeology', id: 'autocracy' }).ok, 'not to another');
+  ok(apply(game, 0, { t: 'switchIdeology', id: 'order' }).ok, 'a revolution');
+  eq(egypt.ideology, 'order', 'Order now');
+  ok(!egypt.policies.some((x) => ['creative_expression', 'civil_society', 'avant_garde'].includes(x)), "Freedom's tenets lost");
+  eq(egypt.freeTenets, 1, 'two fewer free to take');
+  eq(egypt.anarchy, ANARCHY_TURNS, 'anarchy');
+  eq(dissent(game, egypt), 0, 'the dissent is over');
+  const gold = egypt.gold;
+  const culture = egypt.culture;
+  endTurn(game);
+  ok(egypt.gold <= gold && egypt.culture === culture, 'no gold or culture in anarchy');
+  egypt.culture = 0;
+  ok(apply(game, 0, { t: 'policy', id: 'five_year_plan' }).ok, 'a free tenet, without culture');
+  eq(egypt.freeTenets, 0, 'taken');
+  ok(!apply(game, 0, { t: 'policy', id: 'young_pioneers' }).ok, 'the next costs culture');
+  endTurn(game);
+  eq(egypt.anarchy ?? 0, 0, 'anarchy over after two turns');
+});
+
+test('ideologies: chosen in the Modern Era (or the Industrial with three Factories); tenets in levels', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  for (const col of [3, 10, 17]) city(game, 0, at(col, 3));
+  techsTo(game, 0, 8);
+  ok(!canChooseIdeology(game, p), 'not in the renaissance');
+  techsTo(game, 0, 9);
+  ok(!canChooseIdeology(game, p), 'industrial, no factories');
+  for (const c of game.cities) c.buildings.push('factory');
+  ok(canChooseIdeology(game, p), 'industrial with three factories');
+  ok(apply(game, 0, { t: 'ideology', id: 'order' }).ok, 'order');
+  ok(!apply(game, 0, { t: 'ideology', id: 'freedom' }).ok, 'once');
+  const ids = adoptable(p, 4).map((x) => x.id);
+  ok(ids.includes('five_year_plan') && !ids.includes('worker_faculties'), 'level one first');
+  p.policies.push('five_year_plan', 'young_pioneers');
+  ok(adoptable(p, 4).some((x) => x.id === 'worker_faculties'), 'two of level one open level two');
+  const prod = cityYields(game, game.cities[0]).prod;
+  p.policies.push('worker_faculties');
+  ok(cityYields(game, game.cities[0]).science >= 0 && cityYields(game, game.cities[0]).prod === prod, 'tenets are policies with effects');
+});
+
+test('ideological dissent: civs of another ideology whose tourism tells; twice with Dictatorship of the Proletariat', () => {
+  const { game, at } = blank();
+  const [p, q] = game.players;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(14, 3));
+  p.ideology = 'freedom';
+  q.ideology = 'order';
+  p.lifetimeCulture = 300;
+  q.tourism[0] = 50;
+  eq(dissent(game, p), 0, 'little influence');
+  q.tourism[0] = 120;
+  eq(dissent(game, p), 2, 'popular: unrest');
+  q.policies.push('dictatorship_of_the_proletariat');
+  eq(dissent(game, p), 4, 'twice');
+});
+
+test('archaeology: sites from ruins and camps, hidden ones, landmarks and artifacts', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  techsTo(game, 0, 9);
+  const c = city(game, 0, at(5, 5), { buildings: ['museum'] });
+  const site = neighbours(game.grid, c.tile)[0];
+  game.tiles[site].antiquity = true;
+  game.tiles[site].hiddenAntiquity = true;
+  const arch = unit(game, 'archaeologist', 0, site);
+  ok(!canDig(game, arch, 'landmark'), 'hidden');
+  adopt(game, 0, 'treasure_fleets');
+  ok(canDig(game, arch, 'landmark') && canDig(game, arch, 'artifact'), 'revealed');
+  ok(apply(game, 0, { t: 'build', unit: arch.id, what: 'artifact' }).ok, 'dig');
+  for (let i = 0; i < 5; i++) endTurn(game);
+  ok(!game.units.includes(arch), 'the archaeologist is done');
+  eq(c.works?.museum?.length, 1, 'an artifact in the museum');
+  ok(!game.tiles[site].antiquity, 'the site is used up');
+  void p;
+});
+
+test('Korea’s scholars and the Hanse, Scholasticism, Fine Arts', () => {
+  const { game, at } = blank(['korea', 'germany'], { cityStates: 1 });
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5), { pop: 4 });
+  techsTo(game, 0, 2);
+  p.researching = 'optics';
+  p.gold = 9999;
+  ok(apply(game, 0, { t: 'buy', city: c.id, item: { kind: 'building', id: 'library' }, with: 'gold' }).ok, 'a library');
+  ok((p.research.optics ?? 0) >= 10, 'a boost of science');
+  const cs = game.players.findIndex((x) => x.cityState);
+  city(game, cs, at(15, 12), { pop: 6 });
+  p.influence[cs] = 90;
+  adopt(game, 0, 'scholasticism', 'fine_arts');
+  const culture = p.culture;
+  endTurn(game);
+  ok((p.lastIncome?.science ?? 0) > cityYields(game, c).science, 'allied science');
+  ok(p.culture - culture > cityYields(game, c).culture, 'excess happiness to culture');
+});
+
+test('what each screen is told: antiquity sites with Archaeology, no hidden submarines, units that can pillage, what faith buys', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5));
+  const site = at(9, 5);
+  game.tiles[site].antiquity = true;
+  unit(game, 'warrior', 0, at(8, 5));
+  const known = (v: ReturnType<typeof viewFor>) => unpackKnown(v.tiles[site]!);
+  ok(!known(viewFor(game, p, null)).antiquity, 'no site before Archaeology');
+  p.techs.push('archaeology');
+  ok(known(viewFor(game, p, null)).antiquity, 'a site with it');
+  for (let col = 0; col < 26; col++) game.tiles[at(col, 12)].terrain = 'ocean';
+  unit(game, 'trireme', 0, at(10, 12));
+  const sub = unit(game, 'submarine', 1, at(12, 12));
+  ok(!viewFor(game, p, null).units.some((u) => u.id === sub.id), 'a submarine two tiles off is hidden');
+  ok(viewFor(game, null, null).units.some((u) => u.id === sub.id), 'spectators see it');
+  const raider = unit(game, 'warrior', 0, at(14, 5));
+  game.tiles[raider.tile].road = 'road';
+  ok(viewFor(game, p, null).units.find((u) => u.id === raider.id)?.pillage === true, 'it can pillage');
+  game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'mosques', 'holy_warriors'] };
+  p.religion = 'r1';
+  c.followers = { r1: 1 };
+  p.techs.push('bronze_working');
+  const offers = cityInfo(game, p, c).options.filter((o) => o.faith);
+  ok(['missionary', 'mosque', 'spearman'].every((id) => offers.some((o) => o.id === id)), 'faith buys missionaries, mosques and (Holy Warriors) spearmen');
+});
+
+test('edge cases: Great War units are soldiers, civilians are taken by stepping in, nukes spare peaceful land and cities’ roads', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  const gwi = unit(game, 'great_war_infantry', 1, at(10, 8));
+  eq(occupants(game, gwi.tile).military, gwi, 'great war infantry is a military unit');
+  const swordsman = unit(game, 'swordsman', 0, at(9, 8));
+  ok(apply(game, 0, { t: 'attack', unit: swordsman.id, target: gwi.tile }).ok && gwi.owner === 1, 'it is fought, not captured');
+  const worker = unit(game, 'worker', 1, at(12, 12));
+  const raider = unit(game, 'warrior', 0, at(11, 12));
+  ok(apply(game, 0, { t: 'attack', unit: raider.id, target: worker.tile }).ok, 'capture a worker');
+  ok(raider.tile === worker.tile && worker.owner === 0, 'the captor steps onto its tile');
+  techsTo(game, 0, 14);
+  const home = city(game, 0, at(3, 3), { buildings: ['manhattan_project'] });
+  const bomb = unit(game, 'atomic_bomb', 0, home.tile);
+  const theirs = city(game, 1, at(12, 3));
+  game.players[1].diplomacy.war[0] = game.players[0].diplomacy.war[1] = false;
+  ok(!apply(game, 0, { t: 'attack', unit: bomb.id, target: neighbours(game.grid, theirs.tile)[0] }).ok, "no nuking a peaceful civ's land");
+  war(game, 0, 1);
+  ok(apply(game, 0, { t: 'attack', unit: bomb.id, target: theirs.tile }).ok, 'at war');
+  ok(!game.tiles[theirs.tile].pillaged, "the city's own tile keeps its road");
+});
+
+test('edge cases: great people find room (an admiral by the sea), captured works go with their buildings, no gifts of garrisons', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(3, 3));
+  game.tiles[at(4, 14)].terrain = 'coast';
+  city(game, 0, at(3, 14));
+  p.greatChoices = 1;
+  ok(apply(game, 0, { t: 'greatChoice', kind: 'admiral' }).ok, 'an admiral');
+  const admiral = game.units.find((u) => u.type === 'great_admiral');
+  ok(!!admiral && distance(game.grid, admiral.tile, at(3, 14)) <= 2, 'born by the city on the coast');
+  war(game, 0, 1);
+  const art = city(game, 1, at(14, 12), { buildings: ['museum', 'amphitheater'] });
+  art.works = { museum: ['A'], amphitheater: ['B'] };
+  art.hp = 1;
+  const sword = unit(game, 'swordsman', 0, neighbours(game.grid, art.tile)[0]);
+  ok(apply(game, 0, { t: 'attack', unit: sword.id, target: art.tile }).ok && art.owner === 0, 'taken');
+  ok(Object.keys(art.works ?? {}).every((b) => art.buildings.includes(b)), 'no works in buildings that are gone');
+  const gifts = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const cs = gifts.game.players.findIndex((x) => x.cityState);
+  const csCity = city(gifts.game, cs, gifts.at(10, 8));
+  const mine = city(gifts.game, 0, gifts.at(13, 8));
+  for (const t of neighbours(gifts.game.grid, mine.tile)) if (distance(gifts.game.grid, t, csCity.tile) <= 1) gifts.game.tiles[t].owner = cs;
+  const guard = unit(gifts.game, 'warrior', 0, mine.tile);
+  ok(!apply(gifts.game, 0, { t: 'giftUnit', unit: guard.id, target: cs }).ok, "not a city's garrison");
+});
+
+test('a capital taken loses its civ the spaceship (Civ V’s)', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  city(game, 0, at(3, 3));
+  const capital = city(game, 1, at(14, 12));
+  ok(!!capital.capital, 'their first city is their capital');
+  game.players[1].spaceship = ['ss_booster', 'ss_cockpit'];
+  capital.hp = 1;
+  const sword = unit(game, 'swordsman', 0, neighbours(game.grid, capital.tile)[0]);
+  ok(apply(game, 0, { t: 'attack', unit: sword.id, target: capital.tile }).ok && capital.owner === 0, 'taken');
+  eq(game.players[1].spaceship.length, 0, 'its parts lost with it');
+});
+
+test('a puppet chooses its own builds and takes no purchases; annexed, it is unhappy till a Courthouse', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  city(game, 0, at(3, 3));
+  city(game, 1, at(14, 12));
+  const taken = city(game, 1, at(10, 6), { pop: 6 });
+  taken.hp = 1;
+  const sword = unit(game, 'swordsman', 0, neighbours(game.grid, taken.tile)[0]);
+  ok(apply(game, 0, { t: 'attack', unit: sword.id, target: taken.tile }).ok && taken.owner === 0 && !!taken.puppet, 'taken, a puppet');
+  ok(taken.queue.length === 1, 'building something of its own');
+  const p = game.players[0];
+  p.gold = 5000;
+  const orders: Order[] = [
+    { t: 'produce', city: taken.id, item: { kind: 'unit', id: 'warrior' } },
+    { t: 'buy', city: taken.id, item: { kind: 'unit', id: 'warrior' }, with: 'gold' },
+    { t: 'unqueue', city: taken.id, index: 0 },
+    { t: 'repeat', city: taken.id, on: true },
+  ];
+  for (const o of orders) ok(!apply(game, 0, o).ok, `a puppet refuses ${o.t}`);
+  eq(p.gold, 5000, 'nothing bought');
+  const puppet = happiness(game, p);
+  ok(apply(game, 0, { t: 'cityChoice', city: taken.id, choice: 'annex' }).ok && !taken.puppet, 'annexed');
+  ok(happiness(game, p) <= puppet - 2, 'annexed, its people are unhappy at the occupation');
+  ok(apply(game, 0, { t: 'produce', city: taken.id, item: { kind: 'unit', id: 'warrior' } }).ok, 'and it takes orders');
+  taken.buildings.push('courthouse');
+  ok(happiness(game, p) > puppet - 2, 'a Courthouse calms it');
+});
+
+test('a bot warns a person of its war five turns ahead (its army massing, its leader’s words), and names its reason as it declares', () => {
+  const { game, at } = blank();
+  const me = game.players[0];
+  const bot = game.players[1];
+  me.bot = false;
+  const home = city(game, 0, at(4, 6));
+  city(game, 1, at(17, 6));
+  const rally = at(11, 6);
+  for (const t of within(game.grid, rally, 2).slice(0, 10)) unit(game, 'swordsman', 1, t);
+  bot.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {}, plan: { target: 0, city: home.id, stage: 'muster', since: game.turn, rally, why: 'land' } };
+  ok(opinionOf(game, bot, me).reasons.some((r) => r.text === 'We covet your land'), 'its leader says why before');
+  let warned = -1;
+  for (let i = 0; i < 12 && !atWar(game, 0, 1); i++) {
+    planWar(makeCtx(game, bot));
+    if (warned < 0 && me.notes.some((n) => n.text.includes('army is massing'))) warned = game.turn;
+    if (!atWar(game, 0, 1)) game.turn++;
+  }
+  ok(warned >= 0, 'told its army is massing');
+  ok(atWar(game, 0, 1), 'war comes');
+  ok(game.turn - warned >= 5, `five turns after the warning at the soonest (${game.turn - warned})`);
+  ok(me.notes.some((n) => n.text.includes('has declared war on you! “We covet your land.”')), 'its reason named');
+});
+
+test('a person’s automated worker keeps out of reach of an army it was warned of, as of an enemy’s', () => {
+  const { game, at } = blank();
+  const me = game.players[0];
+  me.bot = false;
+  const home = city(game, 0, at(4, 6));
+  city(game, 1, at(17, 6));
+  const worker = unit(game, 'worker', 0, at(6, 6));
+  unit(game, 'swordsman', 1, at(8, 6));
+  game.players[1].ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {}, plan: { target: 0, city: home.id, stage: 'muster', since: game.turn, rally: at(11, 6), why: 'land', warned: game.turn } };
+  // (As its automation moves it: the bots' own workers' logic.)
+  workers(makeCtx(game, me), [worker]);
+  eq(worker.tile, home.tile, 'gone to its city');
+});
+
+test('a bot steals where it can (from a civ ahead), keeps a counter-spy in its best science city once a rival has spies, and reads spies caught in its opinion', () => {
+  const { game, at } = blank();
+  const me = game.players[0];
+  const bot = game.players[1];
+  const theirs = city(game, 0, at(4, 6));
+  city(game, 1, at(16, 6), { pop: 2 });
+  const best = city(game, 1, at(16, 12), { pop: 8, buildings: ['library'] });
+  bot.met = [0];
+  bot.explored[theirs.tile] = 1;
+  spiesOf(me).push({ id: 900, city: null, progress: 0 });
+  spiesOf(bot).push({ id: 901, city: null, progress: 0 });
+  // (A tech the other could learn now.)
+  const open = (p: typeof me, not: string[] = []) => Object.keys(TECHS).find((t) => !p.techs.includes(t) && !not.includes(t) && TECHS[t].needs.every((n) => p.techs.includes(n)))!;
+  const start = [...bot.techs];
+  me.techs = [...start, open(bot)];
+  civilians(makeCtx(game, bot));
+  eq(spiesOf(bot)[0].city, theirs.id, 'a lone spy, behind, steals');
+  bot.techs = [...me.techs, open(me)];
+  civilians(makeCtx(game, bot));
+  eq(spiesOf(bot)[0].city, best.id, 'ahead, nothing to steal: it guards its best city for science');
+  spiesOf(bot).push({ id: 902, city: null, progress: 0 });
+  bot.techs = [...start];
+  civilians(makeCtx(game, bot));
+  ok(spiesOf(bot).some((s) => s.city === best.id) && spiesOf(bot).some((s) => s.city === theirs.id), 'with two, one guards and one steals');
+  const before = opinionOf(game, bot, me).total;
+  remember(game, 'spy', 0, 1);
+  ok(opinionOf(game, bot, me).total < before, 'a spy caught (or a theft traced) is held against the thief');
+});
+
+test('a bot city in reach of the enemy’s bombers trains an anti-aircraft gun first, and the gun keeps by its city', () => {
+  const { game, at } = blank();
+  const bot = game.players[1];
+  const theirs = city(game, 0, at(4, 6));
+  const home = city(game, 1, at(9, 6), { pop: 6 });
+  techsTo(game, 1, TECHS.ballistics.col);
+  war(game, 0, 1);
+  unit(game, 'great_war_bomber', 0, theirs.tile);
+  eq(pickProduction(makeCtx(game, bot), home).id, 'anti_aircraft_gun', 'an anti-aircraft gun');
+  const gun = unit(game, 'anti_aircraft_gun', 1, at(12, 6));
+  game.turn = 100;
+  moveUnits(makeCtx(game, bot), new Set());
+  ok(distance(game.grid, gun.tile, home.tile) < 3, 'back toward its city');
+});
+
+test('a bot in the World Congress proposes the funding its aim wants, and votes down an embargo on itself', () => {
+  const { game, at } = blank();
+  const bot = game.players[1];
+  city(game, 0, at(4, 6));
+  city(game, 1, at(16, 6));
+  game.congress = { host: 1, next: game.turn + 30, proposals: [], active: [] };
+  bot.ai = { aim: 'culture', aimed: game.turn, wars: {}, orders: {} };
+  eq(congressProposal(game, bot)?.kind, 'arts_funding', 'Arts Funding for a culture aim');
+  eq(congressVote(game, bot, { id: 1, by: 0, kind: 'embargo', civ: 1, votes: {} }), 'no', 'no embargo on itself');
+  eq(congressVote(game, bot, { id: 2, by: 0, kind: 'sciences_funding', votes: {} }), 'no', 'nor the funding against its aim');
+  game.congress.active.push({ kind: 'sciences_funding', since: game.turn });
+  ok(congressProposal(game, bot)?.repeal === true, 'and it moves to repeal what hurts it');
+});
+
+/** A bot (the second civ) with an army at its rally point against a person (the first): the world, and the turns from its plan to its war (and its massing note). */
+function warOnPerson(plan: { since: number; why?: 'land' }): { warned: number; war: number; note: string } {
+  const { game, at } = blank();
+  const me = game.players[0];
+  const bot = game.players[1];
+  me.bot = false;
+  game.turn = 100;
+  const home = city(game, 0, at(4, 6));
+  city(game, 1, at(17, 6));
+  const rally = at(11, 6);
+  for (const t of within(game.grid, rally, 2).slice(0, 10)) unit(game, 'swordsman', 1, t);
+  bot.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {}, plan: { target: 0, city: home.id, stage: 'muster', since: game.turn + plan.since, rally, ...(plan.why ? { why: plan.why } : {}) } };
+  let warned = -1;
+  for (let i = 0; i < 12 && !atWar(game, 0, 1); i++) {
+    planWar(makeCtx(game, bot));
+    if (warned < 0 && me.notes.some((n) => n.text.includes('army is massing'))) warned = game.turn;
+    if (!atWar(game, 0, 1)) game.turn++;
+  }
+  return { warned, war: atWar(game, 0, 1) ? game.turn : -1, note: me.notes.find((n) => n.text.includes('army is massing'))?.text ?? '' };
+}
+
+test('a war plan from an old save (no reason, no warning, long since made) still warns, with a reason, five turns ahead', () => {
+  const { warned, war, note } = warOnPerson({ since: -40 });
+  ok(warned >= 0 && war >= 0, `warned (${warned}) and at war (${war})`);
+  ok(war - warned >= 5, `five turns after the warning (${war - warned})`);
+  ok(note.includes('“'), `with its reason (${note})`);
+});
+
+test('a war plan whose army is in place from the start still warns five turns ahead', () => {
+  const { warned, war } = warOnPerson({ since: 0, why: 'land' });
+  eq(warned, 100, 'the warning on the plan’s first turn');
+  ok(war >= warned + 5, `the war five turns on at the soonest (${war})`);
+});
+
+test('ships explore: a warship may be set to explore, and sails for the edge of the known sea', () => {
+  const { game, at } = blank();
+  const me = game.players[0];
+  me.bot = false;
+  city(game, 0, at(4, 6));
+  // (A sea down the map's middle, its far end unseen.)
+  for (let row = 0; row < game.grid.height; row++) for (let col = 6; col <= 8; col++) Object.assign(game.tiles[at(col, row)], { terrain: 'coast', height: 0 });
+  const ship = unit(game, 'trireme', 0, at(7, 6));
+  me.explored = me.explored.map(() => 0);
+  for (const t of within(game.grid, at(7, 6), 2)) me.explored[t] = 1;
+  ok(apply(game, 0, { t: 'automate', unit: ship.id, mode: 'explore' }).ok, 'a warship can be set to explore');
+  const before = ship.tile;
+  ok(exploreSea(makeCtx(game, me), ship) && ship.tile !== before, 'and it sails for the unknown');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Natural wonders
+// -------------------------------------------------------------------------------------------------
+
+/** A natural wonder on a tile, as the map makes one (a mountain to the rules unless it can be entered), found by whoever has seen the tile. */
+function naturalWonder(game: Game, t: number, id: string) {
+  const w = NATURAL_WONDERS[id];
+  ok(!!w, `no natural wonder ${id}`);
+  game.tiles[t].wonder = id;
+  if (!w.passable) Object.assign(game.tiles[t], { elevation: 'mountain', height: w.top });
+  updateAllVisibility(game);
+}
+
+test('natural wonders: found once by each civ, happier for good; the first finder has golden-age points (and the Gilded Peak its gold)', () => {
+  const { game, at } = blank();
+  const [a, b] = game.players;
+  // (A person: bots aren't told things.)
+  a.bot = false;
+  city(game, 0, at(3, 8));
+  city(game, 1, at(21, 8));
+  const peak = at(12, 8);
+  naturalWonder(game, peak, 'gilded_peak');
+  const moods = [happiness(game, a), happiness(game, b)];
+  unit(game, 'scout', 0, at(10, 8));
+  eq(game.found?.gilded_peak?.by.join(), '0', 'found by the first');
+  eq(happiness(game, a) - moods[0], 1, 'happier for it');
+  eq(a.goldenPoints, 40, 'golden-age points (60, quick speed)');
+  eq(a.gold, 67, 'the Gilded Peak’s gold (100, quick speed)');
+  ok(a.notes.some((n) => n.kind === 'wonder' && n.at === peak && n.text.includes('first')), 'told, as the first');
+  unit(game, 'scout', 1, at(14, 8));
+  eq(game.found?.gilded_peak?.by.join(), '0,1', 'then by the second');
+  eq(happiness(game, b) - moods[1], 1, 'the second is happier too');
+  eq(b.goldenPoints + b.gold, 0, 'but has no finder’s gifts');
+  endTurn(game);
+  eq(game.found?.gilded_peak?.by.join(), '0,1', 'found once each');
+  eq(happiness(game, a) - moods[0], 1, 'still one happier');
+  // City-states and barbarians find nothing; nor does anyone what they haven't seen.
+  const v = viewFor(game, a, null);
+  eq(unpackKnown(v.tiles[peak]!).wonder, 'gilded_peak', 'its id on the known tile');
+  eq(v.self.naturalWonders.map((x) => `${x.id}:${x.first}`).join(), 'gilded_peak:true', 'in the finder’s view');
+  const far = at(12, 15);
+  naturalWonder(game, far, 'sky_pillar');
+  ok(viewFor(game, a, null).tiles[far] === null, 'an unseen one isn’t sent');
+});
+
+test('natural wonders: their tile yields their own yields, worked though it can’t be entered; nothing built or founded on them; One with Nature', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(8, 8), { pop: 1 });
+  const t = neighbours(game.grid, c.tile)[0];
+  naturalWonder(game, t, 'mount_solace');
+  eq(JSON.stringify(tileYields(game, t, game.players[0])), JSON.stringify({ faith: 6 }), 'its yields');
+  ok(workable(game, c).includes(t), 'workable');
+  ok(!canStand(game, 'warrior', t), 'can’t be entered');
+  c.locked = [t];
+  assignCitizens(game, c);
+  ok(c.worked.includes(t), 'worked');
+  const faith = cityYields(game, c).faith;
+  game.players[0].pantheon = 'one_with_nature';
+  eq(cityYields(game, c).faith - faith, 4, 'One with Nature: +4 faith');
+  // Mount Solace: +2 happiness in its owner's land.
+  const mood = happiness(game, game.players[0]);
+  game.tiles[t].owner = -1;
+  eq(mood - happiness(game, game.players[0]), 2, 'Mount Solace’s happiness');
+  // A wonder that can be entered: no improvements, roads, cities or great people's works on it.
+  const grove = at(12, 8);
+  game.tiles[grove].elevation = 'hills';
+  naturalWonder(game, grove, 'stone_grove');
+  game.tiles[grove].owner = 0;
+  const w = unit(game, 'worker', 0, grove);
+  ok(canStand(game, 'warrior', grove), 'the Stone Grove can be entered');
+  ok(!canBuild(game, w, 'mine') && !canBuild(game, w, 'road'), 'nothing built on it');
+  ok(!canFound(game, grove), 'no city on it');
+  const gp = unit(game, 'great_engineer', 0, grove);
+  ok(!apply(game, 0, { t: 'greatPerson', unit: gp.id, action: 'improvement' }).ok, 'no great improvement on it');
+});
+
+test('natural wonders: the Ember Throne enriches the land round it; the falls and the spring give fresh water', () => {
+  const { game, at } = blank();
+  const t = at(10, 8);
+  const n = neighbours(game.grid, t)[0];
+  const food = tileYields(game, n, null).food ?? 0;
+  ok(!freshWater(game, n), 'no fresh water on open grassland');
+  naturalWonder(game, t, 'ember_throne');
+  eq((tileYields(game, n, null).food ?? 0) - food, 1, 'ash: +1 food next to it');
+  eq(tileYields(game, at(13, 8), null).food ?? 0, food, 'not further off');
+  game.tiles[t].wonder = 'emerald_falls';
+  ok(freshWater(game, n), 'fresh water by the falls');
+  game.tiles[t].wonder = 'ageless_spring';
+  ok(freshWater(game, n), 'and by the spring');
+});
+
+test('natural wonders: beside the Ageless Spring units heal fully, beside the Cloudcrown they train, beside the Sky Pillar they see further', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  const spring = at(10, 8);
+  naturalWonder(game, spring, 'ageless_spring');
+  const [n1, n2] = neighbours(game.grid, spring);
+  const rested = unit(game, 'warrior', 0, n1, { hp: 30 });
+  const marched = unit(game, 'warrior', 0, n2, { hp: 30, moves: 0 });
+  const away = unit(game, 'warrior', 0, at(16, 8), { hp: 30 });
+  endTurn(game);
+  eq(rested.hp, 100, 'healed fully');
+  eq(marched.hp, 100, 'even after moving');
+  ok(away.hp < 100, 'not further off');
+  const crown = at(10, 13);
+  naturalWonder(game, crown, 'cloudcrown');
+  const [c1, c2] = neighbours(game.grid, crown);
+  const soldier = unit(game, 'warrior', 0, c1);
+  const worker = unit(game, 'worker', 0, c2);
+  endTurn(game);
+  ok(soldier.promotions.includes('altitude_training'), 'Altitude Training');
+  ok(!worker.promotions.includes('altitude_training'), 'only for units that fight');
+  eq(promotionsDue(soldier), 0, 'given, not earned');
+  // Altitude Training: heals on the march.
+  soldier.hp = 50;
+  soldier.moves = 0;
+  endTurn(game);
+  ok(soldier.hp > 50, 'heals after moving');
+  const pillar = at(18, 4);
+  naturalWonder(game, pillar, 'sky_pillar');
+  const scout = unit(game, 'warrior', 0, neighbours(game.grid, pillar)[0]);
+  eq(unitSight(game, scout) - unitSight(game, away), 1, 'one further beside the Sky Pillar');
+});
+
+test('map generation: Horses and Iron within four tiles of every civ’s start, Coal and Oil on its landmass (Strategic Balance)', () => {
+  let starts = 0;
+  let coal = 0;
+  let oil = 0;
+  for (const wrap of [false, true])
+    for (const size of ['small', 'standard'] as MapSize[])
+      for (const type of ['continents', 'pangaea', 'archipelago'] as const)
+        for (const seed of [1, 2, 3, 4]) {
+          const m = MAP_SIZES[size];
+          const g = { width: m.width, height: m.height, wrap };
+          const map = generate(g, seed, type, m.players, m.cityStates);
+          for (const s of map.starts.slice(0, m.players)) {
+            const has = (id: string, r: number) => within(g, s, r).some((t) => map.tiles[t].resource === id);
+            ok(has('horses', 4) && has('iron', 4), `${size} ${type} ${seed}${wrap ? ' (wraps)' : ''}: Horses and Iron near the start at ${s}`);
+            starts++;
+            if (has('coal', 10)) coal++;
+            if (has('oil', 10)) oil++;
+          }
+        }
+  ok(coal >= starts * 0.9 && oil >= starts * 0.9, `Coal (${coal}) and Oil (${oil}) within reach of nearly all ${starts} starts`);
+});
+
+test('map generation: an archipelago is many islands, the civs mostly each on their own, each with room for three or four cities', () => {
+  for (const wrap of [false, true])
+    for (const size of ['small', 'standard', 'large'] as MapSize[]) {
+      const m = MAP_SIZES[size];
+      const g = { width: m.width, height: m.height, wrap };
+      for (const seed of [1, 2, 3, 4, 5, 6]) {
+        const { tiles, starts } = generate(g, seed, 'archipelago', m.players, m.cityStates);
+        const land = tiles.map((x) => !TERRAINS[x.terrain].water);
+        const island = new Array<number>(tiles.length).fill(-1);
+        const sizes: number[] = [];
+        for (let t = 0; t < tiles.length; t++) {
+          if (!land[t] || island[t] >= 0) continue;
+          const stack = [t];
+          island[t] = sizes.length;
+          let count = 0;
+          while (stack.length) {
+            const x = stack.pop()!;
+            count++;
+            for (const y of neighbours(g, x)) if (land[y] && island[y] < 0) (island[y] = sizes.length), stack.push(y);
+          }
+          sizes.push(count);
+        }
+        const total = sizes.reduce((a, b) => a + b, 0);
+        ok(sizes.length >= m.players, `${size} ${seed}${wrap ? ' (wraps)' : ''}: ${sizes.length} islands`);
+        ok(Math.max(...sizes) < total * 0.3, `${size} ${seed}${wrap ? ' (wraps)' : ''}: the largest ${Math.max(...sizes)} of ${total}`);
+        const homes = new Set(starts.slice(0, m.players).map((t) => island[t]));
+        ok(homes.size >= Math.ceil(m.players * 0.75), `${size} ${seed}${wrap ? ' (wraps)' : ''}: the civs on ${homes.size} islands`);
+        for (const t of starts.slice(0, m.players)) ok(sizes[island[t]] >= START_ISLAND, `${size} ${seed}${wrap ? ' (wraps)' : ''}: a civ's island of ${sizes[island[t]]} (room for three or four cities: ${START_ISLAND})`);
+      }
+    }
+});
+
+test('map generation: natural wonders by the map’s size, the same for a seed, off the starts, spread apart, each its tiles’ own', () => {
+  for (const wrap of [false, true])
+    for (const [size, want] of [['duel', 2], ['small', 3], ['standard', 4], ['large', 6]] as [MapSize, number][]) {
+      const m = MAP_SIZES[size];
+      const g = { width: m.width, height: m.height, wrap };
+      for (const seed of [3, 11]) {
+        const { tiles, starts } = generate(g, seed, 'continents', m.players, m.cityStates);
+        const again = generate(g, seed, 'continents', m.players, m.cityStates).tiles;
+        const placed = tiles.flatMap((tile, t) => (tile.wonder ? [t] : []));
+        const ids = new Set(placed.map((t) => tiles[t].wonder!));
+        eq(ids.size, want, `${size} ${seed}${wrap ? ' (wraps)' : ''}: how many`);
+        eq(again.map((x) => x.wonder ?? '').join(), tiles.map((x) => x.wonder ?? '').join(), `${size} ${seed}${wrap ? ' (wraps)' : ''}: the same each time`);
+        for (const t of placed) {
+          const tile = tiles[t];
+          const w = NATURAL_WONDERS[tile.wonder!];
+          const own = placed.filter((o) => tiles[o].wonder === w.id);
+          eq(own.length, w.pair ? 2 : 1, `${w.name}: its tiles`);
+          ok(own.every((o) => o === t || distance(g, o, t) === 1), `${w.name}: its tiles side by side`);
+          ok(starts.slice(0, m.players).every((s) => distance(g, s, t) >= 4), `${w.name}: off the starts`);
+          ok(placed.every((o) => own.includes(o) || distance(g, o, t) >= 5), `${w.name}: apart from the others`);
+          ok(!tile.resource && !tile.feature && !tile.ruin && !tile.river, `${w.name}: nothing else on it`);
+          ok(w.passable ? tile.elevation !== 'mountain' : tile.elevation === 'mountain', `${w.name}: entered or not`);
+        }
+      }
+    }
+});
+
+// -------------------------------------------------------------------------------------------------
+// A world that wraps round east to west
+// -------------------------------------------------------------------------------------------------
+
+test('a world that wraps: the east edge’s neighbours are on the west edge; distances and lines go the short way round', () => {
+  const { game, at } = blank(undefined, { wrap: true });
+  const g = game.grid;
+  const w = g.width;
+  // (Odd rows sit half a tile east: the last tile of one has three neighbours in the first column.)
+  for (const [a, b] of [[at(w - 1, 4), at(0, 4)], [at(w - 1, 5), at(0, 5)], [at(w - 1, 5), at(0, 4)], [at(w - 1, 5), at(0, 6)], [at(0, 4), at(w - 1, 3)], [at(0, 4), at(w - 1, 5)]]) {
+    ok(neighbours(g, a).includes(b) && neighbours(g, b).includes(a), `${a} and ${b}: neighbours across the seam`);
+    eq(distance(g, a, b), 1, `${a} and ${b}: a step apart`);
+  }
+  ok([0, 3, 4, w - 1].every((col) => neighbours(g, at(col, 8)).length === 6), 'six neighbours at either edge');
+  eq(at(-1, 8), at(w - 1, 8), 'a column off the west edge is the last');
+  eq(distance(g, at(1, 8), at(w - 2, 8)), 3, 'three steps round the back, not across the map');
+  eq(distance(g, at(1, 3), at(w - 2, 9)), 6, 'and so on a slant');
+  eq(distance(g, at(0, 8), at(w / 2, 8)), w / 2, 'half the world away is as far as it gets');
+  for (let a = 0; a < g.width * g.height; a += 37) for (let b = 0; b < g.width * g.height; b += 23) eq(distance(g, a, b), distance(g, b, a), `the same both ways (${a}, ${b})`);
+  eq(line(g, at(2, 8), at(w - 3, 8)).join(), [at(2, 8), at(1, 8), at(0, 8), at(w - 1, 8), at(w - 2, 8), at(w - 3, 8)].join(), 'a line runs across the seam');
+  const round = within(g, at(0, 8), w);
+  eq(new Set(round).size, round.length, 'every tile within reach once, even round the whole world');
+  // A flat world (an old save's) is as it was.
+  const flat = blank();
+  eq(distance(flat.game.grid, flat.at(1, 8), flat.at(w - 2, 8)), w - 3, 'flat: the long way');
+  eq(neighbours(flat.game.grid, flat.at(0, 4)).length, 3, 'flat: an edge tile has fewer neighbours');
+  eq(flat.at(-1, 8), -1, 'flat: nothing off the edge');
+});
+
+test('a world that wraps: units see, walk, fire and settle across the seam; cities’ borders run across it', () => {
+  const { game, at } = blank(undefined, { wrap: true });
+  const w = game.grid.width;
+  game.players[0].bot = false;
+  city(game, 0, at(6, 3));
+  city(game, 1, at(16, 14));
+  const scout = unit(game, 'warrior', 0, at(1, 8));
+  ok(game.players[0].visible[at(w - 1, 8)] > 0, 'it sees round the seam');
+  const way = planPath(game, scout, at(w - 2, 8))!;
+  eq(way.length, 3, 'the way west across the seam is three steps');
+  ok(way.includes(at(0, 8)) && way.includes(at(w - 1, 8)), 'through the edge columns');
+  ok(apply(game, 0, { t: 'move', unit: scout.id, to: at(w - 2, 8) }).ok, 'sent across');
+  endTurn(game);
+  endTurn(game);
+  eq(scout.tile, at(w - 2, 8), 'it got there');
+  // A city on the west edge: its first ring across the seam.
+  const port = city(game, 0, at(0, 12));
+  for (const t of within(game.grid, port.tile, 1)) eq(game.tiles[t].owner, 0, `its tile ${t}`);
+  ok(game.tiles[at(w - 1, 12)].owner === 0, 'its land on the east edge');
+  // An archer fires across.
+  war(game, 0, 1);
+  const archer = unit(game, 'archer', 0, at(1, 16));
+  const foe = unit(game, 'warrior', 1, at(w - 1, 16));
+  const hp = foe.hp;
+  ok(apply(game, 0, { t: 'attack', unit: archer.id, target: foe.tile }).ok, 'it shoots across the seam');
+  ok(foe.hp < hp, 'and hits');
+});
+
+test('a world that wraps: new games wrap unless the lobby says not; the wrap is saved and sent; a game saved flat stays flat', () => {
+  const settings = { size: 'duel', type: 'continents', speed: 'quick', timer: 0, cityStates: 0, barbarians: false, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330 } as const;
+  const seats = [
+    { user: null, name: 'A', civ: 'egypt', bot: true },
+    { user: null, name: 'B', civ: 'babylon', bot: true },
+  ];
+  const round = createGame({ ...settings, victories: { ...settings.victories } }, seats, 5);
+  eq(round.grid.wrap, true, 'wraps by default');
+  eq(JSON.parse(JSON.stringify(round)).grid.wrap, true, 'saved with it');
+  eq(mapWire(round).grid.wrap, true, 'and the screens told');
+  const flat = createGame({ ...settings, victories: { ...settings.victories }, wrap: false }, seats, 5);
+  ok(!('wrap' in flat.grid), 'a flat one is as a game always was');
+  // The same seed, flat, makes the same world as it always did (one saved before the wrap is the same).
+  const before = generate({ width: 26, height: 18 }, 5, 'continents', 2, 0);
+  eq(flat.tiles.map((t) => t.terrain).join(), before.tiles.map((t) => t.terrain).join(), 'a flat world from a seed as before');
+});
+
+test('map generation on a world that wraps: land runs across the seam, starts spread round it', () => {
+  let across = 0;
+  for (const type of ['continents', 'pangaea', 'fractal', 'archipelago'] as const)
+    for (const size of ['duel', 'small', 'standard', 'large'] as MapSize[])
+      for (const seed of [1, 2, 3]) {
+        const m = MAP_SIZES[size];
+        const g = { width: m.width, height: m.height, wrap: true };
+        const { tiles, starts } = generate(g, seed, type, m.players, m.cityStates);
+        const land = (t: number) => !TERRAINS[tiles[t].terrain].water;
+        for (let row = 0; row < g.height; row++) if (land(row * g.width) && land(row * g.width + g.width - 1)) across++;
+        const civs = starts.slice(0, m.players);
+        eq(civs.length, m.players, `${type} ${size} ${seed}: a start for every civ`);
+        for (const a of civs) for (const b of civs) ok(a === b || distance(g, a, b) >= 4, `${type} ${size} ${seed}: starts apart round the world (${distance(g, a, b)})`);
+        // (The poles: ice or sea on the top and bottom rows.)
+        for (const row of [0, g.height - 1]) for (let col = 0; col < g.width; col++) ok(!land(row * g.width + col), `${type} ${size} ${seed}: sea at the poles`);
+      }
+  ok(across > 20, `land crosses the seam (${across} rows)`);
+});
+
+test('natural wonders draw settlers: the bots value a site near one more', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  const site = at(12, 8);
+  const before = siteValue(makeCtx(game, game.players[0]), site);
+  naturalWonder(game, at(14, 8), 'emerald_falls');
+  const after = siteValue(makeCtx(game, game.players[0]), site);
+  ok(after > before + 6, `a site two from Emerald Falls is worth more (${before.toFixed(1)} → ${after.toFixed(1)})`);
+  ok(siteValue(makeCtx(game, game.players[0]), at(14, 8)) === -Infinity, 'no city on the wonder itself');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Orders
+// -------------------------------------------------------------------------------------------------
+
+test('orders that make no sense fail cleanly (never throw)', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(5, 5));
+  const u = unit(game, 'warrior', 0, at(6, 5));
+  const junk: unknown[] = [
+    null,
+    42,
+    'move',
+    {},
+    { t: 'nonsense' },
+    { t: '__proto__' },
+    { t: 'move' },
+    { t: 'move', unit: u.id },
+    { t: 'move', unit: u.id, to: -1 },
+    { t: 'move', unit: u.id, to: 1e9 },
+    { t: 'move', unit: 'x', to: 3 },
+    { t: 'attack', unit: u.id, target: NaN },
+    { t: 'build', unit: u.id, what: '__proto__' },
+    { t: 'build', unit: u.id },
+    { t: 'stance', unit: u.id, stance: 'dance' },
+    { t: 'produce', city: c.id },
+    { t: 'produce', city: c.id, item: null },
+    { t: 'produce', city: c.id, item: { kind: 'building', id: '__proto__' } },
+    { t: 'produce', city: c.id, item: { kind: 'building', id: 'constructor' } },
+    { t: 'buy', city: c.id, item: { kind: 'project', id: 'ss_booster' }, with: 'gold' },
+    { t: 'buy', city: c.id, item: { kind: 'unit', id: 'toString' }, with: 'faith' },
+    { t: 'buy', city: c.id, item: { kind: 'unit', id: 'warrior' }, with: 'love' },
+    { t: 'research', tech: '__proto__' },
+    { t: 'research', tech: 'constructor' },
+    { t: 'research' },
+    { t: 'policy', id: 7 },
+    { t: 'religion', unit: u.id, name: 5, beliefs: 'all' },
+    { t: 'religion', unit: u.id, name: 'x', beliefs: ['constructor', 'toString'] },
+    { t: 'greatChoice', kind: 'prophet' },
+    { t: 'greatPerson', unit: u.id, action: 'fly' },
+    { t: 'focus', city: c.id, focus: 'everything' },
+    { t: 'cityChoice', city: c.id, choice: 'sell' },
+    { t: 'gift', target: 9, gold: Infinity },
+    { t: 'spy', spy: 1 },
+    { t: 'war', target: -5 },
+    { t: 'war', target: 99 },
+    { t: 'peace', target: 99 },
+    { t: 'openBorders', target: 0 },
+    { t: 'deal', target: 99, items: 'all' },
+    { t: 'automate', unit: u.id, mode: 'fly' },
+    { t: 'reorder', city: c.id, from: 0 },
+    { t: 'giftUnit', unit: u.id, target: 0 },
+    { t: 'paradrop', unit: u.id, to: 3 },
+    { t: 'airlift', unit: u.id, to: c.tile },
+    { t: 'pillage', unit: u.id },
+    { t: 'ready', ready: 'yes' },
+  ];
+  for (const o of junk) {
+    let result;
+    try {
+      result = apply(game, 0, o as Order);
+    } catch (e) {
+      throw new Failure(`${JSON.stringify(o)} threw ${String(e)}`);
+    }
+    ok(!result.ok, `${JSON.stringify(o)} should fail`);
+  }
+  ok(wellFormed(game, { t: 'move', unit: u.id, to: 3 }), 'a good order is well formed');
+  endTurn(game);
+  ok(game.cities.includes(c) && !c.buildings.includes('__proto__'), 'nothing odd got in');
+});
+
+
+// -------------------------------------------------------------------------------------------------
+// Teams
+// -------------------------------------------------------------------------------------------------
+
+/** Players on teams (by index, team by team from 0), bound as a new game binds them. */
+function teamUp(game: Game, ...teams: number[][]) {
+  teams.forEach((members, t) => {
+    for (const i of members) game.players[i].team = t;
+  });
+  bindTeams(game);
+  updateAllVisibility(game);
+}
+
+test('teams: teammates have met, their borders are open for good; no war or denouncing between them', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  const [a, b, c] = game.players;
+  ok(hasMet(game, a, b) && hasMet(game, b, a), 'teammates have met');
+  ok(!hasMet(game, a, c), 'others are strangers still');
+  const theirs = city(game, 1, at(10, 8));
+  const w = unit(game, 'warrior', 0, neighbours(game.grid, theirs.tile)[0]);
+  for (let i = 0; i < 40; i++) endTurn(game);
+  eq(game.tiles[w.tile].owner, 1, 'a soldier may stay in a teammate’s land, turn after turn');
+  ok(!apply(game, 0, { t: 'war', target: 1 }).ok, 'no war on a teammate');
+  ok(denounce(game, a, b) !== null, 'no denouncing a teammate');
+});
+
+test('teams: each sees what any of them sees', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  const scout = unit(game, 'scout', 1, at(20, 14));
+  const far = unit(game, 'warrior', 2, at(21, 14));
+  ok(game.players[0].visible[scout.tile] > 0, 'my teammate’s scout’s sight is mine');
+  ok(seesUnit(game, game.players[0], far), 'so is what it sees');
+  ok(game.players[0].explored[far.tile] === 1, 'and I’ve explored it');
+  ok(!(game.players[2].visible[at(2, 2)] > 0), 'others see only their own');
+  const view = viewFor(game, game.players[0], null);
+  ok(view.units.some((u) => u.id === far.id), 'my screen shows it');
+  eq(view.players[1].team, 0, 'and says who is on my team');
+  eq(view.players[2].team, null, 'and who plays alone');
+});
+
+test('teams: war and peace are made together', () => {
+  const { game } = blank(['egypt', 'babylon', 'germany', 'france']);
+  teamUp(game, [0, 1], [2, 3]);
+  // (News is for people.)
+  game.players[1].bot = false;
+  ok(apply(game, 0, { t: 'war', target: 2 }).ok, 'war declared');
+  for (const [x, y] of [[0, 2], [0, 3], [1, 2], [1, 3]]) ok(game.players[x].diplomacy.war[y] && game.players[y].diplomacy.war[x], `${x} and ${y} at war`);
+  ok(!game.players[0].diplomacy.war[1] && !game.players[2].diplomacy.war[3], 'teammates still at peace');
+  ok(game.players[1].notes.some((n) => n.text.includes('your team is at war')), 'a teammate is told');
+  endWar(game, game.players[3], game.players[1]);
+  for (const [x, y] of [[0, 2], [0, 3], [1, 2], [1, 3]]) ok(!game.players[x].diplomacy.war[y] && game.players[x].diplomacy.peaceTurns[y] === 10, `${x} and ${y} at peace, with a treaty`);
+  ok(!apply(game, 1, { t: 'war', target: 2 }).ok, 'the treaty holds for the whole team');
+});
+
+test('teams: a team wins together (conquest: holding every capital between them; score: theirs together)', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany', 'france'], { size: 'small' });
+  game.settings.victories = { domination: true, science: false, culture: false, diplomatic: false, score: true };
+  teamUp(game, [0, 1], [2, 3]);
+  game.players[2].bot = false;
+  const capitals = [at(3, 3), at(12, 3), at(22, 15), at(30, 18)].map((t, i) => city(game, i, t));
+  checkVictory(game);
+  ok(!game.over, 'nobody yet');
+  capitals[2].owner = 0;
+  checkVictory(game);
+  ok(!game.over, 'one capital of theirs held: not yet');
+  capitals[3].owner = 1;
+  for (const t of game.tiles) if (t.city === capitals[3].id) t.owner = 1;
+  checkVictory(game);
+  ok(!!game.over && game.over.how === 'domination' && [0, 1].includes(game.over.winner), `every capital held between them (${JSON.stringify(game.over)})`);
+  ok(game.players[2].notes.some((n) => n.text.startsWith('Team 1 has conquered')), 'the world is told which team won');
+
+  const later = blank(['egypt', 'babylon', 'germany'], { size: 'small' });
+  const late = later.game;
+  late.settings.victories.score = true;
+  late.settings.turnLimit = 0;
+  teamUp(late, [0, 1]);
+  [later.at(3, 3), later.at(16, 3), later.at(26, 16)].forEach((t, i) => city(late, i, t));
+  // (Four points a tech: the loner six ahead of each of them.)
+  const known = Object.keys(TECHS).filter((t) => t !== 'future_tech');
+  late.players[2].techs = known.slice(0, 10);
+  late.players[0].techs = known.slice(0, 4);
+  late.players[1].techs = known.slice(0, 4);
+  const [s0, s1, s2] = late.players.slice(0, 3).map((p) => score(late, p));
+  ok(s2 > s0 && s2 > s1 && s0 + s1 > s2, `the loner beats each of them, not both together (${s0}, ${s1}, ${s2})`);
+  checkVictory(late);
+  ok([0, 1].includes(late.over?.winner ?? -1), `the team wins on score (${JSON.stringify(late.over)})`);
+});
+
+test('team research: one research for the team, set by any of them; a bot doesn’t undo a person’s choice', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
+  const [a, b] = game.players;
+  for (const p of game.players) p.techs.push('agriculture');
+  a.bot = false;
+  ok(apply(game, 0, { t: 'research', tech: 'pottery' }).ok, 'a person chooses');
+  eq(b.researching, 'pottery', 'the teammate researches it too');
+  eq(b.researchBy, 0, 'and knows whose choice it is');
+  ok(!apply(game, 1, { t: 'research', tech: 'mining' }).ok, 'a bot on the team doesn’t undo it');
+  eq(a.researching, 'pottery', 'still pottery');
+  ok(apply(game, 0, { t: 'research', tech: 'writing' }).ok, 'a far tech');
+  eq(b.researching, 'pottery', 'its way there, for both');
+  ok(b.techQueue.includes('writing'), 'queued for both');
+  ok(apply(game, 2, { t: 'research', tech: 'mining' }).ok && game.players[2].researching === 'mining', 'a civ alone is its own master');
+});
+
+test('team research: what each puts in is pooled; finished between them, it’s learned by all and the rest goes on', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
+  const [a, b] = game.players;
+  for (const p of game.players) p.techs.push('agriculture');
+  apply(game, 0, { t: 'research', tech: 'pottery' });
+  const cost = techCost(game, a, 'pottery');
+  a.research.pottery = Math.ceil(cost * 0.3);
+  b.research.pottery = Math.ceil(cost * 0.3);
+  shareResearch(game);
+  eq(a.research.pottery, b.research.pottery, 'the same for both');
+  eq(a.research.pottery, Math.ceil(cost * 0.3) * 2, 'what each put in, together');
+  a.techQueue = ['writing'];
+  b.techQueue = ['writing'];
+  a.research.pottery += Math.ceil(cost * 0.3);
+  b.research.pottery += Math.ceil(cost * 0.3);
+  shareResearch(game);
+  ok(a.techs.includes('pottery') && b.techs.includes('pottery'), 'learned by both');
+  eq(a.researching, 'writing', 'on to the next');
+  eq(a.research.writing, Math.ceil(cost * 0.3) * 4 - cost, 'what was over goes on');
+  eq(b.research.writing, a.research.writing, 'for both');
+  // A turn: each one's science goes in, and the team's together is what counts.
+  const before = a.research.writing;
+  const science = (i: number) => game.cities.filter((c) => c.owner === i).reduce((n, c) => n + cityYields(game, c).science, 0);
+  endTurn(game);
+  eq(a.research.writing, before + science(0) + science(1), `a turn's science from both (${science(0)} + ${science(1)})`);
+});
+
+test('team research: a tech learned by one, any way, is learned by all; a team’s techs cost more', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  [at(3, 3), at(14, 3), at(22, 15), at(5, 12)].forEach((t, i) => city(game, i === 3 ? 0 : i, t));
+  const alone = techCost(game, game.players[0], 'writing');
+  teamUp(game, [0, 1]);
+  const [a, b] = game.players;
+  const together = techCost(game, a, 'writing');
+  ok(together > alone * 1.5, `half again for the second civ, and their cities all count (${alone} alone, ${together} together)`);
+  eq(techCost(game, b, 'writing'), together, 'the same for both');
+  eq(techCost(game, game.players[2], 'writing') <= alone, true, 'a civ alone pays what it did');
+  learn(game, b, 'mining');
+  ok(apply(game, 0, { t: 'skip', unit: unit(game, 'warrior', 0, at(4, 4)).id }).ok, 'an order');
+  ok(a.techs.includes('mining'), 'the tech a teammate learned is theirs too');
+});
+
+// -------------------------------------------------------------------------------------------------
+// The replay
+
+/** The events of a kind in a replay. */
+const eventsOf = (game: Game, kind: ReplayEvent[1]) => (game.replay?.events ?? []).filter((e) => e[1] === kind);
+
+test('the replay records the game as it goes: borders, cities founded, taken and lost, wars, peace, wonders, eras, the fallen, the end', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  game.settings.victories.domination = true;
+  const thebes = city(game, 0, at(4, 4));
+  const babylon = city(game, 1, at(20, 12));
+  const berlin = city(game, 2, at(20, 3));
+  const memphis = city(game, 0, at(10, 14));
+  endTurn(game);
+  const first = game.turn - 1;
+  const found = eventsOf(game, 'found');
+  eq(found.length, 4, 'four cities founded');
+  ok(found.some((e) => e[2] === thebes.id && e[0] === first && e[3] === 0 && e[4] === thebes.tile && e[5] === 'Thebes' && e[6] === 1), 'Thebes, a capital, this turn');
+  ok(found.some((e) => e[2] === memphis.id && e[6] === 0), 'Memphis, not a capital');
+  const owners = (turn: number) => replayAt(game.replay!, game.tiles.length, turn).owners;
+  ok(game.tiles.every((tile, t) => owners(Infinity)[t] === tile.owner), 'every tile’s owner as it is');
+  ok(owners(first - 1).every((o) => o === -1), 'nobody’s, before');
+  // A war, a wonder, a new era.
+  war(game, 0, 1);
+  game.wonders.pyramids = 0;
+  thebes.buildings.push('pyramids');
+  techsTo(game, 0, 3);
+  endTurn(game);
+  const second = game.turn - 1;
+  ok(eventsOf(game, 'war').some((e) => e[0] === second && e[2] === 0 && e[3] === 1), 'Egypt and Babylon at war');
+  ok(eventsOf(game, 'wonder').some((e) => e[0] === second && e[2] === 'pyramids' && e[3] === 0 && e[4] === thebes.id), 'the Pyramids, in Thebes');
+  ok(eventsOf(game, 'era').some((e) => e[0] === second && e[2] === 0 && e[3] === 1), 'Egypt in the Classical Era');
+  eq(eventsOf(game, 'found').length, 4, 'nothing founded twice');
+  // A city lost (its land nobody's again), peace.
+  game.cities = game.cities.filter((c) => c !== memphis);
+  for (const tile of game.tiles) if (tile.city === memphis.id) (tile.owner = -1), delete tile.city;
+  endWar(game, game.players[0], game.players[1]);
+  endTurn(game);
+  const third = game.turn - 1;
+  ok(eventsOf(game, 'lost').some((e) => e[0] === third && e[2] === memphis.id && e[3] === 0), 'Memphis lost');
+  ok(eventsOf(game, 'peace').some((e) => e[0] === third && e[2] === 0 && e[3] === 1), 'peace');
+  ok(game.tiles.every((tile, t) => owners(Infinity)[t] === tile.owner), 'its land nobody’s again');
+  ok(owners(second)[memphis.tile] === 0, 'Egypt’s, the turn before');
+  // Babylon's last city taken mid-turn: Babylon falls; Germany's too; Egypt holds every capital and wins.
+  war(game, 0, 1);
+  war(game, 0, 2);
+  cityHooks.captured(game, berlin, 0);
+  ok(eventsOf(game, 'taken').length === 0, 'nothing recorded mid-turn while the game goes on');
+  cityHooks.captured(game, babylon, 0);
+  ok(!!game.over, 'over');
+  const last = game.turn;
+  ok(eventsOf(game, 'taken').some((e) => e[0] === last && e[2] === babylon.id && e[3] === 0 && e[4] === 1), 'Babylon taken, this turn');
+  ok(eventsOf(game, 'out').some((e) => e[0] === last && e[2] === 1), 'Babylon fallen');
+  ok(eventsOf(game, 'won').some((e) => e[0] === last && e[2] === 0 && e[3] === 'domination'), 'Egypt wins');
+  eq(replayEnd(game.replay!), last, 'the replay ends with the game');
+  ok([...replayAt(game.replay!, game.tiles.length, Infinity).cities.values()].every((c) => c.owner === 0), 'every city Egypt’s at the end');
+});
+
+test('the replay after a load carries on where it was (nothing twice); a turn costs three characters and three a tile gained', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  city(game, 0, at(4, 4));
+  city(game, 1, at(20, 12));
+  endTurn(game);
+  const loaded = JSON.parse(JSON.stringify(game)) as Game;
+  const events = loaded.replay!.events.length;
+  endTurn(loaded);
+  endTurn(loaded);
+  eq(loaded.replay!.events.length, events, 'no events again after the load');
+  const size = JSON.stringify(loaded.replay).length;
+  const before = loaded.tiles.map((tile) => tile.owner);
+  endTurn(loaded);
+  const moved = loaded.tiles.filter((tile, t) => tile.owner !== before[t]).length;
+  eq(JSON.stringify(loaded.replay).length - size, 3 + 3 * moved, `a turn's record: three characters, and three for each of the ${moved} tiles that changed hands`);
+});
+
+test('the game’s save is throttled: an order’s at once, the rest at most every few seconds, none left waiting', () => {
+  const t = new SaveThrottle(5);
+  // Orders every half second for a minute: saved at the first, then whenever five seconds have passed with one waiting.
+  let saves = 0;
+  let lastAt = -Infinity;
+  for (let now = 0; now < 60; now += 0.5) {
+    if (t.changed(now)) {
+      t.saved(now);
+      saves++;
+      ok(now - lastAt >= 5, `never sooner than five seconds (${now})`);
+      lastAt = now;
+    }
+    if (t.tick(now)) {
+      t.saved(now);
+      saves++;
+      ok(now - lastAt >= 5, `never sooner than five seconds (${now})`);
+      lastAt = now;
+    }
+  }
+  ok(saves >= 11 && saves <= 13, `about one save in five seconds over a minute of orders (${saves}), not 120`);
+  // The orders stop: what waited is saved once its five seconds are up, then nothing more.
+  t.changed(60);
+  ok(t.pending, 'an order waits');
+  ok(!t.tick(lastAt + 4.9), 'not yet');
+  ok(t.tick(lastAt + 5), 'due');
+  t.saved(lastAt + 5);
+  ok(!t.pending && !t.tick(lastAt + 30), 'nothing left waiting');
+  // A save for what matters (a turn's end) counts as the latest; a new world starts afresh.
+  t.saved(100);
+  ok(!t.changed(102), 'an order just after a turn’s end waits');
+  t.reset();
+  ok(t.changed(0), 'after a new world, the first order is saved at once (its clock starts again)');
+});
+
+test('a city-state asks only for a resource every civ it asks can see (no Uranium before Atomic Theory)', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const [egypt] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, cs.index, at(14, 9));
+  city(game, 0, at(4, 4));
+  egypt.met = [cs.index];
+  game.tiles[at(20, 4)].resource = 'uranium';
+  const asked = () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 400; i++) {
+      questsOf(cs).length = 0;
+      questsTurn(game);
+      for (const q of questsOf(cs)) if (q.kind === 'resource') seen.add(q.target as string);
+    }
+    return seen;
+  };
+  ok(!asked().has('uranium'), 'not asked before Atomic Theory');
+  egypt.techs.push('atomic_theory');
+  ok(asked().has('uranium'), 'asked once it can be found');
+});
+
+test('Oil at sea takes an Offshore Platform, a work boat’s with Refrigeration; it brings the Oil in', () => {
+  const { game, at } = blank();
+  for (let col = 0; col < 26; col++) game.tiles[at(col, 8)].terrain = 'coast';
+  const c = city(game, 0, at(6, 7));
+  const p = game.players[0];
+  const sea = at(7, 8);
+  Object.assign(game.tiles[sea], { resource: 'oil', amount: 4, owner: 0, city: c.id });
+  p.techs.push('sailing', 'biology');
+  const boat = unit(game, 'work_boat', 0, sea);
+  ok(!canBuild(game, boat, 'offshore_platform'), 'not before Refrigeration');
+  ok(!canBuild(game, boat, 'oil_well'), 'never an oil well out at sea');
+  p.techs.push('refrigeration');
+  ok(canBuild(game, boat, 'offshore_platform'), 'with Refrigeration');
+  ok(apply(game, 0, { t: 'build', unit: boat.id, what: 'offshore_platform' }).ok, 'built');
+  eq(game.tiles[sea].improvement, 'offshore_platform', 'on the tile at once');
+  ok(!game.units.includes(boat), 'the work boat is spent');
+  eq(strategic(game, p).oil?.have, 4, 'the Oil is in');
+  // On land, Oil still takes an oil well, a worker's.
+  const land = at(5, 6);
+  Object.assign(game.tiles[land], { resource: 'oil', amount: 2, owner: 0, city: c.id });
+  const w = unit(game, 'worker', 0, land);
+  ok(canBuild(game, w, 'oil_well') && !canBuild(game, w, 'offshore_platform'), 'an oil well on land');
+});
+
+test('a citadel takes the tiles round it, another civ’s too (not a city’s), and they remember it', () => {
+  const { game, at } = blank();
+  const mine = city(game, 0, at(6, 6));
+  const theirs = city(game, 1, at(10, 6));
+  const site = at(8, 6);
+  game.tiles[site].owner = 0;
+  game.tiles[site].city = mine.id;
+  const around = neighbours(game.grid, site);
+  const foreign = around.filter((t) => game.tiles[t].owner === 1);
+  ok(foreign.length > 0, 'Babylon’s land beside it');
+  const general = unit(game, 'great_general', 0, site);
+  ok(apply(game, 0, { t: 'greatPerson', unit: general.id, action: 'improvement' }).ok, 'the citadel is built');
+  ok(around.every((t) => game.tiles[t].owner === 0 || t === theirs.tile), 'every tile round it is Egypt’s');
+  ok(foreign.every((t) => game.tiles[t].city === mine.id), 'its nearest city’s');
+  ok(relationsOf(game).events.some((e) => e.kind === 'land' && e.by === 0 && e.to === 1), 'Babylon remembers');
+});
+
+test('trade routes need a way: a cargo ship only between cities on the same water, a caravan only over land', () => {
+  const { game, at } = blank();
+  for (let col = 0; col < 26; col++) game.tiles[at(col, 8)].terrain = 'coast';
+  const p = game.players[0];
+  p.techs.push('sailing', 'animal_husbandry');
+  const port = city(game, 0, at(4, 7));
+  const inland = city(game, 0, at(10, 4));
+  const otherPort = city(game, 0, at(14, 7));
+  const across = city(game, 0, at(9, 10));
+  ok(startRoute(game, p, unit(game, 'cargo_ship', 0, port.tile), inland.id) !== null, 'no ship to a city inland');
+  ok(startRoute(game, p, unit(game, 'caravan', 0, port.tile), across.id) !== null, 'no caravan across the water');
+  eq(startRoute(game, p, unit(game, 'cargo_ship', 0, port.tile), otherPort.id), null, 'a ship from port to port');
+  eq(startRoute(game, p, unit(game, 'caravan', 0, port.tile), inland.id), null, 'a caravan over land');
+});
+
+test('an annexed city shows as occupied until a Courthouse calms it', () => {
+  const { game, at } = blank();
+  city(game, 0, at(4, 4));
+  const taken = city(game, 0, at(10, 6), { pop: 6 });
+  taken.founder = 1;
+  taken.occupied = true;
+  const occupied = () => !!viewFor(game, game.players[0], null).cities.find((c) => c.id === taken.id)!.occupied;
+  ok(occupied(), 'annexed: occupied');
+  taken.buildings.push('courthouse');
+  ok(!occupied(), 'with a Courthouse: calmed');
+  taken.buildings.pop();
+  taken.puppet = true;
+  ok(!occupied(), 'a puppet doesn’t mind');
+});
+
+// -------------------------------------------------------------------------------------------------
+// The world in blocks
+
+test('each tile’s improvement, road and ruins stay on its own columns (a mine’s mound isn’t in the farm next door), and set no spot twice', () => {
+  const kinds = Object.keys(IMPROVEMENTS) as ImprovementId[];
+  const ores = ['gems', 'gold_ore', 'iron', 'silver', 'salt', ''];
+  /** A tile's own small random number, to vary the land, its roads and its ores. */
+  const roll = (t: number, k: number) => {
+    const h = Math.imul(Math.imul(t + 7919, 73856093) ^ Math.imul(k + 13, 19349663), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+  // Flat land, hills, and a mix of them with coast, rivers, marshes and woods (on a world that wraps
+  // too): every tile's shape of hex, with and without a road through it.
+  for (const land of ['flat', 'hills', 'mixed', 'wrapped'] as const) {
+    const { game } = blank(undefined, { wrap: land === 'wrapped' });
+    const mixed = land === 'mixed' || land === 'wrapped';
+    game.tiles.forEach((tile, t) => {
+      if (land === 'hills' || (mixed && roll(t, 1) < 0.3)) tile.elevation = 'hills';
+      if (!mixed) return;
+      if (roll(t, 2) < 0.12) tile.terrain = 'coast';
+      else if (roll(t, 3) < 0.1 && tile.elevation === 'flat') tile.feature = 'marsh';
+      else if (roll(t, 4) < 0.1) tile.feature = 'forest';
+      if (roll(t, 5) < 0.15) tile.river = true;
+    });
+    const size = extent(game.grid);
+    const ground = new Ground(Math.ceil(size.w), Math.ceil(size.d), terrainEdits(game.grid, game.tiles), period(game.grid));
+    // A city lost on each tile: its ruins show where there's no improvement.
+    game.replay = { borders: [], events: game.tiles.flatMap((_, t) => [[0, 'found', t, 0, t, 'Thebes', 0], [1, 'lost', t, 0]] as ReplayEvent[]) };
+    for (let turn = 0; turn <= kinds.length; turn++)
+      for (const pillaged of [false, true]) {
+        game.tiles.forEach((tile, t) => {
+          const water = TERRAINS[tile.terrain].water;
+          const kind = kinds[(t + turn) % (kinds.length + 1)];
+          if (kind && water === (kind === 'offshore_platform' || kind === 'fishing_boats')) tile.improvement = kind;
+          else delete tile.improvement;
+          tile.pillaged = pillaged;
+          tile.resource = ores[(t + turn) % ores.length];
+          const r = roll(t * 31 + turn, 6);
+          if (!water && r < 0.5) tile.road = r < 0.3 ? 'road' : 'rail';
+          else delete tile.road;
+        });
+        for (let t = 0; t < game.tiles.length; t++) {
+          const at = new Set<string>();
+          for (const [x, y, z, block] of decorOf(game, ground, t)) {
+            const what = `${game.tiles[t].improvement ?? 'ruins'}${pillaged ? ' (pillaged)' : ''} on ${land} tile ${t}`;
+            ok(tileUnder(game.grid, x + 0.5, z + 0.5) === t, `${what}: ${block} at ${x},${y},${z} is on tile ${tileUnder(game.grid, x + 0.5, z + 0.5)}`);
+            ok(!at.has(`${x},${y},${z}`), `${what}: two blocks at ${x},${y},${z}`);
+            at.add(`${x},${y},${z}`);
+          }
+        }
+      }
+  }
+});
+
+test('nothing of an improvement, nor any of a land resource’s models, stands in a river (its channels cut through its tiles) or a marsh’s pools', () => {
+  const kinds = (Object.keys(IMPROVEMENTS) as ImprovementId[]).filter((i) => i !== 'fishing_boats' && i !== 'offshore_platform');
+  const resources = Object.keys(KINDS).filter((r) => !KINDS[r]!.sea);
+  for (const wrap of [false, true])
+    for (let turn = 0; turn < 6; turn++) {
+      // Rivers on three tiles in four (each channel runs from a tile's middle to the next river tile's), hills, woods, marshes.
+      const { game } = blank(undefined, { wrap });
+      const g = game.grid;
+      game.tiles.forEach((tile, t) => {
+        tile.river = (t * 7 + turn) % 4 !== 0;
+        if (t % 5 === 0) tile.elevation = 'hills';
+        else if (t % 11 === 4) tile.feature = 'marsh';
+        if (t % 7 === 3) tile.feature = 'forest';
+        tile.improvement = kinds[(t * 3 + turn) % kinds.length];
+        if (tile.improvement === 'lumber_mill') tile.feature = 'forest';
+        tile.resource = resources[(t + turn * 5) % resources.length];
+        tile.pillaged = turn % 3 === 2;
+      });
+      const size = extent(g);
+      const edits = terrainEdits(g, game.tiles);
+      const ground = new Ground(Math.ceil(size.w), Math.ceil(size.d), edits, period(g));
+      const wet = (x: number, z: number) => ['water', 'ice'].includes(ground.at(Math.floor(x), Math.floor(z))?.block ?? '');
+      // The world as a screen has it: the land's blocks, then each tile's improvement's set over them (each only where what it covers is there).
+      const world = new Map<string, string>();
+      for (const [x, y, z, b] of edits) world.set(`${x},${y},${z}`, b);
+      for (let t = 0; t < game.tiles.length; t++)
+        for (const [x, y, z, block, under] of decorOf(game, ground, t)) {
+          if (block !== 'air' && !game.tiles[t].road) ok(!wet(x, z), `${game.tiles[t].improvement} on tile ${t} (${wrap ? 'wrapped' : 'flat'}): ${block} at ${x},${y},${z} is in the water`);
+          if ((world.get(`${x},${y},${z}`) ?? 'air') === under) world.set(`${x},${y},${z}`, block);
+        }
+      const blocks = { blockAt: (x: number, y: number, z: number) => world.get(`${baseX(g, x)},${y},${z}`) ?? (y === SEA_Y ? 'water' : y < SEA_Y ? 'civ_dirt' : 'air') };
+      for (let t = 0; t < game.tiles.length; t++) {
+        const tile = game.tiles[t];
+        const kind = KINDS[tile.resource!]!;
+        const spots = spotsFor(blocks, g, t, kind, { resource: tile.resource, improvement: tile.improvement, pillaged: tile.pillaged, feature: tile.feature } as KnownTile);
+        ok(!!spots, `tile ${t}'s ground is all here`);
+        const penned = tile.improvement === 'pasture' && kind.life === 'graze';
+        spots!.forEach((spot, i) => {
+          const what = `${tile.resource} (${tile.improvement}${tile.pillaged ? ', pillaged' : ''}) on tile ${t} (${wrap ? 'wrapped' : 'flat'})`;
+          ok(!wet(spot.x, spot.z), `${what}: a model stands in the water at ${spot.x},${spot.z}`);
+          // A still one's footprint, as it's turned and as big as it may be drawn, none of it over water
+          // either (its corners a hair in: one may touch a column's edge).
+          if (kind.life !== 'still') return;
+          const foot = corners(kind.models[i % kind.models.length], kind.scale * (penned ? PEN_SCALE : 1) * GROWN * spot.size * 0.999, (spot.turn ?? 0) * (Math.PI / 2));
+          for (const [fx, fz] of foot) ok(!wet(spot.x + fx, spot.z + fz), `${what}: a model reaches over the water at ${spot.x + fx},${spot.z + fz}`);
+        });
+      }
+    }
+});
+
+test('a turn can end before the capital is founded (Civ V’s): research is asked for only once there’s a city', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  unit(game, 'settler', 0, at(5, 5));
+  p.researching = null;
+  eq(blockers(game, p).length, 0, 'nothing stops the turn with only a Settler');
+  city(game, 0, at(5, 5));
+  ok(blockers(game, p).some((b) => b.text === 'Choose research'), 'with a city, research is asked for');
+});
+
+test('rivers run as a tree, not a web, round their tiles’ middles: none of a river tile’s units stand in the water, and dense rivers don’t drown their land', () => {
+  const seats = [
+    { user: null, name: 'A', civ: 'egypt', bot: true },
+    { user: null, name: 'B', civ: 'babylon', bot: true },
+  ];
+  const shares: number[] = [];
+  const dense: number[] = [];
+  for (const wrap of [true, false])
+    for (const seed of [3, 41, 91, 127, 300, 555]) {
+      const settings = { size: 'small', type: 'continents', speed: 'quick', timer: 0, cityStates: 4, barbarians: false, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330, wrap } as const;
+      const game = createGame({ ...settings, victories: { ...settings.victories } }, seats, seed);
+      const g = game.grid;
+      const water = (t: number) => t >= 0 && !!TERRAINS[game.tiles[t].terrain].water;
+      const river = (t: number) => t >= 0 && !!game.tiles[t].river && !water(t);
+      // A tree: each run of river tiles joined by one link fewer than it has tiles, every tile reached; each mouth out to one water.
+      const links = riverLinks(g, game.tiles);
+      const seen = new Set<number>();
+      for (let t = 0; t < game.tiles.length; t++) {
+        if (!river(t) || seen.has(t)) continue;
+        const run = [t];
+        seen.add(t);
+        let inner = 0;
+        let mouths = 0;
+        for (let i = 0; i < run.length; i++) {
+          const ds = links.get(run[i]) ?? [];
+          ok(new Set(ds).size === ds.length, `tile ${run[i]} links each way once`);
+          for (const d of ds) {
+            const n = neighbour(g, run[i], d);
+            if (water(n)) mouths++;
+            else {
+              ok(river(n) && (links.get(n) ?? []).includes((d + 3) % 6), `tile ${run[i]}'s link to ${n} goes both ways`);
+              inner++;
+              if (!seen.has(n)) {
+                seen.add(n);
+                run.push(n);
+              }
+            }
+          }
+        }
+        ok(run.every((x) => links.has(x) || run.length === 1), `every tile of the river at ${t} is on it`);
+        eq(inner, 2 * (run.length - 1), `the river at ${t} (${run.length} tiles, ${wrap ? 'wrapped' : 'flat'}, seed ${seed}) is a tree`);
+        ok(mouths <= run.filter((x) => [0, 1, 2, 3, 4, 5].some((d) => water(neighbour(g, x, d)))).length, `the river at ${t} flows out once at each mouth`);
+      }
+      eq(JSON.stringify([...riverLinks(g, game.tiles)]), JSON.stringify([...links]), 'the same rivers every time');
+      // The land: where each river tile's units stand is dry; how much of each is water.
+      const size = extent(g);
+      const ground = new Ground(Math.ceil(size.w), Math.ceil(size.d), terrainEdits(g, game.tiles), period(g));
+      const wet = (x: number, z: number) => ground.at(Math.floor(x), Math.floor(z))?.block === 'water';
+      game.tiles.forEach((tile, t) => {
+        if (!river(t) || tile.feature === 'marsh' || tile.wonder) return;
+        const c = middleOf(g, t);
+        for (const [ox, oz] of UNIT_SPOTS) ok(!wet(c.x + ox, c.z + oz), `seed ${seed} (${wrap ? 'wrapped' : 'flat'}): a unit on river tile ${t} stands in the water (${ox}, ${oz})`);
+        let n = 0;
+        let w = 0;
+        for (let x = Math.floor(c.x - 5); x <= c.x + 5; x++)
+          for (let z = Math.floor(c.z - 5); z <= c.z + 5; z++) {
+            if (tileUnder(g, x + 0.5, z + 0.5) !== t) continue;
+            n++;
+            if (wet(x, z)) w++;
+          }
+        shares.push(w / n);
+        if (neighbours(g, t).filter(river).length >= 3) dense.push(w / n);
+      });
+    }
+  const mean = (list: number[]) => list.reduce((a, b) => a + b, 0) / list.length;
+  // (Joined every way, they were 42% water on average, 58% where they're dense, and some 80%.)
+  ok(mean(shares) < 0.33, `a river tile is under a third water, on average (${(mean(shares) * 100).toFixed(0)}%)`);
+  ok(mean(dense) < 0.4, `where rivers are dense, well under half (${(mean(dense) * 100).toFixed(0)}%, of ${dense.length})`);
+  ok(Math.max(...shares) <= 0.62, `none is mostly water (${(Math.max(...shares) * 100).toFixed(0)}% at most)`);
+});
+
+test('wonders open as Civ V’s Brave New World has it: the Pyramids with Liberty, the Kremlin with Order, and so on, not with the tech alone', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const c = city(game, 0, at(5, 5));
+  p.techs.push('masonry', 'pottery', 'bronze_working', 'calendar', 'railroad');
+  const can = () => constructible(game, p, c);
+  for (const id of ['pyramids', 'hanging_gardens', 'statue_of_zeus', 'kremlin']) ok(!can().includes(id), `no ${id} with only its tech`);
+  ok(can().includes('stonehenge') && can().includes('mausoleum'), 'a wonder with no policy needs only its tech');
+  p.policies.push('liberty');
+  ok(can().includes('pyramids') && !can().includes('hanging_gardens'), 'Liberty opens the Pyramids (and only them)');
+  p.policies.push('tradition', 'honor');
+  ok(can().includes('hanging_gardens') && can().includes('statue_of_zeus'), 'Tradition the Hanging Gardens, Honor the Statue of Zeus');
+  p.ideology = 'order';
+  ok(can().includes('kremlin'), 'the Order ideology opens the Kremlin');
+  eq(Object.values(BUILDINGS).filter((b) => b.policy).length, 11, 'eleven wonders need a policy');
+});
+
+test('the Great Wall stands in blocks round the land of the civ that holds it, where it meets land not theirs, with gates for roads', () => {
+  for (const wrap of [false, true]) {
+    const { game, at } = blank(undefined, { wrap });
+    const g = game.grid;
+    const c = city(game, 0, at(6, 6));
+    // Their land: the city and the ring round it, and one more tile two out to the east.
+    const ours = new Set([c.tile, ...neighbours(g, c.tile), at(8, 6)]);
+    for (const t of ours) game.tiles[t].owner = 0;
+    const size = extent(g);
+    const ground = new Ground(Math.ceil(size.w), Math.ceil(size.d), terrainEdits(g, game.tiles), period(g));
+    const bricks = (t: number) => decorOf(game, ground, t).filter((p) => p[3] === 'stone_bricks').length;
+    for (const t of ours) eq(wallEdges(game, t), 0, `no wall before the wonder (tile ${t})`);
+    const before = decorKey(game, neighbours(g, c.tile)[0]);
+    game.wonders.great_wall = 0;
+    ok(decorKey(game, neighbours(g, c.tile)[0]) !== before, 'building it changes what the border tiles show');
+    eq(wallEdges(game, c.tile), 0, 'none round the city itself');
+    for (const t of neighbours(g, c.tile)) {
+      const edges = wallEdges(game, t);
+      ok(edges !== 0, `a wall along the ring tile ${t} (${wrap ? 'wrapped' : 'flat'})`);
+      for (let d = 0; d < 6; d++) {
+        const n = neighbour(g, t, d);
+        eq(!!(edges & (1 << d)), n >= 0 && !ours.has(n), `tile ${t}'s edge toward ${n}: walled only where the land isn't theirs`);
+      }
+      ok(bricks(t) >= 4, `tile ${t} has its wall in blocks (${bricks(t)})`);
+      for (const [x, , z] of decorOf(game, ground, t)) eq(tileUnder(g, x + 0.5, z + 0.5), t, `tile ${t}'s wall stays on its own columns`);
+    }
+    // Not along the coast: a ring tile beside the sea walls only its land edges.
+    const coastal = neighbours(g, c.tile)[0];
+    const sea = neighbours(g, coastal).find((n) => n >= 0 && !ours.has(n))!;
+    game.tiles[sea].terrain = 'coast';
+    eq(wallEdges(game, coastal) & (1 << neighbours(g, coastal).indexOf(sea)), 0, 'no wall facing the sea');
+    game.tiles[sea].terrain = 'grassland';
+    // A road leaves a gate.
+    const t = neighbours(g, c.tile)[1];
+    const walled = bricks(t);
+    game.tiles[t].road = 'road';
+    game.tiles[neighbours(g, t).find((n) => n >= 0 && !ours.has(n))!].road = 'road';
+    ok(bricks(t) < walled, `a road through the wall leaves a gate (${walled} bricks, then ${bricks(t)})`);
+    // It goes with the wonder's city.
+    game.wonders.great_wall = 1;
+    for (const t of ours) eq(wallEdges(game, t), 0, `taken, it's no longer round the old owner's land (tile ${t})`);
+    game.wonders.great_wall = -1;
+    eq(wallEdges(game, neighbours(g, c.tile)[0]), 0, 'gone with a razed city, gone from the land');
+  }
+});
+
+test('what’s left over is kept: production past a finished build goes into the next one chosen, science past a tech into the next tech', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  p.bot = false;
+  const c = city(game, 0, at(5, 5));
+  c.queue = [];
+  c.prod = 30;
+  ok(apply(game, 0, { t: 'produce', city: c.id, item: { kind: 'building', id: 'monument' } }).ok, 'chose a monument');
+  eq(c.prod, 30, 'the production left over went into it');
+  // Switching away still keeps each thing's own.
+  ok(apply(game, 0, { t: 'produce', city: c.id, item: { kind: 'unit', id: 'warrior' } }).ok, 'switched');
+  eq(c.prod, 0, 'nothing carried from the monument to the warrior');
+  eq(c.saved?.['building:monument'], 30, 'the monument keeps its 30');
+  // Science: a tech learned with nothing chosen next.
+  p.researching = 'agriculture';
+  p.research.agriculture = techCost(game, p, 'agriculture') + 40;
+  p.techQueue = [];
+  endTurn(game);
+  ok(p.techs.includes('agriculture') && !p.researching, 'learned, and nothing chosen next');
+  const spare = p.spareScience ?? 0;
+  ok(spare >= 40, `the science over is kept (${spare})`);
+  endTurn(game);
+  ok((p.spareScience ?? 0) > spare, 'and the next turn’s, with nothing chosen');
+  const kept = p.spareScience!;
+  ok(apply(game, 0, { t: 'research', tech: 'pottery' }).ok, 'chose pottery');
+  eq(Math.round(p.research.pottery ?? 0), Math.round(kept), 'all of it went into pottery');
+  eq(p.spareScience, undefined, 'none left over');
+});
+
+test('a building that needs a strategic resource uses one up, as a unit does', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const a = city(game, 0, at(4, 4), { buildings: ['workshop'] });
+  const b = city(game, 0, at(10, 4), { buildings: ['workshop'] });
+  techsTo(game, 0, TECHS.industrialization.col);
+  const coal = neighbours(game.grid, a.tile)[0];
+  Object.assign(game.tiles[coal], { owner: 0, city: a.id, resource: 'coal', amount: 1, improvement: 'mine' });
+  ok(constructible(game, p, a).includes('factory') && constructible(game, p, b).includes('factory'), 'one Coal: either city may build a Factory');
+  a.buildings.push('factory');
+  eq(strategic(game, p).coal?.used, 1, 'the Factory uses the Coal');
+  ok(!constructible(game, p, b).includes('factory'), 'so the other city can’t build one too');
+});
+
+test('a city taken back while it burns is put out; annexing is for good; nothing is bought in resistance', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  city(game, 0, at(4, 4));
+  city(game, 1, at(16, 12));
+  const town = city(game, 1, at(10, 8), { pop: 6 });
+  town.hp = 1;
+  const s = unit(game, 'swordsman', 0, neighbours(game.grid, town.tile)[0]);
+  ok(apply(game, 0, { t: 'attack', unit: s.id, target: town.tile }).ok && town.owner === 0, 'Egypt takes it');
+  game.players[0].gold = 5000;
+  ok((town.resistance ?? 0) > 0, 'in resistance');
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'annex' }).ok, 'annexed');
+  const buy = apply(game, 0, { t: 'buy', city: town.id, item: { kind: 'unit', id: 'warrior' }, with: 'gold' });
+  ok(!buy.ok && /resistance/.test(buy.error ?? ''), `nothing bought in resistance (${buy.error})`);
+  ok(!apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'puppet' }).ok, 'and it can’t be made a puppet again');
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'raze' }).ok, 'razed');
+  endTurn(game);
+  const here = game.units.find((u) => u.tile === town.tile);
+  if (here) game.units.splice(game.units.indexOf(here), 1);
+  town.hp = 1;
+  const b = unit(game, 'swordsman', 1, neighbours(game.grid, town.tile)[2]);
+  ok(apply(game, 1, { t: 'attack', unit: b.id, target: town.tile }).ok && town.owner === 1, 'Babylon takes it back');
+  eq(town.razing, undefined, 'the fire’s out');
+  for (let i = 0; i < 8; i++) endTurn(game);
+  ok(game.cities.includes(town), 'it still stands');
+});
+
+test('a city that shrinks keeps no more followers than citizens; a city grows keeping the food over; a missionary bought appears on land, not on an enemy', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(6, 6), { pop: 6 });
+  c.followers = { r1: 6 };
+  c.food = -500;
+  endTurn(game);
+  eq(c.pop, 5, 'it starved');
+  const total = Object.values(c.followers ?? {}).reduce((s, k) => s + k, 0);
+  ok(total <= c.pop, `followers ${JSON.stringify(c.followers)} in a city of ${c.pop}`);
+  // Growth.
+  const g = city(game, 0, at(12, 6), { pop: 1 });
+  const need = growthThreshold(game, 1);
+  g.food = need + 40;
+  const kept = Math.floor(growthThreshold(game, 1) * (foodKept(game, g) / 100));
+  endTurn(game);
+  ok(g.pop >= 2, 'grew');
+  ok(g.food >= 40 + kept, `kept the 40 over (${g.food})`);
+  // A missionary: every tile round the city is sea but one, which an enemy holds.
+  const p = game.players[0];
+  const m = city(game, 0, at(6, 12));
+  war(game, 0, 1);
+  const ring = neighbours(game.grid, m.tile);
+  for (const t of ring.slice(1)) game.tiles[t].terrain = 'ocean';
+  unit(game, 'warrior', 1, ring[0]);
+  unit(game, 'worker', 0, m.tile);
+  const u = faithUnit(game, p, m, 'missionary')!;
+  ok(!TERRAINS[game.tiles[u.tile].terrain].water, 'not out at sea');
+  ok(!game.units.some((x) => x.tile === u.tile && x.owner === 1), 'not on the enemy');
+});
+
+test('an aircraft strikes once a turn, not after rebasing, and only at what its civ sees', () => {
+  const { game, at } = blank();
+  city(game, 0, at(5, 5));
+  const second = city(game, 0, at(5, 10));
+  city(game, 1, at(25, 5));
+  war(game, 0, 1);
+  const bomber = unit(game, 'great_war_bomber', 0, at(5, 5));
+  const foe = unit(game, 'machine_gun', 1, at(8, 5));
+  unit(game, 'scout', 0, at(7, 5));
+  ok(apply(game, 0, { t: 'attack', unit: bomber.id, target: foe.tile }).ok, 'the first strike');
+  const hp = foe.hp;
+  ok(!apply(game, 0, { t: 'attack', unit: bomber.id, target: foe.tile }).ok, 'no second strike this turn');
+  eq(foe.hp, hp, 'and no more damage');
+  // Rebased, it has flown its turn.
+  const other = unit(game, 'great_war_bomber', 0, at(5, 5));
+  ok(apply(game, 0, { t: 'rebase', unit: other.id, to: second.tile }).ok, 'rebased');
+  ok(!apply(game, 0, { t: 'attack', unit: other.id, target: foe.tile }).ok, 'no strike after rebasing');
+  // Out of sight: nothing to strike.
+  const hidden = unit(game, 'machine_gun', 1, at(10, 10));
+  const third = unit(game, 'great_war_bomber', 0, second.tile);
+  updateAllVisibility(game);
+  ok(!(game.players[0].visible[hidden.tile] > 0), 'the tile is out of sight');
+  ok(!apply(game, 0, { t: 'attack', unit: third.id, target: hidden.tile }).ok, 'no strike on what it can’t see');
+  eq(hidden.hp, 100, 'unhurt');
+});
+
+test('a carrier sunk (by a city’s fire, or a strike) loses the aircraft aboard', () => {
+  const { game, at } = blank();
+  city(game, 0, at(5, 5));
+  const enemy = city(game, 1, at(15, 5));
+  war(game, 0, 1);
+  for (const c of [13, 14]) for (const r of [6, 7]) game.tiles[at(c, r)].terrain = 'coast';
+  const carrier = unit(game, 'carrier', 0, at(14, 7), { hp: 1 });
+  const fighter = unit(game, 'fighter', 0, at(14, 7), { carrier: carrier.id });
+  ok(apply(game, 1, { t: 'cityFire', city: enemy.id, target: carrier.tile }).ok, 'the city fires');
+  ok(!game.units.includes(carrier), 'the carrier is sunk');
+  ok(!game.units.includes(fighter), 'its fighter with it');
+});
+
+test('attacking breaks fortifying: a fortified unit that wins and moves in isn’t fortified there', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  war(game, 0, 1);
+  const sw = unit(game, 'swordsman', 0, at(10, 8), { stance: 'fortify', fortified: 2 });
+  const foe = unit(game, 'warrior', 1, at(11, 8), { hp: 5 });
+  const r = apply(game, 0, { t: 'attack', unit: sw.id, target: foe.tile });
+  ok(r.ok && !!r.combat?.[0].killed, 'it wins');
+  eq(sw.tile, at(11, 8), 'and moves in');
+  eq(sw.stance, undefined, 'no longer fortified');
+  const why: { label: string; percent: number }[] = [];
+  strength(game, sw, 'defend', null, sw.tile, why);
+  ok(!why.some((m) => m.label === 'Fortified'), 'no fortifying bonus where it stands');
+  // A ranged unit that fires leaves its fortifying too.
+  const archer = unit(game, 'archer', 0, at(10, 10), { stance: 'fortify', fortified: 2 });
+  const target = unit(game, 'warrior', 1, at(11, 10));
+  ok(apply(game, 0, { t: 'attack', unit: archer.id, target: target.tile }).ok, 'it fires');
+  eq(archer.fortified, 0, 'and isn’t fortified');
+});
+
+test('a unit at sea in a boat can’t fortify, nor have a fortifying bonus', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  game.players[0].techs.push('optics');
+  game.tiles[at(10, 8)].terrain = 'coast';
+  const sw = unit(game, 'swordsman', 0, at(10, 8), { embarked: true });
+  ok(!apply(game, 0, { t: 'stance', unit: sw.id, stance: 'fortify' }).ok, 'no fortifying at sea');
+  sw.stance = 'fortify';
+  sw.fortified = 2;
+  const why: { label: string; percent: number }[] = [];
+  strength(game, sw, 'defend', null, sw.tile, why);
+  ok(!why.some((m) => m.label === 'Fortified'), 'and no bonus for it');
+});
+
+test('a siege unit’s setting up for an attack that can’t be made costs nothing', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  war(game, 0, 1);
+  const cat = unit(game, 'catapult', 0, at(8, 8));
+  const foe = unit(game, 'warrior', 1, at(14, 8));
+  unit(game, 'scout', 0, at(13, 8));
+  ok(!apply(game, 0, { t: 'attack', unit: cat.id, target: foe.tile }).ok, 'out of range');
+  eq(cat.moves, 2, 'its moves kept');
+  ok(!cat.setUp, 'not set up');
+});
+
+test('the combat preview agrees with the attack: mounted units take cities, mounted archers fire', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(23, 14));
+  const c = city(game, 1, at(12, 8));
+  war(game, 0, 1);
+  c.hp = 1;
+  const h = unit(game, 'horseman', 0, at(11, 8));
+  ok((previewAttack(game, h, c.tile)?.takes ?? 0) > 0, 'a horseman may take the city');
+  ok(!!apply(game, 0, { t: 'attack', unit: h.id, target: c.tile }).combat?.[0].captured, 'and it does');
+  const ca = unit(game, 'chariot_archer', 0, at(18, 4));
+  const foe = unit(game, 'warrior', 1, at(19, 4));
+  const p = previewAttack(game, ca, foe.tile)!;
+  ok(p.ranged, 'next door, a chariot archer’s preview is a ranged attack');
+  eq(p.attacker.damage[1], 0, 'with no reply');
+  const r = apply(game, 0, { t: 'attack', unit: ca.id, target: foe.tile });
+  eq(r.combat?.[0].taken, 0, 'as the attack is');
+});
+
+/** Two civs who've met, each with a city, Writing to Philosophy and embassies both ways (people, so offers wait for an answer). */
+function dealers(civs = ['egypt', 'babylon']) {
+  const w = blank(civs, { size: civs.length > 2 ? 'small' : 'duel' });
+  const { game, at } = w;
+  game.players.forEach((p, i) => {
+    p.bot = false;
+    p.met = game.players.map((o) => o.index);
+    city(game, i, at(3 + 9 * (i % 2), 3 + 9 * Math.floor(i / 2)));
+    techsTo(game, i, 4);
+    for (const o of game.players) if (o !== p) p.diplomacy.embassy[o.index] = true;
+  });
+  return w;
+}
+
+test('a deal can’t hold the same thing twice, however it’s dressed up (no research agreement paid twice, no iron given that isn’t there)', () => {
+  const { game, at } = dealers();
+  const [a, b] = game.players;
+  a.gold = b.gold = 300;
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'research' }, { kind: 'research', x: 1 } as never] }), 'The same thing twice', 'two research agreements');
+  game.tiles[at(3, 3)].resource = 'iron';
+  game.tiles[at(3, 3)].amount = 2;
+  const twice = [{ kind: 'strategic', from: 0, resource: 'iron', amount: 2 }, { kind: 'strategic', from: 0, resource: 'iron', amount: 2, x: 1 }];
+  eq(dealProblem(game, { from: 0, to: 1, items: twice as never }), 'The same thing twice', 'two lots of the same iron');
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'strategic', from: 0, resource: 'iron', amount: 2 }] }), null, 'the iron it has, once');
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'research' }] }), null, 'one research agreement');
+});
+
+test('gold a turn is promised only up to the payer’s income, less what its deals pay already', () => {
+  const { game } = dealers();
+  const [a, b] = game.players;
+  a.lastIncome = { gold: 10, science: 0, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+  eq(spareIncome(game, a), 10, 'all of its income');
+  ok(!!dealProblem(game, { from: 0, to: 1, items: [{ kind: 'gold', from: 1, amount: 0 + 1 }, { kind: 'goldPerTurn', from: 0, amount: 60 }] }), '60 a turn on an income of 10: refused');
+  makeDeal(game, { from: 0, to: 1, items: [{ kind: 'goldPerTurn', from: 0, amount: 6 }] });
+  eq(spareIncome(game, a), 4, 'a deal made this turn counts against it');
+  ok(!!dealProblem(game, { from: 0, to: 1, items: [{ kind: 'goldPerTurn', from: 0, amount: 5 }] }), 'so 5 more is too much');
+  // Next turn its income has the payment in it already: not counted twice.
+  relationsOf(game).running[0].turns--;
+  a.lastIncome.gold = 4;
+  eq(spareIncome(game, a), 4, 'the payment counted once');
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'goldPerTurn', from: 0, amount: 4 }] }), null, 'what is left can be promised');
+  eq(dealGold(game, b), 6, 'the payee is owed its 6');
+});
+
+test('a defensive pact’s partner called into a war ends its own deals with the aggressor', () => {
+  const { game } = dealers(['egypt', 'babylon', 'china']);
+  const [a, b, c] = game.players;
+  const turns = dealTurns(game);
+  b.diplomacy.friends[2] = c.diplomacy.friends[1] = turns;
+  b.diplomacy.pacts[2] = c.diplomacy.pacts[1] = turns;
+  a.gold = c.gold = 1000;
+  a.lastIncome = { gold: 50, science: 0, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+  makeDeal(game, { from: 0, to: 2, items: [{ kind: 'research' }, { kind: 'goldPerTurn', from: 0, amount: 10 }] });
+  ok(apply(game, 0, { t: 'war', target: 1, why: null }).ok, 'Egypt declares on Babylon');
+  ok(c.diplomacy.war[0], 'China honours its pact');
+  eq(relationsOf(game).running.filter((r) => [r.a, r.b].includes(0) && [r.a, r.b].includes(2)).length, 0, 'their deals are over');
+  eq(a.diplomacy.research[2], 0, 'their research agreement too');
+});
+
+test('war on an allied city-state ends the alliance: its influence falls, its luxuries and vote are lost', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const cs = game.players.find((p) => p.cityState)!;
+  const a = game.players[0];
+  city(game, 0, at(3, 3));
+  city(game, 1, at(12, 3));
+  city(game, cs.index, at(7, 8));
+  a.influence[cs.index] = 100;
+  eq(allyOf(game, cs.index), 0, 'allies');
+  ok(apply(game, 0, { t: 'war', target: cs.index, why: null }).ok, 'war declared');
+  eq(allyOf(game, cs.index), -1, 'no ally');
+  ok(a.influence[cs.index] <= -60, `influence ${a.influence[cs.index]}`);
+  // (Even with influence regained somehow, no civ at war with it is its ally.)
+  a.influence[cs.index] = 100;
+  eq(allyOf(game, cs.index), -1, 'still none while at war');
+});
+
+test('a civ gone from the game takes its deals with it: no one goes on paying it', () => {
+  const { game } = dealers(['egypt', 'babylon', 'china']);
+  const [a, b] = game.players;
+  b.gold = 1000;
+  b.lastIncome = { gold: 50, science: 0, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+  makeDeal(game, { from: 1, to: 0, items: [{ kind: 'goldPerTurn', from: 1, amount: 20 }] });
+  game.cities = game.cities.filter((c) => c.owner !== 0);
+  endTurn(game);
+  ok(!a.alive, 'Egypt is out');
+  eq(relationsOf(game).running.length, 0, 'its deal is over');
+  eq(dealGold(game, b), 0, 'Babylon pays nothing');
+});
+
+test('a deal order with nonsense items is refused, at war as at peace (it once threw)', () => {
+  const { game } = dealers();
+  for (const items of [[null], [7], ['peace']]) {
+    ok(!apply(game, 0, { t: 'deal', target: 1, items: items as never }).ok, `at peace: ${JSON.stringify(items)}`);
+  }
+  war(game, 0, 1);
+  for (const items of [[null], [7], ['peace'], [{ kind: 'peace' }, null]]) {
+    ok(!apply(game, 0, { t: 'deal', target: 1, items: items as never }).ok, `at war: ${JSON.stringify(items)}`);
+  }
+});
+
+test('a spy sent to a city-state this turn can’t stage a coup there until the next', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 2, size: 'small' });
+  const [a, b] = game.players;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(14, 3));
+  const homes = game.players.filter((p) => p.cityState).map((cs, i) => city(game, cs.index, at(4 + 6 * i, 10)));
+  for (const c of homes) {
+    b.influence[c.owner] = 61;
+    a.influence[c.owner] = 59;
+  }
+  a.explored.fill(1);
+  const spy = { id: 999, city: null, progress: 0 };
+  spiesOf(a).push(spy);
+  ok(apply(game, 0, { t: 'spy', spy: 999, target: homes[0].id }).ok, 'sent');
+  ok(!apply(game, 0, { t: 'coup', spy: 999 }).ok, 'no coup on arrival');
+  game.turn++;
+  eq(cannotCoup(game, a, 999), null, 'a turn later, it may');
+  // Moved on: it waits again.
+  ok(apply(game, 0, { t: 'spy', spy: 999, target: homes[1].id }).ok, 'sent on');
+  ok(!!cannotCoup(game, a, 999), 'and waits again');
+});
+
+/** A city stormed by `by`'s swordsman (brought to 1 hit point, whoever stood in it gone first). */
+function storm(game: Game, by: number, c: { tile: number; hp: number; owner: number }) {
+  game.units = game.units.filter((u) => u.tile !== c.tile);
+  c.hp = 1;
+  const s = unit(game, 'swordsman', by, neighbours(game.grid, c.tile).find((t) => !game.units.some((u) => u.tile === t))!);
+  ok(apply(game, by, { t: 'attack', unit: s.id, target: c.tile }).ok && c.owner === by, `taken by ${game.players[by].name}`);
+}
+
+test('a city taken from one who took it from its founder can be liberated: back to its founder, who never forgets it', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china'], { size: 'small' });
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(16, 18));
+  const town = city(game, 2, at(16, 10), { pop: 6 });
+  war(game, 1, 2);
+  storm(game, 1, town);
+  eq(liberation(game, town), null, 'taken from its founder: nothing to liberate');
+  war(game, 0, 1);
+  storm(game, 0, town);
+  eq(liberation(game, town)?.to, 2, 'taken from Babylon: Egypt may give it back to China');
+  ok(/liberate/.test(game.players[0].notes.map((n) => n.text).join(' ')) || game.players[0].bot, 'offered with the choices');
+  ok(!apply(game, 1, { t: 'cityChoice', city: town.id, choice: 'liberate' }).ok, 'only its owner decides');
+  const before = opinionOf(game, game.players[2], game.players[0]).total;
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'liberate' }).ok, 'liberated');
+  eq(town.owner, 2, 'China’s again');
+  ok(!town.puppet && !town.occupied && !town.resistance, 'its own, not occupied');
+  ok(game.tiles.every((t) => t.city !== town.id || t.owner === 2), 'its land with it');
+  ok(!game.units.some((u) => u.tile === town.tile && u.owner === 0), 'Egypt’s soldier has stepped out');
+  const reasons = opinionOf(game, game.players[2], game.players[0]).reasons;
+  ok(reasons.some((r) => r.text === 'You liberated our people' && r.value >= 20), 'China remembers it');
+  ok(opinionOf(game, game.players[2], game.players[0]).total >= before + 20, 'and thinks far better of Egypt');
+  game.turn += 300;
+  diplomacyTurn(game);
+  ok(opinionOf(game, game.players[2], game.players[0]).reasons.some((r) => r.text === 'You liberated our people' && r.value > 0), 'for good');
+  // Annexed, it's no longer offered.
+  const other = city(game, 2, at(10, 14));
+  storm(game, 1, other);
+  storm(game, 0, other);
+  ok(apply(game, 0, { t: 'cityChoice', city: other.id, choice: 'annex' }).ok, 'annexed');
+  eq(liberation(game, other), null, 'annexed: not to be liberated');
+  ok(!apply(game, 0, { t: 'cityChoice', city: other.id, choice: 'liberate' }).ok, 'and refused');
+});
+
+test('liberating a destroyed civ’s capital brings it back to life, at peace, and it counts again for domination', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china'], { size: 'small' });
+  game.settings.victories.domination = true;
+  city(game, 0, at(3, 3));
+  const babylon = city(game, 1, at(28, 3));
+  city(game, 1, at(28, 14));
+  const beijing = city(game, 2, at(16, 12), { pop: 6 });
+  war(game, 1, 2);
+  storm(game, 1, beijing);
+  ok(!game.players[2].alive, 'China is destroyed');
+  war(game, 0, 1);
+  storm(game, 0, beijing);
+  ok(liberation(game, beijing)?.revive === true, 'it can be brought back');
+  remember(game, 'denounce', 1, 2);
+  ok(apply(game, 0, { t: 'cityChoice', city: beijing.id, choice: 'liberate' }).ok, 'liberated');
+  const china = game.players[2];
+  ok(china.alive && beijing.owner === 2 && !!beijing.capital && beijing.buildings.includes('palace'), 'China lives again, Beijing its capital');
+  ok(game.units.some((u) => u.owner === 2 && u.tile === beijing.tile), 'with a soldier to hold it');
+  ok(!atWar(game, 0, 2) && china.diplomacy.peaceTurns[0] > 0, 'at peace with Egypt, a treaty between them');
+  ok(!atWar(game, 1, 2), 'and at war with no one');
+  ok(!relationsOf(game).events.some((e) => (e.by === 2 || e.to === 2) && e.kind !== 'liberate'), 'its old quarrels forgotten');
+  ok(relationsOf(game).events.some((e) => e.kind === 'liberate' && e.by === 0 && e.to === 2), 'but not its liberation');
+  // Egypt takes Babylon's capital: without Beijing, it doesn't hold every original capital.
+  storm(game, 0, babylon);
+  checkVictory(game);
+  ok(!game.over, 'no domination while China holds its own capital');
+});
+
+test('a city-state given back its city lives again, and its liberator is its ally', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  const home = city(game, cs.index, at(16, 12), { pop: 4 });
+  war(game, 1, cs.index);
+  storm(game, 1, home);
+  ok(!cs.alive, 'the city-state is gone');
+  war(game, 0, 1);
+  storm(game, 0, home);
+  game.players[0].influence[cs.index] = -20;
+  ok(apply(game, 0, { t: 'cityChoice', city: home.id, choice: 'liberate' }).ok, 'liberated');
+  ok(cs.alive && home.owner === cs.index && !!home.capital, 'it lives again');
+  eq(game.players[0].influence[cs.index], LIBERATE_INFLUENCE, 'Egypt’s influence from nothing');
+  eq(allyOf(game, cs.index), 0, 'Egypt is its ally');
+  eq(game.players[1].influence[cs.index] ?? 0, 0, 'Babylon starts afresh with it');
+  ok(!atWar(game, 1, cs.index), 'at war with no one');
+});
+
+test('a bot liberates a friend’s city it took from their enemy, and keeps a stranger’s', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china', 'india'], { size: 'small' });
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(16, 18));
+  city(game, 3, at(3, 18));
+  const friendTown = city(game, 2, at(16, 10), { pop: 5 });
+  const strangerTown = city(game, 3, at(8, 12), { pop: 5 });
+  war(game, 1, 2);
+  war(game, 1, 3);
+  storm(game, 1, friendTown);
+  storm(game, 1, strangerTown);
+  war(game, 0, 1);
+  storm(game, 0, friendTown);
+  storm(game, 0, strangerTown);
+  const egypt = game.players[0];
+  egypt.diplomacy.friends[2] = game.players[2].diplomacy.friends[0] = 20;
+  conquests(makeCtx(game, egypt));
+  eq(friendTown.owner, 2, 'the friend’s city given back');
+  eq(strangerTown.owner, 0, 'the stranger’s kept');
+});
+
+test('a pledge to protect a city-state raises the influence it rests at; others offend the pledger, the pledger itself breaks it', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  const [a, b] = game.players;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, cs.index, at(16, 12));
+  ok(!!cannotPledge(game, a, cs.index), 'not before meeting it');
+  a.explored.fill(1);
+  b.explored.fill(1);
+  a.influence[cs.index] = -5;
+  ok(/trust/.test(cannotPledge(game, a, cs.index) ?? ''), 'nor while it distrusts you');
+  a.influence[cs.index] = 35;
+  const rest = restingInfluence(game, a, cs.index);
+  ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok && pledged(game, 0, cs.index), 'pledged');
+  eq(restingInfluence(game, a, cs.index), rest + PLEDGE_REST, 'its influence rests higher');
+  ok(!apply(game, 0, { t: 'pledge', target: cs.index }).ok, 'not twice');
+  eq(viewFor(game, a, null).players[cs.index].cityState!.pledge.by.join(), '0', 'shown on its card');
+  ok(apply(game, 1, { t: 'war', target: cs.index, why: null }).ok, 'Babylon attacks it');
+  ok(opinionOf(game, a, b).reasons.some((r) => /protection/.test(r.text) && r.value < 0), 'Egypt is offended');
+  ok(pledged(game, 0, cs.index), 'Egypt’s pledge holds');
+  a.influence[cs.index] = 35;
+  ok(apply(game, 0, { t: 'war', target: cs.index, why: null }).ok, 'Egypt attacks it itself');
+  ok(!pledged(game, 0, cs.index), 'its pledge is broken');
+  ok(a.influence[cs.index] <= 35 - PLEDGE_BROKEN, 'influence lost');
+  endWar(game, a, cs);
+  a.influence[cs.index] = 35;
+  ok(/lately/.test(cannotPledge(game, a, cs.index) ?? ''), 'and no pledging again for a while');
+});
+
+test('a pledge lapses when influence falls below nothing; bots pledge to the city-states they’re friends with', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  const [a, b] = game.players;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, cs.index, at(16, 12));
+  a.explored.fill(1);
+  b.explored.fill(1);
+  a.influence[cs.index] = 10;
+  ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok, 'pledged');
+  a.influence[cs.index] = -10;
+  endTurn(game);
+  ok(!pledged(game, 0, cs.index), 'lapsed');
+  b.influence[cs.index] = 40;
+  botPledges(makeCtx(game, b));
+  ok(pledged(game, 1, cs.index), 'Babylon, its friend, pledges');
+});
+
+test('a World Congress project: proposed once its tech is known, opened when passed, built from every civ’s cities (never bought), rewarded by what each put in', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india']);
+  const [egypt, babylon, india] = game.players;
+  const homes = [egypt, babylon, india].map((p, i) => city(game, p.index, at(3 + i * 8, 4), { pop: 6 }));
+  for (const p of game.players) p.bot = false;
+  egypt.met = [1, 2];
+  game.congress = { host: 0, next: game.turn, proposals: [], active: [] };
+  ok(!!cannotPropose(game, egypt, { kind: 'worlds_fair' }), 'not before anyone knows Industrialization');
+  techsTo(game, 1, TECHS.industrialization.col);
+  ok(!!cannotPropose(game, egypt, { kind: 'worlds_fair', repeal: true }), 'never repealed');
+  eq(proposeResolution(game, egypt, { kind: 'worlds_fair' }), null, 'once Babylon knows it, Egypt proposes it');
+  endTurn(game);
+  const x = game.congress.projects?.[0] as WorldProject;
+  ok(!!x && !x.done, 'passed, it opens');
+  eq(game.congress.active.length, 0, 'not a resolution in force');
+  eq(x.cost, Math.floor(300 * 3 * 0.67), 'its cost so much for each civ (at speed)');
+  const item = { kind: 'project' as const, id: 'worlds_fair' };
+  egypt.gold = 5000;
+  ok(!apply(game, 0, { t: 'buy', city: homes[0].id, item, with: 'gold' }).ok, 'it can’t be bought');
+  ok(cityInfo(game, egypt, homes[0]).options.some((o) => o.id === 'worlds_fair' && o.buy === null), 'it’s in the build list');
+  homes.forEach((c, i) => ok(apply(game, i, { t: 'produce', city: c.id, item }).ok, 'each city builds it'));
+  const prod = productionToward(game, homes[0], item);
+  endTurn(game);
+  eq(x.put[0], prod, 'Egypt’s production went into its share');
+  eq(homes[0].prod, 0, 'none kept in the city');
+  const seen = viewFor(game, egypt, null).congress!.projects[0];
+  eq(seen.shares.find((s) => s.player === 0)?.put, Math.floor(x.put[0]), 'the Congress shows each civ’s share');
+  // Egypt the most, Babylon next, India a twentieth: gold, silver, bronze.
+  x.put = { 0: 400, 1: 160, 2: Math.ceil(x.cost / 20) };
+  const culture = [egypt, babylon, india].map((p) => ({ had: p.culture, policy: policyCost(game, p) }));
+  endTurn(game);
+  ok(!!x.done, 'done once the total reaches its cost');
+  eq(`${x.tiers?.[0]} ${x.tiers?.[1]} ${x.tiers?.[2]}`, 'gold silver bronze', 'tiers by what each put in');
+  ok(egypt.culture - culture[0].had >= culture[0].policy, 'gold: a free social policy');
+  ok(babylon.culture - culture[1].had >= culture[1].policy / 2, 'silver: half of one');
+  ok(india.culture - culture[2].had >= culture[2].policy / 4, 'bronze: a quarter');
+  ok(egypt.notes.some((n) => n.text.startsWith('Gold at the World')), 'and each is told');
+  ok(homes.every((c) => !c.queue.some((q) => q.id === 'worlds_fair')), 'its cities move on');
+  ok(!apply(game, 0, { t: 'produce', city: homes[0].id, item }).ok, 'nor can it be built again');
+  ok(!!cannotPropose(game, egypt, { kind: 'worlds_fair' }), 'nor proposed again');
+});
+
+test('a World Congress project’s lasting rewards: the Games’ happiness and tourism, the Space Station’s faster spaceship parts (not toward the projects themselves)', () => {
+  const { game, at } = blank();
+  const [egypt] = game.players;
+  const c = city(game, 0, at(4, 4), { pop: 6 });
+  city(game, 1, at(16, 6));
+  game.congress = { host: 0, next: game.turn + 30, proposals: [], active: [] };
+  const mood = happiness(game, egypt, []);
+  const part = productionToward(game, c, { kind: 'project', id: 'ss_booster' }, undefined, 100);
+  game.congress.projects = [
+    { id: 'international_games', since: 1, cost: 100, put: { 0: 100 }, done: 2, tiers: { 0: 'gold' } },
+    { id: 'space_station', since: 1, cost: 100, put: { 0: 100 }, done: 2, tiers: { 0: 'gold' } },
+  ];
+  eq(happiness(game, egypt, []), mood + 4, 'the Games’ gold: +4 happiness in the capital');
+  eq(cityEffects(game, c).reduce((s, e) => s + (e.tourismPercent ?? 0), 0), 25, 'and a quarter more tourism');
+  eq(productionToward(game, c, { kind: 'project', id: 'ss_booster' }, undefined, 100), part + 25, 'the Station’s gold: spaceship parts 25% faster');
+  startProject(game, 'worlds_fair');
+  eq(productionToward(game, c, { kind: 'project', id: 'worlds_fair' }, undefined, 100), 100, 'but not a project of the Congress’s');
+});
+
+test('a bot proposes a World Congress project it would win, votes for it, and puts a city it can spare into it', () => {
+  const { game, at } = blank();
+  const [egypt, bot] = game.players;
+  city(game, 0, at(4, 6));
+  const home = city(game, 1, at(16, 6), { pop: 10 });
+  const other = city(game, 1, at(16, 12), { pop: 8 });
+  techsTo(game, 1, TECHS.industrialization.col);
+  game.congress = { host: 1, next: game.turn + 30, proposals: [], active: [] };
+  bot.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+  eq(expectedTier(game, bot, 'worlds_fair'), 'gold', 'the stronger cities: it expects gold');
+  eq(expectedTier(game, egypt, 'worlds_fair'), 'silver', 'and Egypt silver');
+  eq(congressProposal(game, bot)?.kind, 'worlds_fair', 'it proposes the World’s Fair');
+  eq(congressVote(game, bot, { id: 1, by: 0, kind: 'worlds_fair', votes: {} }), 'yes', 'and votes for it, whoever proposed it');
+  startProject(game, 'worlds_fair');
+  ok(worldProject(makeCtx(game, bot), home, 0.5) === null, 'not a city in danger');
+  eq(worldProject(makeCtx(game, bot), home, 0)?.id, 'worlds_fair', 'a city it can spare builds it');
+  home.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  eq(worldProject(makeCtx(game, bot), other, 0), null, 'its share of cities (one, of two) on it already');
+});
