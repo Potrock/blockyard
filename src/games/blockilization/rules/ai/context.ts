@@ -15,6 +15,7 @@ import { memoryOf, type BotMemory } from './memory';
 import { aimLeaning, personalityOf, type Personality } from './personality';
 import { nearVictory } from './opinion';
 import type { Wants } from './production';
+import type { ProjectPlan } from './projects';
 
 /**
  * What a bot knows at the start of its turn, worked out once and kept while it plays: its cities and
@@ -50,6 +51,7 @@ export interface Ctx {
     frontier?: number[];
     edge?: Uint8Array;
     zones?: Danger | null;
+    projects?: Map<string, ProjectPlan>;
   };
 }
 
