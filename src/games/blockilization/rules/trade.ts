@@ -175,7 +175,7 @@ function tradeTurn(game: Game) {
 // -------------------------------------------------------------------------------------------------
 
 /**
- * A city's tourism a turn: its great works (3 each; France's art in its capital, 6), 3 more
+ * A city's tourism a turn: its great works (2 each, Civ V's; France's art in its capital, 4), 3 more
  * for each building whose great-work slots (two or more) are all full (Civ V's theming), its
  * buildings' own, and its wonders once the past is studied (Archaeology: 1 each, 2 with Flight),
  * made more by hotels and the like, and by half again with The Internet.
@@ -186,7 +186,7 @@ export function cityTourism(game: Game, c: City, effects = cityEffects(game, c))
   let t = 0;
   for (const [b, works] of Object.entries(c.works ?? {})) {
     const slots = BUILDINGS[b]?.effects.greatWorks;
-    t += works.length * (doubleArt && slots?.kind === 'art' ? 6 : 3);
+    t += works.length * (doubleArt && slots?.kind === 'art' ? 4 : 2);
     if (slots && slots.slots >= 2 && works.length >= slots.slots) t += 3;
   }
   for (const e of effects) t += e.tourism ?? 0;
@@ -389,12 +389,13 @@ export const stolen: { learn: (game: Game, p: Player, tech: string) => void } = 
 /**
  * The United Nations' vote for World Leader, Civ V's way: each civ's two delegates for the candidate
  * it names (itself unless it says otherwise), two more for the United Nations' builder, each
- * city-state's one for its ally (one with no ally abstains). A World Leader needs half of the
- * delegates the world began with (each civ's two and each city-state's one, though some are gone
- * since, and the UN's two), and more than any other candidate: on a small map the UN's builder with
- * three city-states of four, on a larger one with every city-state or friends' votes besides.
- * (Counting only those still voting, the UN and fewer city-states won most small games once a civ or
- * a city-state had fallen; needing more than half, once the bots worked against a leader, too few.)
+ * city-state's one for its ally (one with no ally abstains). A World Leader needs more than half of
+ * the delegates the world began with (each civ's two and each city-state's one, though some are gone
+ * since, and the UN's two): on a small map the UN's builder with every city-state, or with friends'
+ * votes besides. (Counting only those still voting, the UN and fewer city-states won most small
+ * games once a civ or a city-state had fallen. With half of them, the UN's builder and three
+ * city-states of four, the game was mostly won at the first vote after the UN was built: the
+ * likeliest victory, and the earliest.)
  * A team's delegates stand together (as it wins together): what its civs are given goes to the one
  * of them given most; and in a game of teams a World Leader needs more than two thirds of them (a
  * team's pooled votes alone shouldn't carry it).
@@ -424,7 +425,7 @@ export function unVote(game: Game, allyOf: (game: Game, cs: number) => number): 
   }
   const total = majors(game).length * 2 + (un !== undefined && un >= 0 ? 2 : 0) + game.players.filter((x) => x.cityState).length;
   const teams = living.some((p) => p.team !== undefined);
-  return { votes, needed: teams ? Math.floor((total * 2) / 3) + 1 : Math.ceil(total / 2) };
+  return { votes, needed: teams ? Math.floor((total * 2) / 3) + 1 : Math.floor(total / 2) + 1 };
 }
 
 /** The era (its index: the Industrial) from which a cultural victory can be won. */
@@ -465,7 +466,7 @@ export function longGameTurn(game: Game, eraOf: (p: Player) => number, allyOf: (
     const { votes, needed } = unVote(game, allyOf);
     const [[winner, n], runnerUp] = [...votes.entries()].sort((a, b) => b[1] - a[1]).concat([[-1, 0], [-1, 0]]);
     noteAll(game, { text: `The United Nations votes for World Leader: ${[...votes.entries()].map(([k, x]) => `${game.players[k].name}: ${x} vote${x === 1 ? '' : 's'}`).join(', ')} (${needed} needed).`, kind: 'info' });
-    // (Half the world's delegates, and more than anyone else: two at half each is no one's.)
+    // (More than half the world's delegates: more than anyone else's too.)
     if (winner >= 0 && n >= needed && n > runnerUp[1]) {
       game.over = { winner, how: 'diplomatic' };
       noteAll(game, { text: `${game.players[winner].name} is elected World Leader: a diplomatic victory${game.players[winner].team === undefined ? '' : ` for ${sideName(game.players[winner])}`}!`, kind: 'good' });

@@ -198,7 +198,7 @@ export const CONCEPTS: Article[] = [
     sub: 'Influence over the world',
     sections: [
       { text: 'Culture builds toward social policies and grows your borders. Tourism, from wonders, great works and some buildings, carries your culture abroad: over the game it builds your influence over each other civilization. Influential over every one of them (from the Industrial Era), you win a [[victory:culture|cultural victory]].' },
-      { text: 'Great works are made by [[unit:great_artist|Great Artists]], [[unit:great_writer|Writers]] and [[unit:great_musician|Musicians]], and each needs an empty slot in a building of its kind (amphitheaters, opera houses, museums, some wonders).' },
+      { text: 'Great works are made by [[unit:great_artist|Great Artists]], [[unit:great_writer|Writers]] and [[unit:great_musician|Musicians]]: each brings 2 tourism (3 more for a building of two slots or more with them all full), and needs an empty slot in a building of its kind (amphitheaters, opera houses, museums, some wonders).' },
     ],
   },
   {
@@ -265,7 +265,7 @@ export const VICTORIES: Article[] = [
     color: '#3f8f6f',
     sub: 'Be elected World Leader',
     sections: [
-      { text: 'Once someone builds the [[wonder:united_nations|United Nations]], the world votes for a World Leader every ten turns. Each civilization has two delegates (the United Nations’ builder two more), and every city-state’s delegate votes with its ally. Win half of all the delegates the world began with, and more than anyone else (those of civilizations and city-states since fallen count too; more than two thirds in a game of teams), and you win. City-states are won with gifts of gold, or by a spy rigging their elections (from the Renaissance).' },
+      { text: 'Once someone builds the [[wonder:united_nations|United Nations]], the world votes for a World Leader every ten turns. Each civilization has two delegates (the United Nations’ builder two more), and every city-state’s delegate votes with its ally. Win more than half of all the delegates the world began with (those of civilizations and city-states since fallen count too; more than two thirds in a game of teams), and you win. City-states are won with gifts of gold, or by a spy rigging their elections (from the Renaissance).' },
     ],
   },
   {

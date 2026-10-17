@@ -8,7 +8,7 @@ import { isProject as isWorldProject, PROJECT_IDS, PROJECTS, type ProjectId } fr
 import { PROJECT_LOOK } from './congress';
 import { BELIEF_LIST, BELIEFS } from '../rules/religion';
 import { SPEEDS } from '../rules/state';
-import { baseTechCost, ERA_NAMES, ERAS, eraOfCol, TECH_LIST, TECHS, type Era } from '../rules/techs';
+import { baseTechCost, ERA_NAMES, ERAS, eraOfCol, TECH_LIST, TECHS, type Era, type Tech } from '../rules/techs';
 import { FALLOUT, FEATURES, HILLS, IMPROVEMENTS, MOUNTAIN, RESOURCES, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId, type TerrainId, type Yields } from '../rules/terrain';
 import { UNIT_LIST, UNITS, type UnitType } from '../rules/units';
 import { centre } from '../geometry';
@@ -368,6 +368,12 @@ function cost(n: number): number {
   return speed ? Math.max(1, Math.floor(n * SPEEDS[speed])) : n;
 }
 
+/** A tech's cost at this game's speed (or the standard one), for a civ of one city (rounded, as the rules' `techCost`). */
+function techCostShown(t: Tech): number {
+  const speed = store.lobby?.settings.speed;
+  return Math.round(baseTechCost(t) * (speed ? SPEEDS[speed] : 1));
+}
+
 /** A worker's turns at the game's speed (rounded, as the rules' `workTurns`). */
 function workTime(n: number): number {
   const speed = store.lobby?.settings.speed;
@@ -497,7 +503,7 @@ function techPage(id: string): Page {
   const t = TECHS[id];
   const s = store.view?.self;
   const known = s?.techs.includes(id);
-  const facts: Fact[] = [['science', YIELD_COLOR.science, 'Cost', `${s?.techCosts[id] ?? cost(baseTechCost(t))} science`]];
+  const facts: Fact[] = [['science', YIELD_COLOR.science, 'Cost', `${s?.techCosts[id] ?? techCostShown(t)} science`]];
   facts.push(['turn', ERA_COLOR[techEra(id)], 'Era', ERA_NAMES[eraOfCol(t.col)]]);
   if (s) facts.push(known ? ['check', '#6fd27a', 'Status', 'Known'] : s.researching === id ? ['science', '#f2c14e', 'Status', 'Researching now'] : ['lock', '#8fa1b3', 'Status', 'Not yet known']);
   const body: El[] = [];
