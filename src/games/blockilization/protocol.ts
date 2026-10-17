@@ -5,7 +5,7 @@ import type { CombatPreview } from './rules/preview';
 import type { Difficulty } from './rules/difficulty';
 import type { DealItem } from './rules/diplomacy';
 import type { Replay } from './rules/replay';
-import type { City, Game, MapPin, MapSize, MapType, Note, Production, Settings, Speed } from './rules/state';
+import type { City, Game, MapPin, MapSize, MapType, Note, Production, Settings, Speed, WorldEvent } from './rules/state';
 import { YIELD_KEYS, type Yields } from './rules/terrain';
 
 /**
@@ -58,7 +58,7 @@ export interface LobbyView {
 
 export type LobbyAction =
   | { a: 'civ'; civ: string }
-  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; barbarians?: boolean; wrap?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty }
+  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; barbarians?: boolean; wrap?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty; disasters?: boolean }
   | { a: 'bots'; count: number }
   | { a: 'victories'; victories: Partial<Settings['victories']> }
   | { a: 'seed'; seed: number | null }
@@ -73,12 +73,17 @@ export type LobbyAction =
 /** Teams set up at once: the people against the bots, each person paired with a bot (then the rest in twos), or every civ for itself. */
 export type TeamPreset = 'people' | 'pairs' | 'none';
 
-// ----- The map (sent once a game's made; the terrain doesn't change)
+// ----- The map (sent once a game's made; what the world does to its land after, as `ReshapeWire`)
 
 export interface MapWire {
   grid: Grid;
-  /** Per tile: terrain, elevation, feature, river and height, as `T E F R H` packed in short strings. */
+  /** Per tile: terrain, elevation, feature, river and height, as `T E F R H` packed in short strings, and (where it has any) its marks: a volcano, rich soil, flooded by the sea (`packStatic`). */
   tiles: string[];
+}
+
+/** Tiles the world has changed since the map was sent (the sea risen over them, an eruption's or a flood's rich soil), packed as the map's are, by tile. */
+export interface ReshapeWire {
+  tiles: Record<number, string>;
 }
 
 // ----- A player's view
@@ -372,6 +377,10 @@ export interface View {
   history?: { index: number; score: number[]; science: number[]; land: number[]; military: number[] }[];
   /** The game over: its story, for the replay (`rules/replay.ts`). */
   replay?: Replay;
+  /** Storms at sea the viewer knows the water of (their tiles), what the world did at the last turn's end where they know the land (eruptions, floods, the sea), and how many times the sea has risen (`rules/disasters.ts`, `rules/climate.ts`). */
+  storms?: number[];
+  events?: WorldEvent[];
+  climate?: { rises: number };
   /** Trade routes running between cities the viewer knows (the tiles of their ends), each plied by its caravan or cargo ship. */
   traffic: { from: number; to: number; sea: boolean; owner: number }[];
   /** Who built the United Nations (null: nobody yet), and the next World Leader vote's turn. */
@@ -561,16 +570,27 @@ const TERRAIN_CODES = ['grassland', 'plains', 'desert', 'tundra', 'snow', 'coast
 const ELEVATION_CODES = ['flat', 'hills', 'mountain'] as const;
 const FEATURE_CODES = ['', 'forest', 'jungle', 'marsh', 'oasis', 'floodplains', 'ice', 'atoll'] as const;
 
-export const packStatic = (t: { terrain: string; elevation: string; feature?: string; river?: boolean; height: number }) =>
-  `${TERRAIN_CODES.indexOf(t.terrain as never)}${ELEVATION_CODES.indexOf(t.elevation as never)}${FEATURE_CODES.indexOf((t.feature ?? '') as never)}${t.river ? 1 : 0}${String.fromCharCode(48 + Math.min(40, t.height))}`;
+/** A tile's marks, a bit each (a sixth character, left off when it has none): a volcano, rich soil, flooded by the sea. */
+const VOLCANO = 1;
+const SOIL = 2;
+const FLOODED = 4;
+
+export const packStatic = (t: { terrain: string; elevation: string; feature?: string; river?: boolean; height: number; volcano?: boolean; soil?: object; flooded?: boolean }) => {
+  const marks = (t.volcano ? VOLCANO : 0) | (t.soil ? SOIL : 0) | (t.flooded ? FLOODED : 0);
+  return `${TERRAIN_CODES.indexOf(t.terrain as never)}${ELEVATION_CODES.indexOf(t.elevation as never)}${FEATURE_CODES.indexOf((t.feature ?? '') as never)}${t.river ? 1 : 0}${String.fromCharCode(48 + Math.min(40, t.height))}${marks ? String.fromCharCode(48 + marks) : ''}`;
+};
 
 export function unpackStatic(s: string) {
+  const marks = s.length > 5 ? s.charCodeAt(5) - 48 : 0;
   return {
     terrain: TERRAIN_CODES[+s[0]],
     elevation: ELEVATION_CODES[+s[1]],
     feature: (FEATURE_CODES[+s[2]] || undefined) as (typeof FEATURE_CODES)[number] | undefined,
     river: s[3] === '1',
     height: s.charCodeAt(4) - 48,
+    volcano: !!(marks & VOLCANO),
+    soil: !!(marks & SOIL),
+    flooded: !!(marks & FLOODED),
   };
 }
 

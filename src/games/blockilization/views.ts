@@ -410,6 +410,13 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
     religions: Object.entries(game.religions).map(([id, r]) => ({ id, name: r.name, founder: r.founder, holyCity: cityById(game, r.holyCity)?.name ?? '?', beliefs: r.beliefs, cities: game.cities.filter((c) => cityReligion(c) === id).length })),
     history: game.over ? game.players.filter((o) => o.stats).map((o) => ({ index: o.index, ...o.stats! })) : undefined,
     replay: game.over ? game.replay : undefined,
+    // (The weather and the world's disasters where the viewer knows the land or the sea: `rules/disasters.ts`.)
+    storms: (game.storms ?? []).filter((s) => known(s.tile)).map((s) => s.tile),
+    events: (game.events ?? []).flatMap((e) => {
+      const tiles = (e.tiles ?? [e.tile]).filter((t) => t >= 0 && known(t));
+      return tiles.length ? [{ ...e, tile: known(e.tile) ? e.tile : tiles[0], ...(e.tiles ? { tiles } : {}) }] : [];
+    }),
+    climate: game.climate ? { rises: game.climate.rises } : undefined,
     traffic: game.players.flatMap((o) =>
       routesOf(o).flatMap((r) => {
         const from = cityById(game, r.from);

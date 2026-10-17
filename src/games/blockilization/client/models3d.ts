@@ -870,6 +870,9 @@ function clearAll(client: Client) {
   groundCache.clear();
 }
 
+/** The land changed under some tiles (`reshapeMap`): the ground heights measured are measured again. */
+export const forgetGround = () => groundCache.clear();
+
 /** A new map: the old one's ground heights go. */
 export function resetModels(client: Client) {
   clearAll(client);

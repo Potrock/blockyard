@@ -22,6 +22,8 @@ import { ERAS } from '../rules/techs';
  * `teams`: the civs in two teams (the first half and the second: 2v2 on a small map). `standard`: at
  * standard speed (turn limit 500) rather than quick (330). A map type (`pangaea`, `archipelago`,
  * `fractal`) instead of continents. `flat`: a world with edges east and west (new games wrap round).
+ * `calm`: no disasters (volcanoes, floods, storms, the rising sea: `rules/disasters.ts`), as games
+ * were before them; else each game's line says how many it had.
  */
 
 const size = (process.argv[2] ?? 'small') as MapSize;
@@ -30,9 +32,10 @@ const difficulty = process.argv.slice(4).find((x) => x in DIFFICULTIES) as Diffi
 const teams = process.argv.slice(4).includes('teams');
 const standard = process.argv.slice(4).includes('standard');
 const flat = process.argv.slice(4).includes('flat');
+const calm = process.argv.slice(4).includes('calm');
 const MAP_TYPES: MapType[] = ['continents', 'pangaea', 'archipelago', 'fractal'];
 const mapType = (process.argv.slice(4).find((x) => MAP_TYPES.includes(x as MapType)) as MapType | undefined) ?? 'continents';
-if (process.argv.slice(4).some((x) => !(x in DIFFICULTIES) && x !== 'teams' && x !== 'standard' && x !== 'flat' && !MAP_TYPES.includes(x as MapType))) throw new Error(`Unknown option in ${process.argv.slice(4).join(' ')}`);
+if (process.argv.slice(4).some((x) => !(x in DIFFICULTIES) && x !== 'teams' && x !== 'standard' && x !== 'flat' && x !== 'calm' && !MAP_TYPES.includes(x as MapType))) throw new Error(`Unknown option in ${process.argv.slice(4).join(' ')}`);
 
 /** The processor time this process has used, in milliseconds (unlike the clock, not slowed by other work). */
 function cpuNow(): number {
@@ -92,6 +95,12 @@ interface Result {
   /** The turn each era was first reached by the leader, and by the median civ (by era index). */
   eraLeader: number[];
   eraMedian: number[];
+  /** The world's disasters: eruptions, floods, storms risen, times the sea rose, and the carbon burnt by the end. */
+  eruptions: number;
+  floods: number;
+  storms: number;
+  rises: number;
+  co2: number;
   errors: string[];
 }
 
@@ -106,6 +115,7 @@ function play(seed: number): Result {
     victories: { domination: true, science: true, culture: true, diplomatic: true, score: true },
     turnLimit: TURN_LIMITS[standard ? 'standard' : 'quick'],
     wrap: !flat,
+    ...(calm ? { disasters: false } : {}),
   };
   if (difficulty) settings.difficulty = difficulty;
   // A different set of civs each seed, so every leader gets played.
@@ -115,7 +125,7 @@ function play(seed: number): Result {
   const seats = civs.slice(0, n).map((c, i) => ({ user: null, name: c.leader, civ: c.id, bot: true, team: teams ? (i < n / 2 ? 0 : 1) : undefined }));
   const g: Game = createGame(settings, seats, seed);
   const majors = g.players.filter((p) => !p.cityState && p.civ !== 'barbarian');
-  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, eraLeader: [], eraMedian: [], errors: [] };
+  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, eraLeader: [], eraMedian: [], eruptions: 0, floods: 0, storms: 0, rises: 0, co2: 0, errors: [] };
   const pledgesSeen = new Set<string>();
   let living = g.players.map((p) => p.alive);
   const owners = new Map<number, number>();
@@ -159,6 +169,11 @@ function play(seed: number): Result {
     endTurn(g);
     r.endMs.push(cpuNow() - t0);
     countWars();
+    for (const e of g.events ?? []) {
+      if (e.kind === 'eruption') r.eruptions++;
+      if (e.kind === 'flood') r.floods++;
+      if (e.kind === 'storm' && e.rose) r.storms++;
+    }
     r.eliminated += alive - majors.filter((p) => p.alive).length;
     for (const c of g.cities) {
       const was = owners.get(c.id);
@@ -216,8 +231,10 @@ function play(seed: number): Result {
   r.how = g.over?.how ?? 'none';
   r.winner = g.over ? `${g.players[g.over.winner].civ}${teams ? ` (team ${(g.players[g.over.winner].team ?? 0) + 1})` : ''}` : '';
   r.turn = g.turn;
+  r.rises = g.climate?.rises ?? 0;
+  r.co2 = g.climate?.co2 ?? 0;
   const scores = majors.map((p) => `${p.civ}${p.alive ? '' : '†'}:${g.cities.filter((c) => c.owner === p.index).length}c/${p.techs.length}t/${score(g, p)}`).join(' ');
-  console.log(`seed ${seed}: ${r.how} by ${r.winner} T${r.turn} | c60 [${r.cities60.join(',')}] c120 [${r.cities120.join(',')}] wonders [${r.wonders.join(',')}] wars ${r.wars} taken ${r.captured} dead ${r.eliminated} broke ${r.broke} neg ${r.negative} religions [${r.religions.join(',')}] mood ${avg(r.mood).toFixed(1)} unhappy ${pct(r.unhappy, r.mood.length)} size5 ${avg(r.toFive).toFixed(0)}t steals ${r.stolen} caught ${r.caught} quests ${r.quests} passed ${r.passed} freed ${r.liberated}/${r.revived} pledges ${r.pledges}/${r.pledgesEnded} | bot ms avg ${avg(r.ms).toFixed(1)} max ${Math.max(...r.ms).toFixed(0)} late avg ${avg(r.lateMs).toFixed(1)} | ${scores}`);
+  console.log(`seed ${seed}: ${r.how} by ${r.winner} T${r.turn} | c60 [${r.cities60.join(',')}] c120 [${r.cities120.join(',')}] wonders [${r.wonders.join(',')}] wars ${r.wars} taken ${r.captured} dead ${r.eliminated} broke ${r.broke} neg ${r.negative} religions [${r.religions.join(',')}] mood ${avg(r.mood).toFixed(1)} unhappy ${pct(r.unhappy, r.mood.length)} size5 ${avg(r.toFive).toFixed(0)}t steals ${r.stolen} caught ${r.caught} quests ${r.quests} passed ${r.passed} freed ${r.liberated}/${r.revived} pledges ${r.pledges}/${r.pledgesEnded} | world ${r.eruptions} eruptions ${r.floods} floods ${r.storms} storms ${r.rises} sea rises (${r.co2} carbon) | bot ms avg ${avg(r.ms).toFixed(1)} max ${Math.max(...r.ms).toFixed(0)} late avg ${avg(r.lateMs).toFixed(1)} | ${scores}`);
   for (const e of r.errors) console.log('  ERROR', e);
   // The World Congress's projects: when each opened and was done (its cost), and who placed (g, s, b).
   const projects = (g.congress?.projects ?? []).map((x) => `${x.id} T${x.since}-${x.done ? `T${x.done}` : 'open'} (${x.cost})${x.tiers ? ` ${Object.entries(x.tiers).map(([i, t]) => `${t[0]}:${g.players[Number(i)].civ}`).join(' ')}` : ''}`);
@@ -234,7 +251,7 @@ const all = (f: (r: Result) => number[]) => results.flatMap(f);
 const hows = new Map<string, number>();
 for (const r of results) hows.set(r.how, (hows.get(r.how) ?? 0) + 1);
 const winners = new Set(results.map((r) => r.winner));
-console.log(`\n== ${size} × ${results.length} seeds${mapType !== 'continents' ? ` on ${mapType}` : ''}${difficulty ? ` (${difficulty})` : ''}${teams ? ' (two teams)' : ''}${standard ? ' (standard speed)' : ''}${flat ? ' (flat)' : ' (wraps)'}`);
+console.log(`\n== ${size} × ${results.length} seeds${mapType !== 'continents' ? ` on ${mapType}` : ''}${difficulty ? ` (${difficulty})` : ''}${teams ? ' (two teams)' : ''}${calm ? ' (no disasters)' : ''}${standard ? ' (standard speed)' : ''}${flat ? ' (flat)' : ' (wraps)'}`);
 console.log(`cities T60   ${fmt(all((r) => r.cities60))}`);
 console.log(`cities T120  ${fmt(all((r) => r.cities120))}`);
 console.log(`wonders      T40 ${fmt(results.map((r) => r.wonders[0] ?? 0))}   T70 ${fmt(results.map((r) => r.wonders[1] ?? 0))}   T100 ${fmt(results.map((r) => r.wonders[2] ?? 0))}`);
@@ -250,6 +267,7 @@ const era = (f: (r: Result) => number | undefined) => {
 console.log(`eras (first civ / median civ)  ${ERAS.slice(1).map((name, i) => `${name} ${era((r) => r.eraLeader[i + 1])}/${era((r) => r.eraMedian[i + 1])}`).join('  ')}`);
 console.log(`spies        ${avg(results.map((r) => r.stolen)).toFixed(1)} techs stolen/game   ${avg(results.map((r) => r.caught)).toFixed(1)} spies caught/game   quests ${avg(results.map((r) => r.quests)).toFixed(1)} done/game   resolutions ${avg(results.map((r) => r.passed)).toFixed(1)} passed/game`);
 console.log(`liberation   ${avg(results.map((r) => r.liberated)).toFixed(1)} cities liberated/game (${avg(results.map((r) => r.revived)).toFixed(1)} civs brought back)   pledges ${avg(results.map((r) => r.pledges)).toFixed(1)} made/game, ${avg(results.map((r) => r.pledgesEnded)).toFixed(1)} ended`);
+console.log(`world        ${avg(results.map((r) => r.eruptions)).toFixed(1)} eruptions/game   ${avg(results.map((r) => r.floods)).toFixed(1)} floods/game   ${avg(results.map((r) => r.storms)).toFixed(1)} storms/game   ${avg(results.map((r) => r.rises)).toFixed(1)} sea rises/game   carbon ${fmt(results.map((r) => r.co2))}`);
 console.log(`broke turns  ${avg(results.map((r) => r.broke)).toFixed(1)}/game   negative-income turns ${avg(results.map((r) => r.negative)).toFixed(1)}/game`);
 console.log(`bot turn ms  avg ${avg(all((r) => r.ms)).toFixed(1)}  max ${Math.max(...all((r) => r.ms)).toFixed(0)}  after T200 avg ${avg(all((r) => r.lateMs)).toFixed(1)} max ${Math.max(0, ...all((r) => r.lateMs)).toFixed(0)}   endTurn avg ${avg(all((r) => r.endMs)).toFixed(1)}`);
 console.log(`exceptions   ${results.reduce((s, r) => s + r.errors.length, 0)}`);
