@@ -396,7 +396,7 @@ const WONDER_PICTURE: Record<string, string> = {
   himeji_castle: 'w_himeji_castle', forbidden_palace: 'w_forbidden_palace', sistine_chapel: 'w_sistine_chapel', leaning_tower: 'w_leaning_tower', porcelain_tower: 'w_pagoda',
   taj_mahal: 'w_taj_mahal', uffizi: 'w_uffizi', globe_theatre: 'w_theatre', kremlin: 'w_kremlin', big_ben: 'w_clock', louvre: 'w_louvre',
   brandenburg_gate: 'w_gate', neuschwanstein: 'w_castle', statue_of_liberty: 'w_liberty', eiffel_tower: 'w_spire', broadway: 'w_broadway',
-  cristo_redentor: 'w_cristo', pentagon: 'w_pentagon', sydney_opera_house: 'w_opera', cn_tower: 'w_cn_tower', hubble: 'w_dish', great_firewall: 'w_modern',
+  cristo_redentor: 'w_cristo', pentagon: 'w_pentagon', sydney_opera_house: 'w_opera', cn_tower: 'w_cn_tower', hubble: 'w_dish', great_firewall: 'w_great_firewall',
   united_nations: 'w_united_nations', manhattan_project: 'w_atom', apollo_program: 'w_rocket',
 };
 export const wonderPicture = (id: string): string | null => WONDER_PICTURE[id] ?? (BUILDINGS[id]?.kind === 'national' ? 'w_palace' : null);

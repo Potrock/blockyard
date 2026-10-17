@@ -17,6 +17,7 @@ import { tileY } from './overlay';
 import { previewPath } from './path';
 import { play, type Cue } from './sound';
 import { me, store } from './store';
+import { resetRises, riseWonders, startRise, watchWonders, type WonderShown } from './wonderrise';
 
 /**
  * The world's own models, on this screen: each unit it can see as a little voxel squad (or rider,
@@ -166,7 +167,7 @@ const FLIGHT = 6;
 
 const units = new Map<number, Shown>();
 /** Towns on show: the node, what it was built for, last seen, its far look's houses, whether it has that look on, and its middle. */
-const cities = new Map<number, { node: Node; key: string; seen: number; detail: Node[]; far: boolean; at: Vec3; smoke: Smoke[]; puff: number }>();
+const cities = new Map<number, { node: Node; key: string; seen: number; detail: Node[]; far: boolean; at: Vec3; smoke: Smoke[]; puff: number; wonders: Map<string, WonderShown> }>();
 const sites = new Map<string, { node: Node; seen: number }>();
 /** Units gone that are seen to go (killed, or spent): sinking and shrinking away, since when. */
 let dying: { node: Node; t: number; scale: number; y: number; topple: boolean }[] = [];
@@ -218,6 +219,7 @@ export function drawModels(client: Client, dt: number) {
     return;
   }
   rehome();
+  watchWonders(v, client.time);
   // The bots' moves have just come: what's seen of others' marches waits for each civ's turn on the screen.
   const staging = handoverStaging();
   const staged: { s: Shown; owner: number }[] = [];
@@ -403,8 +405,10 @@ export function drawModels(client: Client, dt: number) {
       if (!made) continue;
       client.scene.add(made.node);
       const c = centreHere(g, city.tile);
-      shown = { node: made.node, key, seen: frame, detail: made.detail, far: false, at: { x: c.x, y: tileY(city.tile), z: c.z }, smoke: made.smoke, puff: 0 };
+      shown = { node: made.node, key, seen: frame, detail: made.detail, far: false, at: { x: c.x, y: tileY(city.tile), z: c.z }, smoke: made.smoke, puff: 0, wonders: made.wonders };
       cities.set(city.id, shown);
+      // A wonder just finished rises out of the ground (`wonderrise.ts`).
+      for (const w of made.wonders.keys()) startRise(city.id, w, client.time);
     }
     shown.seen = frame;
     shown.node.visible = nearScreen(shown.at, TOWN_REACH);
@@ -426,6 +430,11 @@ export function drawModels(client: Client, dt: number) {
       client.scene.remove(s.node);
       cities.delete(id);
     }
+  riseWonders(client, (id, w) => {
+    const s = cities.get(id);
+    const shown = s?.wonders.get(w);
+    return s && shown ? { w: shown, town: s.node } : null;
+  });
 
   // Barbarian camps and ancient ruins, where they're known.
   for (let t = 0; t < store.known.length; t++) {
@@ -727,7 +736,7 @@ const SPREAD = [2, 1, 3, 0, 4, 5];
  * tile is full, districts of more houses. Its detail (the houses past the first few, the walls'
  * towers) is listed apart: put away in its far look.
  */
-function town(client: Client, city: CityWire, era: number): { node: Node; detail: Node[]; smoke: Smoke[] } | null {
+function town(client: Client, city: CityWire, era: number): { node: Node; detail: Node[]; smoke: Smoke[]; wonders: Map<string, WonderShown> } | null {
   const g = store.grid!;
   const c = centreHere(g, city.tile);
   const group = client.scene.node();
@@ -737,6 +746,7 @@ function town(client: Client, city: CityWire, era: number): { node: Node; detail
     return h / 4294967296;
   };
   const detail: Node[] = [];
+  let last: Node | null = null;
   const put = (id: ModelId, t: number, x: number, z: number, scale: number, yaw: number, isDetail = false) => {
     const n = make(client, id, scale);
     if (!n) return false;
@@ -744,6 +754,7 @@ function town(client: Client, city: CityWire, era: number): { node: Node; detail
     n.rotation.set(0, yaw, 0);
     group.add(n);
     if (isDetail) detail.push(n);
+    last = n;
     return true;
   };
   const smoke: Smoke[] = [];
@@ -793,13 +804,18 @@ function town(client: Client, city: CityWire, era: number): { node: Node; detail
     const s = store.terrain[t];
     return t >= 0 && s && !(s.terrain === 'ocean' || s.terrain === 'coast' || s.terrain === 'lake') && s.elevation !== 'mountain' && !store.view!.cities.some((x) => x.tile === t);
   });
+  const wonders = new Map<string, WonderShown>();
   for (const w of city.wonders ?? []) {
     const id = wonderPicture(w);
     if (!id || !isModel(id)) continue;
     const t = beside.shift();
     if (t === undefined) break;
     const at = centreNear(g, t, c.x);
-    if (!put(id, t, at.x, at.z, scaleFor(id, WONDER_SCALE, WONDER_FIT), 0)) return null;
+    const scale = scaleFor(id, WONDER_SCALE, WONDER_FIT);
+    if (!put(id, t, at.x, at.z, scale, 0) || !last) return null;
+    const s = MODEL_SIZE[id];
+    const n: Node = last;
+    wonders.set(w, { node: n, x: n.position.x, y: n.position.y, z: n.position.z, height: ((s.hi[1] - s.lo[1]) * scale) / 16, across: (Math.max(s.hi[0] - s.lo[0], s.hi[2] - s.lo[2]) * scale) / 16 });
   }
   for (const t of beside) {
     if (placed >= houses) break;
@@ -810,7 +826,7 @@ function town(client: Client, city: CityWire, era: number): { node: Node; detail
       placed++;
     }
   }
-  return { node: group, detail, smoke };
+  return { node: group, detail, smoke, wonders };
 }
 
 /**
@@ -868,6 +884,7 @@ function clearAll(client: Client) {
   cities.clear();
   sites.clear();
   groundCache.clear();
+  resetRises();
 }
 
 /** A new map: the old one's ground heights go. */

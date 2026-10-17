@@ -931,6 +931,66 @@ export const WONDERS = [
     });
     m.disc(0, 0, 1.5, 1, 3, 'woodDark');
   }),
+  // The Great Firewall: a server farm behind a great wall of glowing grid, battlemented like the old
+  // Great Wall: rows of dark racks stepping up toward it, their lights blinking green, blue and amber,
+  // cables trunking across their tops to the wall, and satellite dishes on masts to the right.
+  make('w_great_firewall', (m) => {
+    m.box([-16, 0, -14], [16, 1, 14], 'concrete');
+    // The wall, along the back and the left: dark panels ruled in glowing grid, merlons on top.
+    const wall = (lo, hi, along) => {
+      m.vox.paint('m', lo, hi, (i, j, k) => {
+        const u = along === 'x' ? i : k;
+        if (j >= 21) return ((u + 16) >> 1) % 2 === 0 ? 'greyDark' : undefined;
+        if (j === 20 || j === 1) return 'greyDark';
+        return (u + 16) % 4 === 0 || j % 4 === 0 ? 'grid' : 'rack';
+      });
+    };
+    wall([-16, 1, -14], [16, 23, -12], 'x');
+    wall([-16, 1, -12], [-14, 23, 10], 'z');
+    for (const x of [-16, 14]) m.box([x, 1, -14], [x + 2, 25, -12], 'greyDark');
+    m.box([-16, 1, 8], [-14, 25, 10], 'greyDark');
+    // Three rows of racks, taller toward the wall, each cabinet's face dotted with lights.
+    const lights = ['led', 'led', 'ledBlue', 'led', 'ledAmber', 'ledBlue'];
+    for (const [z0, h] of [[-10, 17], [-3, 13], [4, 9]]) {
+      m.box([-12, 1, z0], [8, h, z0 + 3], 'rack');
+      m.box([-12, h, z0], [8, h + 1, z0 + 3], 'greyDark');
+      m.vox.paint('m', [-12, 2, z0 + 3], [8, h - 1, z0 + 4], (i, j) => {
+        const c = (i + 12) % 4;
+        if (c === 3) return 'black';
+        if (j % 2 === 1 && c !== 0) {
+          const n = ((i * 73856093) ^ (j * 19349663) ^ (z0 * 83492791)) >>> 0;
+          return n % 5 < 3 ? lights[n % lights.length] : undefined;
+        }
+      });
+      // A cable tray on top, its bundle running back to the wall.
+      m.box([-9, h + 1, z0 + 1], [-7, h + 2, z0 + 2], 'black').box([3, h + 1, z0 + 1], [5, h + 2, z0 + 2], 'ledBlue');
+    }
+    for (const [x, c] of [[-8, 'black'], [4, 'sash']]) {
+      m.box([x, 14, -7], [x + 1, 15, -3], c).box([x, 18, -12], [x + 1, 19, -7], c);
+      m.box([x, 10, 0], [x + 1, 11, 4], c);
+    }
+    // The dishes on their masts: bowls tipped up toward the viewer, a feed on an arm at each focus.
+    const dish = (x, z, y, r) => {
+      m.box([Math.floor(x), 1, Math.floor(z)], [Math.floor(x) + 1, y, Math.floor(z) + 1], 'grey');
+      const n = [0.62, 0.55, 0.56];
+      const f = r * 0.9;
+      const R = Math.ceil(r) + 1;
+      m.vox.paint('m', [Math.floor(x) - R, y - R, Math.floor(z) - R], [Math.floor(x) + R + 1, y + R + 1, Math.floor(z) + R + 1], (i, j, k) => {
+        const p = [i + 0.5 - x, j + 0.5 - y, k + 0.5 - z];
+        const t = p[0] * n[0] + p[1] * n[1] + p[2] * n[2];
+        const d = Math.hypot(p[0] - t * n[0], p[1] - t * n[1], p[2] - t * n[2]);
+        if (d > r) return;
+        const s = (d * d) / (4 * f);
+        if (t >= s - 0.6 && t <= s + 0.6) return d > r - 1 ? 'grey' : 'white';
+      });
+      for (let q = 1; q <= Math.round(f); q++) m.set(Math.floor(x + n[0] * q), Math.floor(y + n[1] * q), Math.floor(z + n[2] * q), q === Math.round(f) ? 'red' : 'grey');
+    };
+    dish(11.5, -8.5, 13, 5.5);
+    dish(12.5, 6.5, 6, 3.6);
+    m.box([8, 1, -9], [11, 2, -8], 'black').box([8, 1, 5], [12, 2, 6], 'black').box([9, 1, -8], [10, 2, 5], 'sash');
+    // A mast on the wall's corner, its light red.
+    m.box([-16, 25, -14], [-15, 30, -13], 'grey').set(-16, 30, -14, 'neon');
+  }),
   // The Kremlin: red battlemented walls and towers under green spires, a white cathedral of golden domes and the tall bell tower inside; St Basil's bright domes on Red Square in front.
   make('w_kremlin', (m) => {
     m.box([-16, 0, -15], [16, 1, 2], 'green').box([-16, 0, 2], [16, 1, 15], 'greyDark');
