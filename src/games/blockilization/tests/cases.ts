@@ -1882,7 +1882,7 @@ test('no caravan to train or buy with every trade route running or spoken for by
   ok(apply(game, 0, train).ok, 'one route free: a caravan');
 });
 
-test('the World Leader vote: a team’s delegates stand together, given to the one of them given most, more than two thirds needed of the delegates the world began with (half without teams); city-states with no ally abstain', () => {
+test('the World Leader vote: a team’s delegates stand together, given to the one of them given most, more than two thirds needed of the delegates the world began with (more than half without teams); city-states with no ally abstain', () => {
   const { game, at } = blank(['egypt', 'babylon', 'india', 'china'], { cityStates: 2 });
   game.players.forEach((p, i) => {
     if (i < 4) {
@@ -1902,10 +1902,10 @@ test('the World Leader vote: a team’s delegates stand together, given to the o
   game.players.find((x) => x.cityState)!.alive = false;
   eq(unVote(game, () => -1).needed, 7, 'a fallen civ’s and a fallen city-state’s delegates still among those needed');
   game.players.forEach((p) => delete p.team);
-  eq(unVote(game, () => -1).needed, 5, 'without teams, half of them');
+  eq(unVote(game, () => -1).needed, 6, 'without teams, more than half of them');
 });
 
-test('a World Leader: half the world’s delegates and more than anyone else (two at half each is neither)', () => {
+test('a World Leader: more than half the world’s delegates (half is not enough, even well ahead of anyone else)', () => {
   const { game, at } = blank(['egypt', 'babylon', 'india', 'china'], { cityStates: 2 });
   game.players.forEach((_, i) => i < 4 && city(game, i, at(3 + i * 6, 3)));
   const [egypt, babylon, india, china] = game.players;
@@ -1917,9 +1917,16 @@ test('a World Leader: half the world’s delegates and more than anyone else (tw
   // Egypt: the UN's four and both city-states; Babylon: its own two and India's and China's.
   (india as typeof india & { vote?: number }).vote = babylon.index;
   (china as typeof china & { vote?: number }).vote = babylon.index;
-  eq(unVote(game, toEgypt).needed, 6, 'half of twelve');
+  eq(unVote(game, toEgypt).needed, 7, 'more than half of twelve');
   longGameTurn(game, () => 0, toEgypt);
   ok(!game.over, 'six each: no World Leader');
+  delete (india as typeof india & { vote?: number }).vote;
+  delete (china as typeof china & { vote?: number }).vote;
+  game.turn = 110;
+  longGameTurn(game, () => 0, toEgypt);
+  ok(!game.over, 'six of twelve, against two each: still no World Leader');
+  (india as typeof india & { vote?: number }).vote = babylon.index;
+  game.turn = 120;
   (china as typeof china & { vote?: number }).vote = egypt.index;
   longGameTurn(game, () => 0, toEgypt);
   eq(game.over?.how, 'diplomatic', 'China’s two to Egypt: eight against four');
@@ -2336,21 +2343,21 @@ test('tourism: France’s art, hotels, Sacred Sites, Media Culture, The Internet
   const { game, at } = blank(['france', 'egypt']);
   const c = city(game, 0, at(5, 5), { buildings: ['museum'] });
   c.works = { museum: ['Art 1'] };
-  eq(cityTourism(game, c), 6, "france's art in the capital: 6");
+  eq(cityTourism(game, c), 4, "france's art in the capital: 4");
   c.works = { museum: ['Art 1', 'Art 2'] };
-  eq(cityTourism(game, c), 15, 'a full museum: themed, 3 more');
+  eq(cityTourism(game, c), 11, 'a full museum: themed, 3 more');
   c.works = { museum: ['Art 1'] };
   c.buildings.push('hotel');
-  eq(cityTourism(game, c), 9, 'a hotel: +50%');
+  eq(cityTourism(game, c), 6, 'a hotel: +50%');
   c.buildings.push('broadcast_tower');
   game.players[0].policies.push('media_culture');
-  near(cityTourism(game, c), 6 * 1.84, 'media culture with a broadcast tower');
+  near(cityTourism(game, c), 4 * 1.84, 'media culture with a broadcast tower');
   game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'mosques', 'sacred_sites'] };
   game.players[0].religion = 'r1';
   c.buildings.push('mosque');
-  near(cityTourism(game, c), 8 * 1.84, 'sacred sites');
+  near(cityTourism(game, c), 6 * 1.84, 'sacred sites');
   game.players[0].techs.push('the_internet');
-  near(cityTourism(game, c), 8 * 2.34, 'the internet: +50%');
+  near(cityTourism(game, c), 6 * 2.34, 'the internet: +50%');
 });
 
 test('a revolution (Civ V’s): with enough dissent from a rival ideology, a civ may take it; its tenets lost, two fewer free, two turns of anarchy', () => {

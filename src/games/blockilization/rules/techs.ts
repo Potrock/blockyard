@@ -29,9 +29,22 @@ export interface Tech {
 /** A column's era. */
 export const eraOfCol = (col: number): Era => (col <= 2 ? 'ancient' : col <= 4 ? 'classical' : col <= 6 ? 'medieval' : col <= 8 ? 'renaissance' : col <= 10 ? 'industrial' : col <= 12 ? 'modern' : col <= 14 ? 'atomic' : 'information');
 
-/** Science each column's techs cost at standard speed (before the cost per city). */
+/** Civ V's science for each column's techs at standard speed. */
 const COL_COST = [20, 35, 55, 85, 175, 275, 485, 780, 1150, 1600, 2350, 3100, 4100, 5100, 5800, 6400, 7700, 8800, 9500];
-export const baseTechCost = (t: Tech) => COL_COST[Math.min(t.col, COL_COST.length - 1)];
+
+/**
+ * How dear research is overall. No science is wasted (what's over when a tech is learned goes on to
+ * the next, and with nothing chosen it's kept), which brought the eras 5 to 10 turns early: techs
+ * cost 18% more for it.
+ */
+export const RESEARCH_PACE = 1.18;
+
+/**
+ * Science a tech costs at standard speed with one city (`techCost` adds the cost per city). Our maps
+ * are a quarter the size of Civ V's, with fewer cities to research with: techs cost less than Civ V's
+ * (late ones much less).
+ */
+export const baseTechCost = (t: Tech) => COL_COST[Math.min(t.col, COL_COST.length - 1)] * Math.max(0.12, 0.6 - 0.035 * t.col) * RESEARCH_PACE;
 
 const T = (id: string, name: string, col: number, needs: string[], note?: string): Tech => ({ id, name, col, needs, note });
 
