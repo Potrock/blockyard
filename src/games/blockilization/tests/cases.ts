@@ -4354,4 +4354,8 @@ test('teammates at war with people play their segment together; a side gone, or 
   game.players[1].alive = false;
   startSequence(game);
   eq(game.sequence, undefined, 'its enemy fallen: no order to keep');
+  game.players[1].alive = true;
+  game.settings.hybridTurns = false;
+  startSequence(game);
+  eq(game.sequence, undefined, 'turned off in the lobby: everyone plays at once, war or not');
 });

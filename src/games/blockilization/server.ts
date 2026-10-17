@@ -626,6 +626,7 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
       }
       if (a.timer !== undefined && [0, 60, 90, 120, 180, 300].includes(a.timer)) settings.timer = a.timer;
       if (typeof a.dynamicTimer === 'boolean') settings.dynamicTimer = a.dynamicTimer;
+      if (typeof a.hybridTurns === 'boolean') settings.hybridTurns = a.hybridTurns;
       if (a.turnLimit !== undefined && [150, 250, 330, 500].includes(a.turnLimit)) settings.turnLimit = a.turnLimit;
       if (typeof a.barbarians === 'boolean') settings.barbarians = a.barbarians;
       if (typeof a.wrap === 'boolean') settings.wrap = a.wrap;

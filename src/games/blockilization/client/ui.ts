@@ -688,6 +688,8 @@ function renderLobby(): El | null {
     // (-1: the dynamic timer, here only.)
     chips('Turn timer', [[0, 'None'], [-1, 'Dynamic'], [60, '1 min'], [90, '90 s'], [120, '2 min'], [180, '3 min'], [300, '5 min']] as [number, string][], s.dynamicTimer ? -1 : s.timer, (v) => lobby(v < 0 ? { a: 'settings', dynamicTimer: true } : { a: 'settings', timer: v, dynamicTimer: false })),
     s.dynamicTimer && h('div.lb-desc', {}, 'Each turn’s clock is set as it begins, Civilization VI’s way: longer as the eras pass and as the busiest player’s cities and units grow (from 30 seconds to 5 minutes).'),
+    chips('At war', [[1, 'Take turns'], [0, 'All at once']] as [number, string][], s.hybridTurns === false ? 0 : 1, (v) => lobby({ a: 'settings', hybridTurns: v === 1 })),
+    h('div.lb-desc', {}, s.hybridTurns === false ? 'Everyone plays at the same time, at war or not.' : 'People at war with each other take their turns one side at a time, Civilization V’s hybrid turns: everyone else plays at once.'),
     chips('Turns', [[150, '150'], [250, '250'], [330, '330'], [500, '500']] as [number, string][], s.turnLimit, (v) => lobby({ a: 'settings', turnLimit: v })),
     chips('City-states', [[0, 'None'], [2, '2'], [4, '4'], [6, '6'], [8, '8'], [12, '12']] as [number, string][], s.cityStates, (v) => lobby({ a: 'settings', cityStates: v })),
     chips('Barbarians', [[1, 'On'], [0, 'Off']] as [number, string][], s.barbarians ? 1 : 0, (v) => lobby({ a: 'settings', barbarians: v === 1 })),

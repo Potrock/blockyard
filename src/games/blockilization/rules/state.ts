@@ -285,6 +285,8 @@ export interface Settings {
   timer: number;
   /** Civilization VI's dynamic turn timer instead: each turn's clock set by how far on the game is and how much there is to move (the server's `dynamicLength`). */
   dynamicTimer?: boolean;
+  /** People at war with each other take their turns one side at a time (Civ V's hybrid turns, `turns.ts`): on unless turned off. */
+  hybridTurns?: boolean;
   /** City-states, barbarians, victory types on. */
   cityStates: number;
   barbarians: boolean;

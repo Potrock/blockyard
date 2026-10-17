@@ -58,7 +58,7 @@ export interface LobbyView {
 
 export type LobbyAction =
   | { a: 'civ'; civ: string }
-  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; barbarians?: boolean; wrap?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty }
+  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; hybridTurns?: boolean; barbarians?: boolean; wrap?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty }
   | { a: 'bots'; count: number }
   | { a: 'victories'; victories: Partial<Settings['victories']> }
   | { a: 'seed'; seed: number | null }
