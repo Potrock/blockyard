@@ -62,7 +62,7 @@ export interface Unit {
   /** A settler's: the city site it's on its way to (one where a city could be founded when it was sent). */
   site?: number;
   /** Building an improvement or a road (or digging up an artifact): what, and the worker-turns it's had. */
-  work?: { what: ImprovementId | 'road' | 'rail' | 'remove_feature' | 'repair' | 'artifact'; done: number };
+  work?: { what: ImprovementId | 'road' | 'rail' | 'remove_feature' | 'scrub_fallout' | 'repair' | 'artifact'; done: number };
   /** Has it attacked this turn (most units only once), and how many times (Blitz, Logistics: twice). */
   attacked?: boolean;
   attacks?: number;

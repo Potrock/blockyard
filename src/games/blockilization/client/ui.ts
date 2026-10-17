@@ -1109,6 +1109,11 @@ function buildOptions(t: number): { what: string; name: string; does: string }[]
   // (No road on the water: an embarked worker builds none, as the rules' `canBuild` has it.)
   if (!k.road && techs.has('the_wheel') && !TERRAINS[s.terrain].water) out.push({ what: 'road', name: 'Road', does: 'Faster moves, and a link from a city to your capital' });
   if (k.road === 'road' && techs.has('railroad')) out.push({ what: 'rail', name: 'Railroad', does: 'Much faster moves' });
+  // (Under fallout: only scrubbing it away, Civ V's; nothing's built or mended there till it's gone.)
+  if (s.feature === 'fallout') {
+    if (!cityAt(t)) out.push({ what: 'scrub_fallout', name: 'Scrub Fallout', does: 'Clean up the fallout: the tile yields again, stops hurting units on it, and can be improved' });
+    return out;
+  }
   if (k.pillaged) out.push({ what: 'repair', name: 'Repair', does: 'Mend what was pillaged here: its yields come back' });
   if (k.owner !== v.you || cityAt(t)) return out;
   for (const [id, imp] of Object.entries(IMPROVEMENTS) as [ImprovementId, (typeof IMPROVEMENTS)[ImprovementId]][]) {
@@ -1151,7 +1156,8 @@ function buildBlocked(t: number): { what: ImprovementId; name: string; why: stri
     const res = !!k.resource && tapsWith({ resource: k.resource, terrain: s.terrain }) === id;
     const place = !imp.on.includes('resource') && fitsLand(id, t);
     if (res || place) {
-      if (imp.tech && !techs.has(imp.tech)) out.push({ what: id, name: imp.name, why: `needs ${TECHS[imp.tech]?.name ?? imp.tech}` });
+      if (s.feature === 'fallout') out.push({ what: id, name: imp.name, why: 'scrub the Fallout first' });
+      else if (imp.tech && !techs.has(imp.tech)) out.push({ what: id, name: imp.name, why: `needs ${TECHS[imp.tech]?.name ?? imp.tech}` });
       else if (cleared(id, t)) out.push({ what: id, name: imp.name, why: `clear the ${FEATURES[s.feature as FeatureId]?.name ?? 'forest'} first` });
     } else if (id === 'quarry' && s.elevation === 'hills') {
       const on = Object.values(RESOURCES).filter((r) => r.improvement === 'quarry').map((r) => r.name);
@@ -1176,7 +1182,7 @@ function seaBlocked(t: number): { what: ImprovementId; name: string; why: string
 
 export const BUILD_GLYPH: Record<string, string> = {
   road: 'trade', rail: 'rail', repair: 'hammer', farm: 'wheat', mine: 'pick', pasture: 'cattle', camp: 'deer', plantation: 'leaf', quarry: 'stone',
-  trading_post: 'gold', lumber_mill: 'hammer', fishing_boats: 'fish', oil_well: 'oil', offshore_platform: 'oil', fort: 'shield', remove_feature: 'axe',
+  trading_post: 'gold', lumber_mill: 'hammer', fishing_boats: 'fish', oil_well: 'oil', offshore_platform: 'oil', fort: 'shield', remove_feature: 'axe', scrub_fallout: 'drop',
 };
 
 /** The selected unit's card's line for where the mouse is (how many turns to get there), kept current every frame. */
@@ -2418,6 +2424,7 @@ function renderTip() {
         const p = store.view.players[u.owner];
         bits.push(line(unitGlyph(u.type), CIVS[p?.civ]?.color ?? '#fff', `${CIVS[p?.civ]?.adjective ?? p?.name ?? ''} ${UNITS[u.type]?.name} · ${u.hp} HP`));
       }
+    if (s.feature === 'fallout') bits.push(line('mushroom', '#b8d84a', `Fallout: yields next to nothing, ${FEATURES.fallout.hurts} damage a turn to units here; a worker scrubs it away`));
     if (k.ruin) bits.push(line('urn', '#f2c14e', 'Ancient ruins'));
     if (k.camp) bits.push(line('skull', '#ff8a7a', 'Barbarian camp (clear it for gold)'));
     const y = store.yields[t];

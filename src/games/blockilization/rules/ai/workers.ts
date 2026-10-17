@@ -1,6 +1,6 @@
 import { cityById, knows, seesResource } from '../core';
 import { canBuild, seaWork, type BuildWhat } from '../game';
-import { freshWater, workable } from '../economy';
+import { freshWater, tileYields, workable } from '../economy';
 import { line, neighbours, within } from '../hex';
 import type { Unit } from '../state';
 import { IMPROVEMENTS, RESOURCES, tapped, tapsWith, TERRAINS, type ImprovementId, type Yields } from '../terrain';
@@ -43,6 +43,15 @@ export function jobFor(ctx: Ctx, worker: Unit, t: number, worked: Set<number>, l
   const young = city && city.pop < 5 ? (5 - city.pop) * 0.25 : 0;
   const value = (y: Yields) => (y.food ?? 0) * w.food * (1 + young) + (y.prod ?? 0) * w.prod + (y.gold ?? 0) * w.gold + (y.science ?? 0) * w.science + (y.culture ?? 0) * w.culture + (y.faith ?? 0) * w.faith;
   const scale = worked.has(t) ? 1.6 : 0.8;
+  // Fallout first (Civ V's): nothing else is built or mended under it, and the tile yields nothing.
+  // Worth what the tile would yield again (more than a new improvement's gain), and a little over.
+  if (tile.feature === 'fallout') {
+    if (!canBuild(ctx.game, at, 'scrub_fallout')) return null;
+    tile.feature = undefined;
+    const back = tileYields(ctx.game, t, ctx.p);
+    tile.feature = 'fallout';
+    return { tile: t, what: 'scrub_fallout', value: value(back) * scale * 1.5 + 4, young: young > 0 };
+  }
   if (tile.pillaged) return { tile: t, what: 'repair', value: 6 * scale, young: young > 0 };
   if (tile.improvement) return null;
   const r = tile.resource && seesResource(ctx.p, tile.resource) ? RESOURCES[tile.resource] : null;

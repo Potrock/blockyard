@@ -59,6 +59,7 @@ export const CONCEPTS: Article[] = [
       { text: 'Every tile yields something by its [[cat:terrain|terrain]] and feature: grassland food, hills production, the coast food and gold. Rivers add gold and fresh water. [[cat:resource|Resources]] add more, once improved.' },
       { title: 'Workers', text: '[[unit:worker|Workers]] build [[cat:improvement|improvements]]: farms for food, mines for production, trading posts for gold, and the right improvement on each resource (pastures, camps, plantations, quarries, fishing boats from a Work Boat). They also build roads, which connect cities and speed units.' },
       { title: 'Resources', text: 'Bonus resources yield more food or production. Luxury resources make your empire [[concept:happiness|happy]], each kind once. Strategic resources (horses, iron, coal, oil, aluminum, uranium) are needed by the units and buildings that use them; each improved deposit supplies a few.' },
+      { title: 'Fallout', text: 'A nuclear blast leaves [[terrain:fallout|fallout]] on much of the land it strikes. A tile under fallout yields next to nothing, hurts units that end their turn on it, and can’t be improved or repaired until a worker scrubs it away (Scrub Fallout).' },
     ],
   },
   {
@@ -308,7 +309,7 @@ export const ABILITY_TEXT: Record<string, string> = {
   repair_fleet: 'Repair Fleet: spent, every ship of yours on its tile or next to it is healed fully.',
   concert_tour: 'Concert Tour: spent in another civ’s land, ten turns of your tourism toward them at once.',
   paradrop: 'Can parachute from your land to land you know up to 6 tiles away, if it hasn’t moved.',
-  nuke: 'A nuclear weapon: destroys what is round where it lands.',
+  nuke: 'A nuclear weapon: destroys what is round where it lands, and leaves fallout on much of the land.',
   spread_religion: 'Spreads its religion to a city.',
   remove_heresy: 'Drives other religions out of a city.',
   found_religion: 'Founds or enhances a religion.',

@@ -4,7 +4,7 @@ import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damag
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
 import { assignCitizens, cityEffects, cityYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
-import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
+import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
 import { distance, line, neighbour, neighbours, within } from '../rules/hex';
 import { generate, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
@@ -4354,4 +4354,98 @@ test('teammates at war with people play their segment together; a side gone, or 
   game.players[1].alive = false;
   startSequence(game);
   eq(game.sequence, undefined, 'its enemy fallen: no order to keep');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Nuclear fallout
+// -------------------------------------------------------------------------------------------------
+
+test('fallout: a nuclear blast leaves it on a share of its land, burns its forests, and spares cities and the land beyond', () => {
+  const { game, at } = blank();
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(12, 5));
+  const area = within(game.grid, theirs.tile, 2);
+  for (const t of area) if (t !== theirs.tile) game.tiles[t].owner = 1;
+  const wood = area.filter((t) => t !== theirs.tile).slice(0, 6);
+  for (const t of wood) game.tiles[t].feature = 'forest';
+  const oasis = area.find((t) => t !== theirs.tile && !wood.includes(t))!;
+  game.tiles[oasis].feature = 'oasis';
+  const missile = unit(game, 'nuclear_missile', 0, home.tile);
+  war(game, 0, 1);
+  ok(apply(game, 0, { t: 'attack', unit: missile.id, target: theirs.tile }).ok, 'the strike');
+  const fallen = area.filter((t) => game.tiles[t].feature === 'fallout');
+  ok(fallen.length > 0 && fallen.length < area.length - 2, `fallout on some of the blast's land, not all (${fallen.length} of ${area.length})`);
+  ok(game.tiles[theirs.tile].feature !== 'fallout', 'none on the city');
+  eq(game.tiles[oasis].feature, 'oasis', 'an oasis keeps it off');
+  ok(wood.every((t) => game.tiles[t].feature !== 'forest'), 'the forests burnt away');
+  ok(game.tiles.every((tile, t) => tile.feature !== 'fallout' || area.includes(t)), 'none beyond the blast');
+});
+
+test('fallout: its tile yields next to nothing, nothing is built or mended under it, and it hurts units that end a turn there', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  techsTo(game, 0, 6);
+  city(game, 0, at(5, 5));
+  const t = at(6, 5);
+  game.tiles[t].owner = 0;
+  eq(tileYields(game, t, p).food, 2, 'grassland: 2 food');
+  Object.assign(game.tiles[t], { feature: 'fallout', improvement: 'farm', pillaged: true, river: true });
+  const y = tileYields(game, t, p);
+  eq((y.food ?? 0) + (y.prod ?? 0) + (y.gold ?? 0), 0, 'under fallout: no food, production or gold (a river’s gold too)');
+  game.tiles[t].pillaged = false;
+  ok((tileYields(game, t, p).food ?? 0) <= 1, 'next to nothing even with its farm standing (Civ V’s -3 food)');
+  const w = unit(game, 'worker', 0, t);
+  ok(!canBuild(game, w, 'repair'), 'no repairing under it');
+  game.tiles[t].improvement = undefined;
+  ok(!canBuild(game, w, 'farm') && !canBuild(game, w, 'trading_post'), 'nor improving');
+  ok(canBuild(game, w, 'road'), 'a road, though');
+  ok(canBuild(game, w, 'scrub_fallout'), 'and scrubbing it');
+  ok(!canBuild(game, { ...w, tile: at(7, 5) }, 'scrub_fallout'), 'no scrubbing where there is none');
+  const soldier = unit(game, 'warrior', 0, t);
+  endTurn(game);
+  eq(soldier.hp, 85, 'a unit on it loses 15 hit points at the turn’s end');
+  // (One that moved this turn, so it doesn't heal first.)
+  soldier.hp = 10;
+  soldier.moves = 0;
+  endTurn(game);
+  ok(!game.units.includes(soldier), 'and dies of it, weak enough');
+});
+
+test('fallout: a worker scrubs it away in its turns, and the tile yields again', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  techsTo(game, 0, 6);
+  city(game, 0, at(5, 5));
+  const t = at(6, 5);
+  Object.assign(game.tiles[t], { owner: 0, feature: 'fallout' });
+  const w = unit(game, 'worker', 0, t);
+  ok(apply(game, 0, { t: 'build', unit: w.id, what: 'scrub_fallout' }).ok, 'set to scrubbing');
+  const turns = workTurns(game, 'scrub_fallout');
+  ok(turns > 1, `it takes turns (${turns})`);
+  for (let i = 0; i < turns - 1; i++) endTurn(game);
+  eq(game.tiles[t].feature, 'fallout', 'still there a turn short');
+  endTurn(game);
+  eq(game.tiles[t].feature, undefined, 'gone');
+  ok(game.units.includes(w), 'the worker lived through it');
+  eq(tileYields(game, t, p).food, 2, 'its food back');
+  ok(canBuild(game, w, 'farm'), 'and it can be farmed');
+});
+
+test('fallout: a bot’s worker scrubs its own land first, and the advisor recommends it', () => {
+  const { game, at } = blank();
+  const me = game.players[0];
+  techsTo(game, 0, 4);
+  const home = city(game, 0, at(5, 5), { pop: 3 });
+  const t = neighbours(game.grid, home.tile)[0];
+  game.tiles[t].feature = 'fallout';
+  const worker = unit(game, 'worker', 0, t);
+  workers(makeCtx(game, me), [worker]);
+  eq(worker.work?.what, 'scrub_fallout', 'the bot’s worker sets to scrubbing');
+  worker.work = undefined;
+  me.bot = false;
+  const advice = adviseWork(game, me, worker);
+  eq(advice.tips[0]?.what, 'scrub_fallout', 'the advisor’s first tip');
+  eq(advice.tips[0]?.tile, t, 'on the fallout');
+  ok((advice.tips[0]?.gain.food ?? 0) > 0, 'its food back, it says');
 });
