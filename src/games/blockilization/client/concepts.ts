@@ -1,4 +1,6 @@
 import { ALLY, FRIEND } from '../rules/citystates';
+import { LIBERATE_INFLUENCE } from '../rules/liberation';
+import { PLEDGE_BROKEN, PLEDGE_REST, PLEDGE_TURNS } from '../rules/pledges';
 
 /**
  * The Civilopedia's own words: the game's core ideas (how cities grow, what happiness does, how a
@@ -43,7 +45,7 @@ export const CONCEPTS: Article[] = [
       { title: 'Growth', text: 'Every citizen eats two food. What is left over fills the city’s food box, and when it is full the city grows by a citizen. Each new citizen needs more food than the last. An unhappy empire grows slowly, and not at all when very unhappy.' },
       { title: 'Production', text: 'Production builds units, buildings, wonders and projects, one at a time; shift-click adds to a queue. Gold buys things outright (not world wonders), and faith buys religious units and buildings.' },
       { title: 'Borders', text: 'Culture grows a city’s land a tile at a time. Gold buys a tile at once. A city works tiles up to three away.' },
-      { title: 'Defence', text: 'A city has strength and hit points of its own, more with walls and castles, and fires at an enemy within two tiles once a turn. It heals 20 hit points a turn, only 8 after a turn it was attacked, and none while every tile round it holds an enemy. A city brought to no hit points is taken by the first melee unit to enter it. A city taken can be annexed, kept as a puppet, or razed.' },
+      { title: 'Defence', text: 'A city has strength and hit points of its own, more with walls and castles, and fires at an enemy within two tiles once a turn. It heals 20 hit points a turn, only 8 after a turn it was attacked, and none while every tile round it holds an enemy. A city brought to no hit points is taken by the first melee unit to enter it. A city taken can be annexed, kept as a puppet, or razed; one taken from someone who hadn’t founded it can be [[concept:diplomacy|liberated]], back to its founder.' },
     ],
   },
   {
@@ -206,6 +208,8 @@ export const CONCEPTS: Article[] = [
     sections: [
       { text: 'You meet a civilization when you first see its units or land. From the Diplomacy panel you can declare war, make peace (a peace treaty holds for a number of turns), and open your borders to its units.' },
       { title: 'City-states', text: `City-states are small single-city nations. Gifts of gold and services (clearing barbarian camps near them) win influence with them, which drifts back each turn. At ${FRIEND} influence they are your friends; the friend with the most, at ${ALLY} or more, is their ally. Friends and allies get what their [[cat:citystate|kind]] gives; an ally also gets their luxuries and their vote in the United Nations.` },
+      { title: 'Pledges to protect', text: `From a city-state’s card you may pledge to protect it (met, at peace, your influence not below 0). Your influence with it then rests ${PLEDGE_REST} higher, and anyone else who bullies it for tribute or declares war on it offends you, and the leaders who have pledged remember it. Bully or attack it yourself and the pledge is broken (${PLEDGE_BROKEN} influence lost); let your influence fall below 0 and it lapses. Either way you can’t pledge to it again for ${PLEDGE_TURNS} turns (at standard speed).` },
+      { title: 'Liberating cities', text: `A city you take from a civilization that hadn’t founded it (it had been taken from its founder before) can be liberated instead of annexed, kept as a puppet or razed: it goes back to its founder, who never forgets it. A city-state given back its city gives you ${LIBERATE_INFLUENCE} influence with it, enough to be its ally. A civilization or city-state that had been destroyed comes back to life with the city, at peace with you, its quarrels with the world forgotten. Liberating cities also weighs against your conquests in other leaders’ eyes. An original capital given back counts again as its founder’s for [[victory:domination|Domination]].` },
     ],
   },
   {
@@ -229,7 +233,7 @@ export const VICTORIES: Article[] = [
     color: '#b8432f',
     sub: 'Hold every original capital',
     sections: [
-      { text: 'Capture the original capital of every other civilization and hold them all, your own too. A civilization with no cities left (and no settler to found one) is out of the game.' },
+      { text: 'Capture the original capital of every other civilization and hold them all, your own too. A civilization with no cities left (and no settler to found one) is out of the game, unless someone [[concept:diplomacy|liberates]] a city of its: then it lives again, and an original capital given back is its founder’s again, to be taken once more.' },
     ],
   },
   {

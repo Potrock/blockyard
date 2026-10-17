@@ -12,7 +12,7 @@ import { drawResources } from './client/resources3d';
 import { drawTraffic } from './client/traffic';
 import { drawLife, resetLife } from './client/life';
 import { drawNatureFx } from './client/naturefx';
-import { me, setMap, setView, setYields, store } from './client/store';
+import { me, resetGame, setMap, setView, setYields, store } from './client/store';
 import { bindPrefs, loadPrefs, prefs, type Prefs } from './client/prefs';
 import { mountUI, renderUI, selectNextIdle } from './client/ui';
 import { moments } from './client/moments';
@@ -22,7 +22,7 @@ import { defineSounds, frameSounds, play } from './client/sound';
 import { frameWorld, worldMoments } from './client/worldfx';
 import { frameMoments } from './client/splash';
 import { shared } from './shared';
-import { askWorkAdvice, followWorkPlans, setWorkAdvice } from './client/workadvice';
+import { askWorkAdvice, followWorkPlans, resetWorkPlans, setWorkAdvice } from './client/workadvice';
 import { setFame } from './client/fame';
 import { takeHelp } from './client/diplomacy';
 import { turnAlerts } from './client/yourturn';
@@ -82,10 +82,10 @@ function board(): ClientKit {
             resetLife(client);
           }
           store.view = null;
-          store.selectedUnit = store.selectedCity = store.cityTarget = null;
+          resetGame();
+          resetWorkPlans();
           // (The Civilopedia stays open: it can be read in the lobby.)
           if (store.panel !== 'pedia') store.panel = null;
-          store.splashes = [];
         }
         store.changed++;
       });
@@ -94,6 +94,8 @@ function board(): ClientKit {
         setMap(d as MapWire);
         // (A new map: the last game's view is no guide to what's new in this one.)
         store.view = null;
+        resetGame();
+        resetWorkPlans();
         told = { x: NaN, z: NaN, at: 0 };
         resetModels(client);
         resetLife(client);

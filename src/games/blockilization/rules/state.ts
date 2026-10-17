@@ -98,6 +98,8 @@ export interface City {
   owner: number;
   /** Who founded it (a capital taken stays someone's original capital). */
   founder: number;
+  /** Who it was last taken from (set as it's taken): a city taken from a civ that hadn't founded it may be liberated, back to its founder (`liberation.ts`). */
+  takenFrom?: number;
   tile: number;
   pop: number;
   /** Food in the box, production toward what's being built, culture toward the next tile. */
@@ -172,7 +174,15 @@ export interface Player {
   bot: boolean;
   /** A city-state (not a full civilization). */
   /** A city-state: its kind, its character, what it asks of the civs that have met it (`quests.ts`), and the turn it last paid tribute (`citystates.ts`). */
-  cityState?: { kind: 'maritime' | 'cultured' | 'militaristic' | 'mercantile' | 'religious'; personality: string; quests?: Quest[]; tributeAt?: number };
+  cityState?: {
+    kind: 'maritime' | 'cultured' | 'militaristic' | 'mercantile' | 'religious';
+    personality: string;
+    quests?: Quest[];
+    tributeAt?: number;
+    /** The civs pledged to protect it, and the turn each pledged; and the turn each civ last broke a pledge to it (`pledges.ts`). */
+    pledges?: Record<number, number>;
+    broken?: Record<number, number>;
+  };
   /** Their team, by number from 0 (`teams.ts`): none, they play for themselves. */
   team?: number;
   alive: boolean;
@@ -184,6 +194,8 @@ export interface Player {
   research: Record<string, number>;
   researching: string | null;
   techQueue: string[];
+  /** Science with no tech to go to (one just learned with none chosen next): it goes into the next one chosen. */
+  spareScience?: number;
   /** Who chose what's being researched (on a team, which of them: `shareResearch`). */
   researchBy?: number;
   /** The achievements their person has been given in this game (the server's), not given again when they come back. */

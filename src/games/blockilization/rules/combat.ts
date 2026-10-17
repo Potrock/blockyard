@@ -139,7 +139,7 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
     const ground = (n: number) => (type.abilities?.includes('no_terrain_defense') ? Math.min(0, n) : n);
     if (tile.elevation === 'hills') add('Hills', ground(HILLS.defense));
     if (tile.feature) add(FEATURES[tile.feature].name, ground(FEATURES[tile.feature].defense));
-    if (u.stance === 'fortify' && canFortify(type) && !cityAt(game, at)) add('Fortified', 25 * Math.min(2, u.fortified ?? 0));
+    if (u.stance === 'fortify' && canFortify(type) && !u.embarked && !cityAt(game, at)) add('Fortified', 25 * Math.min(2, u.fortified ?? 0));
     if (tile.improvement && !tile.pillaged && tile.owner === u.owner) add(IMPROVEMENTS[tile.improvement].name, tile.improvement === 'citadel' ? 100 : tile.improvement === 'fort' ? 50 : 0);
     // At sea, a land unit is all but defenceless (it grows with the era).
     if (u.embarked) {
@@ -315,6 +315,9 @@ export function melee(game: Game, u: Unit, target: number): CombatResult | null 
   def.hp -= dealt;
   u.hp -= taken;
   u.attacked = true;
+  // (Attacking breaks fortifying, Civ V's.)
+  u.stance = undefined;
+  u.fortified = 0;
   u.moves = UNITS[u.type].abilities?.includes('withdraw') || u.promotions.includes('blitz') ? Math.max(0, u.moves - 1) : 0;
   const killed = def.hp <= 0;
   const died = u.hp <= 0;
@@ -358,6 +361,8 @@ export function ranged(game: Game, u: Unit, target: number): CombatResult | null
   def.hp -= dealt;
   u.attacked = true;
   u.moves = 0;
+  u.stance = undefined;
+  u.fortified = 0;
   gain(game, u, 2, def.owner);
   const killed = def.hp <= 0;
   if (killed) die(game, def, u);
@@ -380,6 +385,8 @@ function attackCity(game: Game, u: Unit, c: City, isRanged: boolean): CombatResu
   }
   u.attacked = true;
   u.moves = 0;
+  u.stance = undefined;
+  u.fortified = 0;
   const owner = c.owner;
   const died = u.hp <= 0;
   if (died) die(game, u, null, `attacking ${c.name}`);
@@ -426,6 +433,11 @@ export function cityFire(game: Game, c: City, target: number): CombatResult | nu
 /** A unit is destroyed (by someone, or nobody; `how` says by what when no unit did it: a city's walls, a citadel). */
 export function die(game: Game, u: Unit, by: Unit | null, how?: string) {
   removeUnit(game, u);
+  // A carrier sunk loses the aircraft aboard (however it was sunk: a unit, a city's fire, a strike, a citadel).
+  for (const a of game.units.filter((x) => x.carrier === u.id && x.owner === u.owner)) {
+    removeUnit(game, a);
+    note(game, a.owner, { text: `Your ${UNITS[a.type].name} was lost with its base.`, at: a.tile, kind: 'bad' });
+  }
   note(game, u.owner, { text: `Your ${UNITS[u.type].name} was destroyed${by ? ` by ${game.players[by.owner].name}'s ${UNITS[by.type].name}` : how ? ` by ${how}` : ''}.`, at: u.tile, kind: 'bad' });
   cityHooks.killed(game, u, by);
 }

@@ -103,8 +103,8 @@ function previewFight(game: Game, u: Unit, target: number): CombatPreview | null
   const here = occupants(game, target);
   const military = here.military && atWar(game, u.owner, here.military.owner) ? here.military : undefined;
   const civilian = here.civilian && atWar(game, u.owner, here.civilian.owner) ? here.civilian : undefined;
-  // (Mounted archers fight hand to hand next door, as the attack order has them.)
-  const fires = !!type.ranged && !(type.class === 'mounted' && next && (enemyCity || military || civilian));
+  // (Units with a ranged attack always fire, next door too, as the attack order has them: mounted archers as well.)
+  const fires = !!type.ranged;
   if (fires) {
     if (!(isAircraft(u) ? airTarget(game, u, target) : canFire(game, u.tile, target, rangeOf(u)))) return null;
     // (A siege unit not set up sets up as it fires, with two moves left: one to set up, one to fire.)
@@ -144,8 +144,8 @@ function previewFight(game: Game, u: Unit, target: number): CombatPreview | null
     d.damage = range(a, d.strength);
     att.damage = range(d.strength, a);
     att.dies = chanceAtLeast(d.strength, a, u.hp);
-    // Barbarians raid cities but never take them; ships and mounted units can't take them either.
-    const canTake = game.players[u.owner].civ !== 'barbarian' && ((type.domain === 'land' && !type.abilities?.includes('penalty_vs_cities')) || type.class !== 'mounted');
+    // Barbarians raid cities but never take them; aircraft and helicopters can't either (as `combat.ts` has it). Mounted units and ships can.
+    const canTake = game.players[u.owner].civ !== 'barbarian' && type.domain !== 'air' && type.class !== 'helicopter';
     const takes = canTake ? chanceAtLeast(a, d.strength, enemyCity.hp) * (1 - att.dies) : 0;
     return { attacker: att, defender: d, ranged: false, takes };
   }

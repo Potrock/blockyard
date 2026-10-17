@@ -8,13 +8,15 @@ import { RESOURCES } from '../terrain';
 import { majors, routesOf } from '../trade';
 import { isMilitary, UNITS } from '../units';
 import { nearVictory, opinionOf } from './opinion';
+import { projectHurts, projectProposals, projectServes } from './projects';
 
 /**
  * The bots in the World Congress. A bot proposes what serves it: the repeal of what hurts it, an
- * embargo on a rival close to winning (or the leader it dislikes), the funding its victory wants, a
- * luxury of the leader's banned, a tax on a conqueror's army, no bombs while it has none. It votes for
- * its own and its friends' (unless they hurt it), against what hurts it or helps a rival it fears, and
- * for what serves its aim; the rest it leaves to others.
+ * embargo on a rival close to winning (or the leader it dislikes), the funding its victory wants, an
+ * international project it would do well at (`ai/projects.ts`), a luxury of the leader's banned, a
+ * tax on a conqueror's army, no bombs while it has none. It votes for its own and its friends'
+ * (unless they hurt it), against what hurts it or helps a rival it fears, and for what serves its
+ * aim; the rest it leaves to others.
  */
 
 type Vote = 'yes' | 'no' | 'abstain';
@@ -35,6 +37,10 @@ function hurts(game: Game, p: Player, r: Resolution): boolean {
       return aim === 'domination' || soldiers(game, p.index) > average(game, (o) => soldiers(game, o.index));
     case 'non_proliferation':
       return knows(p, 'nuclear_fission');
+    case 'worlds_fair':
+    case 'international_games':
+    case 'space_station':
+      return projectHurts(game, p, r.kind, (o) => feared(game, p, o));
   }
 }
 
@@ -54,6 +60,10 @@ function serves(game: Game, p: Player, r: Resolution): boolean {
       return majors(game).some((o) => o !== p && o.ai?.aim === 'domination' && soldiers(game, o.index) > soldiers(game, p.index) * 1.5);
     case 'non_proliferation':
       return majors(game).some((o) => o !== p && knows(o, 'nuclear_fission'));
+    case 'worlds_fair':
+    case 'international_games':
+    case 'space_station':
+      return projectServes(game, p, r.kind);
   }
 }
 
@@ -75,6 +85,8 @@ export function congressProposal(game: Game, p: Player): (Resolution & { repeal?
   for (const o of rivals) options.push({ kind: 'embargo', civ: o.index });
   if (p.ai?.aim === 'culture') options.push({ kind: 'arts_funding' });
   if (p.ai?.aim === 'science') options.push({ kind: 'sciences_funding' });
+  // An international project it would do well at.
+  for (const id of projectProposals(game, p)) options.push({ kind: id });
   for (const o of rivals) {
     const theirs = new Set(game.tiles.filter((t) => t.owner === o.index && t.resource && RESOURCES[t.resource].kind === 'luxury').map((t) => t.resource!));
     for (const lux of theirs) options.push({ kind: 'ban_luxury', luxury: lux });

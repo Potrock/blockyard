@@ -11,7 +11,7 @@ import { h, send, tile, type El } from './ui';
  * The city-states, as Civ V's city-state screen has them, one card each: its kind and what it gives
  * a friend and an ally, your influence on a bar marked where friendship (30) and alliance (60)
  * begin, who its ally is, what it asks of you (its quests: the influence each wins, the turns left,
- * a look at the place), tribute you could demand of it, and gifts of gold (with the influence each
+ * a look at the place), who has pledged to protect it (and your pledge), tribute you could demand of it, and gifts of gold (with the influence each
  * buys), war and peace, and a look at where it stands on the map. Your allies first, then your
  * friends, then the rest.
  */
@@ -132,6 +132,30 @@ function tribute(p: PlayerSummary): El | null {
   );
 }
 
+/** Pledges to protect it (Civ V's): who protects it, and your pledge (its influence rests higher; bullying or attacking it yourself breaks it). */
+function protection(p: PlayerSummary): El | null {
+  const v = store.view!;
+  const pl = p.cityState!.pledge;
+  if (p.war && !pl.by.length) return null;
+  const names = pl.by.map((i) => (i === v.you ? 'you' : v.players[i]?.met ? v.players[i].name : 'a civilization you haven’t met'));
+  return h(
+    'div.cs-pledge',
+    {},
+    icon('shield', 13, pl.by.length ? '#8fc8ff' : '#6c7688'),
+    h('span.cv-grow', {}, pl.by.length ? `Protected by ${names.join(', ')}` : 'No one has pledged to protect it'),
+    pl.mine
+      ? h('span.cv-chip.on', { title: `Your influence rests ${pl.rest} higher. Bullying or attacking it yourself breaks the pledge, as does your influence falling below 0` }, 'Pledged')
+      : !p.war &&
+          h(
+            'button.cv-btn.small',
+            { disabled: !!pl.why, title: pl.why ?? `Pledge to protect ${p.name}: your influence rests ${pl.rest} higher, and anyone who bullies or attacks it offends you. Bullying or attacking it yourself breaks the pledge.`, onclick: () => send({ t: 'pledge', target: p.index }) },
+            icon('shield', 13),
+            'Pledge to protect',
+          ),
+    pl.why && !pl.mine && !p.war && h('small.cv-muted.why', {}, pl.why),
+  );
+}
+
 /** One city-state's card. */
 function card(p: PlayerSummary): El {
   const v = store.view!;
@@ -168,6 +192,7 @@ function card(p: PlayerSummary): El {
     h('div.cs-row.cs-facts', {}, h('span', {}, icon('crown', 13, ally ? '#f2c14e' : '#6c7688'), allyName), drift(cs) && h('span.cs-drift', { title: 'How your influence moves each turn, and where it stops' }, icon('turn', 13, '#9aa4b5'), drift(cs))),
     gives(p),
     quests(p),
+    protection(p),
     tribute(p),
     h(
       'div.cs-acts',
@@ -241,6 +266,9 @@ export const CITYSTATES_CSS = `
 .cs-tribute .why { display: none; flex-basis: 100%; font-family: 'Chakra Petch', system-ui, sans-serif; font-size: 13px; }
 @media (hover: none) { .cs-tribute .why { display: block; } }
 .cs-tribute .loss { font: 400 15px/1 'Jersey 10', monospace; color: #ffb4a6; margin-left: 2px; }
+.cs-pledge { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; }
+.cs-pledge .why { display: none; flex-basis: 100%; font-family: 'Chakra Petch', system-ui, sans-serif; font-size: 13px; }
+@media (hover: none) { .cs-pledge .why { display: block; } }
 .cs-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .cs-acts .gain { font: 400 15px/1 'Jersey 10', monospace; color: #b8f09c; margin-left: 2px; }
 /* The colour-blind palette (the rest is pixel.ts's): a request done in blue. */

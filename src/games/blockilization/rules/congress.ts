@@ -3,6 +3,7 @@ import { civEffects, has, knows, nameTo, note, noteAll, speed } from './core';
 import type { Game, Player } from './state';
 import { teammates } from './teams';
 import { diplomatsOf } from './trade';
+import { cannotHold, isProject, projectsTurn, startProject, type ProjectId, type WorldProject } from './projects';
 import { RESOURCES } from './terrain';
 
 /**
@@ -14,11 +15,11 @@ import { RESOURCES } from './terrain';
  * an embargo on a civ (no trade routes with it), a banned luxury (no happiness from it), Arts or
  * Sciences Funding (a third faster for some great people, a third slower for the others), a
  * Standing Army Tax (a quarter more for units' upkeep), Nuclear Non-Proliferation (no nuclear
- * weapons built).
+ * weapons built). Or, passed once and done when built, an international project (`projects.ts`).
  */
 
-export type ResolutionKind = 'embargo' | 'ban_luxury' | 'arts_funding' | 'sciences_funding' | 'standing_army_tax' | 'non_proliferation';
-export const RESOLUTION_KINDS: ResolutionKind[] = ['embargo', 'ban_luxury', 'arts_funding', 'sciences_funding', 'standing_army_tax', 'non_proliferation'];
+export type ResolutionKind = 'embargo' | 'ban_luxury' | 'arts_funding' | 'sciences_funding' | 'standing_army_tax' | 'non_proliferation' | ProjectId;
+export const RESOLUTION_KINDS: ResolutionKind[] = ['embargo', 'ban_luxury', 'arts_funding', 'sciences_funding', 'standing_army_tax', 'non_proliferation', 'worlds_fair', 'international_games', 'space_station'];
 
 export interface Resolution {
   kind: ResolutionKind;
@@ -47,6 +48,8 @@ export interface Congress {
   active: Resolution[];
   /** The last session: its turn, and how each proposal went. */
   last?: { turn: number; results: (Resolution & { repeal?: boolean; passed: boolean; yes: number; no: number })[] };
+  /** The international projects it has opened, under way and done. */
+  projects?: WorldProject[];
 }
 
 /** The era (its index: the Renaissance) in which the World Congress is founded. */
@@ -120,6 +123,9 @@ export const RESOLUTIONS: Record<ResolutionKind, { name: string; effect: string;
   sciences_funding: { name: 'Sciences Funding', effect: 'Great Scientists, Engineers and Merchants a third faster; Artists, Writers and Musicians a third slower', names: null },
   standing_army_tax: { name: 'Standing Army Tax', effect: "A quarter more for every unit's upkeep", names: null },
   non_proliferation: { name: 'Nuclear Non-Proliferation', effect: 'No nuclear weapons built', names: null },
+  worlds_fair: { name: "World's Fair", effect: 'An international project: who puts the most production in gets a free social policy, the others culture', names: null },
+  international_games: { name: 'International Games', effect: 'An international project: tourism and happiness for those who put the most production in', names: null },
+  space_station: { name: 'International Space Station', effect: 'An international project: science for those who put production in, and faster spaceship parts for the most', names: null },
 };
 
 /** A resolution's name (with what it names) and effect, in words, as a reader sees it (a civ they haven't met not named). */
@@ -149,6 +155,11 @@ export function cannotPropose(game: Game, p: Player, r: Resolution & { repeal?: 
   if (!RESOLUTION_KINDS.includes(r.kind)) return 'No such resolution';
   if (r.kind === 'embargo' && !majors(game).some((o) => o.index === r.civ)) return 'Embargo which civ?';
   if (r.kind === 'ban_luxury' && RESOURCES[r.luxury ?? '']?.kind !== 'luxury') return 'Ban which luxury?';
+  if (isProject(r.kind)) {
+    if (r.repeal) return 'A project is built, not repealed';
+    const why = cannotHold(game, r.kind);
+    if (why) return why;
+  }
   const inForceNow = c.active.some((a) => same(a, r));
   if (r.repeal && !inForceNow) return "That isn't in force";
   if (!r.repeal && inForceNow) return 'That is in force already';
@@ -187,6 +198,7 @@ export function congressTurn(game: Game, eraOf: (p: Player) => number) {
     return;
   }
   const c = game.congress;
+  projectsTurn(game);
   if (!game.players[c.host]?.alive) c.host = living[0]?.index ?? c.host;
   // Bots who may propose do so (before the session's last turns).
   for (const i of proposers(game)) {
@@ -209,6 +221,7 @@ export function congressTurn(game: Game, eraOf: (p: Player) => number) {
     const passed = yes > no;
     const r: Resolution = { kind: o.kind, ...(o.civ !== undefined ? { civ: o.civ } : {}), ...(o.luxury !== undefined ? { luxury: o.luxury } : {}) };
     if (passed && o.repeal) c.active = c.active.filter((a) => !same(a, o));
+    else if (passed && isProject(o.kind)) startProject(game, o.kind);
     else if (passed) c.active.push({ ...r, since: game.turn });
     results.push({ ...r, ...(o.repeal ? { repeal: true } : {}), passed, yes, no });
     noteAll(game, (x) => (x.cityState || x.civ === 'barbarian' ? null : { text: `The World Congress ${passed ? 'passes' : 'rejects'} ${resolutionText(game, o, x)} (${yes} for, ${no} against).`, kind: passed ? 'good' : 'info', topic: 'congress' }));
@@ -250,6 +263,8 @@ function defaultVote(game: Game, p: Player, o: Proposal): 'yes' | 'no' | 'abstai
         return game.units.filter((u) => u.owner === p.index).length > game.units.length / Math.max(1, majors(game).length);
       case 'non_proliferation':
         return knows(p, 'nuclear_fission');
+      default:
+        return false;
     }
   })();
   if (o.repeal) return hurtsMe ? 'yes' : 'abstain';

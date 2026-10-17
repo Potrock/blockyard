@@ -136,7 +136,10 @@ export function decisions(): Decision[] {
         color: '#3f8f6f',
         needed: false,
         act: () => {
+          // (Their page, with its "Accept their peace": any deal drawn up with someone else is put away.)
           store.diplo.with = p.index;
+          store.diplo.deal = null;
+          store.diplo.check = null;
           open('diplomacy')();
         },
       });

@@ -1,6 +1,6 @@
 import { atWar, knows } from '../core';
 import { BUILDINGS } from '../buildings';
-import { askOf, dealTurns, dealer, declinedLately, denounced, friends, hasMet, lentLuxuries, luxuryCopies, pacted, relationsOf, researchCost, tradeable, type Deal, type DealItem } from '../diplomacy';
+import { askOf, dealTurns, dealer, declinedLately, denounced, friends, hasMet, lentLuxuries, luxuryCopies, pacted, relationsOf, researchCost, spareIncome, tradeable, type Deal, type DealItem } from '../diplomacy';
 import { strategic } from '../economy';
 import { eraOf } from '../game';
 import type { Game, Player } from '../state';
@@ -36,7 +36,8 @@ function itemValue(ctx: Ctx, other: Player, item: DealItem, opinion: number): nu
     case 'goldPerTurn':
       // (Never more than its income can pay.)
       if (mine) return ctx.income - item.amount < 2 ? -10000 : -item.amount * turns * dear;
-      return item.amount * turns * 0.85;
+      // (Received: worth no more than the payer's income can keep paying.)
+      return Math.min(item.amount, spareIncome(game, other)) * turns * 0.85;
     case 'luxury': {
       if (!mine) return luxuryCopies(game, ctx.p).get(item.resource) || lentLuxuries(game, ctx.p).got.has(item.resource) ? turns * 0.5 : luxuryWorth(ctx) * turns;
       const spare = (luxuryCopies(game, ctx.p).get(item.resource) ?? 0) - (lentLuxuries(game, ctx.p).sent.get(item.resource) ?? 0);

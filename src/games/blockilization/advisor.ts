@@ -13,6 +13,7 @@ import { cityAt, knows, seesResource, techCost } from './rules/core';
 import { cityYields, connected, isBuilding, tileYields, workable } from './rules/economy';
 import { canBuild, canProduce, constructible, itemCost, trainable, type BuildWhat } from './rules/game';
 import { distance, line, neighbours } from './rules/hex';
+import { isProject, PROJECTS } from './rules/projects';
 import type { City, Game, Player, Production, Tile, Unit } from './rules/state';
 import { pathTo, TECH_LIST, TECHS } from './rules/techs';
 import { FEATURES, IMPROVEMENTS, RESOURCES, tapsWith, TERRAINS, YIELD_KEYS, type ImprovementId, type Yields } from './rules/terrain';
@@ -108,7 +109,7 @@ function quicker(ctx: Ctx, c: City, item: Production): Advice | null {
 }
 
 function buildWhy(ctx: Ctx, c: City, kind: string, id: string): string {
-  if (kind === 'project') return 'The spaceship: the way to a science victory';
+  if (kind === 'project') return isProject(id) ? `The ${PROJECTS[id].name}: you could place among those who put in most` : 'The spaceship: the way to a science victory';
   if (kind === 'unit') {
     const t = UNITS[id];
     if (!t) return '';

@@ -125,6 +125,8 @@ export interface PlayerSummary {
     fall: number;
     /** Tribute the viewer could demand (order `tribute`, take 'gold' or 'worker'): the gold, each choice's influence cost, and why it can't now (null: it can). */
     tribute: { gold: number; cost: { gold: number; worker: number }; why: string | null };
+    /** Pledges to protect it (order `pledge`): whether the viewer has pledged, why it can't now (null: it can), how much higher a pledge rests its influence, and the civs pledged to it. */
+    pledge: { mine: boolean; why: string | null; rest: number; by: number[] };
   };
   /** The viewer's cultural influence over them (1: influential), and their religion. */
   influence?: number;
@@ -155,6 +157,8 @@ export interface Relation {
   strategic: Record<string, number>;
   writing: boolean;
   philosophy: boolean;
+  /** What a research agreement with them costs each side (at the later era of the two, as the rules charge it). */
+  researchCost: number;
   /** Deals running between them and the viewer. */
   deals: { item: DealItem; turns: number }[];
   /** The civs they're friends with and have denounced (as anyone can tell). */
@@ -265,6 +269,8 @@ export interface CityWire {
   /** Own cities: being razed (turns left), whether it can be razed, the great works in it. */
   razing?: number;
   canRaze?: boolean;
+  /** Own cities: who it could be liberated to (order `cityChoice` 'liberate'), and whether that brings them back to life; absent if it can't be. */
+  liberate?: { to: number; name: string; revive: boolean; cityState: boolean };
   works?: Record<string, string[]>;
 }
 
@@ -392,6 +398,13 @@ export interface View {
     proposals: { id: number; kind: string; civ: number | null; luxury: string | null; name: string; effect: string; by: number; repeal: boolean; vote: 'yes' | 'no' | 'abstain' | null; forecast: { player: number; vote: 'yes' | 'no' | 'abstain' | null; delegates: number }[]; projected: { yes: number; no: number } }[];
     last: { turn: number; results: { name: string; effect: string; passed: boolean; yes: number; no: number }[] } | null;
     active: { kind: string; name: string; effect: string; civ: number | null; luxury: string | null; since: number }[];
+    /**
+     * The international projects it has opened (`rules/projects.ts`): what's been put in of the cost,
+     * production a turn going in and the turns left at that pace (null: none going in), when it opened
+     * and was done (null: under way); each tier's reward; each met civ's share, the most first, with
+     * its tier as it stands (or stood), what civs not met have put in, and the viewer's tier.
+     */
+    projects: { id: string; name: string; cost: number; total: number; perTurn: number; turns: number | null; since: number; done: number | null; rewards: { gold: string; silver: string; bronze: string }; shares: { player: number; put: number; tier: 'gold' | 'silver' | 'bronze' | null }[]; unmet: number; mine: 'gold' | 'silver' | 'bronze' | null }[];
   } | null;
   /** Deals put to the viewer, waiting for an answer; the civs the viewer has a deal waiting with. */
   offers: OfferWire[];

@@ -6,6 +6,7 @@ import { policyEffects } from './policies';
 import { cityBeliefEffects, cityReligion, religionEffects } from './faith';
 import { alliedLuxuries, alliedStrategics, cityStateBonus } from './citystates';
 import { banned, fundedGreatPeople, inForce } from './congress';
+import { projectEffects } from './projects';
 import { tradeLuxuries, tradeStrategics } from './diplomacy';
 import { aroundYields, naturalWonderOf, natureHappiness } from './nature';
 import { SPEEDS, type City, type Game, type Player } from './state';
@@ -33,7 +34,8 @@ export interface CityMemo {
 }
 
 /**
- * What applies to one city: its buildings, the empire's, its religion's; and of those, what's only
+ * What applies to one city: its buildings, the empire's, its religion's, what its civ keeps from the
+ * World Congress's projects (`projects.ts`); and of those, what's only
  * for cities like it and for each building it has (`memo` carries what's the same for all the civ's
  * cities, when many are asked about at once).
  */
@@ -48,6 +50,7 @@ export function cityEffects(game: Game, c: City, memo: CityMemo = {}): Effects[]
   for (const b of c.buildings) if (BUILDINGS[b]) add(BUILDINGS[b].effects);
   for (const e of (memo.empire ??= empireEffects(game, p))) add(e);
   for (const e of cityBeliefEffects(game, c)) add(e);
+  for (const e of projectEffects(game, p)) add(e);
   return out;
 }
 
@@ -496,6 +499,12 @@ export function strategic(game: Game, p: Player): Record<string, { have: number;
     const res = UNITS[u.type]?.resource;
     if (res) (out[res] ??= { have: 0, used: 0 }).used++;
   }
+  // (A building that needs one takes one for good, as a unit does: one Coal, one Factory.)
+  for (const c of citiesOf(game, p.index))
+    for (const id of c.buildings) {
+      const res = BUILDINGS[id]?.resource;
+      if (res) (out[res] ??= { have: 0, used: 0 }).used++;
+    }
   tradeStrategics(game, p, out);
   return out;
 }

@@ -48,7 +48,8 @@ import { ask, attackable, cityAt, enemyAt, me, myCity, myUnit, outOfReach, reach
 import { chargeFrom, previewPath, routeOf, swapsWith, whyNot, type Route } from './path';
 import { leaveMarch, marchOf, marching } from './march';
 import { CITYSTATES_CSS } from './citystates';
-import { CONGRESS_CSS, openCongress, sessionWhen, unvoted } from './congress';
+import { CONGRESS_CSS, openCongress, PROJECT_LOOK, sessionWhen, unvoted } from './congress';
+import { isProject, PROJECTS } from '../rules/projects';
 import { DIPLO_CSS, putOffOffer, renderDiplomacy, renderOffer, waitingOffer } from './diplomacy';
 import type { DealItem } from '../rules/diplomacy';
 
@@ -115,7 +116,7 @@ export function portrait(civ: string, size = 52, kind?: string): El {
 /** What an item to build looks like: a unit's picture, a wonder's, a building's glyph. */
 export function itemArt(kind: string, id: string, size = 36): El {
   if (kind === 'unit') return pic(unitModel(id), size);
-  if (kind === 'project') return tile('rocket', '#3a5a9a', size);
+  if (kind === 'project') return PROJECT_LOOK[id] ? tile(...PROJECT_LOOK[id], size) : tile('rocket', '#3a5a9a', size);
   const w = wonderPicture(id);
   if (w && BUILDINGS[id]?.kind !== 'building') return pic(w, size);
   const g = buildingGlyph(id);
@@ -820,6 +821,22 @@ let cycled: { unit: number; i: number; n: number; at: number } | null = null;
 const CYCLED_MS = 2500;
 
 /** Whether a unit can be left to explore by itself (Explore, E): a soldier or a warship (not a great person, nor a work boat or cargo ship). */
+/** Why a unit can't upgrade now, as the rules' `upgrade` order would refuse it (null: it can, or nothing to upgrade to). */
+export function upgradeWhy(u: UnitWire): string | null {
+  const up = u.upgrade;
+  if (!up) return null;
+  const s = store.view!.self;
+  if (store.known[u.tile]?.owner !== me()) return 'Upgrade it in your own land';
+  if (!u.moves) return 'It needs a move left to upgrade: next turn';
+  const need = UNITS[up.to]?.resource;
+  if (need && need !== UNITS[u.type]?.resource) {
+    const r = s.strategic[need];
+    if (!r || r.have - r.used <= 0) return `Upgrading needs ${RESOURCES[need]?.name ?? need}`;
+  }
+  if (s.gold < up.cost) return `It costs ${up.cost} gold (you have ${s.gold})`;
+  return null;
+}
+
 export const explores = (u: UnitWire) => {
   const type = UNITS[u.type];
   return !!type && (type.domain === 'land' || type.domain === 'sea') && isMilitary(type) && !isGreatPerson(u.type);
@@ -1062,7 +1079,8 @@ function buildOptions(t: number): { what: string; name: string; does: string }[]
   // (Nothing's built on a natural wonder, not even a road.)
   if (!s || !k || k.wonder) return [];
   const out: { what: string; name: string; does: string }[] = [];
-  if (!k.road && techs.has('the_wheel')) out.push({ what: 'road', name: 'Road', does: 'Faster moves, and a link from a city to your capital' });
+  // (No road on the water: an embarked worker builds none, as the rules' `canBuild` has it.)
+  if (!k.road && techs.has('the_wheel') && !TERRAINS[s.terrain].water) out.push({ what: 'road', name: 'Road', does: 'Faster moves, and a link from a city to your capital' });
   if (k.road === 'road' && techs.has('railroad')) out.push({ what: 'rail', name: 'Railroad', does: 'Much faster moves' });
   if (k.pillaged) out.push({ what: 'repair', name: 'Repair', does: 'Mend what was pillaged here: its yields come back' });
   if (k.owner !== v.you || cityAt(t)) return out;
@@ -1180,7 +1198,9 @@ function renderUnit(): El | null {
   if (type.domain === 'land' && city?.owner === me() && city.buildings?.includes('airport')) act('Airlift', aim('airlift'), 'Fly it to another of your cities with an airport (before it moves)', 'jet', store.unitAim?.unit === u.id ? '.gold' : '');
   // A soldier in (or next to) a friendly city-state's land can be given to it, for influence.
   const cs = [u.tile, ...neighbours(store.grid!, u.tile)].map((t) => store.view!.players[store.known[t]?.owner ?? -1]).find((p) => p?.cityState && !p.war);
-  if (cs && isMilitary(type) && !city) act(`Gift to ${cs.name}`, () => ask(`Give this ${type.name} to ${cs.name}? It becomes theirs, for influence with them.`, 'Give it', () => send({ t: 'giftUnit', unit: u.id, target: cs.index }), false), undefined, 'peace');
+  // (Not with another unit on its tile, as the rules' `giftUnit` has it.)
+  const stacked = unitsAt(u.tile).some((x) => x.id !== u.id);
+  if (cs && isMilitary(type) && !city) act(`Gift to ${cs.name}`, () => ask(`Give this ${type.name} to ${cs.name}? It becomes theirs, for influence with them.`, 'Give it', () => send({ t: 'giftUnit', unit: u.id, target: cs.index }), false), stacked ? 'Not with another unit on its tile: move one off first' : undefined, 'peace', '', stacked);
   // A fighter on patrol intercepts enemy aircraft striking within its range.
   if (type.class === 'fighter') {
     if (u.stance === 'alert') act('Stop patrolling', { t: 'stance', unit: u.id, stance: 'wake' }, 'It stops intercepting', 'close');
@@ -1194,16 +1214,8 @@ function renderUnit(): El | null {
   act('Skip', { t: 'skip', unit: u.id }, 'Skip this turn', 'moves');
   if (u.path?.length) act('Stop', { t: 'stance', unit: u.id, stance: 'wake' }, 'Stop its journey', 'close');
   if (u.upgrade) {
-    const gold = store.view!.self.gold;
-    const home = store.known[u.tile]?.owner === me();
-    act(
-      `Upgrade to ${UNITS[u.upgrade.to]?.name ?? u.upgrade.to} · ${u.upgrade.cost}`,
-      { t: 'upgrade', unit: u.id },
-      !home ? 'Upgrade it in your own land' : gold < u.upgrade.cost ? `It costs ${u.upgrade.cost} gold (you have ${gold})` : !u.moves ? 'It needs a move left to upgrade: next turn' : `${u.upgrade.cost} gold: ${describe('unit', u.upgrade.to)}`,
-      'xp',
-      '',
-      !home || gold < u.upgrade.cost || !u.moves,
-    );
+    const why = upgradeWhy(u);
+    act(`Upgrade to ${UNITS[u.upgrade.to]?.name ?? u.upgrade.to} · ${u.upgrade.cost}`, { t: 'upgrade', unit: u.id }, why ?? `${u.upgrade.cost} gold: ${describe('unit', u.upgrade.to)}`, 'xp', '', !!why);
   }
   act('Disband', () => ask(`Disband this ${type.name}? It's gone for good.`, 'Disband', () => send({ t: 'disband', unit: u.id })), undefined, 'close', '.danger');
   const hint = store.group.length
@@ -1390,7 +1402,7 @@ export function openCity(id: number) {
 }
 
 export function itemName(kind: string, id: string) {
-  if (kind === 'project') return SPACESHIP_PARTS.find((x) => x.id === id)?.name ?? id;
+  if (kind === 'project') return isProject(id) ? PROJECTS[id].name : (SPACESHIP_PARTS.find((x) => x.id === id)?.name ?? id);
   return kind === 'unit' ? (UNITS[id]?.name ?? id) : (BUILDINGS[id]?.name ?? id);
 }
 
@@ -1631,7 +1643,8 @@ export function cityBuild(city: CityWire, info: CityInfo | null, refresh: () => 
       ),
     ]),
     sect('Wonders', made.filter((o) => o.kind === 'building' && BUILDINGS[o.id]?.kind !== 'building').map(option)),
-    sect('Spaceship', made.filter((o) => o.kind === 'project').map(option)),
+    sect('Spaceship', made.filter((o) => o.kind === 'project' && !isProject(o.id)).map(option)),
+    sect('World Congress projects', made.filter((o) => o.kind === 'project' && isProject(o.id)).map(option)),
     sect('With faith', holy),
     h('small.cv-dim', {}, touchScreen() ? 'Tap to build it now; + adds it to the queue.' : 'Click to build now; + (or shift-click) adds it to the queue.'),
   ].filter((x): x is El => !!x);

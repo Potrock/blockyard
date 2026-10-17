@@ -48,10 +48,10 @@ export interface Running {
   turns: number;
 }
 
-/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel). */
+/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`). */
 export interface DiploEvent {
   turn: number;
-  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land';
+  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge';
   by: number;
   to: number;
 }
@@ -186,7 +186,9 @@ function itemProblem(game: Game, a: Player, b: Player, item: DealItem): string |
     case 'gold':
       return !whole(item.amount) ? 'Gold must be a whole amount' : giver.gold < item.amount ? `${giver.name} hasn't ${item.amount} gold` : null;
     case 'goldPerTurn':
-      return !whole(item.amount) || item.amount > 999 ? 'Gold per turn must be a whole amount' : null;
+      if (!whole(item.amount) || item.amount > 999) return 'Gold per turn must be a whole amount';
+      // (Civ V's: no more a turn than the payer's income can pay, less what its deals pay already.)
+      return item.amount > spareIncome(game, giver) ? `${giver.name} can't pay ${item.amount} gold a turn (${spareIncome(game, giver)} at most)` : null;
     case 'luxury': {
       if (!RESOURCES[item.resource] || RESOURCES[item.resource].kind !== 'luxury') return 'Not a luxury';
       const copies = luxuryCopies(game, giver).get(item.resource) ?? 0;
@@ -236,12 +238,15 @@ export function dealProblem(game: Game, deal: Deal): string | null {
   if (!dealer(a) || !dealer(b) || a === b) return 'No deal can be made with them';
   if (!Array.isArray(deal.items) || !deal.items.length || deal.items.length > 20) return 'The deal is empty';
   if (!hasMet(game, a, b)) return "You haven't met them";
+  // (Every item's shape first: a crafted order could send anything, `null` among them.)
+  if (!deal.items.every(wellFormed)) return 'That deal makes no sense';
   const war = atWar(game, a.index, b.index);
   if (war && !deal.items.some((x) => x.kind === 'peace')) return "You're at war: only a peace deal";
   const seen = new Set<string>();
   for (const item of deal.items) {
-    if (!wellFormed(item)) return 'That deal makes no sense';
-    const key = JSON.stringify({ ...item, amount: undefined });
+    // The same thing twice is one thing, whatever else an item carries (a crafted key, another amount):
+    // so no side gives more of anything than it has, or pays for one research agreement twice.
+    const key = `${item.kind}|${KINDS[item.kind] === 'one' && 'from' in item ? item.from : ''}|${'resource' in item ? item.resource : ''}`;
     if (seen.has(key)) return 'The same thing twice';
     seen.add(key);
     const why = itemProblem(game, a, b, item);
@@ -357,15 +362,8 @@ export function warDeclared(game: Game, by: number, on: number) {
   const t = game.players[on];
   remember(game, 'war', by, on);
   if (friends(game, by, on)) remember(game, 'backstab', by, on);
-  const broken = rel.running.filter((r) => (r.a === by && r.b === on) || (r.a === on && r.b === by));
-  if (broken.length) remember(game, 'brokeDeal', by, on);
-  rel.running = rel.running.filter((r) => !broken.includes(r));
-  rel.offers = rel.offers.filter((o) => !((o.from === by && o.to === on) || (o.from === on && o.to === by)));
-  for (const [x, y] of [[p, t], [t, p]]) {
-    x.diplomacy.friends[y.index] = 0;
-    x.diplomacy.pacts[y.index] = 0;
-    x.diplomacy.research[y.index] = 0;
-  }
+  if (rel.running.some((r) => (r.a === by && r.b === on) || (r.a === on && r.b === by))) remember(game, 'brokeDeal', by, on);
+  endDealings(game, by, on);
   // The victim's pacts: its partners join the war (unless at war already, or bound to peace).
   if (!dealer(t) || !dealer(p)) return;
   for (const ally of game.players) {
@@ -376,7 +374,8 @@ export function warDeclared(game: Game, by: number, on: number) {
       const b = game.players[y];
       a.diplomacy.war[y] = b.diplomacy.war[x] = true;
       a.diplomacy.openBorders[y] = b.diplomacy.openBorders[x] = 0;
-      a.diplomacy.friends[y] = b.diplomacy.friends[x] = 0;
+      // (What they had agreed ends as it does for any war; honouring a pact breaks no deal, and calls in no further pacts.)
+      endDealings(game, x, y);
     }
     remember(game, 'war', ally.index, by);
     noteAll(game, (r) =>
@@ -386,6 +385,19 @@ export function warDeclared(game: Game, by: number, on: number) {
           ? { text: `${nameTo(r, ally, true)} honours its defensive pact with ${r === t ? 'you' : nameTo(r, t)} and declares war on ${r === p ? 'you' : nameTo(r, p)}!`, kind: 'war', topic: r === t || r === p ? undefined : 'wars' }
           : null,
     );
+  }
+}
+
+/** Two civs gone to war (or one gone from the game): their running deals and offers end, and their friendship, pact and research agreement. */
+export function endDealings(game: Game, x: number, y: number) {
+  const rel = relationsOf(game);
+  const between = (i: number, j: number) => (i === x && j === y) || (i === y && j === x);
+  rel.running = rel.running.filter((r) => !between(r.a, r.b));
+  rel.offers = rel.offers.filter((o) => !between(o.from, o.to));
+  for (const [p, q] of [[game.players[x], y], [game.players[y], x]] as const) {
+    p.diplomacy.friends[q] = 0;
+    p.diplomacy.pacts[q] = 0;
+    p.diplomacy.research[q] = 0;
   }
 }
 
@@ -489,6 +501,24 @@ export function dealGold(game: Game, p: Player): number {
 }
 
 /**
+ * Gold a turn a civ could still promise in a deal: its last turn's income without its deals' gold
+ * (paid at that turn's end by those running then; one made since has paid nothing yet), less what
+ * its deals pay each turn now.
+ */
+export function spareIncome(game: Game, p: Player): number {
+  const turns = dealTurns(game);
+  let base = p.lastIncome?.gold ?? 0;
+  let owed = 0;
+  for (const r of game.relations?.running ?? []) {
+    if (r.item.kind !== 'goldPerTurn' || (r.a !== p.index && r.b !== p.index)) continue;
+    const pays = r.item.from === p.index;
+    if (r.turns < turns) base += pays ? r.item.amount : -r.item.amount;
+    if (pays) owed += r.item.amount;
+  }
+  return Math.max(0, base - owed);
+}
+
+/**
  * Each turn: gold paid each turn (a payer who can't pay, or whose income no longer covers it with
  * little in the treasury, breaks the deal), deals running out (a research agreement's science when
  * it does), friendships, pacts and denouncements wearing off, old offers withdrawn, old memories
@@ -533,7 +563,8 @@ export function diplomacyTurn(game: Game) {
   for (const o of rel.offers) if (game.turn - o.turn >= 5) (rel.declined ??= []).push({ from: o.from, to: o.to, turn: game.turn, ask: askOf(o) });
   rel.offers = rel.offers.filter((o) => game.turn - o.turn < 5);
   if (rel.declined) rel.declined = rel.declined.filter((d) => game.turn - d.turn < 40);
-  rel.events = rel.events.filter((e) => game.turn - e.turn < 150);
+  // (A city given back is never forgotten: Civ V's liberation is a debt for good.)
+  rel.events = rel.events.filter((e) => e.kind === 'liberate' || game.turn - e.turn < 150);
 }
 
 /** A research agreement ends: each side's research gains what the two would have made together (the lesser's science, a while's worth). */

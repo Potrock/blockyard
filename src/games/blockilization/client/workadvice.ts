@@ -26,6 +26,13 @@ let asked = '';
 /** Workers on their way to recommended work: where, what to build there, where they set out from and when. */
 const plans = new Map<number, { tile: number; what: BuildWhat; from: number; turn: number }>();
 
+/** A new game: the last one's plans (and advice) go (its unit ids mean other units now). */
+export function resetWorkPlans() {
+  plans.clear();
+  advice = null;
+  asked = '';
+}
+
 /** The worker of yours selected (one that improves the land), if one is. */
 function selectedWorker(): UnitWire | undefined {
   const u = myUnit(store.selectedUnit);

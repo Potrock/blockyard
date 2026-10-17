@@ -1,4 +1,4 @@
-import { airStrike, isAircraft, rebase, strandedAircraft } from './air';
+import { airStrike, carry, isAircraft, rebase, strandedAircraft } from './air';
 import { BUILDINGS, type Building } from './buildings';
 import { CIVS, unitFor } from './civs';
 import { canPillage, capture, citadelTurn, cityHeal, cityMaxHp, cityFire, cityHooks, melee, nuke, pillage, ranged, rangeOf, type CombatResult } from './combat';
@@ -6,12 +6,15 @@ import { aName, atWar, canStand, capitalOf, cityAt, cityById, citiesOf, civEffec
 import { assignCitizens, cityEffects, cityYields, claim, coastal, foodKept, goldUpkeep, goldenCost, greatCost, greatPeopleBonus, growthThreshold, happiness, isBuilding, luxuries, nextTile, policyCost, purchaseCost, scaled, SPECIALIST_YIELD, specialistSlots, strategic, tileCultureCost, tileGoldCost, workable, dissent, preferredIdeology } from './economy';
 import { CHOOSABLE, type Effects, type GreatKind, type SpecialistKind } from './effects';
 import { barbarianTurn } from './barbarians';
-import { allyOf, cityStates, cityStateTurn, coup, gift, giftUnit, tribute } from './citystates';
+import { allyOf, cityStates, cityStateTurn, coup, CS_WAR_INFLUENCE, gift, giftUnit, tribute } from './citystates';
 import { congressTurn, inForce, propose as proposeResolution, RESOLUTION_KINDS, vote as voteOnResolution, type ResolutionKind } from './congress';
 import { cannotSendDiplomat, longGameTurn, partCost, partsBuildable, routesFull, routesGold, spiesOf, startRoute, stolen, surveillanceTurns, tourismOf } from './trade';
-import { answer, cityTaken, denounce, diplomacyTurn, endWar, propose, remember, WAR_WHYS, warDeclared, warWords, type DealItem, type WarWhy } from './diplomacy';
-import { canBuyReligious, faithBuildings, faithCost, faithTurn, faithUnit, foundReligion, inquisition, spread, spreadsOf } from './faith';
+import { canContribute, contribute, isProject, projectLeft } from './projects';
+import { answer, cityTaken, denounce, diplomacyTurn, endDealings, endWar, propose, remember, WAR_WHYS, warDeclared, warWords, type DealItem, type WarWhy } from './diplomacy';
+import { canBuyReligious, capFollowers, faithBuildings, faithCost, faithTurn, faithUnit, foundReligion, inquisition, spread, spreadsOf } from './faith';
 import { fromPromotions, promotionsDue, promotionsFor, PROMOTIONS } from './promotions';
+import { liberate, liberation } from './liberation';
+import { pledge, pledgeOffended } from './pledges';
 import { distance, neighbours, within } from './hex';
 import { advance, campHooks, canEnter, captureHooks, moveTo, occupants, planPath, ruinHooks, sightStops, swap, swapWith } from './movement';
 import { wondersBeside } from './nature';
@@ -66,7 +69,8 @@ export type Order =
   | { t: 'reformation'; belief: string }
   | { t: 'greatChoice'; kind: GreatKind }
   | { t: 'greatPerson'; unit: number; action: 'improvement' | 'discover' | 'hurry' | 'trade' | 'golden' | 'work' | 'culture' | 'repair' | 'concert' }
-  | { t: 'cityChoice'; city: number; choice: 'annex' | 'puppet' | 'raze' }
+  | { t: 'cityChoice'; city: number; choice: 'annex' | 'puppet' | 'raze' | 'liberate' }
+  | { t: 'pledge'; target: number }
   | { t: 'spread'; unit: number }
   | { t: 'gift'; target: number; gold: number }
   | { t: 'tribute'; target: number; take: 'gold' | 'worker' }
@@ -254,7 +258,8 @@ export function heldBuildings(game: Game, p: Player, c: City): { id: string; why
 export function itemCost(game: Game, item: Production): number {
   if (item.kind === 'unit') return scaled(game, UNITS[item.id]?.cost ?? 0);
   if (item.kind === 'building') return scaled(game, BUILDINGS[item.id]?.cost ?? 0);
-  if (item.kind === 'project') return scaled(game, partCost(item.id));
+  // (An international project: what it still wants, from everyone.)
+  if (item.kind === 'project') return isProject(item.id) ? projectLeft(game, item.id) : scaled(game, partCost(item.id));
   return Infinity;
 }
 
@@ -276,7 +281,7 @@ export function productionToward(game: Game, c: City, item: Production, effects 
     const u = UNITS[item.id];
     for (const e of effects) for (const up of e.unitProduction ?? []) if ((!up.classes || up.classes.includes(u.class) || up.classes.includes(u.id)) && (!up.domain || up.domain === u.domain)) pct += up.percent;
   }
-  if (item.kind === 'project') pct += effects.reduce((s, e) => s + (e.spaceshipProduction ?? 0), 0);
+  if (item.kind === 'project' && !isProject(item.id)) pct += effects.reduce((s, e) => s + (e.spaceshipProduction ?? 0), 0);
   return Math.floor(base * (1 + pct / 100));
 }
 
@@ -374,8 +379,9 @@ function captureCity(game: Game, c: City, by: number) {
     noteAll(game, (r) => ({ text: r === loser ? 'Your spaceship is lost with your capital!' : `${nameTo(r, loser, true)} has lost its spaceship with its capital.`, kind: r === loser ? 'bad' : 'info' }));
   }
   cityTaken(game, was, by);
-  // A city-state's or a civ's: it's theirs, occupied, smaller.
+  // A city-state's or a civ's: it's theirs, occupied, smaller (and, taken from one who hadn't founded it, theirs to liberate: `liberation.ts`).
   c.owner = by;
+  c.takenFrom = was;
   c.pop = Math.max(1, c.pop - Math.max(1, Math.floor(c.pop / 4)));
   c.hp = Math.floor(cityMaxHp(game, c) / 4);
   c.occupied = c.founder !== by;
@@ -383,6 +389,9 @@ function captureCity(game: Game, c: City, by: number) {
   c.queue = [];
   c.prod = 0;
   c.locked = [];
+  // (Burning, it's put out: its new owner decides again, and its founder, back, keeps it.)
+  c.razing = undefined;
+  capFollowers(c);
   // Buildings: the palace, national wonders and some others go; world wonders stay; the captor's free buildings come.
   c.buildings = c.buildings.filter((b) => b !== 'palace' && (BUILDINGS[b]?.kind === 'world' || random(game) < 0.66) && BUILDINGS[b]?.kind !== 'national');
   for (const e of civEffects(game, game.players[by])) if (e.freeBuildingInAll && !c.buildings.includes(e.freeBuildingInAll)) c.buildings.push(e.freeBuildingInAll);
@@ -404,7 +413,7 @@ function captureCity(game: Game, c: City, by: number) {
     c.puppet = c.founder !== by ? true : undefined;
     // (A puppet chooses its own builds: it starts on one at once, rather than standing idle till the turn ends.)
     if (c.puppet) c.queue = [defaultBuild(game, game.players[by], c)];
-    if (c.puppet && !game.players[by].bot) note(game, by, { text: `${c.name} is yours: annex it, keep it as a puppet, or raze it (click to open the city).`, at: c.tile, kind: 'war', openCity: true });
+    if (c.puppet && !game.players[by].bot) note(game, by, { text: `${c.name} is yours: annex it, keep it as a puppet, ${liberation(game, c) ? `liberate it (back to ${game.players[c.founder].name}), ` : ''}or raze it (click to open the city).`, at: c.tile, kind: 'war', openCity: true });
   }
   assignCitizens(game, c);
   updateAllVisibility(game);
@@ -417,6 +426,8 @@ function eliminate(game: Game, p: number) {
   const pl = game.players[p];
   if (!pl.alive || pl.civ === 'barbarian') return;
   pl.alive = false;
+  // (What it had agreed with anyone ends with it: no one goes on paying, or lending to, a civ that's gone.)
+  for (const o of game.players) if (o !== pl) endDealings(game, p, o.index);
   for (const u of unitsOf(game, p)) removeUnit(game, u);
   endWars(game, p);
   noteAll(game, (r) => ({ text: knowsOf(r, pl) ? `${pl.name} of ${civOf(pl)?.name ?? 'a lost people'} has been destroyed.` : "A civilization you never met has been destroyed.", kind: 'war' }));
@@ -815,7 +826,8 @@ const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }
   reformation: { belief: 'string' },
   greatChoice: { kind: CHOOSABLE },
   greatPerson: { unit: 'int', action: ACTIONS },
-  cityChoice: { city: 'int', choice: ['annex', 'puppet', 'raze'] },
+  cityChoice: { city: 'int', choice: ['annex', 'puppet', 'raze', 'liberate'] },
+  pledge: { target: 'int' },
   spread: { unit: 'int' },
   gift: { target: 'int', gold: 'int' },
   tribute: { target: 'int', take: ['gold', 'worker'] },
@@ -1027,6 +1039,7 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       }
       if (!isMilitary(type) || type.abilities?.includes('no_attack')) return fail(`${aUnit(u.type)} can't attack`);
       if (isAircraft(u)) {
+        if (u.moves <= 0 || u.attacked) return fail('It has flown this turn already (a strike or a rebase takes its move)');
         const r = airStrike(game, u, o.target);
         return r ? { ok: true, combat: [r] } : fail(`Nothing it can strike there: an enemy it can see, within ${rangeOf(u)} tiles`);
       }
@@ -1034,6 +1047,7 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       if ((u.attacks ?? 0) >= attacks) return fail('It has attacked this turn already');
       if (u.moves <= 0 && !(attacks > 1 && type.ranged && (u.attacks ?? 0) > 0)) return fail('It has no moves left this turn');
       // A siege unit not set up sets up first (a move), Civ V's way, if that leaves it a move to fire with.
+      const before = { setUp: u.setUp, moves: u.moves };
       if (type.abilities?.includes('must_setup') && !u.setUp) {
         if (u.moves < 2) return fail('It needs a move to set up and one to fire: set it up now, and it fires next turn');
         u.setUp = true;
@@ -1041,7 +1055,12 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       }
       // Units with a ranged attack always fire; the rest fight hand to hand. (An attack that doesn't happen doesn't count.)
       const result = type.ranged ? ranged(game, u, o.target) : melee(game, u, o.target);
-      if (!result) return fail(attackWhy(game, u, o.target));
+      if (!result) {
+        // (Nor does the setting up for it.)
+        u.setUp = before.setUp;
+        u.moves = before.moves;
+        return fail(attackWhy(game, u, o.target));
+      }
       u.attacks = (u.attacks ?? 0) + 1;
       // (A city taken or a carrier sunk loses the aircraft there.)
       strandedAircraft(game);
@@ -1120,6 +1139,7 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
     }
     case 'stance':
       if (o.stance === 'fortify' && !canFortify(UNITS[u.type])) return fail("Mounted units, armour and ships can't fortify (sleep instead)");
+      if (o.stance === 'fortify' && u.embarked) return fail("A unit at sea in a boat can't fortify (sleep instead)");
       u.stance = o.stance === 'wake' ? undefined : o.stance;
       if (o.stance === 'fortify') u.fortified = 0;
       u.path = undefined;
@@ -1163,6 +1183,10 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       return OK;
     }
     case 'cityChoice': {
+      if (o.choice === 'liberate') {
+        const why = liberate(game, c);
+        return why ? fail(why) : OK;
+      }
       if (!c.puppet && !c.occupied && o.choice !== 'raze') return fail('Nothing to decide');
       if (o.choice === 'raze') {
         if (c.founder === by) return fail('Only a city taken from someone else can be razed');
@@ -1171,6 +1195,8 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
         c.puppet = undefined;
         return OK;
       }
+      // (Annexing is for good, as in Civ V: an annexed city isn't made a puppet again to shed its unhappiness.)
+      if (o.choice === 'puppet' && !c.puppet) return fail(`${c.name} has been annexed: that can't be undone`);
       c.puppet = o.choice === 'puppet' || undefined;
       c.occupied = o.choice === 'annex' ? true : c.occupied;
       c.razing = undefined;
@@ -1211,6 +1237,8 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       return OK;
     }
     case 'buy': {
+      // (Civ V's: a city in resistance buys nothing, with gold or faith.)
+      if (c.resistance) return fail(`${c.name} is in resistance (${c.resistance} turn${c.resistance === 1 ? '' : 's'} more): nothing can be bought there yet`);
       if (o.with === 'faith') {
         const id = o.item.id;
         if (!faithPurchases(game, p, c).some((x) => x.kind === o.item.kind && x.id === id)) return fail("That can't be bought with faith here (missionaries and the like only where your religion is the city's)");
@@ -1298,6 +1326,7 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       if (canResearch(new Set(p.techs), o.tech)) {
         p.researching = o.tech;
         p.techQueue = [];
+        spendSpare(p);
         return OK;
       }
       // A far tech: queue the way there.
@@ -1312,6 +1341,7 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       if (!order.length) return fail('Already known');
       p.researching = order[0];
       p.techQueue = order.slice(1);
+      spendSpare(p);
       return OK;
     }
     case 'policy': {
@@ -1381,6 +1411,8 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       if (why) return fail(why);
       spy.city = o.target;
       spy.progress = 0;
+      // (Sent somewhere this turn: no coup there until it has settled in, next turn.)
+      spy.arrived = game.turn;
       spy.diplomat = o.diplomat || undefined;
       spy.told = undefined;
       spy.watch = where && !o.diplomat && where.owner !== by && !game.players[where.owner].cityState ? surveillanceTurns(game) : undefined;
@@ -1412,6 +1444,10 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       const why = tribute(game, p, o.target, o.take, (type, owner, at) => spawnNear(game, type, owner, at));
       return why ? fail(why) : OK;
     }
+    case 'pledge': {
+      const why = pledge(game, p, o.target);
+      return why ? fail(why) : OK;
+    }
     case 'inquisition': {
       if (!UNITS[u.type].abilities?.includes('remove_heresy')) return fail('Only an inquisitor');
       const why = inquisition(game, p, u);
@@ -1436,6 +1472,9 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
         x.diplomacy.research[b] = y.diplomacy.research[a] = 0;
         clearOffers(x, b);
         clearOffers(y, a);
+        // War on a city-state: its friendship is lost (Civ V's -60 influence), and any alliance with it; its protectors are offended, and the attacker's own pledge broken (`pledges.ts`).
+        if (y.cityState) pledgeOffended(game, a, b);
+        if (y.cityState) x.influence[b] = Math.min(x.influence[b] ?? 0, CS_WAR_INFLUENCE);
       }
       noteAll(game, (r) =>
         r === p
@@ -1515,7 +1554,7 @@ const specialistsPlaced = (c: City) => Object.values(c.lockedSpecialists ?? {}).
 export function canProduce(game: Game, p: Player, c: City, item: Production): boolean {
   if (item.kind === 'unit') return trainable(game, p, c).includes(item.id);
   if (item.kind === 'building') return Object.hasOwn(BUILDINGS, item.id) && canConstruct(game, p, c, BUILDINGS[item.id]);
-  if (item.kind === 'project') return partsBuildable(game, p).includes(item.id) || c.queue[0]?.id === item.id;
+  if (item.kind === 'project') return isProject(item.id) ? canContribute(game, p, c, item.id) : partsBuildable(game, p).includes(item.id) || c.queue[0]?.id === item.id;
   return false;
 }
 
@@ -1534,11 +1573,16 @@ export function placeFor(game: Game, c: City, type: string): number | undefined 
   return ring.find(free) ?? within(game.grid, c.tile, 2).find((t) => beyond(t) && free(t));
 }
 
-/** Production toward the item being built is kept for it (switching away); the city starts on `item` with what it had kept toward that. */
+/**
+ * Production toward the item being built is kept for it (switching away); the city starts on `item`
+ * with what it had kept toward that. With nothing being built, what's left over from the last thing
+ * finished goes into it too.
+ */
 function switchTo(c: City, item: Production) {
+  const carried = c.queue.length ? 0 : c.prod;
   stash(c);
   const key = `${item.kind}:${item.id}`;
-  c.prod = c.saved?.[key] ?? 0;
+  c.prod = carried + (c.saved?.[key] ?? 0);
   if (c.saved) delete c.saved[key];
 }
 
@@ -1558,6 +1602,13 @@ function bought(c: City, item: Production) {
     c.prod += c.saved?.[key] ?? 0;
     if (c.saved) delete c.saved[key];
   }
+}
+
+/** Science kept with nothing to research goes into what's chosen. */
+function spendSpare(p: Player) {
+  if (!p.spareScience || !p.researching) return;
+  p.research[p.researching] = (p.research[p.researching] ?? 0) + p.spareScience;
+  p.spareScience = undefined;
 }
 
 /** Keep the production toward what's being built now (it's being put aside). */
@@ -1676,6 +1727,8 @@ function expel(game: Game) {
     u.stance = undefined;
     u.fortified = 0;
     u.embarked = type.domain === 'land' && TERRAINS[game.tiles[near].terrain].water ? true : undefined;
+    // (A carrier's aircraft go with it.)
+    carry(game, u);
   }
 }
 
@@ -1725,7 +1778,8 @@ function playerTurn(game: Game, p: Player) {
     const first = Object.keys(TECHS).filter((t) => canResearch(new Set(p.techs), t)).sort((a, b) => TECHS[a].col - TECHS[b].col);
     if (p.bot && first[0]) p.researching = first[Math.floor(random(game) * Math.min(3, first.length))];
   }
-  if (p.researching) {
+  if (!p.researching && science > 0 && teamOf(game, p.index).length < 2) p.spareScience = (p.spareScience ?? 0) + science;
+  else if (p.researching) {
     p.research[p.researching] = (p.research[p.researching] ?? 0) + science;
     const cost = techCost(game, p, p.researching);
     // (A team's research is finished between them, once all have put theirs in: `shareResearch`.)
@@ -1734,7 +1788,10 @@ function playerTurn(game: Game, p: Player) {
       const done = p.researching;
       learn(game, p, done);
       if (p.researching) p.research[p.researching] = (p.research[p.researching] ?? 0) + over;
-      else if (!p.bot) note(game, p.index, { text: 'Choose what to research next.', kind: 'tech', remind: true });
+      else {
+        p.spareScience = (p.spareScience ?? 0) + over;
+        if (!p.bot) note(game, p.index, { text: 'Choose what to research next.', kind: 'tech', remind: true });
+      }
     }
   }
   // Culture and faith.
@@ -1787,11 +1844,13 @@ function cityTurn(game: Game, c: City, y: ReturnType<typeof cityYields>) {
   const need = growthThreshold(game, c.pop);
   if (c.food >= need) {
     c.pop++;
-    c.food = Math.floor(need * (foodKept(game, c) / 100));
+    // (What's over the threshold is kept, as Civ V does, on top of what its granary-likes keep.)
+    c.food = c.food - need + Math.floor(need * (foodKept(game, c) / 100));
     note(game, c.owner, { text: `${c.name} has grown to ${c.pop}.`, at: c.tile, kind: 'city' });
   } else if (c.food < 0) {
     if (c.pop > 1) {
       c.pop--;
+      capFollowers(c);
       note(game, c.owner, { text: `${c.name} is starving!`, at: c.tile, kind: 'bad' });
     }
     c.food = 0;
@@ -1805,6 +1864,10 @@ function cityTurn(game: Game, c: City, y: ReturnType<typeof cityYields>) {
   if (item) {
     if (!canProduce(game, p, c, item)) {
       c.queue.shift();
+    } else if (item.kind === 'project' && isProject(item.id)) {
+      // An international project: the city's production (and what was left over) goes into its civ's share.
+      contribute(game, c, item.id, c.prod + productionToward(game, c, item, undefined, y.prod));
+      c.prod = 0;
     } else {
       c.prod += productionToward(game, c, item, undefined, y.prod);
       const cost = itemCost(game, item);
@@ -2062,6 +2125,7 @@ function raze(game: Game) {
     if (c.razing === undefined) continue;
     c.pop--;
     c.razing = c.pop;
+    capFollowers(c);
     if (c.pop > 0) continue;
     noteAll(game, { text: `${c.name} has been burned to the ground.`, at: c.tile, kind: 'war' });
     for (const tile of game.tiles) if (tile.city === c.id) {

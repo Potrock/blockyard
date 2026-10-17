@@ -14,6 +14,7 @@ import { armyNear, armyReady } from './military';
 import { nearVictory, opinionOf, stanceOf, WARMONGER } from './opinion';
 import { armyNeed, cityCap, isSoldier, wants } from './production';
 import { aimLeaning } from './personality';
+import { liberates } from './liberation';
 
 /**
  * A bot's grand strategy: the victory it works toward (by its leader's character, then by how the
@@ -375,10 +376,11 @@ function strongEnough(ctx: Ctx, margin: number): boolean {
   return mine >= theirs * (1.35 - ctx.pers.boldness * 0.05) * margin;
 }
 
-/** Captured cities: kept as puppets, but a small one burned when the people can't bear more. */
+/** Captured cities: given back to their founders when that pays (`liberates`), else kept as puppets, but a small one burned when the people can't bear more. */
 export function conquests(ctx: Ctx) {
-  for (const c of ctx.cities) {
+  for (const c of [...ctx.cities]) {
     if (!c.puppet || c.razing !== undefined || c.founder === ctx.me) continue;
+    if (liberates(ctx, c)) continue;
     const original = ctx.game.cities.filter((x) => x.founder === c.founder).sort((a, b) => a.id - b.id)[0] === c;
     if (!original && c.pop <= 2 && ctx.mood < -4) act(ctx, { t: 'cityChoice', city: c.id, choice: 'raze' });
   }

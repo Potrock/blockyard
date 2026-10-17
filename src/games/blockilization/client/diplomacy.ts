@@ -374,7 +374,7 @@ function tradePane(p: PlayerSummary): El {
     if (!r.embassyThere && s.trade.writing && r.writing) theirs.push(option({ kind: 'embassy', from: them }, 'An embassy in their capital', 'city', '#c8b8ff'));
     if (r.friends <= 0 && r.youDenounced <= 0 && r.denouncedYou <= 0) both.push(option({ kind: 'friendship' }, 'Declaration of friendship', 'people', '#6fd27a', `${turns} turns`));
     if (r.friends > 0 && r.pact <= 0) both.push(option({ kind: 'pact' }, 'Defensive pact', 'shield', '#6fd27a', 'needs embassies both ways'));
-    if (r.research <= 0 && s.trade.philosophy && r.philosophy) both.push(option({ kind: 'research' }, 'Research agreement', 'science', '#6ab8ff', `${s.trade.researchCost} gold each; needs embassies both ways`));
+    if (r.research <= 0 && s.trade.philosophy && r.philosophy) both.push(option({ kind: 'research' }, 'Research agreement', 'science', '#6ab8ff', `${r.researchCost} gold each; needs embassies both ways`));
   }
   const parts = sides(deal, me);
   const key = JSON.stringify(deal);

@@ -10,12 +10,20 @@ import { h, send, tile, togglePanel, type El } from './ui';
  * to its next session; the proposals before it, each with how it would go now (each civ's expected
  * way and delegates) and your vote (for, against, or abstaining: a person who doesn't vote
  * abstains); a resolution of your own to put to it when you may (the host and the civ with the most
- * delegates besides), or the repeal of one in force; the resolutions in force, each with what it
+ * delegates besides), or the repeal of one in force; the international projects it has opened, with
+ * each civ's share and its tier as it stands; the resolutions in force, each with what it
  * does; the last session's results; and each civ's delegates (yours marked, and where they come from).
  */
 
 type Congress = NonNullable<View['congress']>;
 type Proposal = Congress['proposals'][number];
+
+/** Each international project's glyph and colour (its build option's too). */
+export const PROJECT_LOOK: Record<string, [glyph: string, color: string]> = {
+  worlds_fair: ['frame', '#a85ab8'],
+  international_games: ['medal', '#c8892a'],
+  space_station: ['satellite', '#2f6fc0'],
+};
 
 /** Each kind of resolution's glyph and colour. */
 const LOOK: Record<string, [glyph: string, color: string]> = {
@@ -25,6 +33,7 @@ const LOOK: Record<string, [glyph: string, color: string]> = {
   sciences_funding: ['science', '#2f6fc0'],
   standing_army_tax: ['coins', '#b8892a'],
   non_proliferation: ['atom', '#3f8f6f'],
+  ...PROJECT_LOOK,
 };
 const kindTile = (kind: string, size: number) => tile(...(LOOK[kind] ?? ['vote', '#3a6a9a']), size);
 
@@ -199,6 +208,69 @@ function activeBlock(c: Congress): El {
   );
 }
 
+const TIER_COLOR = { gold: '#f2c14e', silver: '#c8d0dc', bronze: '#c8803a' } as const;
+const TIER_NAME = { gold: 'Gold', silver: 'Silver', bronze: 'Bronze' } as const;
+
+/**
+ * The international projects: each one's progress (what's been put in of its cost, and the turns left
+ * at the world's pace), each tier's reward, and each civ's share, the most first, with the tier it
+ * stands at (or won); yours marked. Done ones after, put away to their result.
+ */
+function projectsBlock(c: Congress): El | null {
+  if (!c.projects.length) return null;
+  const v = store.view!;
+  const open = c.projects.filter((x) => x.done === null);
+  const done = c.projects.filter((x) => x.done !== null);
+  const card = (x: Congress['projects'][number]) => {
+    const most = Math.max(1, ...x.shares.map((s) => s.put), x.unmet);
+    return h(
+      'div.cg-prop',
+      {},
+      h(
+        'div.cg-text',
+        {},
+        kindTile(x.id, 30),
+        h('div.cv-grow', {}, h('b', {}, x.name), h('small.cv-muted', {}, `${x.total} of ${x.cost} production · ${x.turns === null ? 'nothing going in yet' : `${x.perTurn} a turn: done in about ${x.turns} turn${x.turns === 1 ? '' : 's'}`}`)),
+        x.mine && h('span.cv-chip.on', { style: `color:${TIER_COLOR[x.mine]}` }, `${TIER_NAME[x.mine]} for you`),
+      ),
+      h('div.cv-bar.orange', {}, h('i', { style: `width:${Math.min(100, Math.round((x.total / Math.max(1, x.cost)) * 100))}%` })),
+      h('div.cg-tiers', {}, ...(['gold', 'silver', 'bronze'] as const).map((t) => h('small', {}, h('b', { style: `color:${TIER_COLOR[t]}` }, `${TIER_NAME[t]} `), x.rewards[t]))),
+      h(
+        'div.cg-shares',
+        {},
+        ...x.shares.map((s) =>
+          h(
+            `div.cg-share${s.player === v.you ? '.mine' : ''}`,
+            { title: `${nameOf(s.player)}: ${s.put} production${s.tier ? `, ${TIER_NAME[s.tier].toLowerCase()} as it stands` : ''}` },
+            emblemEl(v.players[s.player]?.civ ?? '', 16),
+            h('span.cv-grow', {}, nameOf(s.player)),
+            h('i', { style: `width:${Math.round((s.put / most) * 60)}px` }),
+            s.tier ? icon('medal', 13, TIER_COLOR[s.tier]) : h('span.cg-none', {}),
+            h('b', {}, String(s.put)),
+          ),
+        ),
+        x.unmet > 0 && h('small.cv-muted', {}, `${x.unmet} put in by civilizations you haven’t met`),
+      ),
+    );
+  };
+  return h(
+    'div.cg-block',
+    {},
+    h('div.cv-label', {}, `International projects · ${open.length} under way`),
+    h('small.cv-muted', {}, 'Any of your cities may put its production into one (from its build list); it can’t be bought. When the cost is reached, the civ that put in most wins gold, the next silver, and the rest who put in a twentieth or more, bronze.'),
+    ...open.map(card),
+    ...done.map((x) =>
+      h(
+        'div.cg-law.passed',
+        {},
+        kindTile(x.id, 24),
+        h('div.cv-grow', {}, h('b', {}, x.name), h('small', {}, `Done on turn ${x.done}: ${x.shares.filter((s) => s.tier).map((s) => `${nameOf(s.player)} ${TIER_NAME[s.tier!].toLowerCase()}`).join(', ') || 'no one you’ve met placed'}`)),
+        x.mine && icon('medal', 16, TIER_COLOR[x.mine]),
+      ),
+    ),
+  );
+}
+
 /** The last session's results. */
 function lastBlock(c: Congress): El | null {
   if (!c.last?.results.length) return null;
@@ -272,6 +344,7 @@ export function renderCongress(): El[] {
       ...(c.proposals.length ? c.proposals.map((o) => proposalCard(o, c.total)) : [h('small.cv-muted', {}, 'Nothing has been proposed yet. The host and the civ with the most delegates besides may each propose one resolution.')]),
     ),
     c.canPropose && proposeBlock(c),
+    projectsBlock(c),
     activeBlock(c),
     lastBlock(c),
     delegatesBlock(c),
@@ -312,6 +385,15 @@ export const CONGRESS_CSS = `
 .cg-law { display: flex; align-items: center; gap: 8px; padding: 4px 6px; background: rgba(255,255,255,.035); }
 .cg-law b { font-size: 18px; }
 .cg-law.failed b { color: var(--muted); }
+.cg-tiers { display: flex; flex-direction: column; gap: 1px; }
+.cg-tiers small { font-family: 'Chakra Petch', system-ui, sans-serif; font-size: 13px; color: var(--muted); }
+.cg-tiers b { font: 400 16px/1 'Jersey 10', monospace; }
+.cg-shares { display: flex; flex-direction: column; gap: 3px; }
+.cg-share { display: flex; align-items: center; gap: 7px; padding: 3px 8px; background: rgba(255,255,255,.035); font-size: 14px; }
+.cg-share i { display: block; height: 8px; background: linear-gradient(180deg, #ffd08a 0 2px, #e0902a 2px calc(100% - 2px), #8a5014 calc(100% - 2px)); box-shadow: 0 0 0 2px #07090c; }
+.cg-share .cg-none { width: 13px; }
+.cg-share b { min-width: 40px; text-align: right; font: 400 18px/1 'Jersey 10', monospace; }
+.cg-share.mine { background: rgba(242,193,78,.14); box-shadow: inset 0 0 0 2px #f2c14e; }
 .cg-dels { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px; }
 .cg-del { display: flex; align-items: center; gap: 7px; padding: 4px 8px; background: rgba(255,255,255,.035); font-size: 14px; }
 .cg-del b { font: 400 20px/1 'Jersey 10', monospace; }

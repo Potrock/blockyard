@@ -244,6 +244,8 @@ export interface Spy {
   diplomat?: boolean;
   /** The war plan (by the turn it was made) a diplomat has told of already. */
   told?: number;
+  /** The turn it was last sent where it is (a coup waits a turn after). */
+  arrived?: number;
 }
 
 export const spiesOf = (p: Player): Spy[] => ((p as Player & { spies?: Spy[] }).spies ??= []);

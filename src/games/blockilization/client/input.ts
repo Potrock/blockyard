@@ -411,6 +411,12 @@ function key(e: KeyboardEvent): boolean {
     if (code === 'Escape' || (shown === 'splash' && (code === 'Enter' || code === 'NumpadEnter' || code === 'Space'))) closePanels();
     return true;
   }
+  // (H brings a hidden interface back wherever it was put away: a civ fallen meanwhile, watching on.)
+  if (code === 'KeyH' && store.interfaceHidden) {
+    store.interfaceHidden = false;
+    store.changed++;
+    return true;
+  }
   if (!store.view || store.view.spectator) {
     // The lobby, or watching: only the Civilopedia (F1, and Escape to close it).
     if (code === 'F1' || (code === 'Escape' && store.panel)) {

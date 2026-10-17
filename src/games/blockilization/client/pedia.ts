@@ -4,6 +4,8 @@ import type { CityFilter, Effects, TileFilter } from '../rules/effects';
 import { FIRST_FINDER_GOLDEN, FOUND_HAPPINESS, NATURAL_WONDER_LIST, NATURAL_WONDERS, type NaturalWonder } from '../rules/nature';
 import { IDEOLOGIES, TREES, type Policy } from '../rules/policies';
 import { PROMOTION_LIST, PROMOTIONS } from '../rules/promotions';
+import { isProject as isWorldProject, PROJECT_IDS, PROJECTS, type ProjectId } from '../rules/projects';
+import { PROJECT_LOOK } from './congress';
 import { BELIEF_LIST, BELIEFS } from '../rules/religion';
 import { SPEEDS } from '../rules/state';
 import { baseTechCost, ERA_NAMES, ERAS, eraOfCol, TECH_LIST, TECHS, type Era } from '../rules/techs';
@@ -96,6 +98,7 @@ function buildIndex(): Entry[] {
     else add('wonder', b.id, b.name, isProject(b) ? 'Projects' : b.kind === 'national' ? 'National wonders' : ERA_NAMES[eraOfTech(b.tech)]);
   }
   for (const s of SPACESHIP_PARTS) add('project', s.id, s.name, 'Projects', 'wonder');
+  for (const id of PROJECT_IDS) add('project', id, PROJECTS[id].name, 'World Congress projects', 'wonder');
   for (const t of TREES) for (const p of [t.opener, ...t.policies, t.finisher]) add('policy', p.id, p.name, t.name);
   for (const i of IDEOLOGIES) {
     add('policy', i.id, i.name, 'Ideologies');
@@ -117,7 +120,7 @@ function buildIndex(): Entry[] {
 }
 
 /** The order of the list's groups where it isn't the data's own: civilians first, then the eras, then the rest. */
-const GROUP_ORDER = ['Civilians', 'The capital', ...ERAS.map((e) => ERA_NAMES[e]), 'National wonders', 'Projects', 'Unique units', 'Unique buildings', 'Bought with faith', 'Great people', 'Religious units'];
+const GROUP_ORDER = ['Civilians', 'The capital', ...ERAS.map((e) => ERA_NAMES[e]), 'National wonders', 'Projects', 'World Congress projects','Unique units', 'Unique buildings', 'Bought with faith', 'Great people', 'Religious units'];
 
 const ENTRIES = buildIndex();
 const BY_KEY = new Map(ENTRIES.map((e) => [e.key, e]));
@@ -157,7 +160,7 @@ function artOf(e: Entry, size: number): El {
       return tile(g.glyph, '#22303f', size, g.color);
     }
     case 'project':
-      return tile('rocket', '#3a5a9a', size);
+      return PROJECT_LOOK[e.id] ? tile(...PROJECT_LOOK[e.id], size) : tile('rocket', '#3a5a9a', size);
     case 'policy': {
       const tree = policyTree(e.id);
       return tile(POLICY_GLYPH[tree] ?? 'crown', TREE_COLOR[tree] ?? IDEOLOGY_COLOR[tree] ?? '#555555', size);
@@ -365,6 +368,12 @@ function cost(n: number): number {
   return speed ? Math.max(1, Math.floor(n * SPEEDS[speed])) : n;
 }
 
+/** A worker's turns at the game's speed (rounded, as the rules' `workTurns`). */
+function workTime(n: number): number {
+  const speed = store.lobby?.settings.speed;
+  return speed ? Math.max(1, Math.round(n * SPEEDS[speed])) : n;
+}
+
 const techKey = (t: string | undefined) => (t && TECHS[t] ? [`tech:${t}`] : []);
 
 /** What a tech brings: units, buildings, wonders, improvements and resources it shows (a civ's own in place of the usual). */
@@ -449,7 +458,26 @@ function buildingPage(b: Building): Page {
   };
 }
 
+/** A World Congress project: what it costs each civ in the world, what opens it, and each tier's reward. */
+function worldProjectPage(id: ProjectId): Page {
+  const t = PROJECTS[id];
+  const tier = (name: string, color: string, text: string) => h('li', {}, h('b', { style: `color:${color}` }, `${name}: `), text);
+  return {
+    sub: 'World Congress project',
+    facts: [
+      ['prod', YIELD_COLOR.prod, 'Cost', `${cost(t.perCiv)} production for each civilization`],
+      ['vote', '#3a6a9a', 'Proposed', `once some civilization knows ${TECHS[t.tech]?.name ?? t.tech}`],
+    ],
+    body: [
+      rich('An international project, put to the World Congress as a resolution. Once it passes, every civilization’s cities may put their production into it from their build list (it can’t be bought with gold), until all they have put in together reaches its cost. Then each is rewarded by how much it put in: the most, gold; the next, silver; the rest who put in a twentieth of it or more, bronze. Each project is held once a game.'),
+      h('ul.pd-list', {}, tier('Gold', '#f2c14e', t.rewards.gold.text), tier('Silver', '#c8d0dc', t.rewards.silver.text), tier('Bronze', '#c8803a', t.rewards.bronze.text)),
+    ],
+    related: [['Proposed after', techKey(t.tech)]],
+  };
+}
+
 function projectPage(id: string): Page {
+  if (isWorldProject(id)) return worldProjectPage(id);
   const s = SPACESHIP_PARTS.find((x) => x.id === id)!;
   return {
     sub: 'Spaceship part',
@@ -678,7 +706,7 @@ function resourcePage(id: string): Page {
 function improvementPage(id: ImprovementId): Page {
   const i = IMPROVEMENTS[id];
   const facts: Fact[] = [['food', YIELD_COLOR.food, 'Yields', yieldsEl(i.yields, true)]];
-  if (!i.great && i.turns) facts.push(['hammer', '#f0a24a', 'Build time', `${i.turns} worker turns`]);
+  if (!i.great && i.turns) facts.push(['hammer', '#f0a24a', 'Build time', `${workTime(i.turns)} worker turns`]);
   const body: El[] = [];
   if (i.great) body.push(rich(`A great person’s improvement, built where they stand${GREAT_MAKER[id] ? ` by a [[unit:${GREAT_MAKER[id]}]]` : ''}.`));
   if (i.freshWaterUntil) body.push(rich(`Built on open land anywhere. One more food with fresh water next to it (a river, lake or oasis) once you know [[tech:${i.freshWaterUntil}]], and everywhere with [[tech:fertilizer]]. Clear a forest or jungle first.`));

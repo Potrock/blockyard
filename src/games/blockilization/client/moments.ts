@@ -5,6 +5,7 @@ import { FIRST_FINDER_GOLDEN, FOUND_HAPPINESS, NATURAL_WONDERS } from '../rules/
 import { SPEEDS } from '../rules/state';
 import { ERA_NAMES, ERAS } from '../rules/techs';
 import { isGreatPerson, UNITS } from '../rules/units';
+import { PROJECT_LOOK } from './congress';
 import { wonderPicture } from './icons';
 import { unitModel } from './models3d';
 import { prefs } from './prefs';
@@ -20,7 +21,8 @@ import { WONDER_LINES } from './wonderlines';
  * natural wonder found, first contact with a civ, war and peace, your first city; each a card in the
  * middle of the screen, one at a time (`splash.ts`), and a sound. Lighter ones are a small card at
  * the top for a few seconds: a great person born, a golden age, a religion founded, another civ's
- * wonder (with a short flyover if its city's in sight). With quick movement or combat off, every
+ * wonder (with a short flyover if its city's in sight), a World Congress project done (a full card for
+ * its gold). With quick movement or combat off, every
  * moment is a light one and the camera stays put. Other changes just sound: a new turn, a city
  * founded, and your empire's news (a tech learned, a policy adopted, a building or a unit finished),
  * spaced out as it comes together.
@@ -80,6 +82,16 @@ export function moments(prev: View | null, v: View) {
     const gifts = found.first ? ` First to find it: +${Math.floor(FIRST_FINDER_GOLDEN * speed)} golden-age points${w.finderGold ? `, ${Math.floor(w.finderGold * speed)} gold` : ''}.` : '';
     out.push({ kick: 'Natural wonder discovered', title: w.name, text: `${w.flavour} +${FOUND_HAPPINESS} happiness for good.${gifts}`, landmark: w.id, at: store.known.findIndex((k) => k?.wonder === w.id) });
     play('discover');
+  }
+  // A World Congress project done: a card for everyone (a full one for a gold), with where you placed.
+  for (const x of v.congress?.projects ?? []) {
+    if (x.done === null || prev.congress?.projects.find((y) => y.id === x.id)?.done !== null) continue;
+    const first = x.shares.find((s) => s.tier === 'gold');
+    const who = first ? (first.player === v.you ? 'you' : v.players[first.player]?.name ?? 'another civilization') : 'a civilization you haven’t met';
+    const look = PROJECT_LOOK[x.id] ?? ['vote', '#3a6a9a'];
+    const placed = x.mine ? `You take ${x.mine}: ${x.rewards[x.mine].charAt(0).toLowerCase()}${x.rewards[x.mine].slice(1)}.` : 'You put in too little to place.';
+    out.push({ kick: 'World Congress project', title: x.name, text: `Done, and ${who} put in the most. ${placed}`, glyph: { name: look[0], color: look[1] }, light: x.mine !== 'gold' });
+    play(x.mine ? 'wonder' : 'note');
   }
   if (b.religion && !a.religion) {
     const r = v.religions.find((x) => x.id === b.religion);

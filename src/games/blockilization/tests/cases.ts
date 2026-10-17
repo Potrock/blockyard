@@ -2,8 +2,8 @@ import { adviseResearch, adviseWork } from '../advisor';
 import { BUILDINGS } from '../rules/buildings';
 import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, leadership, strength } from '../rules/combat';
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
-import { assignCitizens, cityEffects, cityYields, connected, dissent, freshWater, goldUpkeep, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
-import { faithCost, faithTurn, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
+import { assignCitizens, cityEffects, cityYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
+import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
 import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
 import { distance, line, neighbour, neighbours, within } from '../rules/hex';
 import { generate, START_ISLAND } from '../rules/mapgen';
@@ -21,26 +21,33 @@ import { pickProduction } from '../rules/ai/production';
 import { siteValue } from '../rules/ai/settle';
 import { canEnter, occupants, planPath, stepCost } from '../rules/movement';
 import { adoptable, ALL_POLICIES } from '../rules/policies';
-import { previewCityFire } from '../rules/preview';
+import { previewAttack, previewCityFire } from '../rules/preview';
 import { promotionsDue } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
-import { cannotBully, cannotCoup, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
+import { allyOf, cannotBully, cannotCoup, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
 import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
 import { MAP_SIZES, type Game, type MapSize } from '../rules/state';
 import { cityTourism, longGameTurn, maxRoutes, routesGold, routesOf, routeYield, spiesOf, spyCount, startRoute, surveillanceTurns, theft, THEFT_COST, unVote } from '../rules/trade';
 import { TECHS } from '../rules/techs';
-import { denounce, diplomacyTurn, endWar, hasMet, relationsOf, remember } from '../rules/diplomacy';
+import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasMet, makeDeal, relationsOf, remember, spareIncome } from '../rules/diplomacy';
 import { bindTeams } from '../rules/teams';
 import { cityInfo, mapWire, viewFor } from '../views';
 import { unpackKnown, type KnownTile } from '../protocol';
 import { SaveThrottle } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
-import { decorOf, Ground } from '../improvements';
+import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { riverLinks, terrainEdits } from '../terrain';
 import { corners, GROWN, KINDS, PEN_SCALE, spotsFor } from '../client/spots';
 import { blank, city, techsTo, unit, war } from './world';
+import { liberation, LIBERATE_INFLUENCE } from '../rules/liberation';
+import { cannotPledge, pledged, PLEDGE_BROKEN, PLEDGE_REST } from '../rules/pledges';
+import { restingInfluence } from '../rules/citystates';
+import { conquests } from '../rules/ai/strategy';
+import { pledges as botPledges } from '../rules/ai/liberation';
+import { startProject, type WorldProject } from '../rules/projects';
+import { expectedTier, worldProject } from '../rules/ai/projects';
 
 /**
  * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
@@ -3650,4 +3657,622 @@ test('wonders open as Civ V’s Brave New World has it: the Pyramids with Libert
   p.ideology = 'order';
   ok(can().includes('kremlin'), 'the Order ideology opens the Kremlin');
   eq(Object.values(BUILDINGS).filter((b) => b.policy).length, 11, 'eleven wonders need a policy');
+});
+
+test('the Great Wall stands in blocks round the land of the civ that holds it, where it meets land not theirs, with gates for roads', () => {
+  for (const wrap of [false, true]) {
+    const { game, at } = blank(undefined, { wrap });
+    const g = game.grid;
+    const c = city(game, 0, at(6, 6));
+    // Their land: the city and the ring round it, and one more tile two out to the east.
+    const ours = new Set([c.tile, ...neighbours(g, c.tile), at(8, 6)]);
+    for (const t of ours) game.tiles[t].owner = 0;
+    const size = extent(g);
+    const ground = new Ground(Math.ceil(size.w), Math.ceil(size.d), terrainEdits(g, game.tiles), period(g));
+    const bricks = (t: number) => decorOf(game, ground, t).filter((p) => p[3] === 'stone_bricks').length;
+    for (const t of ours) eq(wallEdges(game, t), 0, `no wall before the wonder (tile ${t})`);
+    const before = decorKey(game, neighbours(g, c.tile)[0]);
+    game.wonders.great_wall = 0;
+    ok(decorKey(game, neighbours(g, c.tile)[0]) !== before, 'building it changes what the border tiles show');
+    eq(wallEdges(game, c.tile), 0, 'none round the city itself');
+    for (const t of neighbours(g, c.tile)) {
+      const edges = wallEdges(game, t);
+      ok(edges !== 0, `a wall along the ring tile ${t} (${wrap ? 'wrapped' : 'flat'})`);
+      for (let d = 0; d < 6; d++) {
+        const n = neighbour(g, t, d);
+        eq(!!(edges & (1 << d)), n >= 0 && !ours.has(n), `tile ${t}'s edge toward ${n}: walled only where the land isn't theirs`);
+      }
+      ok(bricks(t) >= 4, `tile ${t} has its wall in blocks (${bricks(t)})`);
+      for (const [x, , z] of decorOf(game, ground, t)) eq(tileUnder(g, x + 0.5, z + 0.5), t, `tile ${t}'s wall stays on its own columns`);
+    }
+    // Not along the coast: a ring tile beside the sea walls only its land edges.
+    const coastal = neighbours(g, c.tile)[0];
+    const sea = neighbours(g, coastal).find((n) => n >= 0 && !ours.has(n))!;
+    game.tiles[sea].terrain = 'coast';
+    eq(wallEdges(game, coastal) & (1 << neighbours(g, coastal).indexOf(sea)), 0, 'no wall facing the sea');
+    game.tiles[sea].terrain = 'grassland';
+    // A road leaves a gate.
+    const t = neighbours(g, c.tile)[1];
+    const walled = bricks(t);
+    game.tiles[t].road = 'road';
+    game.tiles[neighbours(g, t).find((n) => n >= 0 && !ours.has(n))!].road = 'road';
+    ok(bricks(t) < walled, `a road through the wall leaves a gate (${walled} bricks, then ${bricks(t)})`);
+    // It goes with the wonder's city.
+    game.wonders.great_wall = 1;
+    for (const t of ours) eq(wallEdges(game, t), 0, `taken, it's no longer round the old owner's land (tile ${t})`);
+    game.wonders.great_wall = -1;
+    eq(wallEdges(game, neighbours(g, c.tile)[0]), 0, 'gone with a razed city, gone from the land');
+  }
+});
+
+test('what’s left over is kept: production past a finished build goes into the next one chosen, science past a tech into the next tech', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  p.bot = false;
+  const c = city(game, 0, at(5, 5));
+  c.queue = [];
+  c.prod = 30;
+  ok(apply(game, 0, { t: 'produce', city: c.id, item: { kind: 'building', id: 'monument' } }).ok, 'chose a monument');
+  eq(c.prod, 30, 'the production left over went into it');
+  // Switching away still keeps each thing's own.
+  ok(apply(game, 0, { t: 'produce', city: c.id, item: { kind: 'unit', id: 'warrior' } }).ok, 'switched');
+  eq(c.prod, 0, 'nothing carried from the monument to the warrior');
+  eq(c.saved?.['building:monument'], 30, 'the monument keeps its 30');
+  // Science: a tech learned with nothing chosen next.
+  p.researching = 'agriculture';
+  p.research.agriculture = techCost(game, p, 'agriculture') + 40;
+  p.techQueue = [];
+  endTurn(game);
+  ok(p.techs.includes('agriculture') && !p.researching, 'learned, and nothing chosen next');
+  const spare = p.spareScience ?? 0;
+  ok(spare >= 40, `the science over is kept (${spare})`);
+  endTurn(game);
+  ok((p.spareScience ?? 0) > spare, 'and the next turn’s, with nothing chosen');
+  const kept = p.spareScience!;
+  ok(apply(game, 0, { t: 'research', tech: 'pottery' }).ok, 'chose pottery');
+  eq(Math.round(p.research.pottery ?? 0), Math.round(kept), 'all of it went into pottery');
+  eq(p.spareScience, undefined, 'none left over');
+});
+
+test('a building that needs a strategic resource uses one up, as a unit does', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  const a = city(game, 0, at(4, 4), { buildings: ['workshop'] });
+  const b = city(game, 0, at(10, 4), { buildings: ['workshop'] });
+  techsTo(game, 0, TECHS.industrialization.col);
+  const coal = neighbours(game.grid, a.tile)[0];
+  Object.assign(game.tiles[coal], { owner: 0, city: a.id, resource: 'coal', amount: 1, improvement: 'mine' });
+  ok(constructible(game, p, a).includes('factory') && constructible(game, p, b).includes('factory'), 'one Coal: either city may build a Factory');
+  a.buildings.push('factory');
+  eq(strategic(game, p).coal?.used, 1, 'the Factory uses the Coal');
+  ok(!constructible(game, p, b).includes('factory'), 'so the other city can’t build one too');
+});
+
+test('a city taken back while it burns is put out; annexing is for good; nothing is bought in resistance', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  city(game, 0, at(4, 4));
+  city(game, 1, at(16, 12));
+  const town = city(game, 1, at(10, 8), { pop: 6 });
+  town.hp = 1;
+  const s = unit(game, 'swordsman', 0, neighbours(game.grid, town.tile)[0]);
+  ok(apply(game, 0, { t: 'attack', unit: s.id, target: town.tile }).ok && town.owner === 0, 'Egypt takes it');
+  game.players[0].gold = 5000;
+  ok((town.resistance ?? 0) > 0, 'in resistance');
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'annex' }).ok, 'annexed');
+  const buy = apply(game, 0, { t: 'buy', city: town.id, item: { kind: 'unit', id: 'warrior' }, with: 'gold' });
+  ok(!buy.ok && /resistance/.test(buy.error ?? ''), `nothing bought in resistance (${buy.error})`);
+  ok(!apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'puppet' }).ok, 'and it can’t be made a puppet again');
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'raze' }).ok, 'razed');
+  endTurn(game);
+  const here = game.units.find((u) => u.tile === town.tile);
+  if (here) game.units.splice(game.units.indexOf(here), 1);
+  town.hp = 1;
+  const b = unit(game, 'swordsman', 1, neighbours(game.grid, town.tile)[2]);
+  ok(apply(game, 1, { t: 'attack', unit: b.id, target: town.tile }).ok && town.owner === 1, 'Babylon takes it back');
+  eq(town.razing, undefined, 'the fire’s out');
+  for (let i = 0; i < 8; i++) endTurn(game);
+  ok(game.cities.includes(town), 'it still stands');
+});
+
+test('a city that shrinks keeps no more followers than citizens; a city grows keeping the food over; a missionary bought appears on land, not on an enemy', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(6, 6), { pop: 6 });
+  c.followers = { r1: 6 };
+  c.food = -500;
+  endTurn(game);
+  eq(c.pop, 5, 'it starved');
+  const total = Object.values(c.followers ?? {}).reduce((s, k) => s + k, 0);
+  ok(total <= c.pop, `followers ${JSON.stringify(c.followers)} in a city of ${c.pop}`);
+  // Growth.
+  const g = city(game, 0, at(12, 6), { pop: 1 });
+  const need = growthThreshold(game, 1);
+  g.food = need + 40;
+  const kept = Math.floor(growthThreshold(game, 1) * (foodKept(game, g) / 100));
+  endTurn(game);
+  ok(g.pop >= 2, 'grew');
+  ok(g.food >= 40 + kept, `kept the 40 over (${g.food})`);
+  // A missionary: every tile round the city is sea but one, which an enemy holds.
+  const p = game.players[0];
+  const m = city(game, 0, at(6, 12));
+  war(game, 0, 1);
+  const ring = neighbours(game.grid, m.tile);
+  for (const t of ring.slice(1)) game.tiles[t].terrain = 'ocean';
+  unit(game, 'warrior', 1, ring[0]);
+  unit(game, 'worker', 0, m.tile);
+  const u = faithUnit(game, p, m, 'missionary')!;
+  ok(!TERRAINS[game.tiles[u.tile].terrain].water, 'not out at sea');
+  ok(!game.units.some((x) => x.tile === u.tile && x.owner === 1), 'not on the enemy');
+});
+
+test('an aircraft strikes once a turn, not after rebasing, and only at what its civ sees', () => {
+  const { game, at } = blank();
+  city(game, 0, at(5, 5));
+  const second = city(game, 0, at(5, 10));
+  city(game, 1, at(25, 5));
+  war(game, 0, 1);
+  const bomber = unit(game, 'great_war_bomber', 0, at(5, 5));
+  const foe = unit(game, 'machine_gun', 1, at(8, 5));
+  unit(game, 'scout', 0, at(7, 5));
+  ok(apply(game, 0, { t: 'attack', unit: bomber.id, target: foe.tile }).ok, 'the first strike');
+  const hp = foe.hp;
+  ok(!apply(game, 0, { t: 'attack', unit: bomber.id, target: foe.tile }).ok, 'no second strike this turn');
+  eq(foe.hp, hp, 'and no more damage');
+  // Rebased, it has flown its turn.
+  const other = unit(game, 'great_war_bomber', 0, at(5, 5));
+  ok(apply(game, 0, { t: 'rebase', unit: other.id, to: second.tile }).ok, 'rebased');
+  ok(!apply(game, 0, { t: 'attack', unit: other.id, target: foe.tile }).ok, 'no strike after rebasing');
+  // Out of sight: nothing to strike.
+  const hidden = unit(game, 'machine_gun', 1, at(10, 10));
+  const third = unit(game, 'great_war_bomber', 0, second.tile);
+  updateAllVisibility(game);
+  ok(!(game.players[0].visible[hidden.tile] > 0), 'the tile is out of sight');
+  ok(!apply(game, 0, { t: 'attack', unit: third.id, target: hidden.tile }).ok, 'no strike on what it can’t see');
+  eq(hidden.hp, 100, 'unhurt');
+});
+
+test('a carrier sunk (by a city’s fire, or a strike) loses the aircraft aboard', () => {
+  const { game, at } = blank();
+  city(game, 0, at(5, 5));
+  const enemy = city(game, 1, at(15, 5));
+  war(game, 0, 1);
+  for (const c of [13, 14]) for (const r of [6, 7]) game.tiles[at(c, r)].terrain = 'coast';
+  const carrier = unit(game, 'carrier', 0, at(14, 7), { hp: 1 });
+  const fighter = unit(game, 'fighter', 0, at(14, 7), { carrier: carrier.id });
+  ok(apply(game, 1, { t: 'cityFire', city: enemy.id, target: carrier.tile }).ok, 'the city fires');
+  ok(!game.units.includes(carrier), 'the carrier is sunk');
+  ok(!game.units.includes(fighter), 'its fighter with it');
+});
+
+test('attacking breaks fortifying: a fortified unit that wins and moves in isn’t fortified there', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  war(game, 0, 1);
+  const sw = unit(game, 'swordsman', 0, at(10, 8), { stance: 'fortify', fortified: 2 });
+  const foe = unit(game, 'warrior', 1, at(11, 8), { hp: 5 });
+  const r = apply(game, 0, { t: 'attack', unit: sw.id, target: foe.tile });
+  ok(r.ok && !!r.combat?.[0].killed, 'it wins');
+  eq(sw.tile, at(11, 8), 'and moves in');
+  eq(sw.stance, undefined, 'no longer fortified');
+  const why: { label: string; percent: number }[] = [];
+  strength(game, sw, 'defend', null, sw.tile, why);
+  ok(!why.some((m) => m.label === 'Fortified'), 'no fortifying bonus where it stands');
+  // A ranged unit that fires leaves its fortifying too.
+  const archer = unit(game, 'archer', 0, at(10, 10), { stance: 'fortify', fortified: 2 });
+  const target = unit(game, 'warrior', 1, at(11, 10));
+  ok(apply(game, 0, { t: 'attack', unit: archer.id, target: target.tile }).ok, 'it fires');
+  eq(archer.fortified, 0, 'and isn’t fortified');
+});
+
+test('a unit at sea in a boat can’t fortify, nor have a fortifying bonus', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  game.players[0].techs.push('optics');
+  game.tiles[at(10, 8)].terrain = 'coast';
+  const sw = unit(game, 'swordsman', 0, at(10, 8), { embarked: true });
+  ok(!apply(game, 0, { t: 'stance', unit: sw.id, stance: 'fortify' }).ok, 'no fortifying at sea');
+  sw.stance = 'fortify';
+  sw.fortified = 2;
+  const why: { label: string; percent: number }[] = [];
+  strength(game, sw, 'defend', null, sw.tile, why);
+  ok(!why.some((m) => m.label === 'Fortified'), 'and no bonus for it');
+});
+
+test('a siege unit’s setting up for an attack that can’t be made costs nothing', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  war(game, 0, 1);
+  const cat = unit(game, 'catapult', 0, at(8, 8));
+  const foe = unit(game, 'warrior', 1, at(14, 8));
+  unit(game, 'scout', 0, at(13, 8));
+  ok(!apply(game, 0, { t: 'attack', unit: cat.id, target: foe.tile }).ok, 'out of range');
+  eq(cat.moves, 2, 'its moves kept');
+  ok(!cat.setUp, 'not set up');
+});
+
+test('the combat preview agrees with the attack: mounted units take cities, mounted archers fire', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(23, 14));
+  const c = city(game, 1, at(12, 8));
+  war(game, 0, 1);
+  c.hp = 1;
+  const h = unit(game, 'horseman', 0, at(11, 8));
+  ok((previewAttack(game, h, c.tile)?.takes ?? 0) > 0, 'a horseman may take the city');
+  ok(!!apply(game, 0, { t: 'attack', unit: h.id, target: c.tile }).combat?.[0].captured, 'and it does');
+  const ca = unit(game, 'chariot_archer', 0, at(18, 4));
+  const foe = unit(game, 'warrior', 1, at(19, 4));
+  const p = previewAttack(game, ca, foe.tile)!;
+  ok(p.ranged, 'next door, a chariot archer’s preview is a ranged attack');
+  eq(p.attacker.damage[1], 0, 'with no reply');
+  const r = apply(game, 0, { t: 'attack', unit: ca.id, target: foe.tile });
+  eq(r.combat?.[0].taken, 0, 'as the attack is');
+});
+
+/** Two civs who've met, each with a city, Writing to Philosophy and embassies both ways (people, so offers wait for an answer). */
+function dealers(civs = ['egypt', 'babylon']) {
+  const w = blank(civs, { size: civs.length > 2 ? 'small' : 'duel' });
+  const { game, at } = w;
+  game.players.forEach((p, i) => {
+    p.bot = false;
+    p.met = game.players.map((o) => o.index);
+    city(game, i, at(3 + 9 * (i % 2), 3 + 9 * Math.floor(i / 2)));
+    techsTo(game, i, 4);
+    for (const o of game.players) if (o !== p) p.diplomacy.embassy[o.index] = true;
+  });
+  return w;
+}
+
+test('a deal can’t hold the same thing twice, however it’s dressed up (no research agreement paid twice, no iron given that isn’t there)', () => {
+  const { game, at } = dealers();
+  const [a, b] = game.players;
+  a.gold = b.gold = 300;
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'research' }, { kind: 'research', x: 1 } as never] }), 'The same thing twice', 'two research agreements');
+  game.tiles[at(3, 3)].resource = 'iron';
+  game.tiles[at(3, 3)].amount = 2;
+  const twice = [{ kind: 'strategic', from: 0, resource: 'iron', amount: 2 }, { kind: 'strategic', from: 0, resource: 'iron', amount: 2, x: 1 }];
+  eq(dealProblem(game, { from: 0, to: 1, items: twice as never }), 'The same thing twice', 'two lots of the same iron');
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'strategic', from: 0, resource: 'iron', amount: 2 }] }), null, 'the iron it has, once');
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'research' }] }), null, 'one research agreement');
+});
+
+test('gold a turn is promised only up to the payer’s income, less what its deals pay already', () => {
+  const { game } = dealers();
+  const [a, b] = game.players;
+  a.lastIncome = { gold: 10, science: 0, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+  eq(spareIncome(game, a), 10, 'all of its income');
+  ok(!!dealProblem(game, { from: 0, to: 1, items: [{ kind: 'gold', from: 1, amount: 0 + 1 }, { kind: 'goldPerTurn', from: 0, amount: 60 }] }), '60 a turn on an income of 10: refused');
+  makeDeal(game, { from: 0, to: 1, items: [{ kind: 'goldPerTurn', from: 0, amount: 6 }] });
+  eq(spareIncome(game, a), 4, 'a deal made this turn counts against it');
+  ok(!!dealProblem(game, { from: 0, to: 1, items: [{ kind: 'goldPerTurn', from: 0, amount: 5 }] }), 'so 5 more is too much');
+  // Next turn its income has the payment in it already: not counted twice.
+  relationsOf(game).running[0].turns--;
+  a.lastIncome.gold = 4;
+  eq(spareIncome(game, a), 4, 'the payment counted once');
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'goldPerTurn', from: 0, amount: 4 }] }), null, 'what is left can be promised');
+  eq(dealGold(game, b), 6, 'the payee is owed its 6');
+});
+
+test('a defensive pact’s partner called into a war ends its own deals with the aggressor', () => {
+  const { game } = dealers(['egypt', 'babylon', 'china']);
+  const [a, b, c] = game.players;
+  const turns = dealTurns(game);
+  b.diplomacy.friends[2] = c.diplomacy.friends[1] = turns;
+  b.diplomacy.pacts[2] = c.diplomacy.pacts[1] = turns;
+  a.gold = c.gold = 1000;
+  a.lastIncome = { gold: 50, science: 0, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+  makeDeal(game, { from: 0, to: 2, items: [{ kind: 'research' }, { kind: 'goldPerTurn', from: 0, amount: 10 }] });
+  ok(apply(game, 0, { t: 'war', target: 1, why: null }).ok, 'Egypt declares on Babylon');
+  ok(c.diplomacy.war[0], 'China honours its pact');
+  eq(relationsOf(game).running.filter((r) => [r.a, r.b].includes(0) && [r.a, r.b].includes(2)).length, 0, 'their deals are over');
+  eq(a.diplomacy.research[2], 0, 'their research agreement too');
+});
+
+test('war on an allied city-state ends the alliance: its influence falls, its luxuries and vote are lost', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const cs = game.players.find((p) => p.cityState)!;
+  const a = game.players[0];
+  city(game, 0, at(3, 3));
+  city(game, 1, at(12, 3));
+  city(game, cs.index, at(7, 8));
+  a.influence[cs.index] = 100;
+  eq(allyOf(game, cs.index), 0, 'allies');
+  ok(apply(game, 0, { t: 'war', target: cs.index, why: null }).ok, 'war declared');
+  eq(allyOf(game, cs.index), -1, 'no ally');
+  ok(a.influence[cs.index] <= -60, `influence ${a.influence[cs.index]}`);
+  // (Even with influence regained somehow, no civ at war with it is its ally.)
+  a.influence[cs.index] = 100;
+  eq(allyOf(game, cs.index), -1, 'still none while at war');
+});
+
+test('a civ gone from the game takes its deals with it: no one goes on paying it', () => {
+  const { game } = dealers(['egypt', 'babylon', 'china']);
+  const [a, b] = game.players;
+  b.gold = 1000;
+  b.lastIncome = { gold: 50, science: 0, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+  makeDeal(game, { from: 1, to: 0, items: [{ kind: 'goldPerTurn', from: 1, amount: 20 }] });
+  game.cities = game.cities.filter((c) => c.owner !== 0);
+  endTurn(game);
+  ok(!a.alive, 'Egypt is out');
+  eq(relationsOf(game).running.length, 0, 'its deal is over');
+  eq(dealGold(game, b), 0, 'Babylon pays nothing');
+});
+
+test('a deal order with nonsense items is refused, at war as at peace (it once threw)', () => {
+  const { game } = dealers();
+  for (const items of [[null], [7], ['peace']]) {
+    ok(!apply(game, 0, { t: 'deal', target: 1, items: items as never }).ok, `at peace: ${JSON.stringify(items)}`);
+  }
+  war(game, 0, 1);
+  for (const items of [[null], [7], ['peace'], [{ kind: 'peace' }, null]]) {
+    ok(!apply(game, 0, { t: 'deal', target: 1, items: items as never }).ok, `at war: ${JSON.stringify(items)}`);
+  }
+});
+
+test('a spy sent to a city-state this turn can’t stage a coup there until the next', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 2, size: 'small' });
+  const [a, b] = game.players;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(14, 3));
+  const homes = game.players.filter((p) => p.cityState).map((cs, i) => city(game, cs.index, at(4 + 6 * i, 10)));
+  for (const c of homes) {
+    b.influence[c.owner] = 61;
+    a.influence[c.owner] = 59;
+  }
+  a.explored.fill(1);
+  const spy = { id: 999, city: null, progress: 0 };
+  spiesOf(a).push(spy);
+  ok(apply(game, 0, { t: 'spy', spy: 999, target: homes[0].id }).ok, 'sent');
+  ok(!apply(game, 0, { t: 'coup', spy: 999 }).ok, 'no coup on arrival');
+  game.turn++;
+  eq(cannotCoup(game, a, 999), null, 'a turn later, it may');
+  // Moved on: it waits again.
+  ok(apply(game, 0, { t: 'spy', spy: 999, target: homes[1].id }).ok, 'sent on');
+  ok(!!cannotCoup(game, a, 999), 'and waits again');
+});
+
+/** A city stormed by `by`'s swordsman (brought to 1 hit point, whoever stood in it gone first). */
+function storm(game: Game, by: number, c: { tile: number; hp: number; owner: number }) {
+  game.units = game.units.filter((u) => u.tile !== c.tile);
+  c.hp = 1;
+  const s = unit(game, 'swordsman', by, neighbours(game.grid, c.tile).find((t) => !game.units.some((u) => u.tile === t))!);
+  ok(apply(game, by, { t: 'attack', unit: s.id, target: c.tile }).ok && c.owner === by, `taken by ${game.players[by].name}`);
+}
+
+test('a city taken from one who took it from its founder can be liberated: back to its founder, who never forgets it', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china'], { size: 'small' });
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(16, 18));
+  const town = city(game, 2, at(16, 10), { pop: 6 });
+  war(game, 1, 2);
+  storm(game, 1, town);
+  eq(liberation(game, town), null, 'taken from its founder: nothing to liberate');
+  war(game, 0, 1);
+  storm(game, 0, town);
+  eq(liberation(game, town)?.to, 2, 'taken from Babylon: Egypt may give it back to China');
+  ok(/liberate/.test(game.players[0].notes.map((n) => n.text).join(' ')) || game.players[0].bot, 'offered with the choices');
+  ok(!apply(game, 1, { t: 'cityChoice', city: town.id, choice: 'liberate' }).ok, 'only its owner decides');
+  const before = opinionOf(game, game.players[2], game.players[0]).total;
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'liberate' }).ok, 'liberated');
+  eq(town.owner, 2, 'China’s again');
+  ok(!town.puppet && !town.occupied && !town.resistance, 'its own, not occupied');
+  ok(game.tiles.every((t) => t.city !== town.id || t.owner === 2), 'its land with it');
+  ok(!game.units.some((u) => u.tile === town.tile && u.owner === 0), 'Egypt’s soldier has stepped out');
+  const reasons = opinionOf(game, game.players[2], game.players[0]).reasons;
+  ok(reasons.some((r) => r.text === 'You liberated our people' && r.value >= 20), 'China remembers it');
+  ok(opinionOf(game, game.players[2], game.players[0]).total >= before + 20, 'and thinks far better of Egypt');
+  game.turn += 300;
+  diplomacyTurn(game);
+  ok(opinionOf(game, game.players[2], game.players[0]).reasons.some((r) => r.text === 'You liberated our people' && r.value > 0), 'for good');
+  // Annexed, it's no longer offered.
+  const other = city(game, 2, at(10, 14));
+  storm(game, 1, other);
+  storm(game, 0, other);
+  ok(apply(game, 0, { t: 'cityChoice', city: other.id, choice: 'annex' }).ok, 'annexed');
+  eq(liberation(game, other), null, 'annexed: not to be liberated');
+  ok(!apply(game, 0, { t: 'cityChoice', city: other.id, choice: 'liberate' }).ok, 'and refused');
+});
+
+test('liberating a destroyed civ’s capital brings it back to life, at peace, and it counts again for domination', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china'], { size: 'small' });
+  game.settings.victories.domination = true;
+  city(game, 0, at(3, 3));
+  const babylon = city(game, 1, at(28, 3));
+  city(game, 1, at(28, 14));
+  const beijing = city(game, 2, at(16, 12), { pop: 6 });
+  war(game, 1, 2);
+  storm(game, 1, beijing);
+  ok(!game.players[2].alive, 'China is destroyed');
+  war(game, 0, 1);
+  storm(game, 0, beijing);
+  ok(liberation(game, beijing)?.revive === true, 'it can be brought back');
+  remember(game, 'denounce', 1, 2);
+  ok(apply(game, 0, { t: 'cityChoice', city: beijing.id, choice: 'liberate' }).ok, 'liberated');
+  const china = game.players[2];
+  ok(china.alive && beijing.owner === 2 && !!beijing.capital && beijing.buildings.includes('palace'), 'China lives again, Beijing its capital');
+  ok(game.units.some((u) => u.owner === 2 && u.tile === beijing.tile), 'with a soldier to hold it');
+  ok(!atWar(game, 0, 2) && china.diplomacy.peaceTurns[0] > 0, 'at peace with Egypt, a treaty between them');
+  ok(!atWar(game, 1, 2), 'and at war with no one');
+  ok(!relationsOf(game).events.some((e) => (e.by === 2 || e.to === 2) && e.kind !== 'liberate'), 'its old quarrels forgotten');
+  ok(relationsOf(game).events.some((e) => e.kind === 'liberate' && e.by === 0 && e.to === 2), 'but not its liberation');
+  // Egypt takes Babylon's capital: without Beijing, it doesn't hold every original capital.
+  storm(game, 0, babylon);
+  checkVictory(game);
+  ok(!game.over, 'no domination while China holds its own capital');
+});
+
+test('a city-state given back its city lives again, and its liberator is its ally', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  const home = city(game, cs.index, at(16, 12), { pop: 4 });
+  war(game, 1, cs.index);
+  storm(game, 1, home);
+  ok(!cs.alive, 'the city-state is gone');
+  war(game, 0, 1);
+  storm(game, 0, home);
+  game.players[0].influence[cs.index] = -20;
+  ok(apply(game, 0, { t: 'cityChoice', city: home.id, choice: 'liberate' }).ok, 'liberated');
+  ok(cs.alive && home.owner === cs.index && !!home.capital, 'it lives again');
+  eq(game.players[0].influence[cs.index], LIBERATE_INFLUENCE, 'Egypt’s influence from nothing');
+  eq(allyOf(game, cs.index), 0, 'Egypt is its ally');
+  eq(game.players[1].influence[cs.index] ?? 0, 0, 'Babylon starts afresh with it');
+  ok(!atWar(game, 1, cs.index), 'at war with no one');
+});
+
+test('a bot liberates a friend’s city it took from their enemy, and keeps a stranger’s', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china', 'india'], { size: 'small' });
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(16, 18));
+  city(game, 3, at(3, 18));
+  const friendTown = city(game, 2, at(16, 10), { pop: 5 });
+  const strangerTown = city(game, 3, at(8, 12), { pop: 5 });
+  war(game, 1, 2);
+  war(game, 1, 3);
+  storm(game, 1, friendTown);
+  storm(game, 1, strangerTown);
+  war(game, 0, 1);
+  storm(game, 0, friendTown);
+  storm(game, 0, strangerTown);
+  const egypt = game.players[0];
+  egypt.diplomacy.friends[2] = game.players[2].diplomacy.friends[0] = 20;
+  conquests(makeCtx(game, egypt));
+  eq(friendTown.owner, 2, 'the friend’s city given back');
+  eq(strangerTown.owner, 0, 'the stranger’s kept');
+});
+
+test('a pledge to protect a city-state raises the influence it rests at; others offend the pledger, the pledger itself breaks it', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  const [a, b] = game.players;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, cs.index, at(16, 12));
+  ok(!!cannotPledge(game, a, cs.index), 'not before meeting it');
+  a.explored.fill(1);
+  b.explored.fill(1);
+  a.influence[cs.index] = -5;
+  ok(/trust/.test(cannotPledge(game, a, cs.index) ?? ''), 'nor while it distrusts you');
+  a.influence[cs.index] = 35;
+  const rest = restingInfluence(game, a, cs.index);
+  ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok && pledged(game, 0, cs.index), 'pledged');
+  eq(restingInfluence(game, a, cs.index), rest + PLEDGE_REST, 'its influence rests higher');
+  ok(!apply(game, 0, { t: 'pledge', target: cs.index }).ok, 'not twice');
+  eq(viewFor(game, a, null).players[cs.index].cityState!.pledge.by.join(), '0', 'shown on its card');
+  ok(apply(game, 1, { t: 'war', target: cs.index, why: null }).ok, 'Babylon attacks it');
+  ok(opinionOf(game, a, b).reasons.some((r) => /protection/.test(r.text) && r.value < 0), 'Egypt is offended');
+  ok(pledged(game, 0, cs.index), 'Egypt’s pledge holds');
+  a.influence[cs.index] = 35;
+  ok(apply(game, 0, { t: 'war', target: cs.index, why: null }).ok, 'Egypt attacks it itself');
+  ok(!pledged(game, 0, cs.index), 'its pledge is broken');
+  ok(a.influence[cs.index] <= 35 - PLEDGE_BROKEN, 'influence lost');
+  endWar(game, a, cs);
+  a.influence[cs.index] = 35;
+  ok(/lately/.test(cannotPledge(game, a, cs.index) ?? ''), 'and no pledging again for a while');
+});
+
+test('a pledge lapses when influence falls below nothing; bots pledge to the city-states they’re friends with', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  const [a, b] = game.players;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, cs.index, at(16, 12));
+  a.explored.fill(1);
+  b.explored.fill(1);
+  a.influence[cs.index] = 10;
+  ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok, 'pledged');
+  a.influence[cs.index] = -10;
+  endTurn(game);
+  ok(!pledged(game, 0, cs.index), 'lapsed');
+  b.influence[cs.index] = 40;
+  botPledges(makeCtx(game, b));
+  ok(pledged(game, 1, cs.index), 'Babylon, its friend, pledges');
+});
+
+test('a World Congress project: proposed once its tech is known, opened when passed, built from every civ’s cities (never bought), rewarded by what each put in', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india']);
+  const [egypt, babylon, india] = game.players;
+  const homes = [egypt, babylon, india].map((p, i) => city(game, p.index, at(3 + i * 8, 4), { pop: 6 }));
+  for (const p of game.players) p.bot = false;
+  egypt.met = [1, 2];
+  game.congress = { host: 0, next: game.turn, proposals: [], active: [] };
+  ok(!!cannotPropose(game, egypt, { kind: 'worlds_fair' }), 'not before anyone knows Industrialization');
+  techsTo(game, 1, TECHS.industrialization.col);
+  ok(!!cannotPropose(game, egypt, { kind: 'worlds_fair', repeal: true }), 'never repealed');
+  eq(proposeResolution(game, egypt, { kind: 'worlds_fair' }), null, 'once Babylon knows it, Egypt proposes it');
+  endTurn(game);
+  const x = game.congress.projects?.[0] as WorldProject;
+  ok(!!x && !x.done, 'passed, it opens');
+  eq(game.congress.active.length, 0, 'not a resolution in force');
+  eq(x.cost, Math.floor(300 * 3 * 0.67), 'its cost so much for each civ (at speed)');
+  const item = { kind: 'project' as const, id: 'worlds_fair' };
+  egypt.gold = 5000;
+  ok(!apply(game, 0, { t: 'buy', city: homes[0].id, item, with: 'gold' }).ok, 'it can’t be bought');
+  ok(cityInfo(game, egypt, homes[0]).options.some((o) => o.id === 'worlds_fair' && o.buy === null), 'it’s in the build list');
+  homes.forEach((c, i) => ok(apply(game, i, { t: 'produce', city: c.id, item }).ok, 'each city builds it'));
+  const prod = productionToward(game, homes[0], item);
+  endTurn(game);
+  eq(x.put[0], prod, 'Egypt’s production went into its share');
+  eq(homes[0].prod, 0, 'none kept in the city');
+  const seen = viewFor(game, egypt, null).congress!.projects[0];
+  eq(seen.shares.find((s) => s.player === 0)?.put, Math.floor(x.put[0]), 'the Congress shows each civ’s share');
+  // Egypt the most, Babylon next, India a twentieth: gold, silver, bronze.
+  x.put = { 0: 400, 1: 160, 2: Math.ceil(x.cost / 20) };
+  const culture = [egypt, babylon, india].map((p) => ({ had: p.culture, policy: policyCost(game, p) }));
+  endTurn(game);
+  ok(!!x.done, 'done once the total reaches its cost');
+  eq(`${x.tiers?.[0]} ${x.tiers?.[1]} ${x.tiers?.[2]}`, 'gold silver bronze', 'tiers by what each put in');
+  ok(egypt.culture - culture[0].had >= culture[0].policy, 'gold: a free social policy');
+  ok(babylon.culture - culture[1].had >= culture[1].policy / 2, 'silver: half of one');
+  ok(india.culture - culture[2].had >= culture[2].policy / 4, 'bronze: a quarter');
+  ok(egypt.notes.some((n) => n.text.startsWith('Gold at the World')), 'and each is told');
+  ok(homes.every((c) => !c.queue.some((q) => q.id === 'worlds_fair')), 'its cities move on');
+  ok(!apply(game, 0, { t: 'produce', city: homes[0].id, item }).ok, 'nor can it be built again');
+  ok(!!cannotPropose(game, egypt, { kind: 'worlds_fair' }), 'nor proposed again');
+});
+
+test('a World Congress project’s lasting rewards: the Games’ happiness and tourism, the Space Station’s faster spaceship parts (not toward the projects themselves)', () => {
+  const { game, at } = blank();
+  const [egypt] = game.players;
+  const c = city(game, 0, at(4, 4), { pop: 6 });
+  city(game, 1, at(16, 6));
+  game.congress = { host: 0, next: game.turn + 30, proposals: [], active: [] };
+  const mood = happiness(game, egypt, []);
+  const part = productionToward(game, c, { kind: 'project', id: 'ss_booster' }, undefined, 100);
+  game.congress.projects = [
+    { id: 'international_games', since: 1, cost: 100, put: { 0: 100 }, done: 2, tiers: { 0: 'gold' } },
+    { id: 'space_station', since: 1, cost: 100, put: { 0: 100 }, done: 2, tiers: { 0: 'gold' } },
+  ];
+  eq(happiness(game, egypt, []), mood + 4, 'the Games’ gold: +4 happiness in the capital');
+  eq(cityEffects(game, c).reduce((s, e) => s + (e.tourismPercent ?? 0), 0), 25, 'and a quarter more tourism');
+  eq(productionToward(game, c, { kind: 'project', id: 'ss_booster' }, undefined, 100), part + 25, 'the Station’s gold: spaceship parts 25% faster');
+  startProject(game, 'worlds_fair');
+  eq(productionToward(game, c, { kind: 'project', id: 'worlds_fair' }, undefined, 100), 100, 'but not a project of the Congress’s');
+});
+
+test('a bot proposes a World Congress project it would win, votes for it, and puts a city it can spare into it', () => {
+  const { game, at } = blank();
+  const [egypt, bot] = game.players;
+  city(game, 0, at(4, 6));
+  const home = city(game, 1, at(16, 6), { pop: 10 });
+  const other = city(game, 1, at(16, 12), { pop: 8 });
+  techsTo(game, 1, TECHS.industrialization.col);
+  game.congress = { host: 1, next: game.turn + 30, proposals: [], active: [] };
+  bot.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+  eq(expectedTier(game, bot, 'worlds_fair'), 'gold', 'the stronger cities: it expects gold');
+  eq(expectedTier(game, egypt, 'worlds_fair'), 'silver', 'and Egypt silver');
+  eq(congressProposal(game, bot)?.kind, 'worlds_fair', 'it proposes the World’s Fair');
+  eq(congressVote(game, bot, { id: 1, by: 0, kind: 'worlds_fair', votes: {} }), 'yes', 'and votes for it, whoever proposed it');
+  startProject(game, 'worlds_fair');
+  ok(worldProject(makeCtx(game, bot), home, 0.5) === null, 'not a city in danger');
+  eq(worldProject(makeCtx(game, bot), home, 0)?.id, 'worlds_fair', 'a city it can spare builds it');
+  home.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  eq(worldProject(makeCtx(game, bot), other, 0), null, 'its share of cities (one, of two) on it already');
 });

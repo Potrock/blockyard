@@ -167,6 +167,19 @@ export function cityTargets(city: CityWire): number[] {
   return within(store.grid, city.tile, 2).filter((t) => t !== city.tile && store.known[t]?.visible && v.units.some((u) => u.tile === t && u.owner !== v.you && v.players[u.owner]?.war));
 }
 
+/** Liberating a captured city (Civ V's): back to its founder, who'll never forget it (and lives again, if it had fallen); asked first. */
+function liberateButton(city: CityWire): El | null {
+  const free = city.liberate;
+  if (!free) return null;
+  const what = free.revive ? `${free.name} lives again, at peace with you` : free.cityState ? `${free.name} owes you its alliance` : `${free.name} never forgets it`;
+  return h(
+    'button.cv-btn.small',
+    { onclick: () => ask(`Liberate ${city.name}, giving it back to ${free.name}? You lose the city; ${what}.`, 'Liberate it', () => send({ t: 'cityChoice', city: city.id, choice: 'liberate' })), title: `Give it back to its founder, ${free.name}: ${what}` },
+    icon('peace', 13),
+    free.revive ? `Liberate: bring back ${free.name}` : `Liberate: back to ${free.name}`,
+  );
+}
+
 /** A city's ranged attack (when there's an enemy in reach), and a captured city's fate. */
 export function cityAlerts(city: CityWire): El[] {
   const out: El[] = [];
@@ -209,6 +222,7 @@ export function cityAlerts(city: CityWire): El[] {
           { style: 'gap:6px' },
           h('button.cv-btn.small', { onclick: () => send({ t: 'cityChoice', city: city.id, choice: 'annex' }), title: 'It takes your orders, but its people are unhappy at the occupation till it has a Courthouse' }, 'Annex'),
           city.canRaze && h('button.cv-btn.small.danger', { onclick: () => ask(`Raze ${city.name} to the ground? It loses a citizen each turn until it's gone, with any wonders in it.`, 'Raze it', () => send({ t: 'cityChoice', city: city.id, choice: 'raze' })) }, 'Raze'),
+          liberateButton(city),
         ),
       ),
     );
@@ -515,7 +529,7 @@ export function renderVictory(): El {
         'Diplomacy',
         v.un === null
           ? 'Once someone builds the United Nations, the world votes every ten turns: two delegates a civ (the builder two more), one for each city-state with its ally. More than half of them all wins.'
-          : `The United Nations stands (${v.players[v.un]?.name}). Next vote: turn ${v.nextVote}.`,
+          : `The United Nations stands (${v.players[v.un]?.name}). Next vote: ${v.nextVote === v.turn ? 'at the end of this turn' : `turn ${v.nextVote}`}.`,
         ...worldLeaderRace(),
         v.un !== null && h('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' }, h('small.cv-muted', {}, 'Your vote:'), ...majors.filter((p) => p.alive && p.met).map((p) => h(`button.cv-chip${(s.vote ?? v.you) === p.index ? '.on' : ''}`, { onclick: () => send({ t: 'vote', candidate: p.index }) }, p.name))),
       ),

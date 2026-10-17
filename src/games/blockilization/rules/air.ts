@@ -1,5 +1,5 @@
 import { cityStrength, damage, die, gain, rangeOf, strength, type CombatResult } from './combat';
-import { atWar, cityAt, note, removeUnit } from './core';
+import { atWar, cityAt, note, removeUnit, seesUnit } from './core';
 import { distance } from './hex';
 import { occupants } from './movement';
 import type { City, Game, Unit } from './state';
@@ -68,18 +68,22 @@ function interceptor(game: Game, u: Unit, target: number): { by: Unit; power: nu
   return best;
 }
 
-/** What an aircraft can strike on a tile: an enemy city, else an enemy unit (null: nothing). */
+/** What an aircraft can strike on a tile: an enemy city, else an enemy unit, that its owner sees (null: nothing). */
 export function airTarget(game: Game, u: Unit, target: number): { city?: City; unit?: Unit } | null {
   if (target === u.tile || distance(game.grid, u.tile, target) > rangeOf(u)) return null;
+  const p = game.players[u.owner];
+  if (!(p?.visible[target] > 0)) return null;
   const city = cityAt(game, target);
   if (city && atWar(game, u.owner, city.owner)) return { city };
   const here = occupants(game, target);
-  const unit = here.military ?? here.civilian;
-  return unit && atWar(game, u.owner, unit.owner) ? { unit } : null;
+  const unit = [here.military, here.civilian].find((x) => x && atWar(game, u.owner, x.owner) && seesUnit(game, p, x));
+  return unit ? { unit } : null;
 }
 
-/** An air strike on a tile (null: nothing there to strike, or out of range). */
+/** An air strike on a tile (null: nothing there to strike, or out of range, or the aircraft has flown this turn). */
 export function airStrike(game: Game, u: Unit, target: number): CombatResult | null {
+  // (Once a turn, and not after rebasing: a strike takes its move.)
+  if (u.moves <= 0 || u.attacked) return null;
   const aim = airTarget(game, u, target);
   if (!aim) return null;
   u.moves = 0;

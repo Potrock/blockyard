@@ -1,5 +1,5 @@
 import { BUILDINGS } from './buildings';
-import { cityById, citiesOf, civOf, has, nameTo, note, noteAll, spawnUnit, speed } from './core';
+import { canStand, cityById, citiesOf, civOf, has, nameTo, note, noteAll, spawnUnit, speed } from './core';
 import type { Effects } from './effects';
 import { distance, within } from './hex';
 import { policyEffects } from './policies';
@@ -191,9 +191,22 @@ export function faithTurn(game: Game) {
   }
 }
 
+/** A city that's shrunk (starved, taken, settled from, bombed) keeps no more followers than citizens: the biggest faiths lose them first. */
+export function capFollowers(c: City) {
+  const f = c.followers;
+  if (!f) return;
+  let over = Object.values(f).reduce((s, k) => s + k, 0) - c.pop;
+  while (over-- > 0) {
+    const most = Object.entries(f).sort((a, b) => b[1] - a[1])[0];
+    if (!most || most[1] <= 0) break;
+    f[most[0]]--;
+  }
+}
+
 /** Convert `n` citizens of a city to a religion (from the others, the biggest first); a change of the city's faith is told unless `quiet`. */
 export function convert(game: Game, c: City, religion: string, n: number, quiet = false) {
   const f = (c.followers ??= {});
+  capFollowers(c);
   const before = cityReligion(c);
   for (let i = 0; i < n; i++) {
     const total = Object.values(f).reduce((s, k) => s + k, 0);
@@ -284,6 +297,7 @@ export function canBuyReligious(game: Game, p: Player, c: City): boolean {
 /** Faith-bought units appear with the buyer's religion. */
 export function faithUnit(game: Game, p: Player, c: City, type: string): Unit | null {
   if (!UNITS[type]) return null;
-  const at = within(game.grid, c.tile, 1).find((t) => !game.units.some((u) => u.tile === t && !UNITS[u.type].strength)) ?? c.tile;
+  // (On land it can stand on, with no civilian there and no one else's unit: not out at sea, nor on an enemy.)
+  const at = within(game.grid, c.tile, 1).find((t) => canStand(game, type, t) && !game.units.some((u) => u.tile === t && (u.owner !== p.index || !UNITS[u.type].strength))) ?? c.tile;
   return spawnUnit(game, type, p.index, at, { religion: p.religion, spreads: spreadsOf(game, p, type) });
 }

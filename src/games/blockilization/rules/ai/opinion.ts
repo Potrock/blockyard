@@ -74,7 +74,12 @@ export function opinionOf(game: Game, a: Player, b: Player): Opinion {
   add('Your spies have worked against us', sum((e) => e.kind === 'spy' && e.by === bi && e.to === ai, 80, -6, 12));
   add('You took our land', sum((e) => e.kind === 'land' && e.by === bi && e.to === ai, 100, -8, 16));
   add('You took our cities', sum((e) => e.kind === 'capture' && e.by === bi && e.to === ai, 150, -6, 24, 0.4));
-  const warmonger = sum((e) => e.kind === 'capture' && e.by === bi && e.to !== ai && game.players[e.to] && !game.players[e.to].cityState, 100, -2, 10) + sum((e) => e.kind === 'war' && e.by === bi && e.to !== ai, 60, -1, 5);
+  // (A city given back is remembered for good, Civ V's liberation: more than any deal.)
+  add('You liberated our people', sum((e) => e.kind === 'liberate' && e.by === bi && e.to === ai, 200, 25, 40, 0.6));
+  add('You threatened a city-state under our protection', sum((e) => e.kind === 'pledge' && e.by === bi && e.to === ai, 60, -6, 12));
+  // (Cities given back weigh against cities taken, as liberating does in Civ V's warmonger count.)
+  const freed = sum((e) => e.kind === 'liberate' && e.by === bi && e.to !== ai, 100, 2, 10);
+  const warmonger = Math.min(0, sum((e) => e.kind === 'capture' && e.by === bi && e.to !== ai && game.players[e.to] && !game.players[e.to].cityState, 100, -2, 10) + freed) + sum((e) => e.kind === 'war' && e.by === bi && e.to !== ai, 60, -1, 5);
   add(WARMONGER, warmonger * (0.6 + pers.defense / 12));
   const friendsAtWar = myFriends.filter((o) => atWar(game, bi, o.index));
   if (friendsAtWar.length) add(`You are at war with our friend ${friendsAtWar[0].name}`, -6);

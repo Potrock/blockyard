@@ -3,6 +3,7 @@ import { cityStrength } from './combat';
 import type { Effects } from './effects';
 import { cityReligion } from './faith';
 import { questsTurn } from './quests';
+import { pledged, pledgeOffended, pledgesTurn, PLEDGE_REST } from './pledges';
 import { spiesOf } from './trade';
 import { distance, neighbours, within } from './hex';
 import { policyEffects } from './policies';
@@ -21,16 +22,18 @@ import { isGreatPerson, isMilitary, UNITS, UNIT_LIST } from './units';
 
 export const FRIEND = 30;
 export const ALLY = 60;
+/** Influence a civ is left with at most by declaring war on a city-state (Civ V's). */
+export const CS_WAR_INFLUENCE = -60;
 
 export const cityStates = (game: Game) => game.players.filter((p) => p.cityState && p.alive);
 export const influenceOf = (p: Player, cs: number) => p.influence[cs] ?? 0;
 
-/** The civ allied with a city-state (most influence, 60 or more), or -1. */
+/** The civ allied with a city-state (most influence, 60 or more, and not at war with it), or -1. */
 export function allyOf(game: Game, cs: number): number {
   let best = -1;
   let most = ALLY - 1;
   for (const p of game.players) {
-    if (p.cityState || p.civ === 'barbarian' || !p.alive) continue;
+    if (p.cityState || p.civ === 'barbarian' || !p.alive || atWar(game, p.index, cs)) continue;
     const v = influenceOf(p, cs);
     if (v > most) {
       most = v;
@@ -88,7 +91,7 @@ const dealings = (game: Game, p: Player): Effects[] => [...policyEffects(p, game
 /**
  * Where a civ's influence with a city-state drifts back to: 0, or higher with Consulates (20), with
  * Papal Primacy if the city-state follows the civ's religion (15), and with Gunboat Diplomacy while
- * one of the civ's military units is within 3 tiles of it (20).
+ * one of the civ's military units is within 3 tiles of it (20), and pledged to protect it (`PLEDGE_REST`).
  */
 export function restingInfluence(game: Game, p: Player, cs: number): number {
   const effects = dealings(game, p);
@@ -96,6 +99,7 @@ export function restingInfluence(game: Game, p: Player, cs: number): number {
   let rest = has(effects, 'influence_rest_20') ? 20 : 0;
   if (home && p.religion && cityReligion(home) === p.religion && has(effects, 'papal_primacy')) rest += 15;
   if (home && has(effects, 'gunboat') && game.units.some((u) => u.owner === p.index && isMilitary(UNITS[u.type]) && distance(game.grid, u.tile, home.tile) <= 3)) rest += 20;
+  if (pledged(game, p.index, cs)) rest += PLEDGE_REST;
   return rest;
 }
 
@@ -208,6 +212,8 @@ export function tribute(game: Game, p: Player, cs: number, take: 'gold' | 'worke
   else spawn('worker', p.index, home.tile);
   p.influence[cs] = influenceOf(p, cs) - TRIBUTE_COST[take];
   c.cityState!.tributeAt = game.turn;
+  // (Its protectors are offended; a protector bullying it breaks its own pledge.)
+  pledgeOffended(game, p.index, cs);
   note(game, p.index, { text: `${c.name} pays tribute: ${take === 'gold' ? `${tributeGold(game, p)} gold` : 'a worker'} (-${TRIBUTE_COST[take]} influence).`, at: home.tile, kind: 'good' });
   noteAll(game, (r) => (r !== p && !r.cityState && knowsOf(r, c) && knowsOf(r, p) ? { text: `${p.name} has bullied ${c.name} into paying tribute.`, at: home.tile, kind: 'info' } : null));
   return null;
@@ -224,7 +230,7 @@ export function coupChance(game: Game, p: Player, cs: number): number {
   return Math.max(0.1, Math.min(0.9, 0.5 + (influenceOf(p, cs) - influenceOf(game.players[ally], cs)) / 100));
 }
 
-/** Why a spy can't attempt a coup, if it can't: it must be in a city-state that's another civ's ally, at peace with it. */
+/** Why a spy can't attempt a coup, if it can't: it must be in a city-state that's another civ's ally, at peace with it, since before this turn. */
 export function cannotCoup(game: Game, p: Player, spyId: number): string | null {
   const spy = spiesOf(p).find((s) => s.id === spyId);
   if (!spy || spy.city === null) return 'Send a spy to a city-state first';
@@ -232,6 +238,7 @@ export function cannotCoup(game: Game, p: Player, spyId: number): string | null 
   const cs = c ? game.players[c.owner] : undefined;
   if (!c || !cs?.cityState) return 'A coup is made in a city-state';
   if (atWar(game, p.index, cs.index)) return "You're at war with them";
+  if (spy.arrived === game.turn) return 'Your spy has only just arrived: a coup can be tried from next turn';
   const ally = allyOf(game, cs.index);
   if (ally < 0) return `${cs.name} has no ally to overthrow`;
   if (ally === p.index) return `${cs.name} is your ally already`;
@@ -274,9 +281,10 @@ export function service(game: Game, p: Player, near: number, amount: number) {
 /** Influence a civ loses a turn with a city-state while above its rest: one, less with policies that slow it (Treaty Organization and the like). */
 export const influenceFall = (game: Game, p: Player) => 1 - Math.min(100, dealings(game, p).reduce((s, e) => s + (e.cityStateInfluence ?? 0), 0)) / 100;
 
-/** Each turn: influence drifts back to rest, friends and allies get their gifts, quests are done and asked (`quests.ts`). */
+/** Each turn: influence drifts back to rest, friends and allies get their gifts, quests are done and asked (`quests.ts`), pledges lapse (`pledges.ts`). */
 export function cityStateTurn(game: Game) {
   questsTurn(game);
+  pledgesTurn(game);
   for (const cs of cityStates(game)) {
     for (const p of game.players) {
       if (p.cityState || p.civ === 'barbarian' || !p.alive) continue;

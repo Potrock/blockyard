@@ -1,6 +1,7 @@
 import { BUILDINGS } from '../buildings';
 import { constructible, itemCost, productionToward } from '../game';
 import { ALLY, allyOf, cannotBully, cannotCoup, cityStates, coupChance, giftInfluence, influenceOf } from '../citystates';
+import { pledged } from '../pledges';
 import { cityById, citiesOf, knows } from '../core';
 import { friends, hasMet, pacted } from '../diplomacy';
 import { cityReligion, religionsLeft } from '../faith';
@@ -402,12 +403,12 @@ function electionBid(ctx: Ctx): boolean {
 
 /**
  * A warlike leader with soldiers by a city-state that outmatch it demands its gold (Civ V's bullying),
- * unless it courts the city-states (a diplomat, or allied with that one), or the UN's votes count.
+ * unless it courts the city-states (a diplomat, or allied with that one, or pledged to protect it), or the UN's votes count.
  */
 function bully(ctx: Ctx) {
   const { game, p, mem } = ctx;
   if (ctx.pers.offense < 7 || mem.aim === 'diplomatic' || game.wonders['united_nations'] !== undefined) return;
-  for (const cs of cityStates(game)) if (allyOf(game, cs.index) !== ctx.me && !cannotBully(game, p, cs.index) && act(ctx, { t: 'tribute', target: cs.index, take: 'gold' })) return;
+  for (const cs of cityStates(game)) if (allyOf(game, cs.index) !== ctx.me && !pledged(game, ctx.me, cs.index) && !cannotBully(game, p, cs.index) && act(ctx, { t: 'tribute', target: cs.index, take: 'gold' })) return;
 }
 
 /** The gold a gift must be to win this much influence. */

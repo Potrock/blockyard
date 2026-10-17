@@ -7,7 +7,7 @@ import type { Reaction } from './leaderscene';
 import { prefs } from './prefs';
 import type { CombatPreview } from '../rules/preview';
 import type { Yields } from '../rules/terrain';
-import { isMilitary, UNITS } from '../rules/units';
+import { isGreatPerson, isMilitary, UNITS } from '../rules/units';
 
 /**
  * What this screen knows: the lobby, the map's terrain, this player's view of the game (the server's
@@ -240,6 +240,35 @@ export function setView(v: View, now: number) {
   store.changed++;
 }
 
+/**
+ * A new game (back to the lobby, or a new map): what this screen kept of the last one goes, so none of
+ * it carries over (a deal drawn up, a group, a question, the interface put away with H...).
+ */
+export function resetGame() {
+  store.selectedUnit = store.selectedCity = store.cityTarget = null;
+  store.group = [];
+  store.box = null;
+  store.unitAim = null;
+  store.cityInfo = null;
+  store.prophet = null;
+  store.preview = null;
+  store.ordered = null;
+  store.tap = null;
+  store.confirm = null;
+  store.toast = null;
+  store.defend = null;
+  store.fights = [];
+  store.notes = [];
+  store.splashes = [];
+  store.splashAt = 0;
+  store.graph = 'score';
+  store.overHidden = false;
+  store.interfaceHidden = false;
+  store.takeOverOpen = false;
+  store.diplo = { with: null, deal: null, check: null, later: [], pending: false };
+  store.changed++;
+}
+
 export const me = () => store.view?.you ?? -1;
 
 /** Each team's colour, Team 1's first. */
@@ -301,6 +330,15 @@ export function attackable(u: UnitWire, t: number): boolean {
   const g = store.grid;
   if (!type || !isMilitary(type) || type.abilities?.includes('no_attack') || !g) return false;
   if (!store.known[t]?.visible || !enemyAt(t)) return false;
+  // A ranged shot from the ground (as the rules' `ranged`): not from the water, and only at an enemy
+  // city or soldier (a lone civilian is taken by moving onto it, not shot).
+  if (type.ranged && type.domain !== 'air') {
+    if (u.embarked) return false;
+    const v = store.view!;
+    const city = cityAt(t);
+    const war = (owner: number) => owner !== me() && !!v.players[owner]?.war;
+    if (!(city && war(city.owner)) && !unitsAt(t).some((x) => war(x.owner) && !!UNITS[x.type] && isMilitary(UNITS[x.type]) && !isGreatPerson(x.type) && UNITS[x.type].domain !== 'air')) return false;
+  }
   const d = distance(g, u.tile, t);
   if (d > reachOf(u)) return false;
   if (d <= 1 || type.domain === 'air' || store.terrain[u.tile]?.elevation === 'hills') return true;

@@ -11,8 +11,11 @@ import type { City, Game, Player, Production } from './rules/state';
 import { canResearch, TECHS } from './rules/techs';
 import { SPACESHIP_PARTS } from './rules/buildings';
 import { allyOf, cannotBully, cannotCoup, cityStateGives, coupChance, giftWorth, influenceFall, influenceOf, restingInfluence, standing, TRIBUTE_COST, tributeGold } from './rules/citystates';
+import { liberation } from './rules/liberation';
+import { cannotPledge, pledged, pledgersOf, PLEDGE_REST } from './rules/pledges';
 import { questsFor } from './rules/quests';
 import { delegates, delegateSources, embargoed, expectedVote, proposers, RESOLUTION_KINDS, resolutionInfo, RESOLUTIONS } from './rules/congress';
+import { cannotHold, isProject, openProject, PROJECTS, projectsFor, projectTotal, tiersOf } from './rules/projects';
 import { cityReligion, conversionNeed, faithCost, pressureOn, prophetCost, religionsLeft } from './rules/faith';
 import { promotionsDue, promotionsFor } from './rules/promotions';
 import { takenBeliefs } from './rules/religion';
@@ -58,6 +61,9 @@ function cityWire(game: Game, c: City, own: boolean, mood: number): CityWire {
     const cost = itemCost(game, item);
     const per = Math.max(1, productionToward(game, c, item));
     w.building = { kind: item.kind, id: item.id, progress: c.prod / cost, turns: Math.max(1, Math.ceil((cost - c.prod) / per)) };
+    // (An international project: how far the world has got with it, and its turns at the world's pace.)
+    const project = item.kind === 'project' ? openProject(game, item.id) : undefined;
+    if (project) w.building = { kind: item.kind, id: item.id, progress: projectTotal(project) / project.cost, turns: Math.max(1, Math.ceil(cost / Math.max(1, projectPace(game, item.id)))) };
   }
   w.buildings = c.buildings;
   w.queue = c.queue;
@@ -78,6 +84,8 @@ function cityWire(game: Game, c: City, own: boolean, mood: number): CityWire {
   w.borderTurns = y.culture > 0 && w.nextTile !== null ? Math.max(1, Math.ceil((w.cultureNeed - c.culture) / y.culture)) : 0;
   w.razing = c.razing;
   w.canRaze = c.founder !== c.owner && game.cities.filter((x) => x.founder === c.founder).sort((a, b) => a.id - b.id)[0] !== c;
+  const free = liberation(game, c);
+  if (free) w.liberate = { to: free.to, name: game.players[free.to].name, revive: free.revive, cityState: !!game.players[free.to].cityState };
   w.works = c.works;
   return w;
 }
@@ -185,7 +193,9 @@ function congressWire(game: Game, me: Player): View['congress'] {
     mine: { total: mine.base + mine.host + mine.un + mine.cityStates + mine.diplomats, ...mine },
     total: living.reduce((s, p) => s + delegates(game, p), 0),
     canPropose: proposers(game).includes(me.index) && !c.proposals.some((o) => o.by === me.index),
-    proposable: RESOLUTION_KINDS.map((kind) => ({ kind, ...RESOLUTIONS[kind] })),
+    // (A project only once some civ knows its tech, and while it hasn't been held.)
+    proposable: RESOLUTION_KINDS.filter((kind) => !isProject(kind) || !cannotHold(game, kind)).map((kind) => ({ kind, ...RESOLUTIONS[kind] })),
+    projects: projectsWire(game, me, known),
     civs: living.map((p) => p.index),
     luxuries: Object.keys(RESOURCES).filter((r) => RESOURCES[r].kind === 'luxury'),
     proposals: c.proposals.map((o) => {
@@ -214,6 +224,34 @@ function congressWire(game: Game, me: Player): View['congress'] {
   };
 }
 
+/** Production going into a World Congress project each turn now: every city building it, the world over. */
+const projectPace = (game: Game, id: string) =>
+  game.cities.reduce((s, c) => s + (c.queue[0]?.kind === 'project' && c.queue[0].id === id ? productionToward(game, c, c.queue[0]) : 0), 0);
+
+/** The World Congress's projects, under way and done: each civ's share (those met by name), its tier as it stands (or stood), and each tier's reward. */
+function projectsWire(game: Game, me: Player, known: Player[]): NonNullable<View['congress']>['projects'] {
+  return (game.congress?.projects ?? []).map((x) => {
+    const tiers = x.tiers ?? tiersOf(x);
+    const total = projectTotal(x);
+    const pace = x.done ? 0 : projectPace(game, x.id);
+    const unmet = Object.entries(x.put).filter(([i]) => !known.some((p) => p.index === Number(i))).reduce((s, [, n]) => s + n, 0);
+    return {
+      id: x.id,
+      name: PROJECTS[x.id].name,
+      cost: x.cost,
+      total: Math.floor(total),
+      perTurn: pace,
+      turns: x.done ? 0 : pace > 0 ? Math.ceil((x.cost - total) / pace) : null,
+      since: x.since,
+      done: x.done ?? null,
+      rewards: { gold: PROJECTS[x.id].rewards.gold.text, silver: PROJECTS[x.id].rewards.silver.text, bronze: PROJECTS[x.id].rewards.bronze.text },
+      shares: known.map((p) => ({ player: p.index, put: Math.floor(x.put[p.index] ?? 0), tier: tiers[p.index] ?? null })).sort((a, b) => b.put - a.put),
+      unmet: Math.floor(unmet),
+      mine: tiers[me.index] ?? null,
+    };
+  });
+}
+
 /** The World Leader vote as it would go now. */
 function unVotesWire(game: Game): NonNullable<View['unVotes']> {
   const { votes, needed } = unVote(game, allyOf);
@@ -239,6 +277,8 @@ function relationWire(game: Game, me: Player, o: Player): Relation {
     strategic: t.strategic,
     writing: knows(o, 'writing'),
     philosophy: knows(o, 'philosophy'),
+    // (As the rules charge it: at the later era of the two.)
+    researchCost: researchCost(game, Math.max(eraOf(me), eraOf(o))),
     deals: (game.relations?.running ?? []).filter((r) => (r.a === me.index && r.b === o.index) || (r.a === o.index && r.b === me.index)).map((r) => ({ item: r.item, turns: r.turns })),
     friendsWith: game.players.filter((x) => x !== o && (o.diplomacy.friends[x.index] ?? 0) > 0).map((x) => x.index),
     denouncing: game.players.filter((x) => x !== o && (o.diplomacy.denounced[x.index] ?? 0) > 0).map((x) => x.index),
@@ -351,6 +391,7 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
             rest: restingInfluence(game, me, o.index),
             fall: Math.round(influenceFall(game, me) * 100) / 100,
             tribute: { gold: tributeGold(game, me), cost: { ...TRIBUTE_COST }, why: cannotBully(game, me, o.index) },
+            pledge: { mine: pledged(game, me.index, o.index), why: cannotPledge(game, me, o.index), rest: PLEDGE_REST, by: pledgersOf(game, o.index) },
           }
         : undefined,
       influence: !o.cityState && o.civ !== 'barbarian' && o !== me ? Math.round(influence(me, o) * 100) / 100 : undefined,
@@ -376,7 +417,7 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
       }),
     ),
     un: (game.wonders['united_nations'] ?? -1) >= 0 ? game.wonders['united_nations'] : null,
-    nextVote: (game.wonders['united_nations'] ?? -1) >= 0 ? Math.ceil((game.turn + 1) / 10) * 10 : null,
+    nextVote: (game.wonders['united_nations'] ?? -1) >= 0 ? Math.ceil(game.turn / 10) * 10 : null, // (held as a turn of ten ends: `longGameTurn`)
     unVotes: game.settings.victories.diplomatic ? unVotesWire(game) : null,
     congress: congressWire(game, me),
     offers: p ? (game.relations?.offers ?? []).filter((o) => o.to === p.index).map((o) => ({ id: o.id, from: o.from, items: o.items, turn: o.turn })) : [],
@@ -458,7 +499,9 @@ export function cityInfo(game: Game, p: Player, c: City): CityInfo {
   const options: CityInfo['options'] = [];
   const effects = cityEffects(game, c);
   const prod = cityYields(game, c).prod;
-  const turns = (item: Production) => Math.ceil(itemCost(game, item) / Math.max(1, productionToward(game, c, item, effects, prod)));
+  // (What's been put in counts: the current build's production, or what was kept toward an item switched from.)
+  const putIn = (item: Production) => (c.queue[0]?.kind === item.kind && c.queue[0]?.id === item.id ? c.prod : (c.saved?.[`${item.kind}:${item.id}`] ?? 0));
+  const turns = (item: Production) => Math.max(1, Math.ceil((itemCost(game, item) - putIn(item)) / Math.max(1, productionToward(game, c, item, effects, prod))));
   const units = trainOptions(game, p, c);
   for (const { id } of units.filter((o) => !o.why)) {
     const item = { kind: 'unit' as const, id };
@@ -473,6 +516,12 @@ export function cityInfo(game: Game, p: Player, c: City): CityInfo {
   for (const id of partsBuildable(game, p)) {
     const item = { kind: 'project' as const, id };
     options.push({ kind: 'project', id, cost: itemCost(game, item), turns: turns(item), buy: null });
+  }
+  // The World Congress's projects open now: their cost what they still want from everyone, their turns at the world's pace (this city's with it).
+  for (const item of projectsFor(game, p, c)) {
+    const on = c.queue[0]?.kind === 'project' && c.queue[0].id === item.id;
+    const pace = projectPace(game, item.id) + (on ? 0 : productionToward(game, c, item, effects, prod));
+    options.push({ kind: 'project', id: item.id, cost: itemCost(game, item), turns: Math.max(1, Math.ceil(itemCost(game, item) / Math.max(1, pace))), buy: null });
   }
   // Units only bought with gold (Mercenary Army's Landsknechts), and what faith buys here.
   const landsknecht = { kind: 'unit' as const, id: 'landsknecht' };
