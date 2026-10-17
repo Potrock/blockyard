@@ -21,10 +21,12 @@ import { wondersBeside } from './nature';
 import { adoptable, ALL_POLICIES, IDEOLOGIES, policyMet, TREES, treeDone } from './policies';
 import { BELIEF_LIST, BELIEFS, pantheonCost, takenBeliefs } from './religion';
 import { recordReplay } from './replay';
-import type { City, Game, Player, Production, Unit } from './state';
+import { GOLDEN_SPEEDS, type City, type Game, type Player, type Production, type Unit } from './state';
 import { sideName, sides, teamOf, teammates } from './teams';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { startSequence, waitsFor, warBegun } from './turns';
+import { climateTurn } from './climate';
+import { disasterTurn } from './disasters';
 import { FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, type ImprovementId } from './terrain';
 import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNIT_LIST, UNITS } from './units';
 
@@ -278,6 +280,11 @@ export function productionToward(game: Game, c: City, item: Production, effects 
     pct += effects.reduce((s, e) => s + (e.buildingProduction ?? 0), 0);
     for (const e of effects) for (const boost of e.buildingBoost ?? []) if (boost.buildings.some((id) => isBuilding(item.id, id))) pct += boost.percent;
     if (b && game.tiles.some((t, i) => t.resource === 'marble' && t.improvement === 'quarry' && !t.pillaged && t.owner === c.owner && i >= 0) && b.kind === 'world') pct += 15;
+    // Rome: a building the capital has goes up faster in the other cities.
+    if (b?.kind === 'building' && has(effects, 'capital_buildings_faster')) {
+      const capital = capitalOf(game, c.owner);
+      if (capital && capital !== c && capital.buildings.some((x) => isBuilding(x, item.id))) pct += 25;
+    }
   }
   if (item.kind === 'unit') {
     const u = UNITS[item.id];
@@ -658,7 +665,7 @@ function spawnNear(game: Game, type: string, owner: number, t: number): Unit | u
 
 function startGoldenAge(game: Game, p: Player, turns: number) {
   const longer = civEffects(game, p).reduce((s, e) => s + (e.goldenAgeLength ?? 0), 0);
-  p.goldenTurns += Math.round(turns * (1 + longer / 100) * (game.settings.speed === 'quick' ? 0.8 : 1));
+  p.goldenTurns += Math.round(turns * (1 + longer / 100) * GOLDEN_SPEEDS[game.settings.speed]);
   p.goldenAges++;
   note(game, p.index, { text: 'A golden age begins!', kind: 'good' });
 }
@@ -1703,6 +1710,10 @@ export function endTurn(game: Game) {
   congressTurn(game, eraOf);
   barbarianTurn(game);
   raze(game);
+  // The world's own turn: its disasters and its climate (what they did kept for the screens to show).
+  const events = [...disasterTurn(game), ...climateTurn(game)];
+  if (events.length) game.events = events;
+  else delete game.events;
   // (Science and techs the turn brought after the civs' own turns, a research agreement's or a spy's, shared again.)
   shareResearch(game);
   game.turn++;
@@ -1980,7 +1991,7 @@ function unitTurn(game: Game, u: Unit) {
         const f = tile.feature && FEATURES[tile.feature];
         if (f?.removable?.prod) {
           const near = citiesOf(game, u.owner).sort((a, b) => distance(game.grid, a.tile, u.tile) - distance(game.grid, b.tile, u.tile))[0];
-          if (near && distance(game.grid, near.tile, u.tile) <= 3) near.prod += Math.floor(f.removable.prod * (game.settings.speed === 'quick' ? 0.67 : 1));
+          if (near && distance(game.grid, near.tile, u.tile) <= 3) near.prod += Math.floor(f.removable.prod * speed(game));
         }
         tile.feature = undefined;
       } else if (w !== 'artifact') {

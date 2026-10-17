@@ -1,4 +1,4 @@
-import { unpackKnown, unpackStatic, unpackYields, type CityInfo, type DealCheck, type KnownTile, type LobbyView, type MapWire, type PreviewAsk, type ResearchAdvice, type StatsInfo, type UnitWire, type View } from '../protocol';
+import { unpackKnown, unpackStatic, unpackYields, type CityInfo, type DealCheck, type KnownTile, type LobbyView, type MapWire, type ReshapeWire, type PreviewAsk, type ResearchAdvice, type StatsInfo, type UnitWire, type View } from '../protocol';
 import type { DealItem } from '../rules/diplomacy';
 import { distance, line, type Grid } from '../rules/hex';
 import type { Note } from '../rules/state';
@@ -188,6 +188,12 @@ export function setMap(m: MapWire) {
   store.stats = null;
   store.advice = null;
   store.yields = [];
+  store.changed++;
+}
+
+/** Tiles the world has changed since the map was sent (`ReshapeWire`): their land as it now is. */
+export function reshapeMap(m: ReshapeWire) {
+  for (const [t, s] of Object.entries(m.tiles)) if (store.terrain[+t]) store.terrain[+t] = unpackStatic(s);
   store.changed++;
 }
 

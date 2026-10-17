@@ -200,6 +200,14 @@ export const UNIT_LIST: UnitType[] = [
   U({ id: 'jaguar', name: 'Jaguar', class: 'melee', cost: 40, strength: 9, moves: 2, obsolete: 'metal_casting', upgrade: 'swordsman', civ: 'aztec', replaces: 'warrior', abilities: ['kill_heal', 'jungle_fighter'] }),
   U({ id: 'cossack', name: 'Cossack', class: 'mounted', cost: 225, strength: 36, moves: 4, tech: 'military_science', obsolete: 'combustion', upgrade: 'landship', resource: 'horses', civ: 'russia', replaces: 'cavalry', abilities: ['no_terrain_defense', 'withdraw'] }),
   U({ id: 'musketeer', name: 'Musketeer', class: 'gun', cost: 150, strength: 28, moves: 2, tech: 'gunpowder', obsolete: 'rifling', upgrade: 'rifleman', civ: 'france', replaces: 'musketman' }),
+  U({ id: 'legion', name: 'Legion', class: 'melee', cost: 75, strength: 17, moves: 2, tech: 'iron_working', obsolete: 'steel', upgrade: 'longswordsman', resource: 'iron', civ: 'rome', replaces: 'swordsman' }),
+  U({ id: 'hoplite', name: 'Hoplite', class: 'melee', cost: 56, strength: 13, moves: 2, tech: 'bronze_working', obsolete: 'civil_service', upgrade: 'pikeman', civ: 'greece', replaces: 'spearman', abilities: ['bonus_vs_mounted'] }),
+  U({ id: 'samurai', name: 'Samurai', class: 'melee', cost: 120, strength: 23, moves: 2, tech: 'steel', obsolete: 'gunpowder', upgrade: 'musketman', resource: 'iron', civ: 'japan', replaces: 'longswordsman' }),
+  U({ id: 'longbowman', name: 'Longbowman', class: 'ranged', cost: 120, strength: 13, ranged: 18, range: 3, moves: 2, tech: 'machinery', obsolete: 'industrialization', upgrade: 'gatling_gun', civ: 'england', replaces: 'crossbowman' }),
+  U({ id: 'keshik', name: 'Keshik', class: 'mounted', cost: 120, strength: 15, ranged: 16, range: 2, moves: 5, tech: 'chivalry', obsolete: 'military_science', upgrade: 'lancer', resource: 'horses', civ: 'mongolia', replaces: 'knight', abilities: ['no_terrain_defense'] }),
+  U({ id: 'janissary', name: 'Janissary', class: 'gun', cost: 150, strength: 26, moves: 2, tech: 'gunpowder', obsolete: 'rifling', upgrade: 'rifleman', civ: 'ottomans', replaces: 'musketman', abilities: ['kill_heal'] }),
+  U({ id: 'impi', name: 'Impi', class: 'melee', cost: 90, strength: 16, moves: 3, tech: 'civil_service', obsolete: 'gunpowder', upgrade: 'musketman', civ: 'zulu', replaces: 'pikeman', abilities: ['bonus_vs_mounted'] }),
+  U({ id: 'slinger', name: 'Slinger', class: 'ranged', cost: 35, strength: 5, ranged: 7, range: 2, moves: 2, tech: 'archery', obsolete: 'machinery', upgrade: 'composite_bowman', civ: 'inca', replaces: 'archer' }),
 ];
 
 export const UNITS: Record<string, UnitType> = Object.fromEntries(UNIT_LIST.map((u) => [u.id, u]));

@@ -124,8 +124,9 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
     pct += n;
     why?.push({ label, percent: n });
   };
-  // Wounds: up to half its strength gone at death's door (Civ V's).
-  add('Wounded', -(100 - u.hp) / 2);
+  const civ = civEffects(game, p);
+  // Wounds: up to half its strength gone at death's door (Civ V's); none for Japan's.
+  if (!has(civ, 'no_wound_penalty')) add('Wounded', -(100 - u.hp) / 2);
   const tile = game.tiles[at];
   const vsUnit = against && 'type' in against ? against : null;
   const vsCity = against && !('type' in against) ? against : null;
@@ -166,7 +167,6 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
     if (c && promotionCounts(c.when, game, role, target, fired, vsUnit, vsCity)) add(PROMOTIONS[id].name, c.percent);
   }
   // Effects (policies, wonders, beliefs, the civ's ability).
-  const civ = civEffects(game, p);
   let effects = 0;
   for (const e of civ)
     for (const c of e.combat ?? []) {
@@ -227,6 +227,8 @@ function combatCounts(when: CombatWhen, game: Game, u: Unit, role: 'attack' | 'd
       return !!vsCity && role !== 'defend';
     case 'vs_barbarians':
       return !!vsUnit && game.players[vsUnit.owner]?.civ === 'barbarian';
+    case 'vs_city_states':
+      return !!game.players[(vsUnit ?? vsCity)?.owner ?? -1]?.cityState;
     case 'beside_friend':
       return besideFriend(game, u, at);
     case 'faithful_land':
@@ -255,15 +257,16 @@ export const BARBARIAN_XP_CAP = 30;
 
 /**
  * Experience for a fight (Civ V: 5 for attacking, 4 defending, 2 for ranged; more with Military
- * Tradition and Elite Forces; against barbarians, only up to 30). A fight against a civ or a
- * city-state also earns its owner great general points (great admiral points at sea).
+ * Tradition and Elite Forces, and for the Zulu; against barbarians, only up to 30). A fight against
+ * a civ or a city-state also earns its owner great general points (great admiral points at sea).
  */
 export function gain(game: Game, u: Unit, xp: number, foe: number) {
   const p = game.players[u.owner];
   const barbarian = game.players[foe]?.civ === 'barbarian';
   if (barbarian && u.xp >= BARBARIAN_XP_CAP) return;
   const civ = civEffects(game, p);
-  const got = xp * (1 + (has(civ, 'double_xp') ? 1 : 0) + (has(civ, 'xp_50') ? 0.5 : 0));
+  // (The Zulu's third more is Civ V's quarter less needed for each promotion.)
+  const got = xp * (1 + (has(civ, 'double_xp') ? 1 : 0) + (has(civ, 'xp_50') ? 0.5 : 0) + (has(civ, 'xp_33') ? 1 / 3 : 0));
   u.xp += barbarian ? Math.min(got, BARBARIAN_XP_CAP - u.xp) : got;
   if (!barbarian && !p.cityState && p.civ !== 'barbarian') cityHooks.greatPoints(game, u, xp);
 }

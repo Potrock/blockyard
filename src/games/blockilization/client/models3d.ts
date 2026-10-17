@@ -51,6 +51,7 @@ const BY_TYPE: Partial<Record<string, ModelId>> = {
   catapult: 'u_catapult', trebuchet: 'u_trebuchet', cannon: 'u_cannon', artillery: 'u_artillery', rocket_artillery: 'u_rocket', gatling_gun: 'u_gatling', machine_gun: 'u_gatling',
   landship: 'u_landship', tank: 'u_tank', modern_armor: 'u_armor', giant_death_robot: 'u_robot', helicopter_gunship: 'u_heli',
   triplane: 'u_triplane', great_war_bomber: 'u_oldbomber', fighter: 'u_fighter', jet_fighter: 'u_fighter', bomber: 'u_bomber', stealth_bomber: 'u_stealth', guided_missile: 'u_missile', nuclear_missile: 'u_nuke', atomic_bomb: 'u_nuke',
+  legion: 'u_sword', hoplite: 'u_spear', samurai: 'u_longsword', longbowman: 'u_bow', keshik: 'u_horse', janissary: 'u_musket', impi: 'u_spear', slinger: 'u_bow',
   trireme: 'u_galley', galleass: 'u_galley', turtle_ship: 'u_turtle', caravel: 'u_sail', frigate: 'u_sail', privateer: 'u_sail', ironclad: 'u_ironclad',
   destroyer: 'u_warship', battleship: 'u_warship', missile_cruiser: 'u_warship', submarine: 'u_sub', nuclear_submarine: 'u_sub', carrier: 'u_carrier',
 };
@@ -869,6 +870,9 @@ function clearAll(client: Client) {
   sites.clear();
   groundCache.clear();
 }
+
+/** The land changed under some tiles (`reshapeMap`): the ground heights measured are measured again. */
+export const forgetGround = () => groundCache.clear();
 
 /** A new map: the old one's ground heights go. */
 export function resetModels(client: Client) {

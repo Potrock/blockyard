@@ -1,6 +1,6 @@
 import { BUILDING_LIST } from './buildings';
 import { CHOOSABLE, type Effects } from './effects';
-import type { Game, Player } from './state';
+import { SPEEDS, type Game, type Player } from './state';
 import { eraOfCol, ERAS, TECHS } from './techs';
 
 /**
@@ -94,7 +94,7 @@ export const BELIEFS: Record<string, Belief> = Object.fromEntries(BELIEF_LIST.ma
 export const RELIGION_NAMES = ['Sunfire Way', 'Order of the Grove', 'Stonefaith', 'The Tidal Path', 'Way of the Four Winds', 'Lantern Creed', 'Covenant of Stars', 'Hearthkeepers', 'The River Teaching', 'Skyward Faith', 'Path of the Ember', 'The Quiet Mountain'];
 
 /** Faith a pantheon costs (Civ V's 10, then more for each taken), and a Great Prophet's points. */
-export const pantheonCost = (game: Game) => Math.floor((10 + 5 * Object.values(game.players).filter((p) => p.pantheon).length) * (game.settings.speed === 'quick' ? 0.67 : 1));
+export const pantheonCost = (game: Game) => Math.floor((10 + 5 * Object.values(game.players).filter((p) => p.pantheon).length) * SPEEDS[game.settings.speed]);
 
 /**
  * The beliefs that work for a player's cities: its pantheon's, and its religion's founder, enhancer

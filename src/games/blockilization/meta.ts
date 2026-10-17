@@ -62,5 +62,13 @@ export default defineMeta({
     win_aztec: { title: 'The Fifth Sun', description: 'Win as the Aztecs' },
     win_russia: { title: 'Mother Russia', description: 'Win as Russia' },
     win_france: { title: 'Vive la France', description: 'Win as France' },
+    win_rome: { title: 'The Eternal City', description: 'Win as Rome' },
+    win_greece: { title: 'The Hellenic Age', description: 'Win as Greece' },
+    win_japan: { title: 'Land of the Rising Sun', description: 'Win as Japan' },
+    win_england: { title: 'This Sceptred Isle', description: 'Win as England' },
+    win_mongolia: { title: 'Lord of the Steppe', description: 'Win as Mongolia' },
+    win_ottomans: { title: 'The Magnificent', description: 'Win as the Ottomans' },
+    win_zulu: { title: 'People of the Heavens', description: 'Win as the Zulu' },
+    win_inca: { title: 'Children of the Sun', description: 'Win as the Inca' },
   },
 });

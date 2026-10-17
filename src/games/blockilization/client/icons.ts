@@ -249,6 +249,15 @@ const G: Record<string, string> = {
   sub: `<path ${F} d="M3 14c0-1.5 1.5-2.5 4-2.5h12c2 0 3.5 1 3.5 2.5s-1.5 2.5-3.5 2.5H7c-2.5 0-4-1-4-2.5zM9 8h5l1 3.5H9z"/><path d="M12 8V4.5h1.5M5 11.5V10h2"/>`,
   nuclear_sub: `<path ${F} d="M2 16c0-1.5 1.5-2.5 4-2.5h14c1.5 0 2.5 1 2.5 2.5s-1 2.5-2.5 2.5H6c-2.5 0-4-1-4-2.5zM6 13.5V10h4l1 3.5zM15.5 12V5L17 2.5 18.5 5v7z"/>`,
   carrier: `<path ${F} d="M1.5 13h21v1.5l-2 3.5H4l-2.5-3.5z"/><path d="M16 13V8h3v5M17.5 8V4"/><path ${F} d="M4 10.5h7l1.5-1v3l-1.5-1H4z"/>`,
+  // The new civs' own units.
+  scutum: `<path ${F} d="M6 2.5h12c1.2 3.5 1.2 15.5 0 19H6c-1.2-3.5-1.2-15.5 0-19z"/><path stroke="#000" stroke-opacity=".35" stroke-width="1.4" fill="none" d="M12 4v5.5M12 14.5V20"/><circle stroke="#000" stroke-opacity=".35" stroke-width="1.4" fill="none" cx="12" cy="12" r="2.2"/>`,
+  aspis: `<path d="M2.5 21.5L20 4"/><path ${F} d="M21.5 2.5l-.7 4.3-4.3.7.7-4.3z"/><circle ${F} cx="10" cy="14" r="7"/><circle stroke="#000" stroke-opacity=".35" stroke-width="1.4" fill="none" cx="10" cy="14" r="4.5"/>`,
+  katana: turn(-45, `<path ${F} d="M10.8-3c2.4 4 2.8 11 2 17.5h-2.4c.6-6 .4-12-1.6-17.5z"/><path d="M7.5 15h7.5M11.6 15.5v7.5"/>`),
+  longbow: '<path d="M7 1c9.5 5 9.5 17 0 22"/><path d="M7 1v22M7 12h14M18 9l3 3-3 3"/>',
+  horse_bow: '<path d="M4 21v-7c-2-1-3-3-2-6l4-4 2 2 4-1 4 4-1 3-3-1-2 3v7"/><path d="M17.5 6c5 3.5 5 11.5 0 15M17.5 6v15"/>',
+  bork: `<path ${F} d="M8 22V9c0-4 2-7 4-7s4 3 4 7v13z"/><path ${F} d="M15.5 5c3.5 1 5.5 4.5 5.5 8.5-2-2.2-3.5-3-5.5-3z"/><path stroke="#000" stroke-opacity=".35" stroke-width="1.4" d="M8 18h8"/>`,
+  isihlangu: `<path d="M20 2L5 22"/><path ${F} d="M12 3c3.5 0 5 4 5 9s-1.5 9-5 9-5-4-5-9 1.5-9 5-9z"/><path stroke="#000" stroke-opacity=".35" stroke-width="1.4" d="M12 4.5v15M10 8h4M10 12h4M10 16h4"/>`,
+  sling: `<path d="M4 2c2 6 4.5 10.5 7 13M20 2c-2 6-4.5 10.5-7 13"/><path ${F} d="M8.5 14.5c1.5-1 5.5-1 7 0l-1.5 3.5h-4z"/><circle ${F} cx="12" cy="21" r="2"/>`,
   // Emblem symbols (drawn filled, white, on a civ's shield).
   ankh: `<path ${F} d="M12 2c-3 0-5 2.5-5 5.5 0 2 1 3.5 2.5 4.5H4v3h6.5v7h3v-7H20v-3h-5.5c1.5-1 2.5-2.5 2.5-4.5C17 4.5 15 2 12 2zm0 3c1.2 0 2 1.2 2 2.5S13.2 10 12 10s-2-1.2-2-2.5S10.8 5 12 5z"/>`,
   ziggurat: `<path ${F} d="M10 3h4v3h3v4h2v4h2v5H3v-5h2v-4h2V6h3z"/>`,
@@ -262,6 +271,14 @@ const G: Record<string, string> = {
   sunstone: `<circle cx="12" cy="12" r="5" fill="none" stroke="#fff" stroke-width="2"/><circle ${F} cx="12" cy="12" r="2"/><path ${F} d="M12 1l1.5 4h-3zM12 23l-1.5-4h3zM1 12l4-1.5v3zM23 12l-4 1.5v-3zM4.2 4.2l3.9 1.8-2.1 2.1zM19.8 19.8l-3.9-1.8 2.1-2.1zM4.2 19.8l1.8-3.9 2.1 2.1zM19.8 4.2l-1.8 3.9-2.1-2.1z"/>`,
   onion: `<path ${F} d="M12 1l1 2.5c3 2 6 5 6 8.5 0 2-1 3-2 3.5V21H7v-5.5c-1-.5-2-1.5-2-3.5 0-3.5 3-6.5 6-8.5z"/><path stroke="#000" stroke-opacity=".35" stroke-width="1.4" d="M5 21h14M10 21v-4h4v4"/>`,
   fleur: `<path ${F} d="M12 2c2 2.5 3 5 3 8 0 2-1 3.5-3 5-2-1.5-3-3-3-5 0-3 1-5.5 3-8zM3 9c3 0 6 2 7 5-2 1.5-4 1.5-6 .5C3 13.5 2.5 11 3 9zM21 9c-3 0-6 2-7 5 2 1.5 4 1.5 6 .5 1-1 1.5-3.5 1-5.5zM6 15h12v2H6zM11 17h2v5h-2z"/>`,
+  laurel: `<path stroke="#fff" stroke-width="1.6" fill="none" d="M9.5 21.5C4.5 18.5 3 11 6.5 4.5M14.5 21.5c5-3 6.5-10.5 3-17"/><path ${F} d="M5.5 8C3.5 7 2.5 5 3.5 3c2 .5 3 2.5 2 5zM4.3 12C2.3 12 .8 10.5.8 8.5c2 0 3.5 1.5 3.5 3.5zM5 16c-2 .5-4-.5-4.5-2.5 2-.5 4 .5 4.5 2.5zM8 19.5c-2 1-4 .5-5-1.5 2-1 4-.5 5 1.5zM18.5 8c2-1 3-3 2-5-2 .5-3 2.5-2 5zM19.7 12c2 0 3.5-1.5 3.5-3.5-2 0-3.5 1.5-3.5 3.5zM19 16c2 .5 4-.5 4.5-2.5-2-.5-4 .5-4.5 2.5zM16 19.5c2 1 4 .5 5-1.5-2-1-4-.5-5 1.5z"/>`,
+  corinthian: `<path ${F} fill-rule="evenodd" d="M12 2C7 2 4 5.5 4 10.5V21h5.5l1-5v-4h3v4l1 5H20V10.5C20 5.5 17 2 12 2zM6.5 9h11v2.5h-11z"/>`,
+  torii: `<path ${F} d="M1 3.5c4 1.5 18 1.5 22 0v3c-4 1.2-18 1.2-22 0zM3.5 9h17v2.5h-17zM5.5 6.5H8V22H5.5zM16 6.5h2.5V22H16zM10.75 6.5h2.5V9h-2.5z"/>`,
+  tudor: `<circle ${F} cx="12" cy="6" r="4"/><circle ${F} cx="18.2" cy="10.5" r="4"/><circle ${F} cx="15.8" cy="17.8" r="4"/><circle ${F} cx="8.2" cy="17.8" r="4"/><circle ${F} cx="5.8" cy="10.5" r="4"/><circle cx="12" cy="12.5" r="3.4" fill="#000" fill-opacity=".3" stroke="none"/><circle ${F} cx="12" cy="12.5" r="1.8"/>`,
+  soyombo: `<path ${F} d="M12 .5c1.5 1.5 2 3.2 0 4.8-2-1.6-1.5-3.3 0-4.8zM8.5 9.5c0 2 1.5 3.5 3.5 3.5s3.5-1.5 3.5-3.5c-1 1.2-2.2 1.8-3.5 1.8s-2.5-.6-3.5-1.8zM8.5 13.8h7L12 16zM8.5 16.6h7v1.2h-7zM8.5 22h7v1.2h-7zM5 13.5h2v9.7H5zM17 13.5h2v9.7h-2z"/><circle ${F} cx="12" cy="7.6" r="1.6"/><circle ${F} cx="12" cy="20" r="1.7"/>`,
+  tulip: `<path ${F} d="M12 3c1.5 1.5 2 3 2 5l3-3c1 2 1 5 0 7-1 2.5-3 3.5-5 3.5S8 14.5 7 12c-1-2-1-5 0-7l3 3c0-2 .5-3.5 2-5z"/><path stroke="#fff" stroke-width="1.8" fill="none" d="M12 15.5V22M12 20.5c-2-2-4-2.5-6-2.5M12 19.5c2-2.5 4-3 6-3"/>`,
+  shield_spears: `<path stroke="#fff" stroke-width="1.8" d="M3.5 22.5L20.5 1.5M3.5 1.5l17 21"/><path ${F} d="M12 2c3.5 0 5.5 4.5 5.5 10S15.5 22 12 22s-5.5-4.5-5.5-10S8.5 2 12 2z"/><path stroke="#000" stroke-opacity=".35" stroke-width="1.6" d="M12 3.5v17M10 7h4M10 11h4M10 15h4"/>`,
+  chakana: `<path ${F} fill-rule="evenodd" d="M9 2h6v3h4v4h3v6h-3v4h-4v3H9v-3H5v-4H2V9h3V5h4zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5z"/>`,
   skull: `<path ${F} d="M12 2c-5 0-8 3.5-8 8 0 3 1.5 5 3 6v3h2v-2h2v2h2v-2h2v2h2v-3c1.5-1 3-3 3-6 0-4.5-3-8-8-8zm-3.5 7a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/>`,
   anchor_f: `<path stroke="#fff" stroke-width="2.4" fill="none" d="M12 7v14M5 13c0 4 3 8 7 8s7-4 7-8M3 13h4M17 13h4M8.5 10h7"/><circle cx="12" cy="5" r="2.2" fill="none" stroke="#fff" stroke-width="2.2"/>`,
   lyre_f: `<path stroke="#fff" stroke-width="2.2" fill="none" d="M7 4c-2 5-2 10 2 14h6c4-4 4-9 2-14M9 8h6M10 8v10M14 8v10"/>`,
@@ -422,11 +439,11 @@ const UNIT_GLYPH: Record<string, string> = {
   settler: 'city', worker: 'hammer', work_boat: 'hammer',
   scout: 'footprints', explorer: 'compass',
   warrior: 'club', jaguar: 'jaguar', spearman: 'spear', immortal: 'spear_shield', pikeman: 'pikes', landsknecht: 'zweihander',
-  swordsman: 'gladius', mohawk_warrior: 'tomahawk', longswordsman: 'longsword',
-  archer: 'bow', composite_bowman: 'recurve', crossbowman: 'crossbow', gatling_gun: 'gatling', machine_gun: 'machine_gun',
-  chariot_archer: 'chariot', war_elephant: 'elephant', horseman: 'horse_head', knight: 'helm', camel_archer: 'camel', lancer: 'lance_flag', cavalry: 'horseshoe',
+  swordsman: 'gladius', mohawk_warrior: 'tomahawk', legion: 'scutum', longswordsman: 'longsword', samurai: 'katana', hoplite: 'aspis', impi: 'isihlangu',
+  archer: 'bow', slinger: 'sling', composite_bowman: 'recurve', crossbowman: 'crossbow', longbowman: 'longbow', gatling_gun: 'gatling', machine_gun: 'machine_gun',
+  chariot_archer: 'chariot', war_elephant: 'elephant', horseman: 'horse_head', knight: 'helm', camel_archer: 'camel', keshik: 'horse_bow', lancer: 'lance_flag', cavalry: 'horseshoe',
   catapult: 'catapult', trebuchet: 'trebuchet', cannon: 'cannon', artillery: 'artillery', rocket_artillery: 'rocket_truck',
-  musketman: 'musket', rifleman: 'rifle', great_war_infantry: 'brodie', infantry: 'helmet', paratrooper: 'parachute', mechanized_infantry: 'apc', xcom_squad: 'visor',
+  musketman: 'musket', janissary: 'bork', rifleman: 'rifle', great_war_infantry: 'brodie', infantry: 'helmet', paratrooper: 'parachute', mechanized_infantry: 'apc', xcom_squad: 'visor',
   anti_tank_gun: 'at_gun', anti_aircraft_gun: 'aa_gun', mobile_sam: 'sam', bazooka: 'bazooka',
   landship: 'landship', tank: 'tank', modern_armor: 'modern_tank', giant_death_robot: 'mech', helicopter_gunship: 'helicopter',
   triplane: 'triplane', fighter: 'prop_plane', jet_fighter: 'jet', great_war_bomber: 'biplane', bomber: 'heavy_bomber', stealth_bomber: 'flying_wing',
@@ -444,9 +461,11 @@ export function unitGlyph(type: string): string {
 // -------------------------------------------------------------------------------------------------
 // Emblems
 
-const CIV_SYMBOL: Record<string, string> = {
+/** Each civ's symbol on its shield (a glyph's name). */
+export const CIV_SYMBOL: Record<string, string> = {
   egypt: 'ankh', babylon: 'ziggurat', china: 'pagoda', india: 'chakra', persia: 'wingsun', korea: 'taeguk', arabia: 'crescent', germany: 'eagle',
-  iroquois: 'pine', aztec: 'sunstone', russia: 'onion', france: 'fleur', barbarian: 'skull',
+  iroquois: 'pine', aztec: 'sunstone', russia: 'onion', france: 'fleur', rome: 'laurel', greece: 'corinthian', japan: 'torii', england: 'tudor',
+  mongolia: 'soyombo', ottomans: 'tulip', zulu: 'shield_spears', inca: 'chakana', barbarian: 'skull',
 };
 const CS_SYMBOL: Record<string, string> = { maritime: 'anchor_f', cultured: 'lyre_f', militaristic: 'swords_f', mercantile: 'coin_f', religious: 'temple_f' };
 

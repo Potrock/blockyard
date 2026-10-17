@@ -1,4 +1,4 @@
-import { MAP_SIZES } from '../rules/state';
+import { MAP_SIZES, mapTypeWord, SPEED_NAMES } from '../rules/state';
 import { openCongress } from './congress';
 import { emblemEl, icon, svg } from './icons';
 import { openPedia } from './pedia';
@@ -221,14 +221,15 @@ export function renderMenu(): El {
             h(
               'div.mn-facts',
               {},
-              h('span', {}, `${MAP_SIZES[s.size].name} ${s.type} map`),
+              h('span', {}, `${MAP_SIZES[s.size].name} ${mapTypeWord(s.type)} map`),
               // (The map's own word: a game saved before worlds wrapped is flat, whatever the lobby says now.)
               h('span', {}, (store.grid?.wrap ?? s.wrap !== false) ? 'The world wraps' : 'The world has edges'),
-              h('span', {}, `${s.speed === 'quick' ? 'Quick' : 'Standard'} speed`),
+              h('span', {}, `${SPEED_NAMES[s.speed]} speed`),
               h('span', {}, `${s.turnLimit} turns`),
               h('span', {}, s.dynamicTimer ? 'Dynamic turn timer' : s.timer ? `${s.timer / 60} min turns` : 'No turn timer'),
               h('span', {}, `${s.cityStates || 'No'} city-states`),
               h('span', {}, s.barbarians ? 'Barbarians' : 'No barbarians'),
+              h('span', {}, s.disasters ? 'Disasters' : 'No disasters'),
               L?.seed !== null && L?.seed !== undefined && h('span', { title: 'The same seed (and settings) makes the same map' }, `Map seed ${L.seed}`),
             ),
             h('small.cv-muted', {}, `Victories: ${on.length ? on.join(', ') : 'none'}.`),

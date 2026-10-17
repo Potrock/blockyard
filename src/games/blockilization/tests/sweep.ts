@@ -17,7 +17,7 @@ import { UNIT_LIST } from '../rules/units';
 import { blank, city, techsTo, unit, war } from './world';
 
 /**
- * A sweep of the rules over a world that has everything: every civ, each with every tech, policy,
+ * A sweep of the rules over worlds that have everything: every civ (twelve to a world), each with every tech, policy,
  * tenet and building, a religion of every belief, every pantheon in turn, units of every kind with
  * every promotion; every rule that reads effects asked about every city and unit, the once-only
  * effects of everything applied, fights, captures, great people, trade, spies and turns played.
@@ -66,10 +66,13 @@ const ITEMS = [
 ];
 
 export function sweep() {
-  const { game, at } = blank(
-    CIV_LIST.map((c) => c.id),
-    { cityStates: 4, barbarians: true, size: 'large' },
-  );
+  // (Twelve civs at a time: as many as a large map holds side by side, two rows of six.)
+  for (let i = 0; i < CIV_LIST.length; i += 12) sweepOf(CIV_LIST.slice(i, i + 12).map((c) => c.id));
+}
+
+/** The sweep over a world of these civs. */
+function sweepOf(civs: string[]) {
+  const { game, at } = blank(civs, { cityStates: 4, barbarians: true, size: 'large' });
   const majors = game.players.filter((p) => !p.cityState && p.civ !== 'barbarian');
   const cs = game.players.filter((p) => p.cityState);
   const barbarian = game.players.findIndex((p) => p.civ === 'barbarian');
@@ -310,15 +313,19 @@ export function sweep() {
   apply(game, p0.index, { t: 'build', unit: worker.id, what: 'road' });
   const defender = unit(game, 'warrior', p0.index, neighbours(game.grid, capital.tile)[4]);
   strength(game, defender, 'defend', null, defender.tile);
-  // China's general, born of a fight; Babylon's scientist, of Writing; a spaceship.
-  const china = majors.find((p) => p.civ === 'china')!;
-  const chinese = unit(game, 'swordsman', china.index, at(36, 21));
-  const foe = unit(game, 'warrior', majors[1].index, at(37, 21));
-  war(game, china.index, majors[1].index);
-  melee(game, chinese, foe.tile);
-  const babylon = majors.find((p) => p.civ === 'babylon')!;
-  babylon.techs = babylon.techs.filter((t) => t !== 'writing');
-  learn(game, babylon, 'writing');
+  // China's general, born of a fight; Babylon's scientist, of Writing (when they're in this world); a spaceship.
+  const china = majors.find((p) => p.civ === 'china');
+  if (china) {
+    const chinese = unit(game, 'swordsman', china.index, at(36, 21));
+    const foe = unit(game, 'warrior', majors[1].index, at(37, 21));
+    war(game, china.index, majors[1].index);
+    melee(game, chinese, foe.tile);
+  }
+  const babylon = majors.find((p) => p.civ === 'babylon');
+  if (babylon) {
+    babylon.techs = babylon.techs.filter((t) => t !== 'writing');
+    learn(game, babylon, 'writing');
+  }
   partsBuildable(game, p0);
   // Great works to fill every slot; missionaries and inquisitors; caravans and cargo ships.
   for (const type of ['great_artist', 'great_writer', 'great_musician']) for (let i = 0; i < 40; i++) apply(game, p0.index, { t: 'greatPerson', unit: unit(game, type, p0.index, capital.tile).id, action: 'work' });
@@ -354,8 +361,9 @@ export function sweep() {
   faithTurn(game);
   game.turn = 8;
   for (let i = 0; i < 3; i++) endTurn(game);
-  // A camp cleared (and Germany's recruits).
-  const germany = majors.find((p) => p.civ === 'germany')!;
+  // A camp cleared (and Germany's recruits, when Germany is here).
+  const germany = majors.find((p) => p.civ === 'germany');
+  if (!germany) return;
   const camp = at(40, 22);
   game.tiles[camp].camp = true;
   const clearer = unit(game, 'swordsman', germany.index, neighbours(game.grid, camp)[0]);

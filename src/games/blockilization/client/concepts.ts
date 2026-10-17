@@ -1,6 +1,8 @@
 import { ALLY, FRIEND } from '../rules/citystates';
 import { LIBERATE_INFLUENCE } from '../rules/liberation';
 import { PLEDGE_BROKEN, PLEDGE_REST, PLEDGE_TURNS } from '../rules/pledges';
+import { MAX_RISES } from '../rules/climate';
+import { SEASON_TURNS } from '../rules/disasters';
 
 /**
  * The Civilopedia's own words: the game's core ideas (how cities grow, what happiness does, how a
@@ -222,6 +224,21 @@ export const CONCEPTS: Article[] = [
     sections: [
       { text: 'Barbarians come out of camps in the unclaimed lands and raid whoever is near. Clearing a camp brings gold, and city-states close by are grateful for it.' },
       { text: 'Ancient ruins are scattered over the world. The first land unit to step on one gets its reward: gold, a technology, a citizen, a map of the land round it, or a unit.' },
+    ],
+  },
+  {
+    id: 'world',
+    name: 'A living world',
+    glyph: 'globe',
+    color: '#4a7a5a',
+    sub: 'Seasons, disasters and the rising sea',
+    sections: [
+      { text: `The year turns through spring, summer, autumn and winter, ${SEASON_TURNS} turns a season at standard speed (fewer at quick). In autumn the woods turn red and gold; in winter snow lies on the hills, the mountains and the tundra, away from the tropics. Rivers flood mostly in spring and never in winter; storms rise most in summer and autumn.` },
+      { title: 'Volcanoes', text: 'A few mountains are live volcanoes, smoking at their peaks. Now and then one erupts: units beside it are hurt (some killed), cities beside it lose a citizen, and the improvements round it are buried in ash. But the ash leaves the land round it rich for good: more food, and often production.' },
+      { title: 'River floods', text: 'A river now and then bursts its banks, along its flat land (flood plains most of all). The farms and mines there may be washed away, to be repaired by a [[unit:worker|Worker]]; the silt it leaves is food there for good.' },
+      { title: 'Storms', text: 'Storms rise over the open sea and blow across it for a few turns. Ships and embarked units in their way are battered, though never sunk, and improvements on the coast and at sea may be wrecked. Keep your fleets in port when one comes.' },
+      { title: 'The rising sea', text: `The Coal and Oil the world burns (each Factory, each ironclad, tank, warship and aircraft that needs them, every turn) warms it. Each time the world’s carbon passes a threshold the sea rises, up to ${MAX_RISES} times: the lowest of the coast (flat land by the sea, flood plains and marsh first) floods, its improvements ruined, and the next rise takes what it flooded under the sea for good. A city’s own tile always holds out. Units on drowned land move to the nearest dry ground.` },
+      { title: 'Quieter news', text: 'The host can turn disasters off in the lobby. News of them can be quietened in the settings, as other news of the world can.' },
     ],
   },
 ];

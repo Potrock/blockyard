@@ -244,7 +244,7 @@ export const centreHere = (g: Grid, t: number) => centreNear(g, t, cam.x);
  */
 const wonderGround = new Map<number, number>();
 let measuredFor: Grid | null = null;
-const OVER_GROUND = new Set(['civ_trunk', 'civ_leaves', 'civ_pine', 'civ_jungle', 'civ_fern', 'civ_tuft', 'civ_drygrass', 'civ_reeds', 'civ_falls', 'civ_cloud', 'civ_mist', 'civ_halo', 'civ_bark', 'civ_goldleaf', 'civ_palm']);
+const OVER_GROUND = new Set(['civ_trunk', 'civ_leaves', 'civ_leaves_autumn', 'civ_leaves_snow', 'civ_pine', 'civ_pine_snow', 'civ_jungle', 'civ_fern', 'civ_tuft', 'civ_drygrass', 'civ_reeds', 'civ_falls', 'civ_cloud', 'civ_mist', 'civ_halo', 'civ_bark', 'civ_goldleaf', 'civ_palm']);
 
 function measureWonders(client: Client) {
   const g = store.grid;
