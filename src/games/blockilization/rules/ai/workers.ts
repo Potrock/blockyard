@@ -53,8 +53,13 @@ export function jobFor(ctx: Ctx, worker: Unit, t: number, worked: Set<number>, l
     return { tile: t, what: 'scrub_fallout', value: value(back) * scale * 1.5 + 4, young: young > 0 };
   }
   if (tile.pillaged) return { tile: t, what: 'repair', value: 6 * scale, young: young > 0 };
-  if (tile.improvement) return null;
   const r = tile.resource && seesResource(ctx.p, tile.resource) ? RESOURCES[tile.resource] : null;
+  // A strategic resource found later under the wrong improvement (Uranium under a farm): the right one in its place.
+  if (tile.improvement) {
+    const right = r?.kind === 'strategic' ? tapsWith(tile) : undefined;
+    if (!right || right === tile.improvement || !canBuild(ctx.game, at, right)) return null;
+    return { tile: t, what: right, value: (value(gain(ctx, t, right)) - value(gain(ctx, t, tile.improvement as ImprovementId))) * scale + 6, young: young > 0 };
+  }
   const taps = r ? tapsWith(tile)! : undefined;
   if (r && taps && canBuild(ctx.game, at, taps)) {
     const extra = r.kind === 'luxury' ? (luxNeeded.has(tile.resource!) ? 14 * w.happiness : 2) : r.kind === 'strategic' ? 7 : 1;

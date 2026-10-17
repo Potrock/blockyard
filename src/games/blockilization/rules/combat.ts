@@ -539,23 +539,67 @@ export function falloutFrom(game: Game, area: number[]): number[] {
 }
 
 /**
- * A nuclear strike on a tile in range: every unit in the blast is badly hurt or destroyed (civilians
- * destroyed), every city loses half its people and its hit points, every improvement is ruined, and
- * fallout is left on much of its land (`falloutFrom`); the weapon is spent. Only where everyone it
- * would hit is at war with its owner.
+ * Who a nuclear strike on a tile would hit (the owners of the units and the land in its blast, not
+ * the striker), or null if it can't be made: not a nuclear weapon, out of range, or someone it would
+ * hit isn't at war with its owner. (The bots ask before they strike.)
  */
-export function nuke(game: Game, u: Unit, target: number): CombatResult | null {
+export function nukeHits(game: Game, u: Unit, target: number): number[] | null {
   const type = UNITS[u.type];
-  if (!type.abilities?.includes('nuke') || target < 0 || target >= game.tiles.length || distance(game.grid, u.tile, target) > rangeOf(u)) return null;
-  const area = within(game.grid, target, type.blast ?? 1);
+  if (!type?.abilities?.includes('nuke') || target < 0 || target >= game.tiles.length || distance(game.grid, u.tile, target) > rangeOf(u)) return null;
   const hit = new Set<number>();
-  for (const t of area) {
+  for (const t of within(game.grid, target, type.blast ?? 1)) {
     for (const o of game.units) if (o.tile === t && o.owner !== u.owner) hit.add(o.owner);
     const owner = game.tiles[t].owner;
     if (owner >= 0 && owner !== u.owner) hit.add(owner);
   }
-  if ([...hit].some((o) => !atWar(game, u.owner, o))) return null;
+  return [...hit].some((o) => !atWar(game, u.owner, o)) ? null : [...hit];
+}
+
+/**
+ * Whether an Atomic Bomb (a bomber's load, not a missile) is shot down on its way (Civ V's): an enemy
+ * fighter on patrol with the target in its range, or an anti-aircraft unit within two tiles of it, may
+ * down it, by a chance that grows with its strength (each interceptor once a turn). The interceptor, if so.
+ */
+export function bombShotDown(game: Game, u: Unit, target: number): Unit | null {
+  if (u.type !== 'atomic_bomb') return null;
+  let best: { by: Unit; power: number } | null = null;
+  for (const x of game.units) {
+    if (x.intercepted === game.turn || x.owner === u.owner || !atWar(game, x.owner, u.owner)) continue;
+    const type = UNITS[x.type];
+    const patrol = type.class === 'fighter' && x.stance === 'alert' && distance(game.grid, x.tile, target) <= rangeOf(x);
+    const guns = !!type.abilities?.includes('intercept') && distance(game.grid, x.tile, target) <= 2;
+    if (!patrol && !guns) continue;
+    const power = Math.max(type.ranged ?? 0, type.strength) * (0.4 + (0.6 * x.hp) / 100);
+    if (!best || power > best.power) best = { by: x, power };
+  }
+  if (!best) return null;
+  best.by.intercepted = game.turn;
+  return random(game) < bombInterceptChance(best.power) ? best.by : null;
+}
+
+/** The chance an interceptor of this strength (its best, less for its wounds) downs an Atomic Bomb (`bombShotDown`). */
+export const bombInterceptChance = (power: number) => Math.min(0.75, power / (power + 70));
+
+/**
+ * A nuclear strike on a tile in range: every unit in the blast is badly hurt or destroyed (civilians
+ * destroyed), every city loses half its people and its hit points, every improvement is ruined, and
+ * fallout is left on much of its land (`falloutFrom`); the weapon is spent. Only where everyone it
+ * would hit is at war with its owner (`nukeHits`). An Atomic Bomb may be shot down first
+ * (`bombShotDown`). The world remembers it (`cityHooks.nuked`).
+ */
+export function nuke(game: Game, u: Unit, target: number): CombatResult | null {
+  const type = UNITS[u.type];
+  const hits = nukeHits(game, u, target);
+  if (!hits) return null;
+  const area = within(game.grid, target, type.blast ?? 1);
   removeUnit(game, u);
+  const downed = bombShotDown(game, u, target);
+  if (downed) {
+    gain(game, downed, 5, u.owner);
+    note(game, downed.owner, { text: `Your ${UNITS[downed.type].name} shot down ${game.players[u.owner].name}'s ${type.name}!`, at: downed.tile, kind: 'good' });
+    note(game, u.owner, { text: `Your ${type.name} was shot down by ${game.players[downed.owner].name}'s ${UNITS[downed.type].name}.`, at: target, kind: 'bad' });
+    return { attacker: u.id, dealt: 0, taken: 100, killed: false, died: true, at: target };
+  }
   let dealt = 0;
   let killed = false;
   for (const t of area) {
@@ -578,13 +622,14 @@ export function nuke(game: Game, u: Unit, target: number): CombatResult | null {
   }
   falloutFrom(game, area);
   for (const c of game.cities) if (within(game.grid, c.tile, 3).some((t) => area.includes(t))) assignCitizens(game, c);
-  for (const o of hit) note(game, o, { text: `${game.players[u.owner].name} has used a nuclear weapon!`, at: target, kind: 'war' });
+  cityHooks.nuked(game, u.owner, hits, target);
   return { attacker: u.id, dealt, taken: 0, killed, died: true, at: target };
 }
 
 /** What the rest of the rules do when a city's taken, a unit's killed, or a fight earns great general points (set up by `game.ts`). */
-export const cityHooks: { captured: (game: Game, c: City, by: number) => void; killed: (game: Game, u: Unit, by: Unit | null) => void; greatPoints: (game: Game, u: Unit, points: number) => void } = {
+export const cityHooks: { captured: (game: Game, c: City, by: number) => void; killed: (game: Game, u: Unit, by: Unit | null) => void; greatPoints: (game: Game, u: Unit, points: number) => void; nuked: (game: Game, by: number, hit: number[], at: number) => void } = {
   captured: () => {},
+  nuked: () => {},
   killed: () => {},
   greatPoints: () => {},
 };

@@ -14,6 +14,7 @@ import { airDefence, airProduction } from './air';
 import { act, cityOn, danger, diplomaticRival, dist, mightOf, militaryAt, unitMight, type Ctx } from './context';
 import type { Aim } from './memory';
 import { bestShip, isWarship, navyWanted, seaport } from './navy';
+import { nukeProduction } from './nukes';
 import { leavesProject, worldProject } from './projects';
 import { bestSite, SITE_WORTH } from './settle';
 import { effectsValue, yieldsOf, yieldWeights } from './value';
@@ -163,7 +164,7 @@ export function threatTo(ctx: Ctx, c: City): number {
 /** What a city builds next. */
 export function pickProduction(ctx: Ctx, c: City): Production {
   if (ctx.p.cityState) return cityStateBuild(ctx, c, counts(ctx, c).military);
-  return urgent(ctx, c) ?? contentment(ctx, c) ?? victoryProduction(ctx, c) ?? worldProject(ctx, c, threatTo(ctx, c)) ?? wonder(ctx, c) ?? army(ctx, c) ?? bestBuilding(ctx, c, counts(ctx, c).caravans) ?? defaultBuild(ctx.game, ctx.p, c);
+  return urgent(ctx, c) ?? contentment(ctx, c) ?? victoryProduction(ctx, c) ?? worldProject(ctx, c, threatTo(ctx, c)) ?? nukeProduction(ctx, c) ?? wonder(ctx, c) ?? army(ctx, c) ?? bestBuilding(ctx, c, counts(ctx, c).caravans) ?? defaultBuild(ctx.game, ctx.p, c);
 }
 
 /**

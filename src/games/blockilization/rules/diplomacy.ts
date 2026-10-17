@@ -48,10 +48,10 @@ export interface Running {
   turns: number;
 }
 
-/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`). */
+/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`; 'nuke': a nuclear weapon used on them; 'nukeSeen': a nuclear weapon used by a civ they knew, on anyone, `nuclearStrike`). */
 export interface DiploEvent {
   turn: number;
-  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge';
+  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge' | 'nuke' | 'nukeSeen';
   by: number;
   to: number;
 }
@@ -157,6 +157,34 @@ export const denounced = (game: Game, a: number, b: number) => (game.players[a]?
 /** Something remembered. */
 export function remember(game: Game, kind: DiploEvent['kind'], by: number, to: number) {
   relationsOf(game).events.push({ turn: game.turn, kind, by, to });
+}
+
+/** How long a nuclear strike is remembered (turns). */
+export const NUKE_MEMORY = 300;
+/** The influence a civ loses with every city-state that knows it when it uses a nuclear weapon (twice with one it hit). */
+export const NUKE_INFLUENCE = 30;
+
+/**
+ * A nuclear weapon used (Civ V's): every civ that knows the striker remembers it (`nukeSeen`), those
+ * it hit most of all (`nuke`), for the bots' opinions (`ai/opinion.ts`); every city-state that knows
+ * it thinks less of it; the world hears of it.
+ */
+export function nuclearStrike(game: Game, by: number, hit: number[], at: number) {
+  const striker = game.players[by];
+  if (!striker) return;
+  for (const o of hit) if (game.players[o] && game.players[o].civ !== 'barbarian') remember(game, 'nuke', by, o);
+  for (const o of game.players) {
+    if (o === striker || !o.alive || o.civ === 'barbarian' || !knowsOf(o, striker)) continue;
+    if (o.cityState) striker.influence[o.index] = (striker.influence[o.index] ?? 0) - NUKE_INFLUENCE * (hit.includes(o.index) ? 2 : 1);
+    else remember(game, 'nukeSeen', by, o.index);
+  }
+  const where = game.tiles[at]?.owner >= 0 ? game.players[game.tiles[at].owner] : undefined;
+  noteAll(game, (r): Note | null => {
+    if (r.cityState || r.civ === 'barbarian') return null;
+    if (r === striker) return { text: 'You have used a nuclear weapon: the world will not soon forget it.', at, kind: 'bad' };
+    const on = where && where !== striker ? ` on ${where === r ? 'you' : nameTo(r, where)}` : '';
+    return { text: `${nameTo(r, striker, true)} has used a nuclear weapon${on}!`, ...(hit.includes(r.index) ? { at } : {}), kind: 'war' };
+  });
 }
 
 const whole = (n: unknown) => Number.isSafeInteger(n) && (n as number) > 0;
@@ -563,8 +591,9 @@ export function diplomacyTurn(game: Game) {
   for (const o of rel.offers) if (game.turn - o.turn >= 5) (rel.declined ??= []).push({ from: o.from, to: o.to, turn: game.turn, ask: askOf(o) });
   rel.offers = rel.offers.filter((o) => game.turn - o.turn < 5);
   if (rel.declined) rel.declined = rel.declined.filter((d) => game.turn - d.turn < 40);
-  // (A city given back is never forgotten: Civ V's liberation is a debt for good.)
-  rel.events = rel.events.filter((e) => e.kind === 'liberate' || game.turn - e.turn < 150);
+  // (A city given back is never forgotten: Civ V's liberation is a debt for good. A nuclear strike is
+  // remembered longer than anything else.)
+  rel.events = rel.events.filter((e) => e.kind === 'liberate' || game.turn - e.turn < (e.kind === 'nuke' || e.kind === 'nukeSeen' ? NUKE_MEMORY : 150));
 }
 
 /** A research agreement ends: each side's research gains what the two would have made together (the lesser's science, a while's worth). */

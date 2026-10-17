@@ -13,6 +13,7 @@ import { expected } from './military';
  * come near. Each turn an aircraft strikes the best target in range (the city it's after first) unless
  * the interception it would fly into could down it; fighters patrol while enemy aircraft are about.
  * Those with nothing in range rebase toward the front: the city of the bot's nearest the war's target.
+ * (Nuclear weapons are left to `nukes.ts`.)
  */
 
 /**
@@ -144,7 +145,7 @@ export function aircraft(ctx: Ctx) {
 }
 
 /** The bot's city an aircraft should be based in: within its rebase range, nearest the enemy it's fighting (or about to). */
-function frontCity(ctx: Ctx, u: Unit): City | undefined {
+export function frontCity(ctx: Ctx, u: Unit): City | undefined {
   const { game } = ctx;
   const foes = game.cities.filter((c) => (ctx.enemies.has(c.owner) || c.owner === ctx.mem.plan?.target) && ctx.p.explored[c.tile]);
   if (!foes.length) return undefined;

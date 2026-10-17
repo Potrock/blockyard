@@ -49,6 +49,9 @@ import { conquests, wantsPeace } from '../rules/ai/strategy';
 import { forsakes, freeable, pledges as botPledges, turnsOn } from '../rules/ai/liberation';
 import { openProject, startProject, type WorldProject } from '../rules/projects';
 import { expectedTier, leavesProject, projectPlan, worldProject } from '../rules/ai/projects';
+import { bestNukeStrike, nukeProduction, nukes as fireNukes, nukesWanted, strikeWorth } from '../rules/ai/nukes';
+import { NUKE_INFLUENCE } from '../rules/diplomacy';
+import { bombInterceptChance } from '../rules/combat';
 
 /**
  * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
@@ -4630,4 +4633,180 @@ test('a warmonger at war with the ally of a city-state it pledged to protect, cl
   ok(!wantsPeace(makeCtx(game, china), cs.index), 'no peace while its ally fights on');
   endWar(game, china, babylon);
   ok(wantsPeace(makeCtx(game, china), cs.index), 'then peace');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Nuclear weapons: the world's memory, and the bots'
+// -------------------------------------------------------------------------------------------------
+
+test('a nuclear strike is remembered: by the civ it fell on most, its friends next, everyone who knew the striker, city-states too; and it fades slowly', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india', 'korea'], { cityStates: 1, size: 'small' });
+  const [egypt, babylon, india, korea] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(4, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(14, 5), { pop: 8 });
+  city(game, 2, at(4, 18));
+  city(game, 3, at(30, 18));
+  city(game, cs.index, at(20, 14));
+  const missile = unit(game, 'nuclear_missile', 0, home.tile);
+  // (Who has met whom, set after the last look round.)
+  egypt.met = [1, 2, cs.index];
+  babylon.met = india.met = cs.met = [0];
+  korea.met = [];
+  // India is Babylon's friend; Korea has never met Egypt.
+  india.diplomacy.friends[1] = babylon.diplomacy.friends[2] = 30;
+  egypt.influence[cs.index] = 20;
+  egypt.bot = false;
+  war(game, 0, 1);
+  const before = { babylon: opinionOf(game, babylon, egypt).total, india: opinionOf(game, india, egypt).total, korea: opinionOf(game, korea, egypt).total };
+  ok(apply(game, 0, { t: 'attack', unit: missile.id, target: theirs.tile }).ok, 'the strike');
+  const events = relationsOf(game).events;
+  ok(events.some((e) => e.kind === 'nuke' && e.by === 0 && e.to === 1), 'Babylon remembers it fell on them');
+  ok(events.some((e) => e.kind === 'nukeSeen' && e.by === 0 && e.to === 2), 'India remembers it');
+  ok(!events.some((e) => e.by === 0 && e.to === 3), 'Korea, who never met Egypt, has nothing to remember');
+  const reason = (a: number, text: string) => opinionOf(game, game.players[a], egypt).reasons.find((r) => r.text === text)?.value ?? 0;
+  ok(reason(1, 'You used nuclear weapons on us') <= -25, `Babylon: on us (${reason(1, 'You used nuclear weapons on us')})`);
+  ok(reason(2, 'You used nuclear weapons on our friends') < 0, 'India: on our friends');
+  ok(reason(2, 'You have used nuclear weapons') < 0, 'India: used them at all');
+  const drop = { babylon: before.babylon - opinionOf(game, babylon, egypt).total, india: before.india - opinionOf(game, india, egypt).total, korea: before.korea - opinionOf(game, korea, egypt).total };
+  ok(drop.babylon > drop.india && drop.india > 10, `Babylon thinks worst of it, then India (${drop.babylon}, ${drop.india})`);
+  eq(drop.korea, 0, 'Korea is unmoved');
+  eq(egypt.influence[cs.index], 20 - NUKE_INFLUENCE, 'the city-state thinks less of Egypt');
+  ok(egypt.notes.some((n) => n.text.includes('nuclear weapon')), 'the striker is told the world will remember');
+  // Slow to fade: still felt a hundred turns on, past the memory of a war declared.
+  const fresh = reason(2, 'You have used nuclear weapons');
+  game.turn += 100;
+  diplomacyTurn(game);
+  const later = reason(2, 'You have used nuclear weapons');
+  ok(later < 0 && later > fresh, `fading, but still felt a hundred turns on (${fresh} then ${later})`);
+  ok(relationsOf(game).events.some((e) => e.kind === 'nukeSeen'), 'not forgotten yet');
+});
+
+test('a world note when a nuclear weapon is used, to every person', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india'], { size: 'small' });
+  const [egypt, babylon, india] = game.players;
+  for (const p of game.players) p.bot = false;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(4, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(14, 5));
+  city(game, 2, at(4, 18));
+  india.met = [0, 1];
+  war(game, 0, 1);
+  const bomb = unit(game, 'atomic_bomb', 0, home.tile);
+  ok(apply(game, 0, { t: 'attack', unit: bomb.id, target: theirs.tile }).ok, 'the strike');
+  ok(india.notes.some((n) => n.text === `${egypt.name} has used a nuclear weapon on ${babylon.name}!`), 'India hears of it');
+  ok(babylon.notes.some((n) => n.text.includes('used a nuclear weapon on you')), 'Babylon too');
+});
+
+test('an Atomic Bomb (not a missile) may be shot down by a fighter on patrol or an anti-aircraft gun near its target', () => {
+  ok(bombInterceptChance(65) > 0.4 && bombInterceptChance(1000) <= 0.75, 'a fair chance, never certain');
+  let downed = 0;
+  let missilesDowned = 0;
+  for (let i = 0; i < 30; i++) {
+    const { game, at } = blank();
+    techsTo(game, 0, 15);
+    techsTo(game, 1, 15);
+    game.rng = 1000 + i * 7919;
+    const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+    const theirs = city(game, 1, at(12, 5), { pop: 8 });
+    unit(game, 'mobile_sam', 1, neighbours(game.grid, theirs.tile)[0]);
+    war(game, 0, 1);
+    const bomb = unit(game, i % 2 ? 'nuclear_missile' : 'atomic_bomb', 0, home.tile);
+    ok(apply(game, 0, { t: 'attack', unit: bomb.id, target: theirs.tile }).ok, 'the strike is made');
+    ok(!game.units.includes(bomb), 'spent either way');
+    if (theirs.pop === 8) (i % 2 ? missilesDowned++ : downed++);
+  }
+  ok(downed > 0 && downed < 15, `some bombs downed (${downed} of 15)`);
+  eq(missilesDowned, 0, 'no missile downed');
+});
+
+test('a bot at war with the tech and Uranium raises the Manhattan Project and keeps a small stockpile; a peaceful one, only when losing badly', () => {
+  const { game, at } = blank(['aztec', 'babylon']);
+  const [aztec] = game.players;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(3, 5), { pop: 10 });
+  city(game, 1, at(20, 5));
+  Object.assign(game.tiles[at(4, 5)], { resource: 'uranium', amount: 4, improvement: 'mine', owner: 0 });
+  aztec.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+  eq(nukesWanted(makeCtx(game, aztec)), 0, 'at peace: none');
+  war(game, 0, 1);
+  const want = nukesWanted(makeCtx(game, aztec));
+  ok(want >= 2 && want <= 4, `at war, a warmonger aiming to conquer wants a few (${want})`);
+  home.buildings.push('manhattan_project');
+  eq(nukeProduction(makeCtx(game, aztec), home)?.id, 'nuclear_missile', 'it builds a missile');
+  for (let i = 0; i < want; i++) unit(game, 'nuclear_missile', 0, home.tile);
+  eq(nukeProduction(makeCtx(game, aztec), home), null, 'its stockpile full: no more');
+  const g2 = blank(['india', 'babylon']);
+  techsTo(g2.game, 0, 15);
+  city(g2.game, 0, g2.at(3, 5), { pop: 10, buildings: ['manhattan_project'] });
+  city(g2.game, 1, g2.at(20, 5));
+  Object.assign(g2.game.tiles[g2.at(4, 5)], { resource: 'uranium', amount: 4, improvement: 'mine', owner: 0 });
+  war(g2.game, 0, 1);
+  unit(g2.game, 'infantry', 0, g2.at(3, 5));
+  eq(nukesWanted(makeCtx(g2.game, g2.game.players[0])), 0, 'Gandhi, holding his own: none');
+  for (let i = 0; i < 4; i++) unit(g2.game, 'mechanized_infantry', 1, g2.at(20, 5 + (i % 2)));
+  ok(nukesWanted(makeCtx(g2.game, g2.game.players[0])) >= 1, 'Gandhi, losing badly: one');
+});
+
+test('a bot fires a nuclear weapon at a worthwhile target (a city ringed by an army), not an unworthy one, nor where its own or a neutral civ would be hit', () => {
+  const setup = (guards: number) => {
+    const { game, at } = blank(['aztec', 'babylon', 'india']);
+    const [aztec] = game.players;
+    techsTo(game, 0, 15);
+    const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+    const theirs = city(game, 1, at(14, 5), { pop: 10 });
+    city(game, 2, at(14, 16));
+    aztec.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+    war(game, 0, 1);
+    const ring = [theirs.tile, ...neighbours(game.grid, theirs.tile)];
+    for (let i = 0; i < guards; i++) unit(game, 'infantry', 1, ring[i]);
+    // (An army of its own: it isn't losing.)
+    for (const t of neighbours(game.grid, home.tile).slice(0, 4)) unit(game, 'infantry', 0, t);
+    const missile = unit(game, 'nuclear_missile', 0, home.tile);
+    aztec.visible.fill(1);
+    aztec.explored.fill(1);
+    return { game, at, aztec, missile, theirs, ring };
+  };
+  // Worth it: a city of ten ringed by five infantry.
+  let w = setup(5);
+  ok(bestNukeStrike(makeCtx(w.game, w.aztec), w.missile) !== null, 'a strike worth making');
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(!w.game.units.includes(w.missile), 'it fires');
+  eq(w.theirs.pop, 5, 'the city halved');
+  // Not worth it: the city with one soldier.
+  w = setup(1);
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(w.game.units.includes(w.missile), 'one soldier: not worth the world’s anger');
+  eq(w.theirs.pop, 10, 'the city untouched');
+  // Its own unit in the blast: no.
+  w = setup(5);
+  const own = unit(w.game, 'infantry', 0, w.ring[6]);
+  w.aztec.visible.fill(1);
+  eq(strikeWorth(makeCtx(w.game, w.aztec), w.missile, w.theirs.tile), null, 'its own soldier would burn');
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(w.game.units.includes(w.missile) && own.hp === 100, 'so it holds fire');
+  // A neutral civ's unit in the blast: the rules would refuse, and it doesn't try.
+  w = setup(5);
+  unit(w.game, 'infantry', 2, w.ring[6]);
+  w.aztec.visible.fill(1);
+  eq(strikeWorth(makeCtx(w.game, w.aztec), w.missile, w.theirs.tile), null, 'India’s soldier is there');
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(w.game.units.includes(w.missile), 'so it holds fire (and makes no strike the rules would refuse)');
+});
+
+test('a peaceful leader holds fire where a warmonger would strike', () => {
+  const { game, at } = blank(['india', 'babylon']);
+  const [india] = game.players;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(14, 5), { pop: 10 });
+  war(game, 0, 1);
+  for (const t of [theirs.tile, ...neighbours(game.grid, theirs.tile)].slice(0, 5)) unit(game, 'infantry', 1, t);
+  for (const t of neighbours(game.grid, home.tile).slice(0, 4)) unit(game, 'infantry', 0, t);
+  const missile = unit(game, 'nuclear_missile', 0, home.tile);
+  india.visible.fill(1);
+  india.explored.fill(1);
+  fireNukes(makeCtx(game, india));
+  ok(game.units.includes(missile), 'Gandhi holds fire');
 });

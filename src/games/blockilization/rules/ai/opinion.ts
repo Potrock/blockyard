@@ -10,8 +10,8 @@ import { personalityOf } from './personality';
 /**
  * What a bot's leader thinks of another civ, and why, Civ V's way: a friendship, a pact, trade and
  * shared faith or ideology warm it; borders pressed together, wonders and city-states fought over,
- * denouncements, wars (on it or its friends), betrayals, cities taken, broken deals and spies cool it, each
- * memory fading with time. The reasons are said as the leader would say them to that civ.
+ * denouncements, wars (on it or its friends), betrayals, cities taken, broken deals, spies and nuclear
+ * weapons cool it, each memory fading with time. The reasons are said as the leader would say them to that civ.
  */
 
 export interface Opinion {
@@ -81,6 +81,12 @@ export function opinionOf(game: Game, a: Player, b: Player): Opinion {
   const freed = sum((e) => e.kind === 'liberate' && e.by === bi && e.to !== ai, 100, 2, 10);
   const warmonger = Math.min(0, sum((e) => e.kind === 'capture' && e.by === bi && e.to !== ai && game.players[e.to] && !game.players[e.to].cityState, 100, -2, 10) + freed) + sum((e) => e.kind === 'war' && e.by === bi && e.to !== ai, 60, -1, 5);
   add(WARMONGER, warmonger * (0.6 + pers.defense / 12));
+  // Nuclear weapons: remembered long by everyone who knew the striker, most by those they fell on
+  // and their friends; a warlike leader minds less, a defensive or peaceful one more.
+  const dread = 1.3 - pers.offense / 20 + pers.defense / 40;
+  add('You used nuclear weapons on us', sum((e) => e.kind === 'nuke' && e.by === bi && e.to === ai, 200, -30, 45, 0.35));
+  add('You used nuclear weapons on our friends', sum((e) => e.kind === 'nuke' && e.by === bi && e.to !== ai && (friends(game, ai, e.to) || pacted(game, ai, e.to) || teammates(game, ai, e.to)), 150, -12, 20, 0.25));
+  add('You have used nuclear weapons', sum((e) => e.kind === 'nukeSeen' && e.by === bi && e.to === ai, 200, -10, 24, 0.3) * dread);
   const friendsAtWar = myFriends.filter((o) => atWar(game, bi, o.index));
   if (friendsAtWar.length) add(`You are at war with our friend ${friendsAtWar[0].name}`, -6);
 

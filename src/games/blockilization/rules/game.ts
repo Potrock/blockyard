@@ -10,7 +10,7 @@ import { allyOf, cityStates, cityStateTurn, coup, CS_WAR_INFLUENCE, gift, giftUn
 import { congressTurn, inForce, propose as proposeResolution, RESOLUTION_KINDS, vote as voteOnResolution, type ResolutionKind } from './congress';
 import { cannotSendDiplomat, longGameTurn, partCost, partsBuildable, routesFull, routesGold, spiesOf, startRoute, stolen, surveillanceTurns, tourismOf } from './trade';
 import { canContribute, contribute, isProject, projectLeft } from './projects';
-import { answer, cityTaken, denounce, diplomacyTurn, endDealings, endWar, propose, remember, WAR_WHYS, warDeclared, warWords, type DealItem, type WarWhy } from './diplomacy';
+import { answer, cityTaken, denounce, diplomacyTurn, endDealings, endWar, nuclearStrike, propose, remember, WAR_WHYS, warDeclared, warWords, type DealItem, type WarWhy } from './diplomacy';
 import { canBuyReligious, capFollowers, faithBuildings, faithCost, faithTurn, faithUnit, foundReligion, inquisition, spread, spreadsOf } from './faith';
 import { fromPromotions, promotionsDue, promotionsFor, PROMOTIONS } from './promotions';
 import { liberate, liberation } from './liberation';
@@ -438,6 +438,7 @@ function eliminate(game: Game, p: number) {
 }
 
 cityHooks.captured = captureCity;
+cityHooks.nuked = nuclearStrike;
 cityHooks.killed = (game, u, by) => {
   // A battlefield: a land unit falling outside a city now and then leaves an antiquity site.
   const tile = game.tiles[u.tile];

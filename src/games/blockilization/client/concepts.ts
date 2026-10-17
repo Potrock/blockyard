@@ -309,7 +309,7 @@ export const ABILITY_TEXT: Record<string, string> = {
   repair_fleet: 'Repair Fleet: spent, every ship of yours on its tile or next to it is healed fully.',
   concert_tour: 'Concert Tour: spent in another civ’s land, ten turns of your tourism toward them at once.',
   paradrop: 'Can parachute from your land to land you know up to 6 tiles away, if it hasn’t moved.',
-  nuke: 'A nuclear weapon: destroys what is round where it lands, and leaves fallout on much of the land.',
+  nuke: 'A nuclear weapon: destroys what is round where it lands and leaves fallout on much of the land. Every civ that knows you will long remember it, those it falls on most, and city-states think less of you. An Atomic Bomb (not a missile) may be shot down by a fighter on patrol or an anti-aircraft gun near its target.',
   spread_religion: 'Spreads its religion to a city.',
   remove_heresy: 'Drives other religions out of a city.',
   found_religion: 'Founds or enhances a religion.',

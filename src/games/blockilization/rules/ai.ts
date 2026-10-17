@@ -4,6 +4,7 @@ import { distance } from './hex';
 import type { Game, Player, Unit } from './state';
 import { UNITS } from './units';
 import { aircraft } from './ai/air';
+import { nukes } from './ai/nukes';
 import { civilians } from './ai/civilians';
 import { congressProposal, congressVote } from './ai/congress';
 import { greatChoice, pantheon, policies, research } from './ai/civics';
@@ -52,6 +53,7 @@ export function botTurn(game: Game, p: Player) {
   const garrisons = new Set<number>();
   for (const u of game.units) if (u.owner === p.index && cityOn(ctx, u.tile)?.owner === p.index) garrisons.add(u.id);
   cityFire(ctx);
+  nukes(ctx);
   aircraft(ctx);
   attacks(ctx, garrisons);
   manageCities(ctx);
