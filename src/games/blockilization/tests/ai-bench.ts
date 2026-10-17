@@ -142,7 +142,7 @@ function play(seed: number): Result {
     war = majors.map((p) => majors.map((o) => p.diplomacy.war[o.index]));
     while (r.religions.length < Object.keys(g.religions).length) r.religions.push(g.turn);
   };
-  while (!g.over && g.turn < 600) {
+  while (!g.over && g.turn < Math.max(600, settings.turnLimit + 10)) {
     const alive = majors.filter((p) => p.alive).length;
     for (const p of g.players) {
       if (!p.bot || !p.alive) continue;

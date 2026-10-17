@@ -448,7 +448,7 @@ function pickStarts(g: Grid, tiles: Tile[], rng: Rng, count: number): number[] {
 
 /**
  * The Earth's true starting places: each civ (and city-state) on the best ground within a few tiles
- * of where it really began (`TRUE_STARTS`), nearer counting for more, three tiles at least from any
+ * of where it really began (`TRUE_STARTS`), nearer counting for more, four tiles at least from any
  * start already placed; one that can't (or isn't from the Earth), a place of the usual ones
  * (`fallback`) clear of those.
  */
@@ -460,15 +460,16 @@ function pickTrueStarts(g: Grid, tiles: Tile[], civs: string[], fallback: number
   civs.forEach((civ, i) => {
     const home = TRUE_STARTS[civ] ? tileOfLonLat(g, TRUE_STARTS[civ]) : -1;
     // (Each tile further from home counts as much as a good deal of land: a start stays where it belongs.
-    // Where the old world is crowded, starts may come within two tiles of each other rather than leave.)
+    // Where the old world is crowded, a start may be pushed out to six tiles; never nearer than four
+    // to another, as no others are: a first city moved a tile to better ground mustn't crowd out the next.)
     const score = (t: number) => value(t) - 8 * distance(g, home, t);
-    const near = (gap: number) => (home < 0 ? [] : within(g, home, 4).filter((t) => Number.isFinite(value(t)) && clear(t, gap)));
-    const best = [...near(3), ...near(2)].sort((a, b) => score(b) - score(a) + (clear(b, 3) ? 100 : 0) - (clear(a, 3) ? 100 : 0))[0];
+    const near = home < 0 ? [] : within(g, home, 6).filter((t) => Number.isFinite(value(t)) && clear(t, 4));
+    const best = near.sort((a, b) => score(b) - score(a))[0];
     starts[i] = best ?? -1;
     if (best === undefined) left.push(i);
   });
   for (const i of left) {
-    const t = fallback.find((x) => !starts.includes(x) && clear(x, 3)) ?? fallback.find((x) => !starts.includes(x));
+    const t = fallback.find((x) => !starts.includes(x) && clear(x, 4)) ?? fallback.find((x) => !starts.includes(x) && clear(x, 3));
     if (t !== undefined) starts[i] = t;
   }
   // (A place none could be found for, on a map too small: those after it go without, as `pickStarts`'s do.)
