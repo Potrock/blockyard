@@ -21,7 +21,7 @@ import { wondersBeside } from './nature';
 import { adoptable, ALL_POLICIES, IDEOLOGIES, policyMet, TREES, treeDone } from './policies';
 import { BELIEF_LIST, BELIEFS, pantheonCost, takenBeliefs } from './religion';
 import { recordReplay } from './replay';
-import type { City, Game, Player, Production, Unit } from './state';
+import { GOLDEN_SPEEDS, type City, type Game, type Player, type Production, type Unit } from './state';
 import { sideName, sides, teamOf, teammates } from './teams';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { startSequence, waitsFor, warBegun } from './turns';
@@ -658,7 +658,7 @@ function spawnNear(game: Game, type: string, owner: number, t: number): Unit | u
 
 function startGoldenAge(game: Game, p: Player, turns: number) {
   const longer = civEffects(game, p).reduce((s, e) => s + (e.goldenAgeLength ?? 0), 0);
-  p.goldenTurns += Math.round(turns * (1 + longer / 100) * (game.settings.speed === 'quick' ? 0.8 : 1));
+  p.goldenTurns += Math.round(turns * (1 + longer / 100) * GOLDEN_SPEEDS[game.settings.speed]);
   p.goldenAges++;
   note(game, p.index, { text: 'A golden age begins!', kind: 'good' });
 }
@@ -1980,7 +1980,7 @@ function unitTurn(game: Game, u: Unit) {
         const f = tile.feature && FEATURES[tile.feature];
         if (f?.removable?.prod) {
           const near = citiesOf(game, u.owner).sort((a, b) => distance(game.grid, a.tile, u.tile) - distance(game.grid, b.tile, u.tile))[0];
-          if (near && distance(game.grid, near.tile, u.tile) <= 3) near.prod += Math.floor(f.removable.prod * (game.settings.speed === 'quick' ? 0.67 : 1));
+          if (near && distance(game.grid, near.tile, u.tile) <= 3) near.prod += Math.floor(f.removable.prod * speed(game));
         }
         tile.feature = undefined;
       } else if (w !== 'artifact') {

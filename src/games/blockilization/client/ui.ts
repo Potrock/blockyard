@@ -8,7 +8,7 @@ import { CIV_LIST, CIVS } from '../rules/civs';
 import { DIFFICULTIES, DIFFICULTY_LIST, difficultyOf, type Difficulty } from '../rules/difficulty';
 import type { Order } from '../rules/game';
 import { distance, neighbours, type Grid } from '../rules/hex';
-import { MAP_SIZES, type City, type MapSize, type MapType, type Speed } from '../rules/state';
+import { MAP_SIZES, MAP_TYPE_NAMES, MAP_TYPES, mapTypeWord, SPEED_LIST, SPEED_NAMES, TURN_CHOICES, type City, type MapSize, type MapType, type Speed } from '../rules/state';
 import { ERA_NAMES, ERAS, TECHS } from '../rules/techs';
 import { addYields, FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId } from '../rules/terrain';
 import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNITS } from '../rules/units';
@@ -610,7 +610,7 @@ function renderBuilding(L: NonNullable<typeof store.lobby>): El {
     h('div.bd-art', {}, h('img', { src: coverArt, alt: '', draggable: 'false' }), h('h1', {}, 'Blockilization')),
     h('div.bd-what', {}, h('b', {}, 'Shaping the world…'), h('span', {}, `${Math.round(done * 100)}%`)),
     h('div.cv-progress', {}, h('i', { style: `width:${Math.round(done * 100)}%` })),
-    h('div.bd-world', {}, `A ${MAP_SIZES[s.size].name.toLowerCase()} ${s.type} map · ${civs} ${civs === 1 ? 'civilization' : 'civilizations'}${s.cityStates ? ` · ${s.cityStates} city-states` : ''}`),
+    h('div.bd-world', {}, `A ${MAP_SIZES[s.size].name.toLowerCase()} ${mapTypeWord(s.type)} map · ${civs} ${civs === 1 ? 'civilization' : 'civilizations'}${s.cityStates ? ` · ${s.cityStates} city-states` : ''}`),
     h('div.bd-tip', {}, tile('lightbulb', '#2f5fa0', 30), h('span', {}, tip)),
   );
 }
@@ -677,18 +677,20 @@ function renderLobby(): El | null {
     !mine && h('small.cv-muted', {}, 'Every place on this map is taken: you’ll watch the game. A place comes free if the host picks a larger map, or someone leaves.'),
     h('div.cv-label.sect', {}, 'The world'),
     chips('Map size', (Object.keys(MAP_SIZES) as MapSize[]).map((k) => [k, `${MAP_SIZES[k].name} · ${MAP_SIZES[k].players}`]), s.size, (v) => lobby({ a: 'settings', size: v }), (v) => (MAP_SIZES[v].players < people ? `Room for ${MAP_SIZES[v].players}: ${people} people are playing` : null)),
-    chips('Map type', [['continents', 'Continents'], ['pangaea', 'Pangaea'], ['archipelago', 'Archipelago'], ['fractal', 'Fractal']] as [MapType, string][], s.type, (v) => lobby({ a: 'settings', type: v })),
+    chips('Map type', MAP_TYPES.map((t): [MapType, string] => [t, MAP_TYPE_NAMES[t]]), s.type, (v) => lobby({ a: 'settings', type: v })),
     mapTypeText(s.type),
+    s.type === 'earth' && chips('Starting places', [[1, 'True'], [0, 'Fair']] as [number, string][], s.trueStarts ? 1 : 0, (v) => lobby({ a: 'settings', trueStarts: v === 1 })),
+    s.type === 'earth' && h('div.lb-desc', {}, s.trueStarts ? 'Every civ starts where it really began: Egypt on the Nile, England on its island. Some get better land than others, as history did.' : 'Starts spread fairly over the Earth’s good land, wherever each civ comes from.'),
     chips('World wraps', [[1, 'On'], [0, 'Off']] as [number, string][], s.wrap === false ? 0 : 1, (v) => lobby({ a: 'settings', wrap: v === 1 })),
     h('div.lb-desc', {}, s.wrap === false ? 'The map has edges east and west, as on a table.' : 'Sail or march off the east edge and come back in from the west, as round a globe (Civ V’s worlds). The poles stay edges.'),
-    chips('Speed', [['quick', 'Quick'], ['standard', 'Standard']] as [Speed, string][], s.speed, (v) => lobby({ a: 'settings', speed: v })),
+    chips('Speed', SPEED_LIST.map((sp): [Speed, string] => [sp, SPEED_NAMES[sp]]), s.speed, (v) => lobby({ a: 'settings', speed: v })),
     speedText(s.speed),
     chips('Difficulty', DIFFICULTY_LIST.map((d) => [d, DIFFICULTIES[d].name] as [Difficulty, string]), difficultyOf(s), (v) => lobby({ a: 'settings', difficulty: v })),
     h('div.row', {}, h('label', {}), h('small.cv-muted', {}, DIFFICULTIES[difficultyOf(s)].text)),
     // (-1: the dynamic timer, here only.)
     chips('Turn timer', [[0, 'None'], [-1, 'Dynamic'], [60, '1 min'], [90, '90 s'], [120, '2 min'], [180, '3 min'], [300, '5 min']] as [number, string][], s.dynamicTimer ? -1 : s.timer, (v) => lobby(v < 0 ? { a: 'settings', dynamicTimer: true } : { a: 'settings', timer: v, dynamicTimer: false })),
     s.dynamicTimer && h('div.lb-desc', {}, 'Each turn’s clock is set as it begins, Civilization VI’s way: longer as the eras pass and as the busiest player’s cities and units grow (from 30 seconds to 5 minutes).'),
-    chips('Turns', [[150, '150'], [250, '250'], [330, '330'], [500, '500']] as [number, string][], s.turnLimit, (v) => lobby({ a: 'settings', turnLimit: v })),
+    chips('Turns', TURN_CHOICES.map((n): [number, string] => [n, String(n)]), s.turnLimit, (v) => lobby({ a: 'settings', turnLimit: v })),
     chips('City-states', [[0, 'None'], [2, '2'], [4, '4'], [6, '6'], [8, '8'], [12, '12']] as [number, string][], s.cityStates, (v) => lobby({ a: 'settings', cityStates: v })),
     chips('Barbarians', [[1, 'On'], [0, 'Off']] as [number, string][], s.barbarians ? 1 : 0, (v) => lobby({ a: 'settings', barbarians: v === 1 })),
     h(

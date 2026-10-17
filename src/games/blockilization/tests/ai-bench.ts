@@ -4,7 +4,7 @@ import { createGame } from '../rules/core';
 import { endTurn, eraOf, score } from '../rules/game';
 import { Rng } from '../rules/mapgen';
 import { DIFFICULTIES, type Difficulty } from '../rules/difficulty';
-import { MAP_SIZES, TURN_LIMITS, type Game, type MapSize, type MapType, type Settings } from '../rules/state';
+import { MAP_SIZES, MAP_TYPES, SPEED_LIST, TURN_LIMITS, type Game, type MapSize, type MapType, type Settings, type Speed } from '../rules/state';
 import { spiesOf, stolen } from '../rules/trade';
 import { ERAS } from '../rules/techs';
 
@@ -17,22 +17,24 @@ import { ERAS } from '../rules/techs';
  *
  * Bundle and run from the platform's folder (it has esbuild):
  *   npx esbuild tests/ai-bench.ts --bundle --platform=node --format=esm --outfile=bench.mjs
- *   node bench.mjs small 1-8 [difficulty] [teams] [standard] [map type]
+ *   node bench.mjs small 1-8 [difficulty] [teams] [speed] [map type]
  * Sizes and seeds: `small 1-8`, `standard 1,2,3,4`, `large 1-2`. A game per line, then the totals.
- * `teams`: the civs in two teams (the first half and the second: 2v2 on a small map). `standard`: at
- * standard speed (turn limit 500) rather than quick (330). A map type (`pangaea`, `archipelago`,
- * `fractal`) instead of continents. `flat`: a world with edges east and west (new games wrap round).
+ * `teams`: the civs in two teams (the first half and the second: 2v2 on a small map). `standard`,
+ * `epic` or `marathon`: at that speed (turn limit 500, 750, 1500) rather than quick (330). A map type
+ * (`pangaea`, `archipelago`, `fractal`, `inland_sea`, `highlands`, `earth`) instead of continents;
+ * `true`: on the Earth, with true starting places. `flat`: a world with edges east and west (new
+ * games wrap round). `huge` is a size too.
  */
 
 const size = (process.argv[2] ?? 'small') as MapSize;
 const seeds = parseSeeds(process.argv[3] ?? '1-4');
 const difficulty = process.argv.slice(4).find((x) => x in DIFFICULTIES) as Difficulty | undefined;
 const teams = process.argv.slice(4).includes('teams');
-const standard = process.argv.slice(4).includes('standard');
+const speed = (process.argv.slice(4).find((x) => SPEED_LIST.includes(x as Speed)) as Speed | undefined) ?? 'quick';
 const flat = process.argv.slice(4).includes('flat');
-const MAP_TYPES: MapType[] = ['continents', 'pangaea', 'archipelago', 'fractal'];
+const trueStarts = process.argv.slice(4).includes('true');
 const mapType = (process.argv.slice(4).find((x) => MAP_TYPES.includes(x as MapType)) as MapType | undefined) ?? 'continents';
-if (process.argv.slice(4).some((x) => !(x in DIFFICULTIES) && x !== 'teams' && x !== 'standard' && x !== 'flat' && !MAP_TYPES.includes(x as MapType))) throw new Error(`Unknown option in ${process.argv.slice(4).join(' ')}`);
+if (process.argv.slice(4).some((x) => !(x in DIFFICULTIES) && x !== 'teams' && x !== 'flat' && x !== 'true' && !SPEED_LIST.includes(x as Speed) && !MAP_TYPES.includes(x as MapType))) throw new Error(`Unknown option in ${process.argv.slice(4).join(' ')}`);
 
 /** The processor time this process has used, in milliseconds (unlike the clock, not slowed by other work). */
 function cpuNow(): number {
@@ -99,13 +101,14 @@ function play(seed: number): Result {
   const settings: Settings = {
     size,
     type: mapType,
-    speed: standard ? 'standard' : 'quick',
+    speed,
     timer: 0,
     cityStates: MAP_SIZES[size].cityStates,
     barbarians: true,
     victories: { domination: true, science: true, culture: true, diplomatic: true, score: true },
-    turnLimit: TURN_LIMITS[standard ? 'standard' : 'quick'],
+    turnLimit: TURN_LIMITS[speed],
     wrap: !flat,
+    ...(trueStarts ? { trueStarts } : {}),
   };
   if (difficulty) settings.difficulty = difficulty;
   // A different set of civs each seed, so every leader gets played.
@@ -234,7 +237,7 @@ const all = (f: (r: Result) => number[]) => results.flatMap(f);
 const hows = new Map<string, number>();
 for (const r of results) hows.set(r.how, (hows.get(r.how) ?? 0) + 1);
 const winners = new Set(results.map((r) => r.winner));
-console.log(`\n== ${size} × ${results.length} seeds${mapType !== 'continents' ? ` on ${mapType}` : ''}${difficulty ? ` (${difficulty})` : ''}${teams ? ' (two teams)' : ''}${standard ? ' (standard speed)' : ''}${flat ? ' (flat)' : ' (wraps)'}`);
+console.log(`\n== ${size} × ${results.length} seeds${mapType !== 'continents' ? ` on ${mapType}` : ''}${difficulty ? ` (${difficulty})` : ''}${teams ? ' (two teams)' : ''}${speed !== 'quick' ? ` (${speed} speed)` : ''}${flat ? ' (flat)' : ' (wraps)'}`);
 console.log(`cities T60   ${fmt(all((r) => r.cities60))}`);
 console.log(`cities T120  ${fmt(all((r) => r.cities120))}`);
 console.log(`wonders      T40 ${fmt(results.map((r) => r.wonders[0] ?? 0))}   T70 ${fmt(results.map((r) => r.wonders[1] ?? 0))}   T100 ${fmt(results.map((r) => r.wonders[2] ?? 0))}`);

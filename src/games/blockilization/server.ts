@@ -18,7 +18,7 @@ import { cityHooks, type CombatResult } from './rules/combat';
 import { dealVerdict, type DealItem } from './rules/diplomacy';
 import { previewAttack, previewCityFire } from './rules/preview';
 import { DIFFICULTIES } from './rules/difficulty';
-import { MAP_SIZES, NOTE_TOPICS, TURN_LIMITS, type Game, type Settings } from './rules/state';
+import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, TURN_CHOICES, TURN_LIMITS, type Game, type Settings } from './rules/state';
 import { IDEOLOGIES } from './rules/policies';
 import { dissent } from './rules/economy';
 import { TECHS } from './rules/techs';
@@ -618,15 +618,16 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
       if (!isHost) return;
       // (Not a map too small for the people seated.)
       if (a.size && a.size in MAP_SIZES && MAP_SIZES[a.size].players >= seats.filter((s) => !s.bot).length) settings.size = a.size;
-      if (a.type && ['continents', 'pangaea', 'archipelago', 'fractal'].includes(a.type)) settings.type = a.type;
-      if (a.speed && ['quick', 'standard'].includes(a.speed)) {
+      if (a.type && MAP_TYPES.includes(a.type)) settings.type = a.type;
+      if (typeof a.trueStarts === 'boolean') settings.trueStarts = a.trueStarts;
+      if (a.speed && SPEED_LIST.includes(a.speed)) {
         settings.speed = a.speed;
         // (The turn limit goes with the speed, unless it's set in the same breath.)
         if (a.turnLimit === undefined) settings.turnLimit = TURN_LIMITS[a.speed];
       }
       if (a.timer !== undefined && [0, 60, 90, 120, 180, 300].includes(a.timer)) settings.timer = a.timer;
       if (typeof a.dynamicTimer === 'boolean') settings.dynamicTimer = a.dynamicTimer;
-      if (a.turnLimit !== undefined && [150, 250, 330, 500].includes(a.turnLimit)) settings.turnLimit = a.turnLimit;
+      if (a.turnLimit !== undefined && TURN_CHOICES.includes(a.turnLimit)) settings.turnLimit = a.turnLimit;
       if (typeof a.barbarians === 'boolean') settings.barbarians = a.barbarians;
       if (typeof a.wrap === 'boolean') settings.wrap = a.wrap;
       if (a.cityStates !== undefined && [0, 2, 4, 6, 8, 12].includes(a.cityStates)) settings.cityStates = a.cityStates;

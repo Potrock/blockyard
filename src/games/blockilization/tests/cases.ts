@@ -5,7 +5,7 @@ import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unit
 import { assignCitizens, cityEffects, cityYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
 import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
-import { distance, line, neighbour, neighbours, within } from '../rules/hex';
+import { distance, line, neighbour, neighbours, tileAt, within } from '../rules/hex';
 import { generate, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
 import { IMPROVEMENTS, TERRAINS, type ImprovementId } from '../rules/terrain';
@@ -24,11 +24,13 @@ import { adoptable, ALL_POLICIES } from '../rules/policies';
 import { previewAttack, previewCityFire } from '../rules/preview';
 import { promotionsDue } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
+import { CIV_LIST } from '../rules/civs';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
 import { allyOf, cannotBully, cannotCoup, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
 import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
-import { MAP_SIZES, type Game, type MapSize } from '../rules/state';
+import { MAP_SIZES, TURN_LIMITS, type Game, type MapSize } from '../rules/state';
+import { lonLatOf, TRUE_STARTS, tileOfLonLat } from '../rules/earth';
 import { cityTourism, longGameTurn, maxRoutes, routesGold, routesOf, routeYield, spiesOf, spyCount, startRoute, surveillanceTurns, theft, THEFT_COST, unVote } from '../rules/trade';
 import { TECHS } from '../rules/techs';
 import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasMet, makeDeal, relationsOf, remember, spareIncome } from '../rules/diplomacy';
@@ -3020,6 +3022,92 @@ test('map generation on a world that wraps: land runs across the seam, starts sp
         for (const row of [0, g.height - 1]) for (let col = 0; col < g.width; col++) ok(!land(row * g.width + col), `${type} ${size} ${seed}: sea at the poles`);
       }
   ok(across > 20, `land crosses the seam (${across} rows)`);
+});
+
+test('the new map types: every civ a start, spread apart, Strategic Balance kept; the same seed the same world', () => {
+  for (const type of ['inland_sea', 'highlands', 'earth'] as const)
+    for (const size of ['duel', 'small', 'standard', 'large', 'huge'] as MapSize[])
+      for (const wrap of [true, false])
+        for (const seed of [1, 2]) {
+          const m = MAP_SIZES[size];
+          const g = { width: m.width, height: m.height, wrap };
+          const what = `${type} ${size} ${seed}${wrap ? ' (wraps)' : ''}`;
+          const { tiles, starts } = generate(g, seed, type, m.players, m.cityStates);
+          eq(JSON.stringify(generate(g, seed, type, m.players, m.cityStates).tiles), JSON.stringify(tiles), `${what}: the same each time`);
+          const civs = starts.slice(0, m.players);
+          eq(civs.length, m.players, `${what}: a start for every civ`);
+          for (const a of civs) for (const b of civs) ok(a === b || distance(g, a, b) >= 4, `${what}: starts apart (${distance(g, a, b)})`);
+          for (const t of civs) ok(within(g, t, 4).some((x) => tiles[x].resource === 'horses') && within(g, t, 4).some((x) => tiles[x].resource === 'iron'), `${what}: Horses and Iron near ${t}`);
+        }
+});
+
+test('an inland sea: one great sea in the middle with land all round it; highlands: hills and mountains over much of the land', () => {
+  for (const seed of [1, 2, 3]) {
+    const m = MAP_SIZES.standard;
+    const g = { width: m.width, height: m.height };
+    const { tiles } = generate(g, seed, 'inland_sea', m.players, m.cityStates);
+    const water = (t: number) => TERRAINS[tiles[t].terrain].water;
+    ok(water(tileAt(g, Math.floor(g.width / 2), Math.floor(g.height / 2))), `${seed}: sea in the middle`);
+    const land = tiles.filter((_, t) => !water(t)).length;
+    ok(land > tiles.length * 0.5, `${seed}: mostly land (${land} of ${tiles.length})`);
+    const high = generate(g, seed, 'highlands', m.players, m.cityStates).tiles.filter((x) => !TERRAINS[x.terrain].water);
+    const rough = high.filter((x) => x.elevation !== 'flat').length;
+    ok(rough > high.length * 0.4, `${seed}: highlands ${rough} of ${high.length} land tiles hills or mountains`);
+    const plain = generate(g, seed, 'fractal', m.players, m.cityStates).tiles.filter((x) => !TERRAINS[x.terrain].water);
+    ok(rough / high.length > (2 * plain.filter((x) => x.elevation !== 'flat').length) / plain.length, `${seed}: twice a fractal map's share`);
+  }
+});
+
+test('the Earth map: its continents, deserts, ranges and great rivers where they are, and true starting places where the civs began', () => {
+  for (const size of ['small', 'standard', 'large', 'huge'] as MapSize[]) {
+    const m = MAP_SIZES[size];
+    const g = { width: m.width, height: m.height, wrap: true };
+    const civs = ['egypt', 'china', 'england', 'aztec', 'russia', 'india'];
+    const { tiles, starts } = generate(g, 4, 'earth', civs.length, 0, civs);
+    const at = (lon: number, lat: number) => tiles[tileOfLonLat(g, [lon, lat])];
+    const land = (lon: number, lat: number) => !TERRAINS[at(lon, lat).terrain].water;
+    ok(land(20, 0) && land(100, 50) && land(-100, 45) && land(-60, -10) && land(135, -25), `${size}: Africa, Asia, the Americas, Australia`);
+    ok(!land(-35, 30) && !land(-150, 10) && !land(80, -20), `${size}: the Atlantic, Pacific and Indian Oceans`);
+    eq(at(10, 25).terrain, 'desert', `${size}: the Sahara`);
+    ok(at(86, 28).elevation !== 'flat', `${size}: the Himalaya`);
+    ok(tiles.some((x, t) => x.river && Math.abs(lonLatOf(g, t)[0] - 32) < 8 && Math.abs(lonLatOf(g, t)[1] - 22) < 6), `${size}: the Nile`);
+    civs.forEach((civ, i) => ok(distance(g, starts[i], tileOfLonLat(g, TRUE_STARTS[civ])) <= 3, `${size}: ${civ} starts where it began (${distance(g, starts[i], tileOfLonLat(g, TRUE_STARTS[civ]))} away)`));
+    // (England on its island: not joined by land to France's.)
+    const fair = generate(g, 4, 'earth', civs.length, 0).starts;
+    ok(civs.some((civ, i) => distance(g, fair[i], tileOfLonLat(g, TRUE_STARTS[civ])) > 3), `${size}: without true starts, starts are placed the usual way`);
+  }
+  // A game on the Earth, true starts asked, seats each civ at home; city-states at theirs where they fit.
+  const seats = ['germany', 'korea'].map((civ) => ({ user: null, name: civ, civ, bot: true }));
+  const settings = { ...blank().game.settings, size: 'standard' as MapSize, type: 'earth' as const, trueStarts: true, cityStates: 4, wrap: true };
+  const game = createGame(settings, seats, 9);
+  for (const p of game.players.filter((x) => !x.cityState && TRUE_STARTS[x.civ])) {
+    const u = game.units.find((x) => x.owner === p.index && x.type === 'settler')!;
+    ok(distance(game.grid, u.tile, tileOfLonLat(game.grid, TRUE_STARTS[p.civ])) <= 3, `${p.civ}'s settler at home`);
+  }
+});
+
+test('game speeds: Epic and Marathon stretch growth, research, deals and golden ages as Civ V does, and set their turn limits', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(5, 5), { pop: 4 });
+  const measure = () => ({ grow: growthThreshold(game, 4), tech: techCost(game, game.players[0], 'writing'), deal: dealTurns(game) });
+  game.settings.speed = 'standard';
+  const std = measure();
+  for (const [sp, k] of [['quick', 0.67], ['epic', 1.5], ['marathon', 3]] as const) {
+    game.settings.speed = sp;
+    const x = measure();
+    ok(Math.abs(x.grow / std.grow - k) < 0.05 && Math.abs(x.tech / std.tech - k) < 0.05 && Math.abs(x.deal / std.deal - k) < 0.05, `${sp}: ${JSON.stringify(x)} against ${JSON.stringify(std)}`);
+    eq(TURN_LIMITS[sp], { quick: 330, epic: 750, marathon: 1500 }[sp], `${sp}'s turn limit`);
+  }
+  ok(c.pop === 4, 'the city stands');
+});
+
+test('a huge map: ten civs and ten city-states, each with a start', () => {
+  const civs = CIV_LIST.slice(0, 10).map((c) => c.id);
+  const settings = { ...blank().game.settings, size: 'huge' as MapSize, type: 'continents' as const, cityStates: 10, wrap: true };
+  const game = createGame(settings, civs.map((civ) => ({ user: null, name: civ, civ, bot: true })), 3);
+  eq(game.grid.width * game.grid.height, 60 * 36, 'its size');
+  eq(game.players.filter((p) => p.alive && !p.cityState).length, 10, 'every civ in it');
+  eq(game.players.filter((p) => p.alive && p.cityState).length, 10, 'every city-state in it');
 });
 
 test('natural wonders draw settlers: the bots value a site near one more', () => {

@@ -273,9 +273,12 @@ export interface Note {
 export const NOTE_TOPICS = ['wonders', 'quests', 'congress', 'religion', 'wars'] as const;
 export type NoteTopic = (typeof NOTE_TOPICS)[number];
 
-export type MapSize = 'duel' | 'small' | 'standard' | 'large';
-export type MapType = 'continents' | 'pangaea' | 'archipelago' | 'fractal';
-export type Speed = 'quick' | 'standard';
+export type MapSize = 'duel' | 'small' | 'standard' | 'large' | 'huge';
+export type MapType = 'continents' | 'pangaea' | 'archipelago' | 'fractal' | 'inland_sea' | 'highlands' | 'earth';
+export type Speed = 'quick' | 'standard' | 'epic' | 'marathon';
+/** Every map type and speed, in the order the lobby lists them. */
+export const MAP_TYPES: MapType[] = ['continents', 'pangaea', 'archipelago', 'fractal', 'inland_sea', 'highlands', 'earth'];
+export const SPEED_LIST: Speed[] = ['quick', 'standard', 'epic', 'marathon'];
 
 export interface Settings {
   size: MapSize;
@@ -295,6 +298,8 @@ export interface Settings {
   difficulty?: Difficulty;
   /** The world wraps round east to west, Civ V's (`hex.ts`); unset, it does. */
   wrap?: boolean;
+  /** On the Earth map, each civ starts where it really began (`earth.ts`). */
+  trueStarts?: boolean;
 }
 
 export interface Game {
@@ -346,9 +351,18 @@ export interface MapPin {
   label: string;
 }
 
-export const SPEEDS: Record<Speed, number> = { quick: 0.67, standard: 1 };
-/** A game's turn limit at each speed, Civ V's: 330 turns quick, 500 standard (the lobby sets it as the speed is chosen). */
-export const TURN_LIMITS: Record<Speed, number> = { quick: 330, standard: 500 };
+/** How long everything takes at each speed (building, research, growth, the turns things last), Civ V's. */
+export const SPEEDS: Record<Speed, number> = { quick: 0.67, standard: 1, epic: 1.5, marathon: 3 };
+/** A game's turn limit at each speed, Civ V's: 330 turns quick, 500 standard, 750 epic, 1500 marathon (the lobby sets it as the speed is chosen). */
+export const TURN_LIMITS: Record<Speed, number> = { quick: 330, standard: 500, epic: 750, marathon: 1500 };
+/** The turn limits the lobby offers. */
+export const TURN_CHOICES = [150, 250, 330, 500, 750, 1500];
+/** How long golden ages last at each speed (Civ V's: they don't stretch as far as the rest). */
+export const GOLDEN_SPEEDS: Record<Speed, number> = { quick: 0.8, standard: 1, epic: 1.25, marathon: 2 };
+export const SPEED_NAMES: Record<Speed, string> = { quick: 'Quick', standard: 'Standard', epic: 'Epic', marathon: 'Marathon' };
+export const MAP_TYPE_NAMES: Record<MapType, string> = { continents: 'Continents', pangaea: 'Pangaea', archipelago: 'Archipelago', fractal: 'Fractal', inland_sea: 'Inland Sea', highlands: 'Highlands', earth: 'Earth' };
+/** A map type in a sentence ("a small continents map", "a small Earth map"). */
+export const mapTypeWord = (t: MapType) => (t === 'earth' ? 'Earth' : MAP_TYPE_NAMES[t].toLowerCase());
 
 /** Map sizes: tiles across and down, and players and city-states they suit. */
 export const MAP_SIZES: Record<MapSize, { name: string; width: number; height: number; players: number; cityStates: number }> = {
@@ -356,4 +370,5 @@ export const MAP_SIZES: Record<MapSize, { name: string; width: number; height: n
   small: { name: 'Small', width: 34, height: 22, players: 4, cityStates: 4 },
   standard: { name: 'Standard', width: 42, height: 26, players: 6, cityStates: 6 },
   large: { name: 'Large', width: 50, height: 30, players: 8, cityStates: 8 },
+  huge: { name: 'Huge', width: 60, height: 36, players: 10, cityStates: 10 },
 };

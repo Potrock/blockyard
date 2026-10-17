@@ -80,7 +80,9 @@ export function createGame(settings: Settings, seats: Seat[], seed: number): Gam
   // (A new world wraps round east to west unless the lobby said not.)
   const grid: Grid = { width: size.width, height: size.height, ...(settings.wrap === false ? {} : { wrap: true }) };
   const cityStates = CITY_STATES.slice(0, Math.max(0, Math.min(CITY_STATES.length, settings.cityStates)));
-  const { tiles, starts } = generate(grid, seed, settings.type, seats.length, cityStates.length);
+  // (On the Earth with true starts, each seat's civ and each city-state's own, to start where it began.)
+  const trueStarts = settings.type === 'earth' && settings.trueStarts ? [...seats.map((s) => s.civ), ...cityStates.map((cs) => cs.civ.id)] : undefined;
+  const { tiles, starts } = generate(grid, seed, settings.type, seats.length, cityStates.length, trueStarts);
   const game: Game = {
     version: 1,
     seed,

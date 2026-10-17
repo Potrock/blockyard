@@ -1,6 +1,6 @@
 import { lobbySides, TEAMS, type LobbyAction, type LobbySeat, type LobbyView } from '../protocol';
 import { CIVS } from '../rules/civs';
-import { MAP_SIZES, type MapType, type Settings, type Speed } from '../rules/state';
+import { MAP_SIZES, mapTypeWord, type MapType, type Settings, type Speed } from '../rules/state';
 import { VICTORIES } from './concepts';
 import { emblemEl, icon } from './icons';
 import { openPedia } from './pedia';
@@ -18,11 +18,16 @@ const MAP_TYPE_TEXT: Record<MapType, string> = {
   pangaea: 'One great landmass that everyone shares: neighbours from the start, and wars over land.',
   archipelago: 'Many islands, large and small: ships, the coast and the sea matter from the first turns.',
   fractal: 'Land of every shape and size, from islands to sprawling continents: no two worlds alike.',
+  inland_sea: 'Land all round one great sea in the middle: armies march round it, fleets cross it.',
+  highlands: 'Hills and mountains nearly everywhere, with lakes and valleys between: hard country to cross and to take, rich in production.',
+  earth: 'The Earth as it is, its continents, ranges, deserts and great rivers. With true starting places, every civ begins where it really did.',
 };
 
 const SPEED_TEXT: Record<Speed, string> = {
   quick: 'Everything takes about two-thirds as long: a game of an evening.',
   standard: 'Civilization V’s pace: longer to build, research and grow.',
+  epic: 'Half as long again as Standard: more turns in every era, 750 in all.',
+  marathon: 'Three times as long as Standard: wars and wonders that take an age, 1500 turns in all.',
 };
 
 /** A line under the map type's choices, and under the speed's. */
@@ -80,7 +85,7 @@ export function lobbyFoot(L: LobbyView, isHost: boolean, send: (a: LobbyAction) 
       'div.cv-grow',
       {},
       h('b', {}, civ ? `${civ.name}, led by ${civ.leader}` : 'A civilization chosen for you'),
-      h('small.cv-muted', {}, `${civ ? '' : 'Or pick one above · '}${MAP_SIZES[s.size].name} ${s.type} map · ${people > 1 ? `${people} people, ` : ''}${bots} bot${bots === 1 ? '' : 's'}`),
+      h('small.cv-muted', {}, `${civ ? '' : 'Or pick one above · '}${MAP_SIZES[s.size].name} ${mapTypeWord(s.type)} map · ${people > 1 ? `${people} people, ` : ''}${bots} bot${bots === 1 ? '' : 's'}`),
     ),
     isHost
       ? h('button.cv-btn.gold.lb-begin', { onclick: () => send({ a: 'start' }), disabled: stuck, title: stuck ? 'Everyone is on one team' : undefined }, 'Begin')
