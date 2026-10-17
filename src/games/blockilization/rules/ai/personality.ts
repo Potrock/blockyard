@@ -38,6 +38,14 @@ export const PERSONALITIES: Record<string, Personality> = {
   aztec: L(7, 3, 10, 3, 3, 5, 6, 3, 3, 10), // Montezuma: war, always
   russia: L(8, 5, 6, 6, 6, 4, 4, 5, 4, 5), // Catherine: a vast land and what's under it
   france: L(5, 7, 8, 5, 4, 8, 3, 5, 3, 8), // Napoleon: a cultured conqueror
+  rome: L(8, 7, 7, 6, 5, 6, 4, 5, 4, 6), // Augustus Caesar: many cities, each built like the capital
+  greece: L(5, 5, 7, 4, 6, 6, 4, 5, 10, 7), // Alexander: the city-states won over, then conquest
+  japan: L(5, 4, 9, 6, 5, 6, 5, 4, 3, 9), // Oda Nobunaga: war fought to the last
+  england: L(7, 5, 6, 6, 6, 5, 3, 7, 5, 5), // Elizabeth: fleets, trade and spies
+  mongolia: L(7, 2, 10, 3, 3, 3, 3, 4, 2, 9), // Genghis Khan: horsemen, and city-states for the taking
+  ottomans: L(6, 6, 7, 6, 5, 6, 6, 7, 5, 6), // Suleiman: a lawgiver's cities and a conqueror's fleets
+  zulu: L(5, 2, 10, 4, 3, 3, 4, 3, 2, 10), // Shaka: war, always
+  inca: L(7, 6, 4, 7, 5, 5, 6, 6, 4, 4), // Pachacuti: towns in the hills, roads between them
 };
 
 /** A city-state: keeps its one city and defends it. */

@@ -1,8 +1,12 @@
 import { adviseResearch, adviseWork } from '../advisor';
 import { BUILDINGS } from '../rules/buildings';
-import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, leadership, strength } from '../rules/combat';
+import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, gain, leadership, strength } from '../rules/combat';
+import { CITY_STATES, CIV_LIST } from '../rules/civs';
+import { PERSONALITIES } from '../rules/ai/personality';
+import { UNITS } from '../rules/units';
+import { CIV_SYMBOL, glyphPaths } from '../client/icons';
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
-import { assignCitizens, cityEffects, cityYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
+import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
 import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
 import { distance, line, neighbour, neighbours, within } from '../rules/hex';
@@ -25,7 +29,7 @@ import { previewAttack, previewCityFire } from '../rules/preview';
 import { promotionsDue } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
-import { allyOf, cannotBully, cannotCoup, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
+import { allyOf, cannotBully, cannotCoup, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
 import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
 import { MAP_SIZES, type Game, type MapSize } from '../rules/state';
@@ -4354,4 +4358,167 @@ test('teammates at war with people play their segment together; a side gone, or 
   game.players[1].alive = false;
   startSequence(game);
   eq(game.sequence, undefined, 'its enemy fallen: no order to keep');
+});
+
+// -------------------------------------------------------------------------------------------------
+// The civilizations
+// -------------------------------------------------------------------------------------------------
+
+test('every civ has its own unit and building (each replacing one that exists), a personality, a symbol, sixteen names of its own and its own colours', () => {
+  const csNames = new Set(CITY_STATES.map((c) => c.civ.name));
+  const named = new Map<string, string>();
+  const colours = new Set<string>();
+  for (const c of CIV_LIST) {
+    const u = UNITS[c.unit];
+    ok(!!u && u.civ === c.id && !!u.replaces && !!UNITS[u.replaces] && !UNITS[u.replaces].civ, `${c.id}: its unit ${c.unit} replaces a common one`);
+    const b = BUILDINGS[c.building];
+    ok(!!b && b.civ === c.id && !!b.replaces && !!BUILDINGS[b.replaces] && !BUILDINGS[b.replaces].civ, `${c.id}: its building ${c.building} replaces a common one`);
+    ok(!!PERSONALITIES[c.id], `${c.id}: a leader's personality`);
+    ok(!!CIV_SYMBOL[c.id] && glyphPaths(CIV_SYMBOL[c.id]) !== glyphPaths(''), `${c.id}: a symbol drawn for its emblem`);
+    ok(!!c.ability.name && !!c.ability.text && Object.keys(c.ability.effects).length > 0, `${c.id}: an ability that does something`);
+    eq(new Set(c.cities).size, 16, `${c.id}: sixteen different city names`);
+    for (const n of c.cities) {
+      ok(!csNames.has(n), `${c.id}: ${n} is a city-state's name`);
+      ok(!named.has(n), `${c.id}: ${n} is ${named.get(n)}'s too`);
+      named.set(n, c.id);
+    }
+    ok(!colours.has(c.color), `${c.id}: a colour of its own`);
+    colours.add(c.color);
+  }
+});
+
+test('Rome: buildings the capital has go up a quarter faster in its other cities', () => {
+  const toward = (civ: string) => {
+    const { game, at } = blank([civ, 'egypt']);
+    const capital = city(game, 0, at(4, 4));
+    const other = city(game, 0, at(12, 4));
+    const fast = (c: typeof other) => productionToward(game, c, { kind: 'building', id: 'monument' }, cityEffects(game, c), 100);
+    const before = fast(other);
+    capital.buildings.push('monument');
+    return { before, after: fast(other), capital: fast(capital) };
+  };
+  const rome = toward('rome');
+  eq(rome.after - rome.before, 25, 'a monument in the capital: +25% toward one elsewhere');
+  eq(rome.capital, rome.before, 'not in the capital itself');
+  const egypt = toward('egypt');
+  eq(egypt.after, egypt.before, 'nobody else');
+});
+
+test('Greece: influence with city-states falls half as fast and climbs back twice as fast', () => {
+  const { game, at } = blank(['greece', 'egypt'], { cityStates: 1 });
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, cs.index, at(12, 9));
+  const [greece, egypt] = [game.players[0], game.players[1]];
+  city(game, 0, at(3, 3));
+  city(game, 1, at(20, 3));
+  eq(influenceFall(game, greece), 0.5, 'half as fast');
+  eq(influenceFall(game, egypt), 1, 'a point a turn for others');
+  greece.influence[cs.index] = -10;
+  egypt.influence[cs.index] = -10;
+  cityStateTurn(game);
+  eq(greece.influence[cs.index], -8, 'two back a turn');
+  eq(egypt.influence[cs.index], -9, 'one for others');
+});
+
+test('Japan: wounded units fight at full strength; fishing boats give culture', () => {
+  const { game, at } = blank(['japan', 'egypt']);
+  war(game, 0, 1);
+  const samurai = unit(game, 'warrior', 0, at(4, 8), { hp: 40 });
+  const foe = unit(game, 'warrior', 1, at(5, 8));
+  const other = unit(game, 'warrior', 1, at(12, 8), { hp: 40 });
+  const mark = unit(game, 'warrior', 0, at(13, 8));
+  near(strength(game, samurai, 'attack', foe, samurai.tile), 8, 'Japanese: full strength at 40 hit points');
+  near(strength(game, other, 'attack', mark, other.tile), 8 * 0.7, 'others: 30% down');
+  const boats = (civ: string) => {
+    const w = blank([civ, 'egypt']);
+    const c = city(w.game, 0, w.at(6, 6));
+    const t = neighbours(w.game.grid, c.tile)[0];
+    Object.assign(w.game.tiles[t], { terrain: 'coast', resource: 'fish', improvement: 'fishing_boats' });
+    return workedYields(w.game, c, t).culture ?? 0;
+  };
+  eq(boats('japan') - boats('egypt'), 1, '+1 culture from fishing boats');
+});
+
+test('England: +2 moves for ships and an extra spy', () => {
+  const { game, at } = blank(['england', 'egypt']);
+  game.tiles[at(6, 6)].terrain = 'coast';
+  game.tiles[at(16, 6)].terrain = 'coast';
+  const mine = unit(game, 'trireme', 0, at(6, 6));
+  const theirs = unit(game, 'trireme', 1, at(16, 6));
+  eq(maxMoves(game, mine) - maxMoves(game, theirs), 2, 'two more moves at sea');
+  eq(maxMoves(game, unit(game, 'warrior', 0, at(3, 3))), 2, 'none more on land');
+  eq(spyCount(game, game.players[0], 5) - spyCount(game, game.players[1], 5), 1, 'one more spy');
+});
+
+test('Mongolia: +30% against city-states and their units; +1 move for mounted units', () => {
+  const { game, at } = blank(['mongolia', 'egypt'], { cityStates: 1 });
+  const cs = game.players.find((x) => x.cityState)!;
+  const rider = unit(game, 'warrior', 0, at(4, 8));
+  const csFoe = unit(game, 'warrior', cs.index, at(5, 8));
+  const rider2 = unit(game, 'warrior', 0, at(14, 8));
+  const civFoe = unit(game, 'warrior', 1, at(15, 8));
+  near(strength(game, rider, 'attack', csFoe, rider.tile) / strength(game, rider2, 'attack', civFoe, rider2.tile), 1.3, 'against a city-state’s unit');
+  const town = city(game, cs.index, at(10, 14));
+  const siege = unit(game, 'warrior', 0, neighbours(game.grid, town.tile)[0]);
+  near(strength(game, siege, 'attack', town, siege.tile), 8 * 1.3, 'and against its city');
+  near(strength(game, csFoe, 'defend', rider, csFoe.tile), 8, 'but not for the city-state');
+  const horse = unit(game, 'horseman', 0, at(3, 3));
+  const theirs = unit(game, 'horseman', 1, at(20, 3));
+  eq(maxMoves(game, horse) - maxMoves(game, theirs), 1, 'a move more for horsemen');
+  eq(maxMoves(game, rider), 2, 'none for those on foot');
+});
+
+test('the Ottomans: ships cost a third of the upkeep (and nothing else less)', () => {
+  const upkeep = (civ: string, type: string) => {
+    const { game, at } = blank([civ, 'egypt']);
+    city(game, 0, at(3, 3));
+    game.turn = 120;
+    for (let i = 0; i < 12; i++) {
+      game.tiles[at(i + 2, 12)].terrain = 'coast';
+      unit(game, type, 0, at(i + 2, type === 'trireme' ? 12 : 8));
+    }
+    return goldUpkeep(game, game.players[0]).units;
+  };
+  ok(upkeep('egypt', 'trireme') >= 10, 'twelve ships cost an Egyptian dearly');
+  eq(upkeep('ottomans', 'trireme'), 0, 'four ships’ worth: within the free four');
+  eq(upkeep('ottomans', 'warrior'), upkeep('egypt', 'warrior'), 'soldiers as anyone’s');
+});
+
+test('the Zulu: melee units cost half the upkeep; units earn a third more experience', () => {
+  const upkeep = (civ: string, type: string) => {
+    const { game, at } = blank([civ, 'egypt']);
+    city(game, 0, at(3, 3));
+    game.turn = 120;
+    for (let i = 0; i < 12; i++) unit(game, type, 0, at(i + 2, 8));
+    return goldUpkeep(game, game.players[0]).units;
+  };
+  ok(upkeep('zulu', 'warrior') < upkeep('egypt', 'warrior'), 'warriors cheaper');
+  eq(upkeep('zulu', 'archer'), upkeep('egypt', 'archer'), 'archers as anyone’s');
+  const { game, at } = blank(['zulu', 'egypt']);
+  const impi = unit(game, 'warrior', 0, at(4, 4));
+  const other = unit(game, 'warrior', 1, at(14, 4));
+  gain(game, impi, 6, 1);
+  gain(game, other, 6, 0);
+  near(impi.xp, 8, 'a third more');
+  near(other.xp, 6, 'as earned for others');
+});
+
+test('the Inca: a hill is a single move; roads on hills cost no upkeep and half elsewhere', () => {
+  const step = (civ: string) => {
+    const { game, at } = blank([civ, 'egypt']);
+    Object.assign(game.tiles[at(6, 6)], { elevation: 'hills', feature: 'forest' });
+    const u = unit(game, 'warrior', 0, at(5, 6));
+    return stepCost(game, u, at(5, 6), at(6, 6));
+  };
+  eq(step('inca'), 1, 'onto a forested hill');
+  eq(step('egypt'), 2, 'two for others');
+  const roads = (civ: string, hills: boolean) => {
+    const { game, at } = blank([civ, 'egypt']);
+    city(game, 0, at(3, 3));
+    for (let i = 0; i < 8; i++) Object.assign(game.tiles[at(i + 2, 10)], { owner: 0, road: 'road', elevation: hills ? 'hills' : 'flat' });
+    return goldUpkeep(game, game.players[0]).roads;
+  };
+  eq(roads('egypt', false), 4, 'half a gold a road');
+  eq(roads('inca', false), 2, 'a quarter for the Inca');
+  eq(roads('inca', true), 0, 'none on hills');
 });
