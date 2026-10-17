@@ -1,4 +1,4 @@
-import { aName, atWar, capitalOf, cityById, citiesOf, endWars, has, knowsOf, note, noteAll, random, speed, spawnUnit } from './core';
+import { aName, atWar, capitalOf, cityById, citiesOf, civOf, endWars, has, knowsOf, note, noteAll, random, speed, spawnUnit } from './core';
 import { cityStrength } from './combat';
 import type { Effects } from './effects';
 import { cityReligion } from './faith';
@@ -86,8 +86,8 @@ export function alliedStrategics(game: Game, p: Player): Record<string, number> 
   return out;
 }
 
-/** What a civ's policies and beliefs say about city-states (wonders say nothing about them). */
-const dealings = (game: Game, p: Player): Effects[] => [...policyEffects(p, game), ...beliefEffects(game, p)];
+/** What a civ's policies, beliefs and ability say about city-states (wonders say nothing about them). */
+const dealings = (game: Game, p: Player): Effects[] => [...policyEffects(p, game), ...beliefEffects(game, p), civOf(p).ability.effects];
 /**
  * Where a civ's influence with a city-state drifts back to: 0, or higher with Consulates (20), with
  * Papal Primacy if the city-state follows the civ's religion (15), and with Gunboat Diplomacy while
@@ -292,7 +292,8 @@ export function cityStateTurn(game: Game) {
       const v = influenceOf(p, cs.index);
       const effects = dealings(game, p);
       if (v > rest) p.influence[cs.index] = Math.max(rest, v - influenceFall(game, p));
-      else if (v < rest) p.influence[cs.index] = Math.min(rest, v + 1);
+      // (Below its rest it climbs back one a turn: two for Greece.)
+      else if (v < rest) p.influence[cs.index] = Math.min(rest, v + (has(effects, 'influence_recovers_double') ? 2 : 1));
       const s = standing(game, p, cs.index);
       if (s !== 'friend' && s !== 'ally') continue;
       const k = cs.cityState!.kind;

@@ -38,6 +38,7 @@ export const TOPIC_NAMES: [NoteTopic, string][] = [
   ['congress', 'The World Congress'],
   ['religion', 'Religion news'],
   ['wars', 'Others’ wars'],
+  ['disasters', 'Disasters'],
 ];
 
 /** How a kind of animation plays: as it is, faster, or not at all (what it shows simply is). */

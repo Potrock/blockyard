@@ -1,7 +1,7 @@
 import type { FameEntry } from '../protocol';
 import { CIVS, CIV_LIST } from '../rules/civs';
 import { DIFFICULTIES } from '../rules/difficulty';
-import { MAP_SIZES } from '../rules/state';
+import { MAP_SIZES, MAP_TYPE_NAMES } from '../rules/state';
 import { emblemEl, icon } from './icons';
 import { store } from './store';
 import { h, type El } from './ui';
@@ -22,7 +22,7 @@ export function setFame(list: FameEntry[]) {
 }
 
 const HOW: Record<string, string> = { domination: 'Domination', science: 'Science', culture: 'Culture', diplomatic: 'Diplomatic', score: 'Score', time: 'Time' };
-const MAP: Record<string, string> = { continents: 'Continents', pangaea: 'Pangaea', archipelago: 'Archipelago', fractal: 'Fractal' };
+const MAP: Record<string, string> = MAP_TYPE_NAMES;
 
 /** How a game ended for them, in a few words. */
 function result(e: FameEntry): El {

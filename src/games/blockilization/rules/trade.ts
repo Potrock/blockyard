@@ -98,7 +98,7 @@ export function startRoute(game: Game, p: Player, u: Unit, toId: number, cargo: 
   const routes = routesOf(p);
   if (routes.length >= maxRoutes(game, p)) return `You have every trade route you can (${maxRoutes(game, p)})`;
   if (routes.some((r) => r.from === from.id && r.to === to.id)) return 'There is a route between them already';
-  routes.push({ from: from.id, to: to.id, turns: Math.round(30 * (game.settings.speed === 'quick' ? 0.67 : 1)), sea, ...(to.owner === p.index && cargo === 'prod' ? { cargo } : {}) });
+  routes.push({ from: from.id, to: to.id, turns: Math.round(30 * speed(game)), sea, ...(to.owner === p.index && cargo === 'prod' ? { cargo } : {}) });
   game.units.splice(game.units.indexOf(u), 1);
   note(game, p.index, { text: `A trade route from ${from.name} to ${to.name} is open.`, at: to.tile, kind: 'good' });
   return null;

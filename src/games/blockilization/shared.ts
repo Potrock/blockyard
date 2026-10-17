@@ -115,6 +115,14 @@ export const shared = defineShared({
     civ_jungle: { texture: mottled(['#2e9a32', '#38a83a', '#26882c', '#56bc48'], 2), label: 'Jungle' },
     civ_pine: { texture: mottled(['#2a4a3a', '#30523f', '#244234']), label: 'Pines' },
     civ_trunk: { texture: mottled(['#5a4028', '#644830', '#523a24']), label: 'Trunk' },
+    // The seasons' looks (`seasons.ts`): the woods red and gold in autumn, snow on the trees and the high ground in winter.
+    civ_leaves_autumn: { texture: mottled(['#c4541e', '#d8802a', '#b8381c', '#e0a832'], 2), label: 'Autumn Woods' },
+    civ_leaves_snow: { texture: mottled(['#e8eef2', '#2a5a30', '#f4f8fa', '#d8e2e8']), label: 'Snowy Woods' },
+    civ_pine_snow: { texture: mottled(['#2a4a3a', '#e8eef2', '#30523f', '#f4f8fa']), label: 'Snowy Pines' },
+    civ_frost: { texture: sides(['#eef3f6', '#e2e9ee', '#f8fbfc']), label: 'Snow' },
+    // What the world does to the land (`rules/disasters.ts`, `rules/climate.ts`): ash and silt's rich soil, the sea's mud on flooded land.
+    civ_loam: { texture: sides(['#3e3424', '#4a4028', '#56682e', '#3a3020']), label: 'Rich Soil' },
+    civ_silt: { texture: sides(['#7a7458', '#6c664c', '#857e60']), label: 'Flooded Land' },
     // The land's improvements and roads (`improvements.ts`).
     civ_farmland: { texture: { top: { paint: furrows }, side: mottled(['#6e5434', '#77593a', '#684f30']), bottom: mottled(['#6e5434', '#77593a', '#684f30']) }, label: 'Farmland' },
     civ_wheat: { texture: { paint: wheat }, shape: 'cross', label: 'Wheat' },

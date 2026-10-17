@@ -251,6 +251,117 @@ const BUSTS = [
       for (let y = 1; y < 6; y += 2) m.set(0, y, 4, 'gold');
     },
   }),
+  bust('l_rome', {
+    robe: 'white',
+    skin: 'skin',
+    hair: 'hair',
+    extra: (m) => {
+      // A laurel wreath round short hair; a toga, its purple border across the chest.
+      m.box([-6, 17, -6], [6, 18, 6], 'cypress');
+      for (const x of [-6, -4, 3, 5]) m.set(x, 18, 4, 'green');
+      m.box([-6, 18, -5], [-5, 19, 2], 'green').box([5, 18, -5], [6, 19, 2], 'green');
+      for (let y = 0; y < 7; y++) m.box([-8 + y * 2, y, 4], [-6 + y * 2, y + 1, 5], 'purple');
+    },
+  }),
+  bust('l_greece', {
+    robe: 'bronze',
+    skin: 'skin',
+    hair: 'hair',
+    extra: (m) => {
+      // Young and beardless, his hair swept up from the brow under a gold diadem; a bronze cuirass, a red cloak at the shoulders.
+      m.box([-2, 19, 4], [2, 21, 6], 'hair').box([-1, 21, 3], [1, 22, 5], 'hair');
+      m.box([-6, 17, -6], [6, 18, 6], 'gold');
+      m.box([-10, 3, -5], [-7, 8, 2], 'red').box([7, 3, -5], [10, 8, 2], 'red').box([-9, 0, -5], [9, 6, -4], 'red');
+      m.box([-3, 2, 4], [3, 5, 5], 'gold').set(0, 3, 5, 'redDark');
+    },
+  }),
+  bust('l_japan', {
+    robe: 'black',
+    skin: 'skin3',
+    hair: 'black',
+    extra: (m) => {
+      // The crown shaved, a topknot laid along it; a thin moustache; a kamishimo's stiff shoulders and a white crest on the chest.
+      m.box([-3, 19, -3], [3, 20, 5], 'skin3');
+      m.box([-1, 20, -4], [1, 21, 3], 'black');
+      m.box([-3, 11, 5], [3, 12, 6], 'black');
+      m.box([-13, 6, -3], [-9, 8, 3], 'black').box([9, 6, -3], [13, 8, 3], 'black');
+      m.box([-9, 7, -3], [-7, 8, 3], 'black').box([7, 7, -3], [9, 8, 3], 'black');
+      m.box([-1, 2, 4], [1, 4, 5], 'white');
+      m.box([-3, 0, 4], [3, 1, 5], 'greyDark');
+    },
+  }),
+  bust('l_england', {
+    robe: 'crimson',
+    skin: 'skin3',
+    hair: 'orange',
+    extra: (m) => {
+      // Red hair curled high under a small jewelled crown; a great white ruff; pearls down the gown.
+      m.box([-5, 20, -4], [5, 22, 4], 'orange');
+      m.box([-3, 22, -2], [3, 24, 2], 'gold').set(-1, 24, 0, 'white').set(1, 24, 0, 'white');
+      m.box([-1, 22, 2], [1, 23, 3], 'red');
+      m.box([-9, 7, -4], [9, 9, 5], 'white').box([-8, 9, -4], [-5, 12, 0], 'white').box([5, 9, -4], [8, 12, 0], 'white');
+      for (let y = 0; y < 7; y += 2) m.set(-1, y, 4, 'white').set(1, y, 4, 'white');
+      m.box([-3, 1, 4], [3, 6, 5], 'gold').box([-2, 2, 4], [2, 5, 5], 'crimson');
+    },
+  }),
+  bust('l_mongolia', {
+    robe: 'blueDark',
+    skin: 'skin3',
+    hair: 'black',
+    brow: 'black',
+    extra: (m) => {
+      // A fur-brimmed hat rising to a gold point; a long moustache falling past the chin and a thin beard; a deel tied with a gold sash.
+      m.box([-6, 18, -6], [6, 20, 6], 'leatherDark');
+      m.box([-4, 20, -4], [4, 23, 4], 'redDark').box([-2, 23, -2], [2, 25, 2], 'gold').box([-1, 25, -1], [1, 26, 1], 'gold');
+      m.box([-3, 11, 5], [3, 12, 6], 'black').box([-4, 8, 5], [-3, 11, 6], 'black').box([3, 8, 5], [4, 11, 6], 'black');
+      m.box([-1, 7, 5], [1, 9, 6], 'black');
+      m.box([-9, 2, -4], [9, 3, 5], 'sash');
+      for (let y = 3; y < 7; y++) m.box([2 - y, y, 4], [4 - y, y + 1, 5], 'blue');
+    },
+  }),
+  bust('l_ottomans', {
+    robe: 'teal',
+    skin: 'skin',
+    beard: 'black',
+    hair: 'black',
+    extra: (m) => {
+      // A great tall turban round a red cap, a jewel and a plume at its front; a kaftan with a fur collar.
+      m.box([-7, 17, -7], [7, 22, 7], 'white').box([-6, 22, -6], [6, 27, 6], 'white').box([-4, 27, -4], [4, 29, 4], 'white');
+      m.box([-2, 29, -2], [2, 30, 2], 'red');
+      m.box([-1, 21, 7], [1, 23, 8], 'jade').box([0, 23, 6], [1, 30, 7], 'feather3');
+      m.box([-9, 5, -4], [-4, 8, 5], 'leather').box([4, 5, -4], [9, 8, 5], 'leather');
+      for (let y = 0; y < 5; y++) m.set(0, y, 4, 'gold');
+    },
+  }),
+  bust('l_zulu', {
+    robe: 'skin4',
+    skin: 'skin4',
+    nose: 'horseDark',
+    hair: 'black',
+    extra: (m) => {
+      // A leopard-skin headband with a crane's feather upright; ear plugs; a leopard pelt over the shoulders.
+      m.box([-6, 16, -6], [6, 18, 6], 'sand');
+      for (const [x, z] of [[-6, 2], [-4, 5], [-1, 5], [2, 5], [5, 3], [5, -2], [-6, -3]]) m.set(x, 16 + (x & 1), z, 'black');
+      m.box([-1, 18, -5], [1, 27, -4], 'white').box([-1, 27, -5], [1, 28, -4], 'black');
+      m.box([-7, 11, -1], [-6, 13, 1], 'white').box([6, 11, -1], [7, 13, 1], 'white');
+      m.box([-9, 4, -4], [9, 8, 5], 'sand');
+      for (const [x, y] of [[-8, 5], [-5, 7], [-2, 5], [1, 6], [4, 4], [7, 6], [-6, 4], [6, 7]]) m.set(x, y, 4, 'black');
+    },
+  }),
+  bust('l_inca', {
+    robe: 'ochre',
+    skin: 'skin2',
+    nose: 'skin4',
+    hair: 'black',
+    extra: (m) => {
+      // The royal fringe of red wool hanging on the brow from a woven band, feathers above; gold ear spools; a tunic of squares.
+      m.box([-6, 17, -6], [6, 19, 6], 'gold').box([-6, 18, -6], [6, 19, 6], 'redDark');
+      m.box([-3, 15, 5], [3, 17, 6], 'red');
+      m.box([-2, 19, -2], [-1, 25, -1], 'feather').box([1, 19, -2], [2, 25, -1], 'feather').box([-1, 19, -2], [1, 23, -1], 'white');
+      m.box([-7, 11, -1], [-6, 14, 2], 'gold').box([6, 11, -1], [7, 14, 2], 'gold');
+      for (let y = 0; y < 6; y += 2) for (let x = -8; x < 8; x += 2) m.box([x, y, 4], [x + 1, y + 1, 5], (x + y) % 4 ? 'gold' : 'redDark');
+    },
+  }),
 ];
 
 /** The leaders' pictures, each in three moods. */

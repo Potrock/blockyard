@@ -69,6 +69,8 @@ export function stepCost(game: Game, u: Unit, a: number, b: number): number {
   if (from.road && to.road && !from.pillaged && !to.pillaged) return from.road === 'rail' && to.road === 'rail' ? RAIL_MOVE : knows(game.players[u.owner], 'machinery') ? ROAD_MOVE * 0.75 : ROAD_MOVE;
   if (forestPath(game, u.owner, a) && forestPath(game, u.owner, b)) return ROAD_MOVE;
   if (type.abilities?.includes('ignore_terrain')) return 1;
+  // The Inca: a hill (whatever grows on it) is a single move.
+  if (to.elevation === 'hills' && (civOf(game.players[u.owner]).ability.effects.special?.includes('andean_roads') ?? false)) return 1;
   let cost = to.elevation === 'hills' ? HILLS.move : TERRAINS[to.terrain].move;
   if (to.feature) cost = Math.max(cost, FEATURES[to.feature].move);
   // Crossing into a river tile from outside it costs all moves without a bridge (Construction).

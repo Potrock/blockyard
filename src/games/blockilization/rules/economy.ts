@@ -183,6 +183,8 @@ export function tileYields(game: Game, t: number, p: Player | null): Yields {
   }
   if (tile.river) y = addYields(y, { gold: 1 });
   y = addYields(y, aroundYields(game, t));
+  // (The rich soil an eruption or a flood has left: `disasters.ts`.)
+  y = addYields(y, tile.soil);
   for (const k of YIELD_KEYS) if ((y[k] ?? 0) < 0) y[k] = 0;
   return y;
 }
@@ -653,12 +655,24 @@ export function goldUpkeep(game: Game, p: Player): { buildings: number; units: n
   for (const c of citiesOf(game, p.index)) for (const b of c.buildings) buildings += BUILDINGS[b]?.upkeep ?? 0;
   // Oligarchy: garrisons are free.
   const garrisonsFree = has(civ, 'garrison_free');
-  const military = unitsOf(game, p.index).filter((u) => !['settler', 'worker', 'work_boat'].includes(u.type) && !isGreatPerson(u.type) && !(garrisonsFree && isMilitary(UNITS[u.type]) && game.cities.some((c) => c.tile === u.tile && c.owner === p.index))).length;
+  // The Ottomans' warships count a third, the Zulu's melee units (gunpowder ones too) a half.
+  const [ships, melee] = [has(civ, 'naval_upkeep_third'), has(civ, 'melee_upkeep_half')];
+  const share = (type: string) => {
+    const u = UNITS[type];
+    if (ships && u?.domain === 'sea' && isMilitary(u)) return 1 / 3;
+    if (melee && (u?.class === 'melee' || u?.class === 'gun')) return 0.5;
+    return 1;
+  };
+  const military = unitsOf(game, p.index)
+    .filter((u) => !['settler', 'worker', 'work_boat'].includes(u.type) && !isGreatPerson(u.type) && !(garrisonsFree && isMilitary(UNITS[u.type]) && game.cities.some((c) => c.tile === u.tile && c.owner === p.index)))
+    .reduce((s, u) => s + share(u.type), 0);
   // Civ V's unit upkeep grows with the game: a few are free, the rest cost more as the game goes on
   // (by its turns at quick speed: 1 more each 120, each 180 at standard).
   const free = 3 + citiesOf(game, p.index).length;
   const units = Math.max(0, military - free) * (1 + (game.turn * SPEEDS.quick) / speed(game) / 120) * (inForce(game, 'standing_army_tax') ? 1.25 : 1);
-  const roads = game.tiles.filter((t) => t.owner === p.index && t.road && !game.cities.some((c) => game.tiles[c.tile] === t)).length * 0.5 * (has(civ, 'road_upkeep_less') ? 2 / 3 : 1);
+  // The Inca's roads: free on hills, half the upkeep elsewhere.
+  const andean = has(civ, 'andean_roads');
+  const roads = game.tiles.filter((t) => t.owner === p.index && t.road && !game.cities.some((c) => game.tiles[c.tile] === t)).reduce((s, t) => s + (!andean ? 1 : t.elevation === 'hills' ? 0 : 0.5), 0) * 0.5 * (has(civ, 'road_upkeep_less') ? 2 / 3 : 1);
   return { buildings: Math.floor(buildings), units: Math.floor(units * (1 - uCheaper / 100)), roads: Math.floor(roads) };
 }
 

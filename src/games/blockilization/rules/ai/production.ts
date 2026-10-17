@@ -1,6 +1,6 @@
 import { BUILDINGS, SPACESHIP_PARTS } from '../buildings';
 import { cityStrength } from '../combat';
-import { knows, random } from '../core';
+import { knows, random, speed } from '../core';
 import { isBuilding, purchaseCost, strategic, workable } from '../economy';
 import { canBuyReligious, cityReligion, faithBuildings, faithCost } from '../faith';
 import { canConstruct, canProduce, constructible, defaultBuild, faithPurchases, itemCost, placeFor, productionToward, seaWork, trainable } from '../game';
@@ -57,7 +57,7 @@ export interface Wants {
 
 /** The most cities a bot sets out to have: by its love of expansion and the map. */
 export function cityCap(ctx: Ctx): number {
-  const big = ctx.game.settings.size === 'large' ? 1 : ctx.game.settings.size === 'duel' ? -1 : 0;
+  const big = ctx.game.settings.size === 'large' || ctx.game.settings.size === 'huge' ? 1 : ctx.game.settings.size === 'duel' ? -1 : 0;
   return 3 + Math.round(ctx.pers.expansion * 0.55) + big;
 }
 
@@ -518,7 +518,7 @@ function upgrades(ctx: Ctx, reserve: number) {
     const nt = UNITS[next];
     if (!nt?.tech || !knows(p, nt.tech)) continue;
     if (nt.resource && (res[nt.resource]?.have ?? 0) - (res[nt.resource]?.used ?? 0) <= 0) continue;
-    const cost = Math.max(10, Math.floor((nt.cost - UNITS[u.type].cost) * 2 * (game.settings.speed === 'quick' ? 0.67 : 1)));
+    const cost = Math.max(10, Math.floor((nt.cost - UNITS[u.type].cost) * 2 * speed(game)));
     if (p.gold - cost < reserve) continue;
     act(ctx, { t: 'upgrade', unit: u.id });
   }
@@ -553,7 +553,7 @@ function buyTiles(ctx: Ctx, reserve: number) {
     for (const t of within(game.grid, c.tile, 3)) {
       const tile = game.tiles[t];
       if (tile.owner >= 0 || !tile.resource || RESOURCES[tile.resource].kind === 'bonus') continue;
-      const cost = Math.floor((50 + 5 * c.tilesBought) * Math.max(1, dist(ctx, c.tile, t) - 1) * (game.settings.speed === 'quick' ? 0.67 : 1));
+      const cost = Math.floor((50 + 5 * c.tilesBought) * Math.max(1, dist(ctx, c.tile, t) - 1) * speed(game));
       if (p.gold - cost < reserve + 60) continue;
       if (act(ctx, { t: 'buyTile', city: c.id, tile: t })) return;
     }

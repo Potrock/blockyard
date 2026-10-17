@@ -1,14 +1,17 @@
+import { earthDry, earthLand, earthLatitude, earthRidges, earthRivers, earthWet, TRUE_STARTS, tileOfLonLat } from './earth';
 import { distance, neighbour, neighbours, rowOf, colOf, within, type Grid } from './hex';
 import { fitsSite, NATURAL_WONDER_LIST, type NaturalWonder } from './nature';
 import type { MapType, Tile } from './state';
 import { FEATURES, RESOURCES, TERRAINS, type FeatureId, type TerrainId } from './terrain';
 
 /**
- * A new world: land and sea from layered noise (continents, one great landmass, scattered islands),
+ * A new world: land and sea from layered noise (continents, one great landmass, scattered islands,
+ * land round an inland sea, broken high country) or the Earth's own (`earth.ts`),
  * mountains and hills where the land rises, climate by latitude and rainfall (snow and tundra toward
  * the poles, desert where it's hot and dry), forests, jungles and marshes, rivers running from the high
  * ground to the sea, resources where each belongs, ancient ruins, hidden antiquity sites, starting places spread fairly,
- * and a few natural wonders where the land suits them. The same seed makes the same world.
+ * and a few natural wonders where the land suits them. The same seed makes the same world (and the
+ * Earth the same Earth, with its hills, forests and resources as the seed has them).
  */
 
 /** A small seeded generator (mulberry32): `next()` 0..1. */
@@ -83,21 +86,40 @@ export interface Generated {
   starts: number[];
 }
 
-/** Make a world. `players` + `cityStates` places to start are looked for. */
-export function generate(g: Grid, seed: number, type: MapType, players: number, cityStates: number): Generated {
+/**
+ * Make a world. `players` + `cityStates` places to start are looked for; on the Earth, given each
+ * start's civ (`trueStarts`, in the same order), each is where that civ really began, or as near as
+ * the land allows.
+ */
+export function generate(g: Grid, seed: number, type: MapType, players: number, cityStates: number, trueStarts?: string[]): Generated {
   const rng = new Rng(seed);
   const n = g.width * g.height;
+  const earth = type === 'earth';
   // --- Land and sea
-  const base = type === 'pangaea' ? Math.max(g.width, g.height) / 2.2 : type === 'archipelago' ? 4 : type === 'fractal' ? 6 : 9;
+  const base = type === 'pangaea' || type === 'inland_sea' ? Math.max(g.width, g.height) / 2.2 : type === 'archipelago' ? 4 : type === 'fractal' || type === 'highlands' || earth ? 6 : 9;
   const elev = fractal(g, rng, base, 5);
+  // The Earth: its own land, the noise only the lie of it (higher along the great ranges).
+  const earthShare = earth ? earthLand(g) : [];
+  if (earth) {
+    const ridges = earthRidges(g, (t) => neighbours(g, t));
+    for (let t = 0; t < n; t++) elev[t] = isEarthLand(g, earthShare, t) ? 0.35 + 0.35 * elev[t] + ridges[t] : 0.3 * elev[t];
+  }
   // Falloff toward the map's edges (and, for continents, a channel down the middle so there's more than one).
   // A world that wraps has no east and west edges: a pangaea has its ocean round it at a longitude of
   // its own (as a flat map's are at its edges, joined), continents two oceans half the world apart,
   // and fractal land and islands run on round it; north and south fall off to the poles as ever.
-  const meridian = g.wrap ? rng.next() : 0;
-  for (let t = 0; t < n; t++) {
+  // An inland sea: land all round a great sea in the middle (and a world that wraps, land on round
+  // its back), only the poles' edges sea.
+  const meridian = g.wrap && !earth ? rng.next() : 0;
+  for (let t = 0; !earth && t < n; t++) {
     const y = (rowOf(g, t) + 0.5) / g.height;
     const poles = Math.min(y * 1.4, (1 - y) * 1.4);
+    if (type === 'inland_sea') {
+      const x = g.wrap ? ((colOf(g, t) + 0.5) / g.width - meridian + 1.5) % 1 : (colOf(g, t) + 0.5) / g.width;
+      const d = Math.hypot((x - 0.5) / 0.32, (y - 0.5) / 0.36);
+      elev[t] = (0.35 * elev[t] + 0.65 * Math.min(1, Math.max(0, (d - 0.55) / 0.5))) * Math.min(1, poles * 14) * (g.wrap ? 1 : Math.min(1, Math.min(x, 1 - x) * 14));
+      continue;
+    }
     if (g.wrap) {
       const x = ((colOf(g, t) + 0.5) / g.width - meridian + 1) % 1;
       const ocean = type === 'pangaea' ? Math.min(x, 1 - x) : type === 'continents' ? 2 * Math.min(x, Math.abs(x - 0.5), 1 - x) : Infinity;
@@ -132,9 +154,9 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
       cellOf[t] = ds[0].i;
     }
   }
-  const landShare = type === 'archipelago' ? 0.3 : type === 'pangaea' ? 0.42 : 0.38;
+  const landShare = type === 'archipelago' ? 0.3 : type === 'pangaea' ? 0.42 : type === 'inland_sea' ? 0.6 : type === 'highlands' ? 0.52 : 0.38;
   const sea = quantile(elev, 1 - landShare);
-  const land = elev.map((e) => e > sea);
+  const land = earth ? earthShare.map((_, t) => isEarthLand(g, earthShare, t)) : elev.map((e) => e > sea);
   // A civ's cell whose main island is too small for three or four cities: the island grown into the
   // cell's highest ground beside it (never touching another cell's land) to `START_ISLAND` and a few.
   if (type === 'archipelago')
@@ -155,17 +177,25 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
         island.add(best);
       }
     }
-  const landVals = elev.filter((_, t) => land[t]);
-  const mountainAt = quantile(landVals, 0.93);
-  const hillAt = quantile(landVals, 0.78);
+  // Highlands: ridges of mountains with hills either side over nearly half the land (along the lines
+  // where a noise crosses its middle), the low ground in valleys between; elsewhere the highest land.
+  const highlands = type === 'highlands';
+  const rise = highlands ? fractal(g, rng, 5, 3).map((v) => 1 - Math.abs(2 * v - 1)) : elev;
+  const landVals = rise.filter((_, t) => land[t]);
+  const mountainAt = quantile(landVals, highlands ? 0.88 : 0.93);
+  const hillAt = quantile(landVals, highlands ? 0.5 : 0.78);
 
   // --- Climate
   const wet = fractal(g, rng, 6, 4);
   const warmth = fractal(g, rng, 8, 3);
   const tiles: Tile[] = [];
+  // 0 at the equator, 1 at the poles (the Earth's, by its real latitude).
+  const latOf = (t: number) => (earth ? earthLatitude(g, t) : Math.abs((rowOf(g, t) + 0.5) / g.height - 0.5) * 2);
+  // The Earth's rain: little in the deserts, most in the rainforests.
+  if (earth) for (let t = 0; t < n; t++) wet[t] = earthDry(g, t) ? 0.15 : earthWet(g, t) ? 0.8 : 0.2 + 0.5 * wet[t];
   for (let t = 0; t < n; t++) {
-    const lat = Math.abs((rowOf(g, t) + 0.5) / g.height - 0.5) * 2; // 0 at the equator, 1 at the poles
-    const temp = 1 - lat * 1.05 + (warmth[t] - 0.5) * 0.35;
+    const lat = latOf(t);
+    const temp = 1 - lat * 1.05 + (warmth[t] - 0.5) * (earth ? 0.15 : 0.35);
     if (!land[t]) {
       tiles.push({ terrain: 'ocean', elevation: 'flat', owner: -1, height: 0, ...(lat > 0.9 && rng.chance(0.6) ? { feature: 'ice' as FeatureId } : {}) });
       continue;
@@ -173,10 +203,10 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
     let terrain: TerrainId;
     if (temp < 0.12) terrain = 'snow';
     else if (temp < 0.28) terrain = 'tundra';
-    else if (temp > 0.72 && wet[t] < 0.42) terrain = 'desert';
+    else if ((temp > 0.72 && wet[t] < 0.42) || (earth && temp > 0.35 && earthDry(g, t))) terrain = 'desert';
     else if (wet[t] > 0.45) terrain = 'grassland';
     else terrain = 'plains';
-    const elevation = elev[t] > mountainAt ? 'mountain' : elev[t] > hillAt ? 'hills' : 'flat';
+    const elevation = rise[t] > mountainAt ? 'mountain' : rise[t] > hillAt ? 'hills' : 'flat';
     tiles.push({ terrain, elevation, owner: -1, height: 1 });
   }
   // Coast: sea next to land; lakes: small seas with no way out.
@@ -190,7 +220,7 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
   for (let t = 0; t < n; t++) {
     const tile = tiles[t];
     if (TERRAINS[tile.terrain].water || tile.elevation === 'mountain') continue;
-    const lat = Math.abs((rowOf(g, t) + 0.5) / g.height - 0.5) * 2;
+    const lat = latOf(t);
     const w = wet[t];
     if (tile.terrain === 'desert') {
       if (rng.chance(0.04) && tile.elevation === 'flat') tile.feature = 'oasis';
@@ -203,8 +233,9 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
     if (tile.feature === 'jungle') tile.terrain = 'plains';
   }
 
-  // --- Rivers: from high ground down to the sea or a lake.
-  const rivers = Math.round((g.width * g.height) / 140);
+  // --- Rivers: from high ground down to the sea or a lake (on the Earth, its great rivers and fewer others).
+  if (earth) for (const course of earthRivers(g)) for (const t of course) if (tiles[t].elevation !== 'mountain' && !TERRAINS[tiles[t].terrain].water) tiles[t].river = true;
+  const rivers = Math.round((g.width * g.height) / (earth ? 280 : 140));
   for (let i = 0; i < rivers; i++) {
     const springs = tiles.map((_, t) => t).filter((t) => tiles[t].elevation === 'hills' || (tiles[t].elevation === 'mountain' && neighbours(g, t).some((x) => tiles[x].elevation !== 'mountain')));
     if (!springs.length) break;
@@ -232,7 +263,8 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
   }
 
   // --- Starting places, then resources (a fair few near each start), ruins.
-  const starts = type === 'archipelago' ? pickIslandStarts(g, tiles, rng, players, cityStates, cellOf) : pickStarts(g, tiles, rng, players + cityStates);
+  let starts = type === 'archipelago' ? pickIslandStarts(g, tiles, rng, players, cityStates, cellOf) : pickStarts(g, tiles, rng, players + cityStates);
+  if (earth && trueStarts) starts = pickTrueStarts(g, tiles, trueStarts, starts);
   placeResources(g, tiles, rng, starts.slice(0, players));
   for (let t = 0; t < n; t++) {
     const tile = tiles[t];
@@ -252,6 +284,31 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
   placeNaturalWonders(g, tiles, rng, starts, players);
   strategicBalance(g, tiles, rng, starts.slice(0, players));
   return { tiles, starts };
+}
+
+/**
+ * The volcanoes (`disasters.ts`), set on a few of a new world's mountains after the rest of it is
+ * made (in a game with disasters), by a stream of random numbers of their own (so the map a seed made before is the same, but for them): mountains
+ * with land beside them for the ash to fall on, not by a start, and spread apart.
+ */
+export function placeVolcanoes(g: Grid, tiles: Tile[], seed: number, starts: number[]) {
+  const rng = new Rng((seed ^ 0x766f6c63) >>> 0);
+  const count = Math.max(2, Math.round((g.width * g.height) / 260));
+  const sites = tiles
+    .map((_, t) => t)
+    .filter((t) => {
+      const tile = tiles[t];
+      if (tile.elevation !== 'mountain' || tile.wonder || tile.feature === 'ice' || TERRAINS[tile.terrain].water) return false;
+      if (starts.some((s) => distance(g, s, t) <= 2)) return false;
+      return neighbours(g, t).filter((n) => !TERRAINS[tiles[n].terrain].water && tiles[n].elevation !== 'mountain' && !tiles[n].wonder).length >= 2;
+    });
+  const placed: number[] = [];
+  while (placed.length < count && sites.length) {
+    const t = sites.splice(Math.floor(rng.next() * sites.length), 1)[0];
+    if (placed.some((p) => distance(g, p, t) < 5)) continue;
+    tiles[t].volcano = true;
+    placed.push(t);
+  }
 }
 
 /**
@@ -412,6 +469,46 @@ function pickStarts(g: Grid, tiles: Tile[], rng: Rng, count: number): number[] {
     }
   }
   return starts;
+}
+
+/**
+ * The Earth's true starting places: each civ (and city-state) on the best ground within a few tiles
+ * of where it really began (`TRUE_STARTS`), nearer counting for more, four tiles at least from any
+ * start already placed; one that can't (or isn't from the Earth), a place of the usual ones
+ * (`fallback`) clear of those.
+ */
+function pickTrueStarts(g: Grid, tiles: Tile[], civs: string[], fallback: number[]): number[] {
+  const value = (t: number) => startValue(g, tiles, t);
+  const starts: number[] = [];
+  const clear = (t: number, gap: number) => starts.every((s) => distance(g, s, t) >= gap);
+  const left: number[] = [];
+  civs.forEach((civ, i) => {
+    const home = TRUE_STARTS[civ] ? tileOfLonLat(g, TRUE_STARTS[civ]) : -1;
+    // (Each tile further from home counts as much as a good deal of land: a start stays where it belongs.
+    // Where the old world is crowded, a start may be pushed out to six tiles; never nearer than four
+    // to another, as no others are: a first city moved a tile to better ground mustn't crowd out the next.)
+    const score = (t: number) => value(t) - 8 * distance(g, home, t);
+    const near = home < 0 ? [] : within(g, home, 6).filter((t) => Number.isFinite(value(t)) && clear(t, 4));
+    const best = near.sort((a, b) => score(b) - score(a))[0];
+    starts[i] = best ?? -1;
+    if (best === undefined) left.push(i);
+  });
+  for (const i of left) {
+    const t = fallback.find((x) => !starts.includes(x) && clear(x, 4)) ?? fallback.find((x) => !starts.includes(x) && clear(x, 3));
+    if (t !== undefined) starts[i] = t;
+  }
+  // (A place none could be found for, on a map too small: those after it go without, as `pickStarts`'s do.)
+  const end = starts.indexOf(-1);
+  return end < 0 ? starts : starts.slice(0, end);
+}
+
+/**
+ * Whether an Earth tile is land: two-fifths of it at least, or (so the islands a coarse map would lose,
+ * Japan, New Zealand, the Philippines, stay) a quarter, away from other land (so coasts don't grow).
+ */
+function isEarthLand(g: Grid, share: number[], t: number): boolean {
+  if (share[t] >= 0.4) return true;
+  return share[t] >= 0.25 && neighbours(g, t).every((x) => share[x] < 0.4);
 }
 
 /** The land an archipelago civ's island must have to start on: room for three or four cities. */

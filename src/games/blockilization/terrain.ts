@@ -253,7 +253,7 @@ export function terrainEdits(g: Grid, tiles: Tile[]): Edit[] {
       let h = 1;
       if (tile.elevation === 'hills') h = 1 + Math.round(2.6 * Math.pow(1 - d, 0.8) + hash(x, z) * 0.5);
       else if (tile.elevation === 'mountain') h = 1 + Math.round((tile.height + 1) * Math.pow(1 - d, 1.1) + hash(x, z) * 1.5);
-      const y = SEA_Y + h;
+      let y = SEA_Y + h;
       let cap = TOP[tile.terrain] ?? 'civ_grass';
       if (tile.elevation === 'mountain') cap = y >= SEA_Y + 6 ? 'civ_snow' : 'civ_rock';
       // Rock showing through on a hill's crown; old snow lying in patches on the tundra.
@@ -261,6 +261,17 @@ export function terrainEdits(g: Grid, tiles: Tile[]): Edit[] {
       else if (tile.terrain === 'tundra' && hash(x >> 1, z >> 1, 7) < 0.1) cap = 'civ_snow';
       if (tile.feature === 'floodplains') cap = 'civ_floodplain';
       if (tile.feature === 'marsh') cap = hash(x, z, 1) < 0.38 ? 'water' : 'civ_marsh';
+      // What the world has done to it (`rules/disasters.ts`, `rules/climate.ts`): dark rich soil where
+      // ash or silt has fallen; the sea standing in pools on land it's flooded; a volcano's crater
+      // glowing at its peak, its slopes ash.
+      else if (tile.flooded) cap = hash(x, z, 2) < 0.45 ? 'water' : 'civ_silt';
+      else if (tile.soil && tile.feature !== 'floodplains' && tile.elevation !== 'mountain') cap = 'civ_loam';
+      if (tile.volcano && tile.elevation === 'mountain') {
+        if (d < 0.2) {
+          y -= 1;
+          cap = 'civ_magma';
+        } else cap = y >= SEA_Y + 5 ? 'civ_ashrock' : 'civ_rock';
+      }
       land.set(key(x, z), { x, z, t, d, y, cap });
     }
   // Rivers: a channel two blocks wide through each river tile, a block down into the land, its banks
@@ -363,8 +374,8 @@ export function terrainEdits(g: Grid, tiles: Tile[]): Edit[] {
   return out;
 }
 
-/** Trees' blocks, and the ferns under a jungle's (a city's founding, or the woods cut down, clears them from a tile). */
-export const TREE_BLOCKS = new Set(['civ_trunk', 'civ_leaves', 'civ_pine', 'civ_jungle', 'civ_fern']);
+/** Trees' blocks (with their seasons' looks, `seasons.ts`), and the ferns under a jungle's (a city's founding, or the woods cut down, clears them from a tile). */
+export const TREE_BLOCKS = new Set(['civ_trunk', 'civ_leaves', 'civ_pine', 'civ_jungle', 'civ_fern', 'civ_leaves_autumn', 'civ_leaves_snow', 'civ_pine_snow']);
 
 /** The ground a tree can stand on at a column (its top), or undefined (none: off the land, in a river). */
 type Ground = (x: number, z: number) => number | undefined;
