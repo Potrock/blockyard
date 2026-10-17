@@ -232,7 +232,7 @@ type BadgeLook = 'lens' | 'worked' | 'idle';
 
 const badges = new Map<string, HTMLCanvasElement>();
 // (Made again once the type has come: any made before it are in a stand-in face.)
-document.fonts?.addEventListener('loadingdone', () => badges.clear());
+globalThis.document?.fonts?.addEventListener('loadingdone', () => badges.clear());
 
 /**
  * A tile's yields as a small picture, made once for each set of yields, size and look: each yield's

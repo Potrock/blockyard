@@ -7,7 +7,8 @@
  * reflections, the pixels drawn.)
  */
 
-const finger = matchMedia('(pointer: coarse)');
+// (Asked when first drawn, not when loaded: the module loads where there's no screen too, as the platform checks the game.)
+let finger: MediaQueryList | undefined;
 
 /** Whether this screen draws the world light. */
-export const light = () => finger.matches || Math.min(window.innerWidth, window.innerHeight) < 500;
+export const light = () => (finger ??= matchMedia('(pointer: coarse)')).matches || Math.min(window.innerWidth, window.innerHeight) < 500;
