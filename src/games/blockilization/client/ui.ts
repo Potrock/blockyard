@@ -691,6 +691,8 @@ function renderLobby(): El | null {
     // (-1: the dynamic timer, here only.)
     chips('Turn timer', [[0, 'None'], [-1, 'Dynamic'], [60, '1 min'], [90, '90 s'], [120, '2 min'], [180, '3 min'], [300, '5 min']] as [number, string][], s.dynamicTimer ? -1 : s.timer, (v) => lobby(v < 0 ? { a: 'settings', dynamicTimer: true } : { a: 'settings', timer: v, dynamicTimer: false })),
     s.dynamicTimer && h('div.lb-desc', {}, 'Each turn’s clock is set as it begins, Civilization VI’s way: longer as the eras pass and as the busiest player’s cities and units grow (from 30 seconds to 5 minutes).'),
+    chips('At war', [[1, 'Take turns'], [0, 'All at once']] as [number, string][], s.hybridTurns === false ? 0 : 1, (v) => lobby({ a: 'settings', hybridTurns: v === 1 })),
+    h('div.lb-desc', {}, s.hybridTurns === false ? 'Everyone plays at the same time, at war or not.' : 'People at war with each other take their turns one side at a time, Civilization V’s hybrid turns: everyone else plays at once.'),
     chips('Turns', TURN_CHOICES.map((n): [number, string] => [n, String(n)]), s.turnLimit, (v) => lobby({ a: 'settings', turnLimit: v })),
     chips('City-states', [[0, 'None'], [2, '2'], [4, '4'], [6, '6'], [8, '8'], [12, '12']] as [number, string][], s.cityStates, (v) => lobby({ a: 'settings', cityStates: v })),
     chips('Barbarians', [[1, 'On'], [0, 'Off']] as [number, string][], s.barbarians ? 1 : 0, (v) => lobby({ a: 'settings', barbarians: v === 1 })),
@@ -966,7 +968,7 @@ function renderCorner(now: number): El {
     // At war with another person: their side plays its segment, then (if yours is to come) yours.
     const w = sequenceWait(v)!;
     label = w.done ? 'Turn over' : 'Their turn';
-    sub = w.done ? `${w.names} ${w.names.includes(' and ') ? 'are' : 'is'} taking their turn` : `${w.names} first: at war, you take turns in order`;
+    sub = w.done ? `${w.names} ${w.names.includes(' and ') ? 'are' : 'is'} taking their turn` : `${w.names} first (at war: turns in order)`;
     cls = 'wait';
     glyph = 'war';
   } else if (s.ready) {
@@ -986,7 +988,12 @@ function renderCorner(now: number): El {
     sub = `${needOrders(idle)}${touchScreen() ? '' : ' (Space)'}`;
   }
   // (Your side's segment, with people at war taking turns in order: the others at war wait on you.)
-  if (!v.over && !v.spectator && !s.ready && sequenceMine(v) && v.sequence!.sides.length > 1) sub = sub ? `your move, then theirs · ${sub}` : 'your move: those at war with you wait';
+  const q = v.sequence;
+  if (!v.over && !v.spectator && !s.ready && q && sequenceMine(v) && q.sides.length > 1) {
+    // (A side at war with you still to move after yours, or every one of them done.)
+    const after = q.at < q.sides.length - 1;
+    sub = sub ? `${after ? 'your move, then theirs' : 'your move: theirs is done'} · ${sub}` : after ? 'your move: those at war with you wait' : 'your move: those at war have moved';
+  }
   const left = timerLeft(now);
   // (The clock first: the line may be cut short.)
   if (left !== null && !v.over) sub = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left${sub ? ` · ${sub}` : ''}`;
@@ -1114,6 +1121,11 @@ function buildOptions(t: number): { what: string; name: string; does: string }[]
   // (No road on the water: an embarked worker builds none, as the rules' `canBuild` has it.)
   if (!k.road && techs.has('the_wheel') && !TERRAINS[s.terrain].water) out.push({ what: 'road', name: 'Road', does: 'Faster moves, and a link from a city to your capital' });
   if (k.road === 'road' && techs.has('railroad')) out.push({ what: 'rail', name: 'Railroad', does: 'Much faster moves' });
+  // (Under fallout: only scrubbing it away, Civ V's; nothing's built or mended there till it's gone.)
+  if (s.feature === 'fallout') {
+    if (!cityAt(t)) out.push({ what: 'scrub_fallout', name: 'Scrub Fallout', does: 'Clean up the fallout: the tile yields again, stops hurting units on it, and can be improved' });
+    return out;
+  }
   if (k.pillaged) out.push({ what: 'repair', name: 'Repair', does: 'Mend what was pillaged here: its yields come back' });
   if (k.owner !== v.you || cityAt(t)) return out;
   for (const [id, imp] of Object.entries(IMPROVEMENTS) as [ImprovementId, (typeof IMPROVEMENTS)[ImprovementId]][]) {
@@ -1156,7 +1168,8 @@ function buildBlocked(t: number): { what: ImprovementId; name: string; why: stri
     const res = !!k.resource && tapsWith({ resource: k.resource, terrain: s.terrain }) === id;
     const place = !imp.on.includes('resource') && fitsLand(id, t);
     if (res || place) {
-      if (imp.tech && !techs.has(imp.tech)) out.push({ what: id, name: imp.name, why: `needs ${TECHS[imp.tech]?.name ?? imp.tech}` });
+      if (s.feature === 'fallout') out.push({ what: id, name: imp.name, why: 'scrub the Fallout first' });
+      else if (imp.tech && !techs.has(imp.tech)) out.push({ what: id, name: imp.name, why: `needs ${TECHS[imp.tech]?.name ?? imp.tech}` });
       else if (cleared(id, t)) out.push({ what: id, name: imp.name, why: `clear the ${FEATURES[s.feature as FeatureId]?.name ?? 'forest'} first` });
     } else if (id === 'quarry' && s.elevation === 'hills') {
       const on = Object.values(RESOURCES).filter((r) => r.improvement === 'quarry').map((r) => r.name);
@@ -1181,7 +1194,7 @@ function seaBlocked(t: number): { what: ImprovementId; name: string; why: string
 
 export const BUILD_GLYPH: Record<string, string> = {
   road: 'trade', rail: 'rail', repair: 'hammer', farm: 'wheat', mine: 'pick', pasture: 'cattle', camp: 'deer', plantation: 'leaf', quarry: 'stone',
-  trading_post: 'gold', lumber_mill: 'hammer', fishing_boats: 'fish', oil_well: 'oil', offshore_platform: 'oil', fort: 'shield', remove_feature: 'axe',
+  trading_post: 'gold', lumber_mill: 'hammer', fishing_boats: 'fish', oil_well: 'oil', offshore_platform: 'oil', fort: 'shield', remove_feature: 'axe', scrub_fallout: 'drop',
 };
 
 /** The selected unit's card's line for where the mouse is (how many turns to get there), kept current every frame. */
@@ -2423,6 +2436,7 @@ function renderTip() {
         const p = store.view.players[u.owner];
         bits.push(line(unitGlyph(u.type), CIVS[p?.civ]?.color ?? '#fff', `${CIVS[p?.civ]?.adjective ?? p?.name ?? ''} ${UNITS[u.type]?.name} · ${u.hp} HP`));
       }
+    if (s.feature === 'fallout') bits.push(line('mushroom', '#b8d84a', `Fallout: yields next to nothing, ${FEATURES.fallout.hurts} damage a turn to units here; a worker scrubs it away`));
     if (k.ruin) bits.push(line('urn', '#f2c14e', 'Ancient ruins'));
     if (k.camp) bits.push(line('skull', '#ff8a7a', 'Barbarian camp (clear it for gold)'));
     const y = store.yields[t];

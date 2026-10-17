@@ -8,7 +8,7 @@ import { CIV_SYMBOL, glyphPaths } from '../client/icons';
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
 import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
-import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
+import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
 import { colOf, distance, line, neighbour, neighbours, tileAt, within } from '../rules/hex';
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
@@ -53,10 +53,13 @@ import { blank, city, techsTo, unit, war } from './world';
 import { liberation, LIBERATE_INFLUENCE } from '../rules/liberation';
 import { cannotPledge, pledged, PLEDGE_BROKEN, PLEDGE_REST } from '../rules/pledges';
 import { restingInfluence } from '../rules/citystates';
-import { conquests } from '../rules/ai/strategy';
-import { pledges as botPledges } from '../rules/ai/liberation';
-import { startProject, type WorldProject } from '../rules/projects';
-import { expectedTier, worldProject } from '../rules/ai/projects';
+import { conquests, wantsPeace } from '../rules/ai/strategy';
+import { forsakes, freeable, pledges as botPledges, turnsOn } from '../rules/ai/liberation';
+import { openProject, startProject, type WorldProject } from '../rules/projects';
+import { expectedTier, leavesProject, projectPlan, worldProject } from '../rules/ai/projects';
+import { bestNukeStrike, nukeProduction, nukes as fireNukes, nukesWanted, strikeWorth } from '../rules/ai/nukes';
+import { NUKE_INFLUENCE } from '../rules/diplomacy';
+import { bombInterceptChance } from '../rules/combat';
 
 /**
  * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
@@ -1890,7 +1893,7 @@ test('no caravan to train or buy with every trade route running or spoken for by
   ok(apply(game, 0, train).ok, 'one route free: a caravan');
 });
 
-test('the World Leader vote: a team’s delegates stand together, given to the one of them given most, more than two thirds needed of the delegates the world began with (half without teams); city-states with no ally abstain', () => {
+test('the World Leader vote: a team’s delegates stand together, given to the one of them given most, more than two thirds needed of the delegates the world began with (more than half without teams); city-states with no ally abstain', () => {
   const { game, at } = blank(['egypt', 'babylon', 'india', 'china'], { cityStates: 2 });
   game.players.forEach((p, i) => {
     if (i < 4) {
@@ -1910,10 +1913,10 @@ test('the World Leader vote: a team’s delegates stand together, given to the o
   game.players.find((x) => x.cityState)!.alive = false;
   eq(unVote(game, () => -1).needed, 7, 'a fallen civ’s and a fallen city-state’s delegates still among those needed');
   game.players.forEach((p) => delete p.team);
-  eq(unVote(game, () => -1).needed, 5, 'without teams, half of them');
+  eq(unVote(game, () => -1).needed, 6, 'without teams, more than half of them');
 });
 
-test('a World Leader: half the world’s delegates and more than anyone else (two at half each is neither)', () => {
+test('a World Leader: more than half the world’s delegates (half is not enough, even well ahead of anyone else)', () => {
   const { game, at } = blank(['egypt', 'babylon', 'india', 'china'], { cityStates: 2 });
   game.players.forEach((_, i) => i < 4 && city(game, i, at(3 + i * 6, 3)));
   const [egypt, babylon, india, china] = game.players;
@@ -1925,9 +1928,16 @@ test('a World Leader: half the world’s delegates and more than anyone else (tw
   // Egypt: the UN's four and both city-states; Babylon: its own two and India's and China's.
   (india as typeof india & { vote?: number }).vote = babylon.index;
   (china as typeof china & { vote?: number }).vote = babylon.index;
-  eq(unVote(game, toEgypt).needed, 6, 'half of twelve');
+  eq(unVote(game, toEgypt).needed, 7, 'more than half of twelve');
   longGameTurn(game, () => 0, toEgypt);
   ok(!game.over, 'six each: no World Leader');
+  delete (india as typeof india & { vote?: number }).vote;
+  delete (china as typeof china & { vote?: number }).vote;
+  game.turn = 110;
+  longGameTurn(game, () => 0, toEgypt);
+  ok(!game.over, 'six of twelve, against two each: still no World Leader');
+  (india as typeof india & { vote?: number }).vote = babylon.index;
+  game.turn = 120;
   (china as typeof china & { vote?: number }).vote = egypt.index;
   longGameTurn(game, () => 0, toEgypt);
   eq(game.over?.how, 'diplomatic', 'China’s two to Egypt: eight against four');
@@ -2344,21 +2354,21 @@ test('tourism: France’s art, hotels, Sacred Sites, Media Culture, The Internet
   const { game, at } = blank(['france', 'egypt']);
   const c = city(game, 0, at(5, 5), { buildings: ['museum'] });
   c.works = { museum: ['Art 1'] };
-  eq(cityTourism(game, c), 6, "france's art in the capital: 6");
+  eq(cityTourism(game, c), 4, "france's art in the capital: 4");
   c.works = { museum: ['Art 1', 'Art 2'] };
-  eq(cityTourism(game, c), 15, 'a full museum: themed, 3 more');
+  eq(cityTourism(game, c), 11, 'a full museum: themed, 3 more');
   c.works = { museum: ['Art 1'] };
   c.buildings.push('hotel');
-  eq(cityTourism(game, c), 9, 'a hotel: +50%');
+  eq(cityTourism(game, c), 6, 'a hotel: +50%');
   c.buildings.push('broadcast_tower');
   game.players[0].policies.push('media_culture');
-  near(cityTourism(game, c), 6 * 1.84, 'media culture with a broadcast tower');
+  near(cityTourism(game, c), 4 * 1.84, 'media culture with a broadcast tower');
   game.religions.r1 = { founder: 0, holyCity: c.id, name: 'One', beliefs: ['tithe', 'mosques', 'sacred_sites'] };
   game.players[0].religion = 'r1';
   c.buildings.push('mosque');
-  near(cityTourism(game, c), 8 * 1.84, 'sacred sites');
+  near(cityTourism(game, c), 6 * 1.84, 'sacred sites');
   game.players[0].techs.push('the_internet');
-  near(cityTourism(game, c), 8 * 2.34, 'the internet: +50%');
+  near(cityTourism(game, c), 6 * 2.34, 'the internet: +50%');
 });
 
 test('a revolution (Civ V’s): with enough dissent from a rival ideology, a civ may take it; its tenets lost, two fewer free, two turns of anarchy', () => {
@@ -4448,6 +4458,451 @@ test('teammates at war with people play their segment together; a side gone, or 
   game.players[1].alive = false;
   startSequence(game);
   eq(game.sequence, undefined, 'its enemy fallen: no order to keep');
+  game.players[1].alive = true;
+  game.settings.hybridTurns = false;
+  startSequence(game);
+  eq(game.sequence, undefined, 'turned off in the lobby: everyone plays at once, war or not');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Nuclear fallout
+// -------------------------------------------------------------------------------------------------
+
+test('fallout: a nuclear blast leaves it on a share of its land, burns its forests, and spares cities and the land beyond', () => {
+  const { game, at } = blank();
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(12, 5));
+  const area = within(game.grid, theirs.tile, 2);
+  for (const t of area) if (t !== theirs.tile) game.tiles[t].owner = 1;
+  const wood = area.filter((t) => t !== theirs.tile).slice(0, 6);
+  for (const t of wood) game.tiles[t].feature = 'forest';
+  const oasis = area.find((t) => t !== theirs.tile && !wood.includes(t))!;
+  game.tiles[oasis].feature = 'oasis';
+  const missile = unit(game, 'nuclear_missile', 0, home.tile);
+  war(game, 0, 1);
+  ok(apply(game, 0, { t: 'attack', unit: missile.id, target: theirs.tile }).ok, 'the strike');
+  const fallen = area.filter((t) => game.tiles[t].feature === 'fallout');
+  ok(fallen.length > 0 && fallen.length < area.length - 2, `fallout on some of the blast's land, not all (${fallen.length} of ${area.length})`);
+  ok(game.tiles[theirs.tile].feature !== 'fallout', 'none on the city');
+  eq(game.tiles[oasis].feature, 'oasis', 'an oasis keeps it off');
+  ok(wood.every((t) => game.tiles[t].feature !== 'forest'), 'the forests burnt away');
+  ok(game.tiles.every((tile, t) => tile.feature !== 'fallout' || area.includes(t)), 'none beyond the blast');
+});
+
+test('fallout: its tile yields next to nothing, nothing is built or mended under it, and it hurts units that end a turn there', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  techsTo(game, 0, 6);
+  city(game, 0, at(5, 5));
+  const t = at(6, 5);
+  game.tiles[t].owner = 0;
+  eq(tileYields(game, t, p).food, 2, 'grassland: 2 food');
+  Object.assign(game.tiles[t], { feature: 'fallout', improvement: 'farm', pillaged: true, river: true });
+  const y = tileYields(game, t, p);
+  eq((y.food ?? 0) + (y.prod ?? 0) + (y.gold ?? 0), 0, 'under fallout: no food, production or gold (a river’s gold too)');
+  game.tiles[t].pillaged = false;
+  ok((tileYields(game, t, p).food ?? 0) <= 1, 'next to nothing even with its farm standing (Civ V’s -3 food)');
+  const w = unit(game, 'worker', 0, t);
+  ok(!canBuild(game, w, 'repair'), 'no repairing under it');
+  game.tiles[t].improvement = undefined;
+  ok(!canBuild(game, w, 'farm') && !canBuild(game, w, 'trading_post'), 'nor improving');
+  ok(canBuild(game, w, 'road'), 'a road, though');
+  ok(canBuild(game, w, 'scrub_fallout'), 'and scrubbing it');
+  ok(!canBuild(game, { ...w, tile: at(7, 5) }, 'scrub_fallout'), 'no scrubbing where there is none');
+  const soldier = unit(game, 'warrior', 0, t);
+  endTurn(game);
+  eq(soldier.hp, 85, 'a unit on it loses 15 hit points at the turn’s end');
+  // (One that moved this turn, so it doesn't heal first.)
+  soldier.hp = 10;
+  soldier.moves = 0;
+  endTurn(game);
+  ok(!game.units.includes(soldier), 'and dies of it, weak enough');
+});
+
+test('fallout: a worker scrubs it away in its turns, and the tile yields again', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  techsTo(game, 0, 6);
+  city(game, 0, at(5, 5));
+  const t = at(6, 5);
+  Object.assign(game.tiles[t], { owner: 0, feature: 'fallout' });
+  const w = unit(game, 'worker', 0, t);
+  ok(apply(game, 0, { t: 'build', unit: w.id, what: 'scrub_fallout' }).ok, 'set to scrubbing');
+  const turns = workTurns(game, 'scrub_fallout');
+  ok(turns > 1, `it takes turns (${turns})`);
+  for (let i = 0; i < turns - 1; i++) endTurn(game);
+  eq(game.tiles[t].feature, 'fallout', 'still there a turn short');
+  endTurn(game);
+  eq(game.tiles[t].feature, undefined, 'gone');
+  ok(game.units.includes(w), 'the worker lived through it');
+  eq(tileYields(game, t, p).food, 2, 'its food back');
+  ok(canBuild(game, w, 'farm'), 'and it can be farmed');
+});
+
+test('fallout: a bot’s worker scrubs its own land first, and the advisor recommends it', () => {
+  const { game, at } = blank();
+  const me = game.players[0];
+  techsTo(game, 0, 4);
+  const home = city(game, 0, at(5, 5), { pop: 3 });
+  const t = neighbours(game.grid, home.tile)[0];
+  game.tiles[t].feature = 'fallout';
+  const worker = unit(game, 'worker', 0, t);
+  workers(makeCtx(game, me), [worker]);
+  eq(worker.work?.what, 'scrub_fallout', 'the bot’s worker sets to scrubbing');
+  worker.work = undefined;
+  me.bot = false;
+  const advice = adviseWork(game, me, worker);
+  eq(advice.tips[0]?.what, 'scrub_fallout', 'the advisor’s first tip');
+  eq(advice.tips[0]?.tile, t, 'on the fallout');
+  ok((advice.tips[0]?.gain.food ?? 0) > 0, 'its food back, it says');
+});
+
+test('a bot brings back a fallen civ with a city it took from their common enemy; a conqueror keeps the original capital, but gives back a lesser city', () => {
+  for (const aim of ['science', 'domination'] as const) {
+    const { game, at } = blank(['egypt', 'babylon', 'china'], { size: 'small' });
+    city(game, 0, at(3, 3));
+    city(game, 1, at(28, 3));
+    const beijing = city(game, 2, at(16, 12), { pop: 5 });
+    const town = city(game, 2, at(10, 16), { pop: 4 });
+    war(game, 1, 2);
+    storm(game, 1, town);
+    storm(game, 1, beijing);
+    ok(!game.players[2].alive, 'China is destroyed');
+    war(game, 0, 1);
+    storm(game, 0, beijing);
+    storm(game, 0, town);
+    const egypt = game.players[0];
+    egypt.ai = { aim, aimed: game.turn, wars: {}, orders: {} };
+    conquests(makeCtx(game, egypt));
+    ok(game.players[2].alive, `${aim}: China lives again`);
+    if (aim === 'science') eq(beijing.owner, 2, 'science: Beijing given back, against Babylon');
+    else {
+      eq(beijing.owner, 0, 'domination: Beijing, an original capital, kept');
+      eq(town.owner, 2, 'domination: the lesser city given back');
+    }
+    ok(relationsOf(game).events.some((e) => e.kind === 'liberate' && e.by === 0 && e.to === 2), 'China remembers it');
+  }
+});
+
+test('a bot gives a city-state back its small city, and a friend’s city it took back from their enemy is one it would go to war to free', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china'], { cityStates: 1, size: 'small' });
+  const cs = game.players.find((p) => p.cityState)!;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(16, 18));
+  const home = city(game, cs.index, at(16, 9), { pop: 3 });
+  const town = city(game, 2, at(22, 12), { pop: 4 });
+  war(game, 1, cs.index);
+  war(game, 1, 2);
+  storm(game, 1, home);
+  storm(game, 1, town);
+  const egypt = game.players[0];
+  egypt.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+  ok(!freeable(makeCtx(game, egypt), town), 'a stranger’s city: nothing to free');
+  egypt.diplomacy.friends[2] = game.players[2].diplomacy.friends[0] = 20;
+  ok(freeable(makeCtx(game, egypt), town), 'a friend’s, held by Babylon: one to free');
+  war(game, 0, 1);
+  storm(game, 0, home);
+  conquests(makeCtx(game, egypt));
+  ok(cs.alive && home.owner === cs.index, 'the city-state lives again');
+  eq(allyOf(game, cs.index), 0, 'Egypt its ally');
+});
+
+test('a warmonger whose interests change breaks its pledge to a city-state, and pays for it; a peaceful leader keeps it', () => {
+  for (const civ of ['china', 'india']) {
+    const { game, at } = blank([civ, 'babylon'], { cityStates: 1 });
+    const p = game.players[0];
+    const cs = game.players.find((x) => x.cityState)!;
+    city(game, 0, at(4, 4));
+    const home = city(game, cs.index, at(14, 9));
+    p.explored.fill(1);
+    p.influence[cs.index] = 35;
+    ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok, `${civ} pledges`);
+    p.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+    for (const t of neighbours(game.grid, home.tile).slice(0, 3)) unit(game, 'swordsman', 0, t);
+    eq(forsakes(makeCtx(game, p), cs.index), null, 'still its friend: the pledge holds');
+    // Its influence there has waned, and it's short of gold: the city-state's tribute is wanted.
+    p.influence[cs.index] = 10;
+    p.gold = 0;
+    const why = forsakes(makeCtx(game, p), cs.index);
+    civilians(makeCtx(game, p));
+    if (civ === 'india') {
+      eq(why, null, 'Gandhi never breaks his word');
+      ok(pledged(game, 0, cs.index), 'his pledge holds');
+      continue;
+    }
+    ok(!!why, `Wu Zetian would break it (${why})`);
+    ok(!pledged(game, 0, cs.index), 'she demands its tribute: the pledge is broken');
+    ok(p.gold > 0, 'its gold taken');
+    ok(p.influence[cs.index] <= 10 - PLEDGE_BROKEN - TRIBUTE_COST.gold, 'the influence lost, the pledge’s with the tribute’s');
+    p.influence[cs.index] = 35;
+    ok(/lately/.test(cannotPledge(game, p, cs.index) ?? ''), 'and no pledging again for a while');
+  }
+});
+
+test('a pledged city-state allied with a bot’s enemy, or at war with its friend, is forsaken; a warmonger pledges only to its allies', () => {
+  const { game, at } = blank(['aztec', 'babylon', 'egypt'], { cityStates: 1, size: 'small' });
+  const [aztec, babylon, egypt] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, 0, at(3, 3));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(3, 18));
+  city(game, cs.index, at(16, 10));
+  for (const p of [aztec, babylon, egypt]) p.explored.fill(1);
+  aztec.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+  aztec.influence[cs.index] = 40;
+  botPledges(makeCtx(game, aztec));
+  ok(!pledged(game, 0, cs.index), 'a friend only: Montezuma doesn’t pledge');
+  aztec.influence[cs.index] = 70;
+  botPledges(makeCtx(game, aztec));
+  ok(pledged(game, 0, cs.index), 'its ally: he pledges');
+  eq(forsakes(makeCtx(game, aztec), cs.index), null, 'and keeps it while it serves him');
+  // Babylon courts it away and goes to war with him.
+  babylon.influence[cs.index] = 90;
+  war(game, 0, 1);
+  ok(/enemy/.test(forsakes(makeCtx(game, aztec), cs.index) ?? ''), 'allied with his enemy: forsaken');
+  endWar(game, aztec, babylon);
+  babylon.influence[cs.index] = 0;
+  aztec.diplomacy.friends[2] = egypt.diplomacy.friends[0] = 20;
+  war(game, 2, cs.index);
+  ok(/friend/.test(forsakes(makeCtx(game, aztec), cs.index) ?? ''), 'at war with his friend: forsaken');
+});
+
+test('a bot goes for the tier of a World Congress project worth its cities: one city for bronze while it lacks it, moved on once it has it', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india'], { size: 'small' });
+  const [egypt] = game.players;
+  const homes = [0, 1, 2].map((i) => city(game, i, at(4 + i * 9, 4), { pop: 8 }));
+  const towns = [city(game, 0, at(4, 12), { pop: 6 }), city(game, 0, at(10, 16), { pop: 6 })];
+  game.congress = { host: 0, next: game.turn + 30, proposals: [], active: [] };
+  startProject(game, 'worlds_fair');
+  const x = openProject(game, 'worlds_fair')!;
+  // Babylon and India far ahead, their capitals building it: gold and silver are theirs.
+  x.put = { 1: Math.round(x.cost * 0.35), 2: Math.round(x.cost * 0.3) };
+  for (const c of homes.slice(1)) c.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  egypt.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+  let plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  eq(plan.tier, 'bronze', 'bronze is what it can reach');
+  eq(plan.cities.length, 1, 'one city for it');
+  const chosen = plan.cities[0];
+  eq(worldProject(makeCtx(game, egypt), chosen, 0)?.id, 'worlds_fair', 'that city builds it');
+  ok([homes[0], ...towns].filter((c) => c !== chosen).every((c) => worldProject(makeCtx(game, egypt), c, 0) === null), 'the others don’t');
+  chosen.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  ok(!leavesProject(makeCtx(game, egypt), chosen), 'it stays on it till it has its bronze');
+  x.put[0] = Math.ceil(x.cost / 20) + 5;
+  plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  eq(`${plan.tier} ${plan.cities.length}`, 'bronze 0', 'its bronze had: no more cities on it');
+  ok(leavesProject(makeCtx(game, egypt), chosen), 'the city moves on');
+  // Ahead of the others, it goes for gold with more of its cities.
+  x.put = { 0: Math.round(x.cost * 0.3), 1: Math.round(x.cost * 0.1), 2: Math.round(x.cost * 0.1) };
+  plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  eq(plan.tier, 'gold', 'gold in reach');
+  ok(plan.cities.length >= 1, 'cities on it for gold');
+  // The others have stopped: no reward till it's done, so it carries it to the end itself.
+  for (const c of homes.slice(1)) c.queue = [];
+  chosen.queue = [{ kind: 'project', id: 'worlds_fair' }];
+  plan = projectPlan(makeCtx(game, egypt), 'worlds_fair');
+  ok(plan.tier === 'gold' && plan.cities.length >= 1, 'the others stopped: it finishes it itself');
+});
+
+test('a warmonger at war with the ally of a city-state it pledged to protect, close by, turns on it: war, the pledge broken, kept up while its ally fights on', () => {
+  const { game, at } = blank(['china', 'babylon', 'egypt'], { cityStates: 1, size: 'small' });
+  const [china, babylon] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  city(game, 0, at(6, 6));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(3, 18));
+  city(game, cs.index, at(11, 8));
+  china.explored.fill(1);
+  china.ai = { aim: 'science', aimed: game.turn, wars: {}, orders: {} };
+  china.influence[cs.index] = 35;
+  ok(apply(game, 0, { t: 'pledge', target: cs.index }).ok, 'China pledges');
+  turnsOn(makeCtx(game, china));
+  ok(pledged(game, 0, cs.index) && !atWar(game, 0, cs.index), 'at peace with everyone: it keeps its pledge');
+  babylon.influence[cs.index] = 90;
+  war(game, 0, 1);
+  turnsOn(makeCtx(game, china));
+  ok(atWar(game, 0, cs.index), 'Babylon’s ally, at war with it: China declares war');
+  ok(!pledged(game, 0, cs.index), 'its pledge broken');
+  ok(!wantsPeace(makeCtx(game, china), cs.index), 'no peace while its ally fights on');
+  endWar(game, china, babylon);
+  ok(wantsPeace(makeCtx(game, china), cs.index), 'then peace');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Nuclear weapons: the world's memory, and the bots'
+// -------------------------------------------------------------------------------------------------
+
+test('a nuclear strike is remembered: by the civ it fell on most, its friends next, everyone who knew the striker, city-states too; and it fades slowly', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india', 'korea'], { cityStates: 1, size: 'small' });
+  const [egypt, babylon, india, korea] = game.players;
+  const cs = game.players.find((x) => x.cityState)!;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(4, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(14, 5), { pop: 8 });
+  city(game, 2, at(4, 18));
+  city(game, 3, at(30, 18));
+  city(game, cs.index, at(20, 14));
+  const missile = unit(game, 'nuclear_missile', 0, home.tile);
+  // (Who has met whom, set after the last look round.)
+  egypt.met = [1, 2, cs.index];
+  babylon.met = india.met = cs.met = [0];
+  korea.met = [];
+  // India is Babylon's friend; Korea has never met Egypt.
+  india.diplomacy.friends[1] = babylon.diplomacy.friends[2] = 30;
+  egypt.influence[cs.index] = 20;
+  egypt.bot = false;
+  war(game, 0, 1);
+  const before = { babylon: opinionOf(game, babylon, egypt).total, india: opinionOf(game, india, egypt).total, korea: opinionOf(game, korea, egypt).total };
+  ok(apply(game, 0, { t: 'attack', unit: missile.id, target: theirs.tile }).ok, 'the strike');
+  const events = relationsOf(game).events;
+  ok(events.some((e) => e.kind === 'nuke' && e.by === 0 && e.to === 1), 'Babylon remembers it fell on them');
+  ok(events.some((e) => e.kind === 'nukeSeen' && e.by === 0 && e.to === 2), 'India remembers it');
+  ok(!events.some((e) => e.by === 0 && e.to === 3), 'Korea, who never met Egypt, has nothing to remember');
+  const reason = (a: number, text: string) => opinionOf(game, game.players[a], egypt).reasons.find((r) => r.text === text)?.value ?? 0;
+  ok(reason(1, 'You used nuclear weapons on us') <= -25, `Babylon: on us (${reason(1, 'You used nuclear weapons on us')})`);
+  ok(reason(2, 'You used nuclear weapons on our friends') < 0, 'India: on our friends');
+  ok(reason(2, 'You have used nuclear weapons') < 0, 'India: used them at all');
+  const drop = { babylon: before.babylon - opinionOf(game, babylon, egypt).total, india: before.india - opinionOf(game, india, egypt).total, korea: before.korea - opinionOf(game, korea, egypt).total };
+  ok(drop.babylon > drop.india && drop.india > 10, `Babylon thinks worst of it, then India (${drop.babylon}, ${drop.india})`);
+  eq(drop.korea, 0, 'Korea is unmoved');
+  eq(egypt.influence[cs.index], 20 - NUKE_INFLUENCE, 'the city-state thinks less of Egypt');
+  ok(egypt.notes.some((n) => n.text.includes('nuclear weapon')), 'the striker is told the world will remember');
+  // Slow to fade: still felt a hundred turns on, past the memory of a war declared.
+  const fresh = reason(2, 'You have used nuclear weapons');
+  game.turn += 100;
+  diplomacyTurn(game);
+  const later = reason(2, 'You have used nuclear weapons');
+  ok(later < 0 && later > fresh, `fading, but still felt a hundred turns on (${fresh} then ${later})`);
+  ok(relationsOf(game).events.some((e) => e.kind === 'nukeSeen'), 'not forgotten yet');
+});
+
+test('a world note when a nuclear weapon is used, to every person', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india'], { size: 'small' });
+  const [egypt, babylon, india] = game.players;
+  for (const p of game.players) p.bot = false;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(4, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(14, 5));
+  city(game, 2, at(4, 18));
+  india.met = [0, 1];
+  war(game, 0, 1);
+  const bomb = unit(game, 'atomic_bomb', 0, home.tile);
+  ok(apply(game, 0, { t: 'attack', unit: bomb.id, target: theirs.tile }).ok, 'the strike');
+  ok(india.notes.some((n) => n.text === `${egypt.name} has used a nuclear weapon on ${babylon.name}!`), 'India hears of it');
+  ok(babylon.notes.some((n) => n.text.includes('used a nuclear weapon on you')), 'Babylon too');
+});
+
+test('an Atomic Bomb (not a missile) may be shot down by a fighter on patrol or an anti-aircraft gun near its target', () => {
+  ok(bombInterceptChance(65) > 0.4 && bombInterceptChance(1000) <= 0.75, 'a fair chance, never certain');
+  let downed = 0;
+  let missilesDowned = 0;
+  for (let i = 0; i < 30; i++) {
+    const { game, at } = blank();
+    techsTo(game, 0, 15);
+    techsTo(game, 1, 15);
+    game.rng = 1000 + i * 7919;
+    const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+    const theirs = city(game, 1, at(12, 5), { pop: 8 });
+    unit(game, 'mobile_sam', 1, neighbours(game.grid, theirs.tile)[0]);
+    war(game, 0, 1);
+    const bomb = unit(game, i % 2 ? 'nuclear_missile' : 'atomic_bomb', 0, home.tile);
+    ok(apply(game, 0, { t: 'attack', unit: bomb.id, target: theirs.tile }).ok, 'the strike is made');
+    ok(!game.units.includes(bomb), 'spent either way');
+    if (theirs.pop === 8) (i % 2 ? missilesDowned++ : downed++);
+  }
+  ok(downed > 0 && downed < 15, `some bombs downed (${downed} of 15)`);
+  eq(missilesDowned, 0, 'no missile downed');
+});
+
+test('a bot at war with the tech and Uranium raises the Manhattan Project and keeps a small stockpile; a peaceful one, only when losing badly', () => {
+  const { game, at } = blank(['aztec', 'babylon']);
+  const [aztec] = game.players;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(3, 5), { pop: 10 });
+  city(game, 1, at(20, 5));
+  Object.assign(game.tiles[at(4, 5)], { resource: 'uranium', amount: 4, improvement: 'mine', owner: 0 });
+  aztec.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+  eq(nukesWanted(makeCtx(game, aztec)), 0, 'at peace: none');
+  war(game, 0, 1);
+  const want = nukesWanted(makeCtx(game, aztec));
+  ok(want >= 2 && want <= 4, `at war, a warmonger aiming to conquer wants a few (${want})`);
+  home.buildings.push('manhattan_project');
+  eq(nukeProduction(makeCtx(game, aztec), home)?.id, 'nuclear_missile', 'it builds a missile');
+  for (let i = 0; i < want; i++) unit(game, 'nuclear_missile', 0, home.tile);
+  eq(nukeProduction(makeCtx(game, aztec), home), null, 'its stockpile full: no more');
+  const g2 = blank(['india', 'babylon']);
+  techsTo(g2.game, 0, 15);
+  city(g2.game, 0, g2.at(3, 5), { pop: 10, buildings: ['manhattan_project'] });
+  city(g2.game, 1, g2.at(20, 5));
+  Object.assign(g2.game.tiles[g2.at(4, 5)], { resource: 'uranium', amount: 4, improvement: 'mine', owner: 0 });
+  war(g2.game, 0, 1);
+  unit(g2.game, 'infantry', 0, g2.at(3, 5));
+  eq(nukesWanted(makeCtx(g2.game, g2.game.players[0])), 0, 'Gandhi, holding his own: none');
+  for (let i = 0; i < 4; i++) unit(g2.game, 'mechanized_infantry', 1, g2.at(20, 5 + (i % 2)));
+  ok(nukesWanted(makeCtx(g2.game, g2.game.players[0])) >= 1, 'Gandhi, losing badly: one');
+});
+
+test('a bot fires a nuclear weapon at a worthwhile target (a city ringed by an army), not an unworthy one, nor where its own or a neutral civ would be hit', () => {
+  const setup = (guards: number) => {
+    const { game, at } = blank(['aztec', 'babylon', 'india']);
+    const [aztec] = game.players;
+    techsTo(game, 0, 15);
+    const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+    const theirs = city(game, 1, at(14, 5), { pop: 10 });
+    city(game, 2, at(14, 16));
+    aztec.ai = { aim: 'domination', aimed: game.turn, wars: {}, orders: {} };
+    war(game, 0, 1);
+    const ring = [theirs.tile, ...neighbours(game.grid, theirs.tile)];
+    for (let i = 0; i < guards; i++) unit(game, 'infantry', 1, ring[i]);
+    // (An army of its own: it isn't losing.)
+    for (const t of neighbours(game.grid, home.tile).slice(0, 4)) unit(game, 'infantry', 0, t);
+    const missile = unit(game, 'nuclear_missile', 0, home.tile);
+    aztec.visible.fill(1);
+    aztec.explored.fill(1);
+    return { game, at, aztec, missile, theirs, ring };
+  };
+  // Worth it: a city of ten ringed by five infantry.
+  let w = setup(5);
+  ok(bestNukeStrike(makeCtx(w.game, w.aztec), w.missile) !== null, 'a strike worth making');
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(!w.game.units.includes(w.missile), 'it fires');
+  eq(w.theirs.pop, 5, 'the city halved');
+  // Not worth it: the city with one soldier.
+  w = setup(1);
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(w.game.units.includes(w.missile), 'one soldier: not worth the world’s anger');
+  eq(w.theirs.pop, 10, 'the city untouched');
+  // Its own unit in the blast: no.
+  w = setup(5);
+  const own = unit(w.game, 'infantry', 0, w.ring[6]);
+  w.aztec.visible.fill(1);
+  eq(strikeWorth(makeCtx(w.game, w.aztec), w.missile, w.theirs.tile), null, 'its own soldier would burn');
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(w.game.units.includes(w.missile) && own.hp === 100, 'so it holds fire');
+  // A neutral civ's unit in the blast: the rules would refuse, and it doesn't try.
+  w = setup(5);
+  unit(w.game, 'infantry', 2, w.ring[6]);
+  w.aztec.visible.fill(1);
+  eq(strikeWorth(makeCtx(w.game, w.aztec), w.missile, w.theirs.tile), null, 'India’s soldier is there');
+  fireNukes(makeCtx(w.game, w.aztec));
+  ok(w.game.units.includes(w.missile), 'so it holds fire (and makes no strike the rules would refuse)');
+});
+
+test('a peaceful leader holds fire where a warmonger would strike', () => {
+  const { game, at } = blank(['india', 'babylon']);
+  const [india] = game.players;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(14, 5), { pop: 10 });
+  war(game, 0, 1);
+  for (const t of [theirs.tile, ...neighbours(game.grid, theirs.tile)].slice(0, 5)) unit(game, 'infantry', 1, t);
+  for (const t of neighbours(game.grid, home.tile).slice(0, 4)) unit(game, 'infantry', 0, t);
+  const missile = unit(game, 'nuclear_missile', 0, home.tile);
+  india.visible.fill(1);
+  india.explored.fill(1);
+  fireNukes(makeCtx(game, india));
+  ok(game.units.includes(missile), 'Gandhi holds fire');
 });
 
 // -------------------------------------------------------------------------------------------------

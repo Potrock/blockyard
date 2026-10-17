@@ -13,6 +13,7 @@ import { cannotSendDiplomat, maxRoutes, routesOf, spiesOf, theft, unVote, type S
 import { isMilitary, UNITS } from '../units';
 import { act, civilianAt, cityOn, diplomaticRival, dist, goTo, militaryAt, questsAsked, type Ctx } from './context';
 import { bestBelief } from './civics';
+import { forsakes } from './liberation';
 import { isSoldier, threatTo } from './production';
 import { yieldsOf } from './value';
 
@@ -403,12 +404,17 @@ function electionBid(ctx: Ctx): boolean {
 
 /**
  * A warlike leader with soldiers by a city-state that outmatch it demands its gold (Civ V's bullying),
- * unless it courts the city-states (a diplomat, or allied with that one, or pledged to protect it), or the UN's votes count.
+ * unless it courts the city-states (a diplomat, or allied with that one), or the UN's votes count. One
+ * it pledged to protect it bullies only once it would break that pledge (`forsakes`), and pays for it.
  */
 function bully(ctx: Ctx) {
   const { game, p, mem } = ctx;
-  if (ctx.pers.offense < 7 || mem.aim === 'diplomatic' || game.wonders['united_nations'] !== undefined) return;
-  for (const cs of cityStates(game)) if (allyOf(game, cs.index) !== ctx.me && !pledged(game, ctx.me, cs.index) && !cannotBully(game, p, cs.index) && act(ctx, { t: 'tribute', target: cs.index, take: 'gold' })) return;
+  if (mem.aim === 'diplomatic' || game.wonders['united_nations'] !== undefined) return;
+  for (const cs of cityStates(game)) {
+    if (allyOf(game, cs.index) === ctx.me) continue;
+    if (pledged(game, ctx.me, cs.index) ? !forsakes(ctx, cs.index) : ctx.pers.offense < 7) continue;
+    if (!cannotBully(game, p, cs.index) && act(ctx, { t: 'tribute', target: cs.index, take: 'gold' })) return;
+  }
 }
 
 /** The gold a gift must be to win this much influence. */

@@ -1,6 +1,5 @@
 import { defineClient, type Client, type ClientKit } from '@platform/client';
-import { centre, period } from './geometry';
-import type { CityInfo, DealCheck, FightWire, LobbyView, MapWire, OrderResult, ReshapeWire, PreviewReply, ResearchAdvice, StatsInfo, View, WorkAdvice, FameEntry, DealHelp } from './protocol';
+import { centre, period, type CityInfo, type DealCheck, type FightWire, type LobbyView, type MapWire, type OrderResult, type ReshapeWire, type PreviewReply, type ResearchAdvice, type StatsInfo, type View, type WorkAdvice, type FameEntry, type DealHelp } from './client/wire';
 import { setAdvice } from './client/advice';
 import { cam, frameCamera } from './client/camera';
 import { drawFog, mountFog } from './client/fog';

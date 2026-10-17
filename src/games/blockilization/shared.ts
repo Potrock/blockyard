@@ -133,6 +133,9 @@ export const shared = defineShared({
     civ_fence: { texture: 'oak_planks', shape: 'fence', label: 'Fence' },
     civ_bush: { texture: { paint: bush('#d8642a') }, boxes: BUSH, solid: false, label: 'Plantation' },
     civ_cotton: { texture: { paint: bush('#f6f4ee') }, boxes: BUSH, solid: false, label: 'Cotton' },
+    // Nuclear fallout (`improvements.ts`): a sickly yellow-green crust, and its faintly glowing specks.
+    civ_fallout: { texture: { top: mottled(['#7c8a34', '#8e9a44', '#626c2c', '#a2a85a', '#5a5a4a'], 2), side: mottled(['#6e5434', '#77593a', '#684f30']), bottom: mottled(['#6e5434', '#77593a', '#684f30']) }, label: 'Fallout' },
+    civ_fallout_glow: { texture: mottled(['#b8ff4a', '#8ae83a', '#d8ff7a'], 2), boxes: [[2, 0, 3, 4, 1, 5], [9, 0, 10, 11, 1, 12], [12, 0, 4, 14, 2, 6], [5, 0, 11, 6, 1, 12]], solid: false, light: 6, glow: 0.8, label: 'Fallout' },
     civ_embers: { texture: mottled(['#ff8a2a', '#e8541a', '#ffb43a', '#8a2a14'], 2), boxes: [[3, 0, 3, 13, 3, 13]], solid: false, light: 10, glow: 0.9, label: 'Campfire' },
     civ_girder: { texture: mottled(['#3a3c40', '#46494e', '#2e3034']), shape: 'post', label: 'Derrick' },
     // The natural wonders' landmarks (`landmarks.ts`).

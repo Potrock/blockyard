@@ -8,8 +8,8 @@ import { isProject as isWorldProject, PROJECT_IDS, PROJECTS, type ProjectId } fr
 import { PROJECT_LOOK } from './congress';
 import { BELIEF_LIST, BELIEFS } from '../rules/religion';
 import { SPEEDS } from '../rules/state';
-import { baseTechCost, ERA_NAMES, ERAS, eraOfCol, TECH_LIST, TECHS, type Era } from '../rules/techs';
-import { FEATURES, HILLS, IMPROVEMENTS, MOUNTAIN, RESOURCES, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId, type TerrainId, type Yields } from '../rules/terrain';
+import { baseTechCost, ERA_NAMES, ERAS, eraOfCol, TECH_LIST, TECHS, type Era, type Tech } from '../rules/techs';
+import { FALLOUT, FEATURES, HILLS, IMPROVEMENTS, MOUNTAIN, RESOURCES, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId, type TerrainId, type Yields } from '../rules/terrain';
 import { UNIT_LIST, UNITS, type UnitType } from '../rules/units';
 import { centre } from '../geometry';
 import { lookAt } from './camera';
@@ -61,8 +61,8 @@ interface Entry {
 }
 
 const TERRAIN_COLOR: Record<string, string> = { grassland: '#4a8a2a', plains: '#9a8a3a', desert: '#c8a85a', tundra: '#6a7a6a', snow: '#a8b8c8', coast: '#3a7ab0', ocean: '#1e4a7a', lake: '#3a8ac0', hills: '#7a6a4a', mountain: '#6a6a72' };
-const FEATURE_GLYPH: Record<FeatureId, string> = { forest: 'pine', jungle: 'leaf', marsh: 'drop', oasis: 'drop', floodplains: 'wheat', ice: 'snowflake', atoll: 'anchor' };
-const FEATURE_COLOR: Record<FeatureId, string> = { forest: '#2a6a3a', jungle: '#2a7a4a', marsh: '#4a6a5a', oasis: '#3a9a8a', floodplains: '#8a8a3a', ice: '#8aa8c8', atoll: '#3a8aa0' };
+const FEATURE_GLYPH: Record<FeatureId, string> = { forest: 'pine', jungle: 'leaf', marsh: 'drop', oasis: 'drop', floodplains: 'wheat', ice: 'snowflake', atoll: 'anchor', fallout: 'mushroom' };
+const FEATURE_COLOR: Record<FeatureId, string> = { forest: '#2a6a3a', jungle: '#2a7a4a', marsh: '#4a6a5a', oasis: '#3a9a8a', floodplains: '#8a8a3a', ice: '#8aa8c8', atoll: '#3a8aa0', fallout: '#7a8a2a' };
 const BELIEF_COLOR: Record<string, string> = { pantheon: '#8a7a4a', founder: '#b8892a', follower: '#3a7ac0', enhancer: '#7a5aa8', reformation: '#3f8f6f' };
 const BELIEF_KIND: Record<string, string> = { pantheon: 'Pantheon beliefs', founder: 'Founder beliefs', follower: 'Follower beliefs', enhancer: 'Enhancer beliefs', reformation: 'Reformation beliefs' };
 const YIELD_NAME: Record<string, string> = { food: 'food', prod: 'production', gold: 'gold', science: 'science', culture: 'culture', faith: 'faith' };
@@ -369,6 +369,12 @@ function cost(n: number): number {
   return speed ? Math.max(1, Math.floor(n * SPEEDS[speed])) : n;
 }
 
+/** A tech's cost at this game's speed (or the standard one), for a civ of one city (rounded, as the rules' `techCost`). */
+function techCostShown(t: Tech): number {
+  const speed = store.lobby?.settings.speed;
+  return Math.round(baseTechCost(t) * (speed ? SPEEDS[speed] : 1));
+}
+
 /** A worker's turns at the game's speed (rounded, as the rules' `workTurns`). */
 function workTime(n: number): number {
   const speed = store.lobby?.settings.speed;
@@ -498,7 +504,7 @@ function techPage(id: string): Page {
   const t = TECHS[id];
   const s = store.view?.self;
   const known = s?.techs.includes(id);
-  const facts: Fact[] = [['science', YIELD_COLOR.science, 'Cost', `${s?.techCosts[id] ?? cost(baseTechCost(t))} science`]];
+  const facts: Fact[] = [['science', YIELD_COLOR.science, 'Cost', `${s?.techCosts[id] ?? techCostShown(t)} science`]];
   facts.push(['turn', ERA_COLOR[techEra(id)], 'Era', ERA_NAMES[eraOfCol(t.col)]]);
   if (s) facts.push(known ? ['check', '#6fd27a', 'Status', 'Known'] : s.researching === id ? ['science', '#f2c14e', 'Status', 'Researching now'] : ['lock', '#8fa1b3', 'Status', 'Not yet known']);
   const body: El[] = [];
@@ -599,6 +605,10 @@ function terrainPage(id: string): Page {
     const f = FEATURES[id as FeatureId];
     if (f.replace) body.push(rich('It takes the place of the terrain’s yields.'));
     if (f.removable) body.push(rich(`Workers can clear it with [[tech:${f.removable.tech}]]${f.removable.prod ? `, which brings ${f.removable.prod} production to the nearest city` : ''}.`));
+    if (id === 'fallout') {
+      body.push(rich(`Left by a nuclear blast ([[unit:atomic_bomb|Atomic Bomb]], [[unit:nuclear_missile|Nuclear Missile]]) on about ${Math.round(FALLOUT.chance * 100)}% of the land it strikes, burning away forest, jungle and marsh. Its tile yields next to nothing while it lies there.`));
+      body.push(rich(`A unit ending its turn in it loses ${f.hurts} hit points. Nothing can be built or repaired under it (roads aside): [[unit:worker|Workers]] scrub it away in ${FALLOUT.scrubTurns} turns at standard speed.`));
+    }
   }
   if ((TERRAINS[id as TerrainId] as { water?: boolean } | undefined)?.water) body.push(rich('Water: worked from the coast, crossed by ships and embarked units.'));
   const found = Object.entries(RESOURCES)

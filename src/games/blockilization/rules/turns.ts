@@ -21,6 +21,8 @@ const person = (p: Player) => p.alive && !p.bot && !p.cityState && p.civ !== 'ba
 
 /** The people at war with another person now. */
 export function warringPeople(game: Game): number[] {
+  // (Turned off in the lobby: everyone plays at once, war or not.)
+  if (game.settings.hybridTurns === false) return [];
   const people = game.players.filter(person);
   return people.filter((p) => people.some((o) => atWar(game, p.index, o.index))).map((p) => p.index);
 }

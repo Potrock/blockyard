@@ -227,6 +227,7 @@ export function renderMenu(): El {
               h('span', {}, `${SPEED_NAMES[s.speed]} speed`),
               h('span', {}, `${s.turnLimit} turns`),
               h('span', {}, s.dynamicTimer ? 'Dynamic turn timer' : s.timer ? `${s.timer / 60} min turns` : 'No turn timer'),
+              h('span', {}, s.hybridTurns === false ? 'Wars played all at once' : 'People at war take turns'),
               h('span', {}, `${s.cityStates || 'No'} city-states`),
               h('span', {}, s.barbarians ? 'Barbarians' : 'No barbarians'),
               h('span', {}, s.disasters ? 'Disasters' : 'No disasters'),

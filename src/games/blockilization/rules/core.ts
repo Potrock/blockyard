@@ -11,7 +11,7 @@ import { beliefEffects } from './religion';
 import { MAP_SIZES, SPEEDS, type City, type Game, type Note, type Player, type Settings, type Unit } from './state';
 import { RESOURCES, TERRAINS } from './terrain';
 import { bindTeams, teamOf } from './teams';
-import { TECHS } from './techs';
+import { baseTechCost, TECHS } from './techs';
 import { UNITS } from './units';
 
 /**
@@ -401,15 +401,13 @@ export function updateAllVisibility(game: Game) {
   for (const p of game.players) if (!done.has(p)) for (const m of updateVisibility(game, p)) done.add(m);
 }
 
-/** Tech cost for a player: the column's, at the game's speed, 5% more for each city past the first (Civ V's). */
+/** Tech cost for a player: the tech's (`baseTechCost`), at the game's speed, 5% more for each city past the first (Civ V's). */
 export function techCost(game: Game, p: Player, id: string): number {
   const t = TECHS[id];
   if (!t) return Infinity;
-  const base = [20, 35, 55, 85, 175, 275, 485, 780, 1150, 1600, 2350, 3100, 4100, 5100, 5800, 6400, 7700, 8800, 9500][Math.min(t.col, 18)];
   // A team researches together (`shareResearch`): its cities all count, and each civ past the first adds half again.
   const team = p.team === undefined ? [p] : teamOf(game, p.index);
   const cities = team.reduce((n, m) => n + citiesOf(game, m.index).length, 0);
   const members = 1 + 0.5 * (team.length - 1);
-  // Our maps are a quarter the size of Civ V's, with fewer cities to research with: techs cost less (late ones much less).
-  return Math.round(base * Math.max(0.12, 0.6 - 0.035 * t.col) * speed(game) * (1 + 0.05 * Math.max(0, cities - 1)) * members * (id === 'future_tech' ? 1 + p.futureTechs * 0.1 : 1));
+  return Math.round(baseTechCost(t) * speed(game) * (1 + 0.05 * Math.max(0, cities - 1)) * members * (id === 'future_tech' ? 1 + p.futureTechs * 0.1 : 1));
 }

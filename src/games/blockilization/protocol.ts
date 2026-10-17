@@ -58,7 +58,7 @@ export interface LobbyView {
 
 export type LobbyAction =
   | { a: 'civ'; civ: string }
-  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; barbarians?: boolean; wrap?: boolean; trueStarts?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty; disasters?: boolean }
+  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; hybridTurns?: boolean; barbarians?: boolean; wrap?: boolean; trueStarts?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty; disasters?: boolean }
   | { a: 'bots'; count: number }
   | { a: 'victories'; victories: Partial<Settings['victories']> }
   | { a: 'seed'; seed: number | null }
@@ -568,7 +568,7 @@ export interface FightWire {
 
 const TERRAIN_CODES = ['grassland', 'plains', 'desert', 'tundra', 'snow', 'coast', 'ocean', 'lake'] as const;
 const ELEVATION_CODES = ['flat', 'hills', 'mountain'] as const;
-const FEATURE_CODES = ['', 'forest', 'jungle', 'marsh', 'oasis', 'floodplains', 'ice', 'atoll'] as const;
+const FEATURE_CODES = ['', 'forest', 'jungle', 'marsh', 'oasis', 'floodplains', 'ice', 'atoll', 'fallout'] as const;
 
 /** A tile's marks, a bit each (a sixth character, left off when it has none): a volcano, rich soil, flooded by the sea. */
 const VOLCANO = 1;

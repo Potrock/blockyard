@@ -70,6 +70,7 @@ export function buildName(what: BuildWhat, t: number): string {
   if (what === 'road') return 'Road';
   if (what === 'rail') return 'Railroad';
   if (what === 'repair') return 'Repair';
+  if (what === 'scrub_fallout') return 'Scrub Fallout';
   if (what === 'remove_feature') {
     const f = store.terrain[t]?.feature;
     return f ? `Clear the ${FEATURES[f].name}` : 'Clear the land';

@@ -14,7 +14,8 @@ import { armyNear, armyReady } from './military';
 import { nearVictory, opinionOf, stanceOf, WARMONGER } from './opinion';
 import { armyNeed, cityCap, isSoldier, wants } from './production';
 import { aimLeaning } from './personality';
-import { liberates } from './liberation';
+import { forsakes, freeable, liberates } from './liberation';
+import { pledged } from '../pledges';
 
 /**
  * A bot's grand strategy: the victory it works toward (by its leader's character, then by how the
@@ -95,7 +96,8 @@ export function wantsPeace(ctx: Ctx, them: number): boolean {
   const other = game.players[them];
   if (!other?.alive || other.civ === 'barbarian') return false;
   if (mem.passive) return true;
-  if (other.cityState) return !(mem.plan?.target === them);
+  // (A city-state: peace, unless it's the war's target or sides with an enemy, its ally.)
+  if (other.cityState) return !(mem.plan?.target === them) && !ctx.enemies.has(allyOf(game, them));
   // (On a team with people, they make the team's peace.)
   if (teamedWithPeople(game, ctx.me)) return false;
   const rec = mem.wars[them];
@@ -170,7 +172,7 @@ function targetCity(ctx: Ctx, o: Player): { city: number; near: number; amphibio
     if (across && !(knows(p, 'optics') && coastal(game, c.tile) && seaRoute(game, p, home.tile, c.tile))) continue;
     // (Across the water, a strong or well-guarded city is all the worse: the army lands under it.)
     const guards = across ? game.units.filter((u) => u.owner === o.index && p.visible[u.tile] && isSoldier(u) && dist(ctx, u.tile, c.tile) <= 2).length : 0;
-    const d = dist(ctx, home.tile, c.tile) * (across ? 0.5 : 1) + (across ? 5 + guards : 0) + cityStrength(game, c) / 5 + (c.capital && mem.aim === 'domination' ? -1 : 0) + (c.capital && racing ? -8 : 0) + (c.founder === ctx.me ? -6 : 0) + (wanted(c) ? -10 : 0);
+    const d = dist(ctx, home.tile, c.tile) * (across ? 0.5 : 1) + (across ? 5 + guards : 0) + cityStrength(game, c) / 5 + (c.capital && mem.aim === 'domination' ? -1 : 0) + (c.capital && racing ? -8 : 0) + (c.founder === ctx.me ? -6 : freeable(ctx, c) ? -3 : 0) + (wanted(c) ? -10 : 0);
     // (Over land, a way there not through a third civ's closed borders; looked for only when it would do.)
     if (d < near && (across || landRoute(game, home.tile, c.tile, p, o.index))) (near = d), (city = c.id), (amphibious = across);
   }
@@ -190,7 +192,8 @@ function bestTarget(ctx: Ctx): { target: number; city: number; desire: number; a
   if (teamedWithPeople(game, ctx.me)) return null;
   for (const o of game.players) {
     if (o === p || !o.alive || o.civ === 'barbarian' || p.diplomacy.peaceTurns[o.index] > 0) continue;
-    if (o.cityState && pers.offense < 8) continue;
+    // (A city-state only for the warlike, and not one it pledged to protect unless it would break that pledge.)
+    if (o.cityState && (pers.offense < 8 || (pledged(game, ctx.me, o.index) && !forsakes(ctx, o.index)))) continue;
     // Friends and pact partners are not attacked.
     if (friends(game, ctx.me, o.index) || pacted(game, ctx.me, o.index) || teammates(game, ctx.me, o.index)) continue;
     // (Pressing for the capitals: only those that hold one, however far, unless another's close to winning.)
@@ -215,6 +218,8 @@ function bestTarget(ctx: Ctx): { target: number; city: number; desire: number; a
     // A civ close to winning is everyone's business (all the more so late on).
     if (close.has(o.index)) desire += game.turn > 220 ? 12 : 7;
     if (game.cities.some((c) => c.founder === ctx.me && c.owner === o.index)) desire += 6;
+    // (And a friend's city they hold, to be given back: a war of liberation.)
+    else if (game.cities.some((c) => c.owner === o.index && freeable(ctx, c))) desire += 3;
     if (best && desire <= best.desire) continue;
     best = { target: o.index, city, desire, amphibious, why: warWhy(ctx, o, ratio) };
   }

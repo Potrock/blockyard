@@ -232,7 +232,7 @@ type BadgeLook = 'lens' | 'worked' | 'idle';
 
 const badges = new Map<string, HTMLCanvasElement>();
 // (Made again once the type has come: any made before it are in a stand-in face.)
-document.fonts?.addEventListener('loadingdone', () => badges.clear());
+globalThis.document?.fonts?.addEventListener('loadingdone', () => badges.clear());
 
 /**
  * A tile's yields as a small picture, made once for each set of yields, size and look: each yield's
@@ -470,6 +470,18 @@ export function drawOverlay(now: number) {
     for (const t of shown) {
       const y = store.yields[t];
       const k = known[t];
+      // (Fallout: a sickly badge over what little it yields, so the land lost to it shows.)
+      if (k?.feature === 'fallout' && !cityTiles.has(t)) {
+        const at = badgeAt(t);
+        if (at) {
+          const rad = at.size * 0.9;
+          const fy = at.y - (y ? at.size * 1.6 : 0);
+          ctx.fillStyle = 'rgba(40,52,12,0.88)';
+          dotPath(at.x, fy, rad);
+          ctx.fill();
+          glyph('mushroom', at.x, fy, rad * 1.4, '#c8e85a');
+        }
+      }
       if (!y || !k || cityTiles.has(t)) continue;
       const at = badgeAt(t);
       // (Far off, open sea's the same everywhere: only what's worth a look there.)

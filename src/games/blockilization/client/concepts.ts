@@ -30,7 +30,7 @@ export const CONCEPTS: Article[] = [
     sub: 'An empire, a turn at a time',
     sections: [
       { text: 'You lead a civilization from its first city to the space age. Each turn you move your units, choose what your cities build and what your scholars study, and then end the turn. Everyone takes their turn at the same time; the turn ends when every player is done (or the turn timer runs out).' },
-      { title: 'People at war', text: 'Players at war with each other take their turns one side at a time, so a war is never a race of clicks. One side moves while the other waits: its cities, research and diplomacy are still its own, but not its units. A war declared during a turn lets the side that declared it finish first. The side that goes first changes every turn. With a turn timer, each side gets the whole clock, and a player who leaves the game hands the turn on. Teammates take their turn together, and everyone else, including the bots, plays at once as usual.' },
+      { title: 'People at war', text: 'Players at war with each other take their turns one side at a time, so a war is never a race of clicks. One side moves while the other waits: its cities, research and diplomacy are still its own, but not its units. A war declared during a turn lets the side that declared it finish first. The side that goes first changes every turn. With a turn timer, each side gets the whole clock, and a player who leaves the game hands the turn on. Teammates take their turn together, and everyone else, including the bots, plays at once as usual. The host can turn this off in the lobby (At war: All at once).' },
       { title: 'The first turns', text: 'Found your capital with your [[unit:settler|Settler]] at once: rivers, the coast and grassland make the best start. Explore with your [[unit:warrior|Warrior]] or a [[unit:scout|Scout]], pick a first [[concept:research|technology]], and build a few more units. More cities, placed well, are how an empire grows: build [[unit:settler|Settlers]] while there is good land free.' },
       { title: 'What to watch', text: 'The top bar shows your empire: science, gold (and its change each turn), [[concept:happiness|happiness]], progress toward a [[concept:golden|golden age]], culture toward the next [[concept:policies|social policy]], and faith. The panel at the top right lists what needs deciding before the turn can end.' },
       { title: 'Winning', text: 'There are five ways to win: [[victory:domination|Domination]], [[victory:science|Science]], [[victory:culture|Culture]], [[victory:diplomatic|Diplomacy]], and the [[victory:score|Score]] when the last turn comes. The Victory panel shows how near everyone is.' },
@@ -61,6 +61,7 @@ export const CONCEPTS: Article[] = [
       { text: 'Every tile yields something by its [[cat:terrain|terrain]] and feature: grassland food, hills production, the coast food and gold. Rivers add gold and fresh water. [[cat:resource|Resources]] add more, once improved.' },
       { title: 'Workers', text: '[[unit:worker|Workers]] build [[cat:improvement|improvements]]: farms for food, mines for production, trading posts for gold, and the right improvement on each resource (pastures, camps, plantations, quarries, fishing boats from a Work Boat). They also build roads, which connect cities and speed units.' },
       { title: 'Resources', text: 'Bonus resources yield more food or production. Luxury resources make your empire [[concept:happiness|happy]], each kind once. Strategic resources (horses, iron, coal, oil, aluminum, uranium) are needed by the units and buildings that use them; each improved deposit supplies a few.' },
+      { title: 'Fallout', text: 'A nuclear blast leaves [[terrain:fallout|fallout]] on much of the land it strikes. A tile under fallout yields next to nothing, hurts units that end their turn on it, and can’t be improved or repaired until a worker scrubs it away (Scrub Fallout).' },
     ],
   },
   {
@@ -199,7 +200,7 @@ export const CONCEPTS: Article[] = [
     sub: 'Influence over the world',
     sections: [
       { text: 'Culture builds toward social policies and grows your borders. Tourism, from wonders, great works and some buildings, carries your culture abroad: over the game it builds your influence over each other civilization. Influential over every one of them (from the Industrial Era), you win a [[victory:culture|cultural victory]].' },
-      { text: 'Great works are made by [[unit:great_artist|Great Artists]], [[unit:great_writer|Writers]] and [[unit:great_musician|Musicians]], and each needs an empty slot in a building of its kind (amphitheaters, opera houses, museums, some wonders).' },
+      { text: 'Great works are made by [[unit:great_artist|Great Artists]], [[unit:great_writer|Writers]] and [[unit:great_musician|Musicians]]: each brings 2 tourism (3 more for a building of two slots or more with them all full), and needs an empty slot in a building of its kind (amphitheaters, opera houses, museums, some wonders).' },
     ],
   },
   {
@@ -281,7 +282,7 @@ export const VICTORIES: Article[] = [
     color: '#3f8f6f',
     sub: 'Be elected World Leader',
     sections: [
-      { text: 'Once someone builds the [[wonder:united_nations|United Nations]], the world votes for a World Leader every ten turns. Each civilization has two delegates (the United Nations’ builder two more), and every city-state’s delegate votes with its ally. Win half of all the delegates the world began with, and more than anyone else (those of civilizations and city-states since fallen count too; more than two thirds in a game of teams), and you win. City-states are won with gifts of gold, or by a spy rigging their elections (from the Renaissance).' },
+      { text: 'Once someone builds the [[wonder:united_nations|United Nations]], the world votes for a World Leader every ten turns. Each civilization has two delegates (the United Nations’ builder two more), and every city-state’s delegate votes with its ally. Win more than half of all the delegates the world began with (those of civilizations and city-states since fallen count too; more than two thirds in a game of teams), and you win. City-states are won with gifts of gold, or by a spy rigging their elections (from the Renaissance).' },
     ],
   },
   {
@@ -325,7 +326,7 @@ export const ABILITY_TEXT: Record<string, string> = {
   repair_fleet: 'Repair Fleet: spent, every ship of yours on its tile or next to it is healed fully.',
   concert_tour: 'Concert Tour: spent in another civ’s land, ten turns of your tourism toward them at once.',
   paradrop: 'Can parachute from your land to land you know up to 6 tiles away, if it hasn’t moved.',
-  nuke: 'A nuclear weapon: destroys what is round where it lands.',
+  nuke: 'A nuclear weapon: destroys what is round where it lands and leaves fallout on much of the land. Every civ that knows you will long remember it, those it falls on most, and city-states think less of you. An Atomic Bomb (not a missile) may be shot down by a fighter on patrol or an anti-aircraft gun near its target.',
   spread_religion: 'Spreads its religion to a city.',
   remove_heresy: 'Drives other religions out of a city.',
   found_religion: 'Founds or enhances a religion.',

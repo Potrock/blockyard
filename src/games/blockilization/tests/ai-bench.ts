@@ -1,4 +1,5 @@
 import { botTurn } from '../rules/ai';
+import { cityHooks } from '../rules/combat';
 import { CIV_LIST } from '../rules/civs';
 import { createGame } from '../rules/core';
 import { endTurn, eraOf, score } from '../rules/game';
@@ -6,6 +7,7 @@ import { Rng } from '../rules/mapgen';
 import { DIFFICULTIES, type Difficulty } from '../rules/difficulty';
 import { MAP_SIZES, MAP_TYPES, SPEED_LIST, TURN_LIMITS, type Game, type MapSize, type MapType, type Settings, type Speed } from '../rules/state';
 import { spiesOf, stolen } from '../rules/trade';
+import { UNITS } from '../rules/units';
 import { ERAS } from '../rules/techs';
 
 /**
@@ -94,9 +96,15 @@ interface Result {
   revived: number;
   pledges: number;
   pledgesEnded: number;
+  /** Pledges broken by their pledgers' own doing (a tribute demanded of, or war declared on, the city-state). */
+  pledgesBroken: number;
   /** The turn each era was first reached by the leader, and by the median civ (by era index). */
   eraLeader: number[];
   eraMedian: number[];
+  /** Nuclear weapons built (each seen once) and fired (strikes that landed, not bombs shot down); the turn of the first strike. */
+  nukesBuilt: number;
+  nukesFired: number;
+  firstNuke?: number;
   /** The world's disasters: eruptions, floods, storms risen, times the sea rose, and the carbon burnt by the end. */
   eruptions: number;
   floods: number;
@@ -128,7 +136,7 @@ function play(seed: number): Result {
   const seats = civs.slice(0, n).map((c, i) => ({ user: null, name: c.leader, civ: c.id, bot: true, team: teams ? (i < n / 2 ? 0 : 1) : undefined }));
   const g: Game = createGame(settings, seats, seed);
   const majors = g.players.filter((p) => !p.cityState && p.civ !== 'barbarian');
-  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, eraLeader: [], eraMedian: [], eruptions: 0, floods: 0, storms: 0, rises: 0, co2: 0, errors: [] };
+  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, pledgesBroken: 0, eraLeader: [], eraMedian: [], eruptions: 0, floods: 0, storms: 0, rises: 0, co2: 0, nukesBuilt: 0, nukesFired: 0, errors: [] };
   const pledgesSeen = new Set<string>();
   let living = g.players.map((p) => p.alive);
   const owners = new Map<number, number>();
@@ -139,6 +147,13 @@ function play(seed: number): Result {
   let lastSession = -1;
   // The turn each civ first reached each era.
   const reached = majors.map(() => [] as number[]);
+  const nuked = cityHooks.nuked;
+  cityHooks.nuked = (game, by, hit, at) => {
+    r.nukesFired++;
+    r.firstNuke ??= game.turn;
+    nuked(game, by, hit, at);
+  };
+  const nukesSeen = new Set<number>();
   const learn = stolen.learn;
   stolen.learn = (game, p, tech) => {
     r.stolen++;
@@ -157,12 +172,15 @@ function play(seed: number): Result {
     for (const p of g.players) {
       if (!p.bot || !p.alive) continue;
       const t0 = cpuNow();
+      // (Its pledges before its turn: one gone after it, it broke.)
+      const held = g.players.filter((cs) => cs.cityState?.pledges?.[p.index] !== undefined);
       try {
         botTurn(g, p);
       } catch (e) {
         if (r.errors.length < 5) r.errors.push(`T${g.turn} ${p.civ}: ${(e as Error).stack?.split('\n').slice(0, 3).join(' | ')}`);
       }
       const ms = cpuNow() - t0;
+      r.pledgesBroken += held.filter((cs) => cs.cityState?.pledges?.[p.index] === undefined).length;
       countWars();
       if (p.cityState || p.civ === 'barbarian') continue;
       r.ms.push(ms);
@@ -220,11 +238,13 @@ function play(seed: number): Result {
       if (p.alive) for (let e = 0; e <= eraOf(p); e++) reached[i][e] ??= g.turn;
     });
     spies = majors.map((p) => spiesOf(p).length);
+    for (const u of g.units) if (UNITS[u.type]?.abilities?.includes('nuke') && !nukesSeen.has(u.id)) (nukesSeen.add(u.id), r.nukesBuilt++);
     if (g.turn === 60) r.cities60 = cityCount();
     if (g.turn === 120) r.cities120 = cityCount();
     if (g.turn === 40 || g.turn === 70 || g.turn === 100) r.wonders.push(Object.keys(g.wonders).length);
   }
   stolen.learn = learn;
+  cityHooks.nuked = nuked;
   for (let e = 1; e < ERAS.length; e++) {
     const turns = reached.map((x) => x[e]).filter((t): t is number => t !== undefined).sort((a, b) => a - b);
     if (turns.length) r.eraLeader[e] = turns[0];
@@ -237,7 +257,7 @@ function play(seed: number): Result {
   r.rises = g.climate?.rises ?? 0;
   r.co2 = g.climate?.co2 ?? 0;
   const scores = majors.map((p) => `${p.civ}${p.alive ? '' : '†'}:${g.cities.filter((c) => c.owner === p.index).length}c/${p.techs.length}t/${score(g, p)}`).join(' ');
-  console.log(`seed ${seed}: ${r.how} by ${r.winner} T${r.turn} | c60 [${r.cities60.join(',')}] c120 [${r.cities120.join(',')}] wonders [${r.wonders.join(',')}] wars ${r.wars} taken ${r.captured} dead ${r.eliminated} broke ${r.broke} neg ${r.negative} religions [${r.religions.join(',')}] mood ${avg(r.mood).toFixed(1)} unhappy ${pct(r.unhappy, r.mood.length)} size5 ${avg(r.toFive).toFixed(0)}t steals ${r.stolen} caught ${r.caught} quests ${r.quests} passed ${r.passed} freed ${r.liberated}/${r.revived} pledges ${r.pledges}/${r.pledgesEnded} | world ${r.eruptions} eruptions ${r.floods} floods ${r.storms} storms ${r.rises} sea rises (${r.co2} carbon) | bot ms avg ${avg(r.ms).toFixed(1)} max ${Math.max(...r.ms).toFixed(0)} late avg ${avg(r.lateMs).toFixed(1)} | ${scores}`);
+  console.log(`seed ${seed}: ${r.how} by ${r.winner} T${r.turn} | c60 [${r.cities60.join(',')}] c120 [${r.cities120.join(',')}] wonders [${r.wonders.join(',')}] wars ${r.wars} taken ${r.captured} dead ${r.eliminated} broke ${r.broke} neg ${r.negative} religions [${r.religions.join(',')}] mood ${avg(r.mood).toFixed(1)} unhappy ${pct(r.unhappy, r.mood.length)} size5 ${avg(r.toFive).toFixed(0)}t steals ${r.stolen} caught ${r.caught} quests ${r.quests} passed ${r.passed} freed ${r.liberated}/${r.revived} pledges ${r.pledges}/${r.pledgesEnded}/${r.pledgesBroken} nukes ${r.nukesBuilt}/${r.nukesFired}${r.firstNuke ? ` (T${r.firstNuke})` : ''} | world ${r.eruptions} eruptions ${r.floods} floods ${r.storms} storms ${r.rises} sea rises (${r.co2} carbon) | bot ms avg ${avg(r.ms).toFixed(1)} max ${Math.max(...r.ms).toFixed(0)} late avg ${avg(r.lateMs).toFixed(1)} | ${scores}`);
   for (const e of r.errors) console.log('  ERROR', e);
   // The World Congress's projects: when each opened and was done (its cost), and who placed (g, s, b).
   const projects = (g.congress?.projects ?? []).map((x) => `${x.id} T${x.since}-${x.done ? `T${x.done}` : 'open'} (${x.cost})${x.tiers ? ` ${Object.entries(x.tiers).map(([i, t]) => `${t[0]}:${g.players[Number(i)].civ}`).join(' ')}` : ''}`);
@@ -269,7 +289,8 @@ const era = (f: (r: Result) => number | undefined) => {
 };
 console.log(`eras (first civ / median civ)  ${ERAS.slice(1).map((name, i) => `${name} ${era((r) => r.eraLeader[i + 1])}/${era((r) => r.eraMedian[i + 1])}`).join('  ')}`);
 console.log(`spies        ${avg(results.map((r) => r.stolen)).toFixed(1)} techs stolen/game   ${avg(results.map((r) => r.caught)).toFixed(1)} spies caught/game   quests ${avg(results.map((r) => r.quests)).toFixed(1)} done/game   resolutions ${avg(results.map((r) => r.passed)).toFixed(1)} passed/game`);
-console.log(`liberation   ${avg(results.map((r) => r.liberated)).toFixed(1)} cities liberated/game (${avg(results.map((r) => r.revived)).toFixed(1)} civs brought back)   pledges ${avg(results.map((r) => r.pledges)).toFixed(1)} made/game, ${avg(results.map((r) => r.pledgesEnded)).toFixed(1)} ended`);
+console.log(`liberation   ${avg(results.map((r) => r.liberated)).toFixed(1)} cities liberated/game (${avg(results.map((r) => r.revived)).toFixed(1)} civs brought back)   pledges ${avg(results.map((r) => r.pledges)).toFixed(1)} made/game, ${avg(results.map((r) => r.pledgesEnded)).toFixed(1)} ended, ${avg(results.map((r) => r.pledgesBroken)).toFixed(1)} broken by their pledgers`);
+console.log(`nukes        ${avg(results.map((r) => r.nukesBuilt)).toFixed(1)} built/game   ${avg(results.map((r) => r.nukesFired)).toFixed(1)} fired/game   in ${results.filter((r) => r.nukesFired).length}/${results.length} games${results.some((r) => r.firstNuke) ? `   first strike T${avg(results.flatMap((r) => (r.firstNuke ? [r.firstNuke] : []))).toFixed(0)}` : ''}`);
 console.log(`world        ${avg(results.map((r) => r.eruptions)).toFixed(1)} eruptions/game   ${avg(results.map((r) => r.floods)).toFixed(1)} floods/game   ${avg(results.map((r) => r.storms)).toFixed(1)} storms/game   ${avg(results.map((r) => r.rises)).toFixed(1)} sea rises/game   carbon ${fmt(results.map((r) => r.co2))}`);
 console.log(`broke turns  ${avg(results.map((r) => r.broke)).toFixed(1)}/game   negative-income turns ${avg(results.map((r) => r.negative)).toFixed(1)}/game`);
 console.log(`bot turn ms  avg ${avg(all((r) => r.ms)).toFixed(1)}  max ${Math.max(...all((r) => r.ms)).toFixed(0)}  after T200 avg ${avg(all((r) => r.lateMs)).toFixed(1)} max ${Math.max(0, ...all((r) => r.lateMs)).toFixed(0)}   endTurn avg ${avg(all((r) => r.endMs)).toFixed(1)}`);

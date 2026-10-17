@@ -68,7 +68,7 @@ export interface Unit {
   /** A settler's: the city site it's on its way to (one where a city could be founded when it was sent). */
   site?: number;
   /** Building an improvement or a road (or digging up an artifact): what, and the worker-turns it's had. */
-  work?: { what: ImprovementId | 'road' | 'rail' | 'remove_feature' | 'repair' | 'artifact'; done: number };
+  work?: { what: ImprovementId | 'road' | 'rail' | 'remove_feature' | 'scrub_fallout' | 'repair' | 'artifact'; done: number };
   /** Has it attacked this turn (most units only once), and how many times (Blitz, Logistics: twice). */
   attacked?: boolean;
   attacks?: number;
@@ -294,6 +294,8 @@ export interface Settings {
   timer: number;
   /** Civilization VI's dynamic turn timer instead: each turn's clock set by how far on the game is and how much there is to move (the server's `dynamicLength`). */
   dynamicTimer?: boolean;
+  /** People at war with each other take their turns one side at a time (Civ V's hybrid turns, `turns.ts`): on unless turned off. */
+  hybridTurns?: boolean;
   /** City-states, barbarians, victory types on. */
   cityStates: number;
   barbarians: boolean;

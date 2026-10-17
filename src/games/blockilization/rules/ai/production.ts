@@ -14,7 +14,8 @@ import { airDefence, airProduction } from './air';
 import { act, cityOn, danger, diplomaticRival, dist, mightOf, militaryAt, unitMight, type Ctx } from './context';
 import type { Aim } from './memory';
 import { bestShip, isWarship, navyWanted, seaport } from './navy';
-import { worldProject } from './projects';
+import { nukeProduction } from './nukes';
+import { leavesProject, worldProject } from './projects';
 import { bestSite, SITE_WORTH } from './settle';
 import { effectsValue, yieldsOf, yieldWeights } from './value';
 
@@ -163,7 +164,7 @@ export function threatTo(ctx: Ctx, c: City): number {
 /** What a city builds next. */
 export function pickProduction(ctx: Ctx, c: City): Production {
   if (ctx.p.cityState) return cityStateBuild(ctx, c, counts(ctx, c).military);
-  return urgent(ctx, c) ?? contentment(ctx, c) ?? victoryProduction(ctx, c) ?? worldProject(ctx, c, threatTo(ctx, c)) ?? wonder(ctx, c) ?? army(ctx, c) ?? bestBuilding(ctx, c, counts(ctx, c).caravans) ?? defaultBuild(ctx.game, ctx.p, c);
+  return urgent(ctx, c) ?? contentment(ctx, c) ?? victoryProduction(ctx, c) ?? worldProject(ctx, c, threatTo(ctx, c)) ?? nukeProduction(ctx, c) ?? wonder(ctx, c) ?? army(ctx, c) ?? bestBuilding(ctx, c, counts(ctx, c).caravans) ?? defaultBuild(ctx.game, ctx.p, c);
 }
 
 /**
@@ -441,13 +442,19 @@ export function manageCities(ctx: Ctx) {
       chosen[c.id] = ctx.game.turn;
       continue;
     }
+    // A city that has done its part in a World Congress project (or is now in danger) moves on.
+    if (!ctx.p.cityState && leavesProject(ctx, c)) {
+      const item = pickProduction(ctx, c);
+      if ((item.kind !== cur.kind || item.id !== cur.id) && act(ctx, { t: 'produce', city: c.id, item })) chosen[c.id] = ctx.game.turn;
+      continue;
+    }
     // Something put aside (its production kept) for something pressing or for the victory, unless
     // it's nearly done: a building for either, a unit (not one a threatened city needs) for the victory
-    // or a faithful capital's first shrine.
+    // or a faithful capital's first shrine; a building, for a World Congress project it's wanted in.
     if (!ctx.p.cityState && !grand(cur)) {
       const left = (itemCost(ctx.game, cur) - c.prod) / Math.max(1, productionToward(ctx.game, c, cur));
       if (left <= 3) continue;
-      const now = cur.kind === 'building' ? (urgent(ctx, c) ?? victoryProduction(ctx, c)) : threatTo(ctx, c) < 0.4 ? (earlyShrine(ctx, c) ?? victoryProduction(ctx, c)) : null;
+      const now = cur.kind === 'building' ? (urgent(ctx, c) ?? worldProject(ctx, c, threatTo(ctx, c)) ?? victoryProduction(ctx, c)) : threatTo(ctx, c) < 0.4 ? (earlyShrine(ctx, c) ?? victoryProduction(ctx, c)) : null;
       if (now && (now.kind !== cur.kind || now.id !== cur.id) && act(ctx, { t: 'produce', city: c.id, item: now })) chosen[c.id] = ctx.game.turn;
     }
   }
