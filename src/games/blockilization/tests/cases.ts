@@ -38,6 +38,7 @@ import { unpackKnown, type KnownTile } from '../protocol';
 import { SaveThrottle } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
+import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
 import { riverLinks, terrainEdits } from '../terrain';
 import { corners, GROWN, KINDS, PEN_SCALE, spotsFor } from '../client/spots';
 import { blank, city, techsTo, unit, war } from './world';
@@ -4275,4 +4276,82 @@ test('a bot proposes a World Congress project it would win, votes for it, and pu
   eq(worldProject(makeCtx(game, bot), home, 0)?.id, 'worlds_fair', 'a city it can spare builds it');
   home.queue = [{ kind: 'project', id: 'worlds_fair' }];
   eq(worldProject(makeCtx(game, bot), other, 0), null, 'its share of cities (one, of two) on it already');
+});
+
+/** Players by index made people (a test world's are all bots). */
+function people(game: Game, ...who: number[]) {
+  for (const i of who) game.players[i].bot = false;
+}
+
+test('people at war with each other take their turns one side at a time; everyone else, and the bots, as before', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india', 'persia'], { size: 'small' });
+  people(game, 0, 1, 2);
+  for (const [i, col] of [[0, 3], [1, 12], [2, 3], [3, 12]]) city(game, i, at(col, i < 2 ? 3 : 12));
+  const [a, b, c, d] = [0, 1, 2, 3].map((i) => unit(game, 'warrior', i, at([5, 10, 5, 10][i], i < 2 ? 5 : 14)));
+  endTurn(game);
+  eq(game.sequence, undefined, 'at peace: everyone plays at once');
+  war(game, 0, 1);
+  war(game, 2, 3);
+  endTurn(game);
+  eq(JSON.stringify(game.sequence?.sides.flat().sort()), '[0,1]', 'Egypt and Babylon (people at war) are put in order; India’s war is with a bot');
+  const [first, second] = game.sequence!.sides.map((s) => s[0]);
+  const mover = first === 0 ? a : b;
+  const waiter = first === 0 ? b : a;
+  ok(apply(game, first, { t: 'move', unit: mover.id, to: neighbours(game.grid, mover.tile)[0] }).ok, 'the side playing moves');
+  const refused = apply(game, second, { t: 'move', unit: waiter.id, to: neighbours(game.grid, waiter.tile)[0] });
+  ok(!refused.ok && /finish their turn/.test(refused.error ?? ''), `the other waits: ${refused.error}`);
+  ok(apply(game, second, { t: 'research', tech: 'pottery' }).ok, 'its research is still its own meanwhile');
+  ok(!apply(game, second, { t: 'ready', ready: true }).ok, 'nor can it end a turn it hasn’t had');
+  ok(apply(game, 2, { t: 'move', unit: c.id, to: neighbours(game.grid, c.tile)[0] }).ok, 'India, at war with no person, plays at once');
+  ok(apply(game, 3, { t: 'move', unit: d.id, to: neighbours(game.grid, d.tile)[0] }).ok, 'and so does the bot');
+  ok(!advanceSequence(game, () => false), 'the turn isn’t handed on before the side playing is done');
+  ok(apply(game, first, { t: 'ready', ready: true }).ok, 'it ends its turn');
+  ok(advanceSequence(game, () => false), 'and it is handed on');
+  eq(activeSide(game)?.[0], second, 'to the other side');
+  eq(waitingOn(game, first)?.[0], second, 'the first now waits in its turn');
+  ok(!apply(game, first, { t: 'move', unit: mover.id, to: mover.tile }).ok, 'and gives its units no more orders this turn');
+  ok(apply(game, second, { t: 'move', unit: waiter.id, to: neighbours(game.grid, waiter.tile)[0] }).ok, 'the second side moves now');
+  ok(advanceSequence(game, () => false, true), 'its clock run out: handed on all the same');
+  ok(sequenceDone(game), 'every side has played');
+  endTurn(game);
+  eq(game.sequence?.sides[0][0], second, 'the next turn, the order turns round: the other side first');
+});
+
+test('a war declared between people during a turn: the side that declared plays on, the other waits its segment', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  people(game, 0, 1);
+  city(game, 0, at(3, 3));
+  city(game, 1, at(12, 3));
+  const b = unit(game, 'warrior', 1, at(10, 5));
+  endTurn(game);
+  game.players[1].ready = true;
+  ok(apply(game, 0, { t: 'war', target: 1 }).ok, 'Egypt declares war');
+  eq(JSON.stringify(game.sequence?.sides), '[[0],[1]]', 'Egypt plays first, Babylon after');
+  ok(!game.players[1].ready, 'Babylon’s turn, ended before the war, is its own to play again');
+  ok(!apply(game, 1, { t: 'move', unit: b.id, to: neighbours(game.grid, b.tile)[0] }).ok, 'meanwhile it waits');
+  game.players[0].ready = true;
+  ok(advanceSequence(game, () => false) && apply(game, 1, { t: 'move', unit: b.id, to: neighbours(game.grid, b.tile)[0] }).ok, 'then it plays');
+});
+
+test('teammates at war with people play their segment together; a side gone, or fallen, is passed over', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'india']);
+  people(game, 0, 1, 2);
+  game.players[0].team = game.players[2].team = 0;
+  game.players[1].team = 1;
+  bindTeams(game);
+  for (const [i, col] of [[0, 3], [1, 12], [2, 3]]) city(game, i, at(col, i === 2 ? 12 : 3));
+  war(game, 0, 1);
+  war(game, 2, 1);
+  game.turn = 0;
+  startSequence(game);
+  eq(JSON.stringify(game.sequence?.sides), '[[0,2],[1]]', 'Egypt and India together, then Babylon');
+  game.players[0].ready = true;
+  ok(!advanceSequence(game, () => false), 'one of a side done isn’t enough');
+  ok(advanceSequence(game, (i) => i === 2), 'its other gone from the game: the side is done');
+  ok(advanceSequence(game, (i) => i === 1), 'Babylon gone: passed over');
+  ok(sequenceDone(game), 'and the turn can end');
+  game.turn = 1;
+  game.players[1].alive = false;
+  startSequence(game);
+  eq(game.sequence, undefined, 'its enemy fallen: no order to keep');
 });

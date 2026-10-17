@@ -52,6 +52,15 @@ export function moments(prev: View | null, v: View) {
     play('bad');
     return;
   }
+  // Your civilization back (a city of yours liberated, Civ V's resurrection): you play again.
+  if (prev && prev.fallen !== undefined && !v.spectator && v.fallen === undefined && v.you === prev.fallen) {
+    store.panel = null;
+    store.splashes = [{ kick: 'Liberated', title: 'Your people live again', text: 'A city of yours has been given back to you. Your civilization is in the game once more: its turn is yours to play.', glyph: { name: 'golden', color: '#c99a2e' } }];
+    store.splashAt = 0;
+    store.changed++;
+    play('golden');
+    return;
+  }
   // The first view after joining (or a reload): nothing's new, it's just here.
   if (!prev || prev.you !== v.you) return;
   const out: Splash[] = [];

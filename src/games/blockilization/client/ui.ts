@@ -1,6 +1,6 @@
 import type { Client } from '@platform/client';
 import { centre } from '../geometry';
-import type { CityInfo, CityWire, ClientToServer, LobbyAction, LobbyView, UnitWire } from '../protocol';
+import type { CityInfo, CityWire, ClientToServer, LobbyAction, LobbyView, UnitWire, View } from '../protocol';
 import { takenAlive } from '../rules/combat';
 import type { CombatPreview, PreviewSide } from '../rules/preview';
 import { BUILDINGS, SPACESHIP_PARTS } from '../rules/buildings';
@@ -895,6 +895,8 @@ export function endTurnAction() {
   }
   if (!v || v.over || v.spectator) return;
   const s = v.self;
+  // (At war with another person, between your side's segments: nothing to end or take back.)
+  if (sequenceWait(v)) return;
   if (s.ready) return send({ t: 'ready', ready: false });
   // (No city yet: the turn ends all the same, as Civ V's; a Settler may walk to a better site first.)
   const block = s.blockers[0];
@@ -915,6 +917,22 @@ export function endTurnAction() {
   }
   send({ t: 'ready', ready: true });
 }
+
+/**
+ * People at war with each other take their turns one side at a time (`rules/turns.ts`): whom the
+ * viewer waits on (their side's segment yet to come, or played), or null (theirs now, or not at war with a person).
+ */
+function sequenceWait(v: View): { names: string; done: boolean } | null {
+  const q = v.sequence;
+  if (!q) return null;
+  const mine = q.sides.findIndex((x) => x.includes(v.you));
+  if (mine < 0 || mine === q.at) return null;
+  const names = q.sides[q.at].map((i) => (i === v.you ? 'you' : v.players[i]?.name ?? 'another')).join(' and ');
+  return { names, done: mine < q.at };
+}
+
+/** Whether it's the viewer's side's segment now, with people at war taking their turns in order. */
+export const sequenceMine = (v: View) => !!v.sequence?.sides[v.sequence.at]?.includes(v.you);
 
 function renderCorner(now: number): El {
   const v = store.view!;
@@ -939,6 +957,13 @@ function renderCorner(now: number): El {
     cls = 'wait';
     glyph = 'globe';
     sub = waiting ? `${awaited} still deciding` : '';
+  } else if (sequenceWait(v)) {
+    // At war with another person: their side plays its segment, then (if yours is to come) yours.
+    const w = sequenceWait(v)!;
+    label = w.done ? 'Turn over' : 'Their turn';
+    sub = w.done ? `${w.names} ${w.names.includes(' and ') ? 'are' : 'is'} taking their turn` : `${w.names} first: at war, you take turns in order`;
+    cls = 'wait';
+    glyph = 'war';
   } else if (s.ready) {
     label = 'Waiting…';
     sub = waiting ? `for ${awaited} · ${click()} to take back` : 'the turn is ending';
@@ -955,6 +980,8 @@ function renderCorner(now: number): El {
   } else if (idle) {
     sub = `${needOrders(idle)}${touchScreen() ? '' : ' (Space)'}`;
   }
+  // (Your side's segment, with people at war taking turns in order: the others at war wait on you.)
+  if (!v.over && !v.spectator && !s.ready && sequenceMine(v) && v.sequence!.sides.length > 1) sub = sub ? `your move, then theirs · ${sub}` : 'your move: those at war with you wait';
   const left = timerLeft(now);
   // (The clock first: the line may be cut short.)
   if (left !== null && !v.over) sub = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left${sub ? ` · ${sub}` : ''}`;

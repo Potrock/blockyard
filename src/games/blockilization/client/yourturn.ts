@@ -35,6 +35,13 @@ export function turnAlerts(prev: View | null, v: View, now: number) {
     if (waited) tell('It’s your turn', now, v.turn);
     return;
   }
+  // At war with another person, taking turns in order: your side's segment has begun.
+  const mineNow = !!v.sequence?.sides[v.sequence.at]?.includes(v.you);
+  const minePrev = !!prev.sequence?.sides[prev.sequence.at]?.includes(prev.you);
+  if (mineNow && !minePrev && prev.sequence) {
+    tell('Your move: those at war with you have taken theirs', now, v.turn);
+    return;
+  }
   if (v.self.ready) readyAt ??= now;
   else readyAt = null;
   // The last one to end the turn, with others in the game: they've all ended theirs.

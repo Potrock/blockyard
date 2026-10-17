@@ -359,6 +359,7 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
   return {
     turn: game.turn,
     timer,
+    sequence: game.sequence && game.sequence.at < game.sequence.sides.length ? { sides: game.sequence.sides.map((x) => [...x]), at: game.sequence.at } : undefined,
     you: p ? p.index : -1,
     spectator: !p,
     players: game.players.map((o) => ({
