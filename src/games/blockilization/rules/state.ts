@@ -327,8 +327,10 @@ export interface Game {
   over?: { winner: number; how: 'domination' | 'science' | 'culture' | 'diplomatic' | 'score' | 'time' };
   /** The game's story so far, for the replay at its end (`replay.ts`). */
   replay?: Replay;
-  /** When this turn started (game clock seconds, for the timer). */
+  /** When this turn started (game clock seconds, for the timer; with people at war, when this side's segment did). */
   turnStarted: number;
+  /** People at war with each other this turn: their sides in the order they play, and whose segment it is (`turns.ts`). */
+  sequence?: { sides: number[][]; at: number };
   /** When the game began (the server's time, ISO): with its seed, which game it is (a Hall of Fame entry's), the same seed played again another. */
   started?: string;
   /** Pins people have put on the map (the server's, `server.ts`: nothing in the rules looks at them). */

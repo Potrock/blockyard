@@ -13,6 +13,7 @@ import { distance, neighbours, within } from './rules/hex';
 import { NATURAL_WONDERS } from './rules/nature';
 import { isMilitary, UNITS } from './rules/units';
 import { apply, endTurn, eraOf, fightHooks, learn, score, type Order } from './rules/game';
+import { advanceSequence, sequenceDone, warBegun } from './rules/turns';
 import { cityHooks, type CombatResult } from './rules/combat';
 import { dealVerdict, type DealItem } from './rules/diplomacy';
 import { previewAttack, previewCityFire } from './rules/preview';
@@ -533,10 +534,31 @@ const AWAY_GRACE = 20;
  * still theirs to end); but with nobody at all here, the game waits (the bots don't play it out alone).
  */
 function everyoneReady(game: GameContext): boolean {
-  if (!civGame || botQueue.length || !anyonePlaying(game)) return false;
+  if (!civGame || botQueue.length || !anyonePlaying(game) || !sequenceDone(civGame)) return false;
+  const gone = goneFrom(game);
+  return civGame.players.every((p) => !p.alive || p.bot || p.ready || gone(p.index));
+}
+
+/** Who's been gone long enough that their turn counts as done (by their civ's index): left, and not back within the grace. */
+function goneFrom(game: GameContext): (i: number) => boolean {
   const here = new Set(humans(game).map(keyOf));
-  const gone = (key: string) => !here.has(key) && game.clock.now - (leftAt.get(key) ?? -Infinity) >= AWAY_GRACE;
-  return civGame.players.every((p) => !p.alive || p.bot || p.ready || gone(p.user!));
+  return (i) => {
+    const key = civGame?.players[i]?.user;
+    return !!key && !here.has(key) && game.clock.now - (leftAt.get(key) ?? -Infinity) >= AWAY_GRACE;
+  };
+}
+
+/**
+ * People at war with each other take their turns one side at a time (`rules/turns.ts`): the side
+ * playing hands on once it's done (or gone), or when its clock runs out; each side's segment has a
+ * clock of its own. Whether it handed on.
+ */
+function handOn(game: GameContext, timeUp: boolean): boolean {
+  if (!civGame || sequenceDone(civGame) || !advanceSequence(civGame, goneFrom(game), timeUp)) return false;
+  if (!sequenceDone(civGame)) startClock(game);
+  saveSoon(game);
+  markAll(game);
+  return true;
 }
 
 /**
@@ -555,6 +577,8 @@ function takeOver(game: GameContext, player: Player, data: unknown) {
   t.name = player.name;
   t.ready = false;
   botQueue = botQueue.filter((b) => b !== t.index);
+  // (At war with another person now: they take their turns in order, from this one.)
+  warBegun(civGame, -1);
   const seat = seats.find((s) => s.bot && s.civ === t.civ);
   const mine: LobbySeat = { key, name: player.name, civ: t.civ, bot: false, here: true, team: seat?.team ?? t.team ?? null };
   seats = seat ? seats.map((s) => (s === seat ? mine : s)) : [...seats, mine];
@@ -767,8 +791,11 @@ function recordFame(game: GameContext, pl: Player, p: CivPlayer) {
   if (!civGame) return;
   // (Which game: its seed and when it began, so a fixed seed played again is another; a save from before games kept their start, its seed alone.)
   const id = civGame.started ? `${civGame.seed}@${civGame.started}:${p.index}` : `${civGame.seed}:${p.index}`;
-  const list = pl.store.get<FameEntry[]>('fame') ?? [];
-  if (list.some((e) => e.id === id)) return;
+  // (Kept once; but a civ fallen and since brought back, its game's end replaces its fall.)
+  const all = pl.store.get<FameEntry[]>('fame') ?? [];
+  const was = all.find((e) => e.id === id);
+  if (was && !(was.fell && p.alive)) return;
+  const list = all.filter((e) => e !== was);
   const g = civGame;
   const over = g.over;
   const wins = (i: number) => !!over && (i === over.winner || teammates(g, over.winner, i));
@@ -831,6 +858,8 @@ function order(game: GameContext, p: Player, o: Order) {
 
 export default defineServer(shared, {
   setup(game) {
+    // (For the headless tests, in development: the game as it stands, and its phase.)
+    if (import.meta.env.DEV) (globalThis as unknown as { __civ: unknown }).__civ = { game: () => civGame, phase: () => phase };
     fightHooks.fought = (g, by, combat) => {
       if (g === civGame) showFights(game, by, combat);
     };
@@ -1240,7 +1269,10 @@ export default defineServer(shared, {
       if (!anyonePlaying(game)) civGame.turnStarted += dt;
       // (Each screen counts the clock down itself from the time left it was last told.)
       const timer = timerLeft(game);
-      if (everyoneReady(game) || (timer !== null && timer <= 0 && !botQueue.length)) nextTurn(game);
+      const timeUp = timer !== null && timer <= 0 && !botQueue.length;
+      // (A side at war done with its segment, or out of time: the next side's begins, on a clock of its own.)
+      if (handOn(game, timeUp && !sequenceDone(civGame))) return void sendViews(game);
+      if (everyoneReady(game) || (timeUp && sequenceDone(civGame))) nextTurn(game);
     }
     sendViews(game);
   },

@@ -343,8 +343,10 @@ export interface SelfWire {
 
 export interface View {
   turn: number;
-  /** Seconds left on the turn's clock (null: no clock). */
+  /** Seconds left on the turn's clock (null: no clock; with people at war, the segment's playing now). */
   timer: number | null;
+  /** People at war with each other taking their turns one side at a time: the sides in order, whose segment it is (`rules/turns.ts`). */
+  sequence?: { sides: number[][]; at: number };
   /** The bots are playing the turn just begun (what they do comes in the view once they're done). */
   moving?: boolean;
   /** A game with one person in it: the turns kept to go back to (newest first). */

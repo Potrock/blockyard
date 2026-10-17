@@ -37,6 +37,13 @@ function talkTo(index: number) {
 
 const badge = (corner: string, glyph: string, cls: string) => h(`span.lr-badge.${corner}.${cls}`, { html: svg(glyph, 12) });
 
+/** With people at war taking turns one side at a time: whether a player's side is yet to play its segment, or playing it now. */
+function sequenceAwaits(i: number): boolean {
+  const q = store.view?.sequence;
+  return !!q && q.sides.findIndex((x) => x.includes(i)) > q.at;
+}
+const sequencePlays = (i: number) => !!store.view?.sequence?.sides[store.view.sequence.at]?.includes(i);
+
 /** A civ met: its leader framed in its colours, its marks, its mood and its score. */
 function leader(p: PlayerSummary): El {
   const civ = CIVS[p.civ];
@@ -55,7 +62,7 @@ function leader(p: PlayerSummary): El {
     r && r.youDenounced > 0 ? 'You have denounced them' : '',
     typeof team === 'number' ? `Team ${team + 1}` : '',
     `Score ${p.score}`,
-    person ? (p.here === false ? 'Away' : p.ready ? 'Done with the turn' : 'Still deciding') : '',
+    person ? (p.here === false ? 'Away' : p.ready ? 'Done with the turn' : sequenceAwaits(p.index) ? 'Waits for their turn (at war: one side at a time)' : sequencePlays(p.index) ? 'Taking their turn (at war: one side at a time)' : 'Still deciding') : '',
   ].filter(Boolean);
   const pic = PICTURES[`l_${p.civ}` as PictureId];
   const el = h(

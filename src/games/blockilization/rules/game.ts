@@ -24,6 +24,7 @@ import { recordReplay } from './replay';
 import type { City, Game, Player, Production, Unit } from './state';
 import { sideName, sides, teamOf, teammates } from './teams';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
+import { startSequence, waitsFor, warBegun } from './turns';
 import { FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, type ImprovementId } from './terrain';
 import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNIT_LIST, UNITS } from './units';
 
@@ -31,7 +32,8 @@ import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNIT_LIST, UNITS
  * The rules: every order a player can give (each checked: a player only commands their own, and only
  * what the rules allow now), and the end of a turn, when every city grows and builds, research and
  * culture come in, units heal and workers work. Simultaneous turns, Civilization V's online way: orders
- * happen as they're given, and the turn ends for everyone at once.
+ * happen as they're given, and the turn ends for everyone at once (but people at war with each other
+ * take theirs one side at a time: `turns.ts`).
  */
 
 export type Order =
@@ -997,6 +999,8 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
   if (!wellFormed(game, o)) return fail('That order makes no sense');
   const p = game.players[by];
   if (!p?.alive) return fail('Your civilization is out of the game');
+  const wait = waitsFor(game, by, o);
+  if (wait) return fail(wait);
   const unit = 'unit' in o ? unitById(game, o.unit) : undefined;
   if ('unit' in o && (!unit || unit.owner !== by)) return fail("That unit is gone, or isn't yours");
   const city = 'city' in o ? cityById(game, o.city) : undefined;
@@ -1488,6 +1492,8 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
                 : null,
       );
       for (const [a, b] of pairs) warDeclared(game, a, b);
+      // (A war between people: from now they take their turns one side at a time.)
+      warBegun(game, by);
       return OK;
     }
     case 'peace': {
@@ -1704,6 +1710,8 @@ export function endTurn(game: Game) {
   updateAllVisibility(game);
   checkVictory(game);
   recordReplay(game, game.turn - 1, eraOf);
+  // (People at war with each other: the order they take this turn in.)
+  startSequence(game);
 }
 
 /**
