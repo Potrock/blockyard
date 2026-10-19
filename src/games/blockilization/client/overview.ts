@@ -120,6 +120,7 @@ function renderCities(): El {
           c.razing ? h('span.cv-chip.bad', {}, `razing ${c.razing}`) : null,
           c.resistance ? h('span.cv-chip.bad', {}, `resisting ${c.resistance}`) : null,
           c.occupied ? h('span.cv-chip.bad', { title: 'Unhappy at the occupation till it has a Courthouse' }, 'occupied') : null,
+          c.blockaded ? h('span.cv-chip.bad', { title: 'Enemy warships blockade it: its sea tiles and sea trade routes yield nothing' }, 'blockaded') : null,
         ),
       ),
       num(c.pop),

@@ -1,3 +1,7 @@
+import { blockaded, blockaders } from '../rules/economy';
+import { declareEmbargo, embargoTurns, liftEmbargo } from '../rules/diplomacy';
+import { cityHeal } from '../rules/combat';
+import { routeBlockaded } from '../rules/trade';
 import { adviseResearch, adviseWork } from '../advisor';
 import { BUILDINGS } from '../rules/buildings';
 import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, gain, leadership, strength } from '../rules/combat';
@@ -5277,4 +5281,79 @@ test('the world’s changes reach the screens: the map sent marks them, the view
   ok(built.edits.every((e) => tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5) === t || built.tiles.includes(tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5))), 'only its own columns');
   ok(built.edits.some((e) => e[1] === SEA_Y && e[3] === 'water') && !built.edits.some((e) => e[1] > SEA_Y && e[3] !== 'air'), 'as open sea');
   ok(before.some((e) => tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5) === t && e[1] > SEA_Y), 'where there was land');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Naval blockades and embargoes
+// -------------------------------------------------------------------------------------------------
+
+test('a blockade: enemy warships near a coastal city take its sea tiles, sea routes and half its healing', () => {
+  const { game, at } = blank();
+  for (let col = 0; col < 26; col++) game.tiles[at(col, 8)].terrain = 'coast';
+  const c = city(game, 0, at(5, 7), { pop: 3 });
+  const other = city(game, 0, at(15, 7));
+  const sea = neighbours(game.grid, c.tile).find((t) => game.tiles[t].terrain === 'coast')!;
+  ok(sea !== undefined, 'the city is on the coast');
+  c.worked = [sea];
+  c.locked = [sea];
+  const p = game.players[0];
+  routesOf(p).push({ from: c.id, to: other.id, turns: 10, sea: true, cargo: 'food' });
+  const route = routesOf(p)[0];
+  const food = cityYields(game, c).food;
+  const carried = routeYield(game, p, route).food;
+  ok(carried > 0, 'the sea route carries food');
+  const ship = unit(game, 'trireme', 1, sea);
+  ok(!blockaded(game, c), 'a ship at peace blockades nothing');
+  war(game, 0, 1);
+  ok(blockaded(game, c), 'an enemy warship within two tiles blockades it');
+  eq(blockaders(game, c)[0], ship, 'that ship');
+  ok(cityYields(game, c).food < food, 'its sea tile yields nothing');
+  eq(routeYield(game, p, route).food, 0, 'its sea route carries nothing');
+  ok(routeBlockaded(game, route), 'the route is held up');
+  c.attacked = undefined;
+  eq(cityHeal(game, c), 10, 'it heals half as fast');
+  const mine = unit(game, 'trireme', 0, neighbours(game.grid, sea).find((t) => game.tiles[t].terrain === 'coast' && t !== sea)!);
+  ok(!blockaded(game, c), 'a warship of its own breaks the blockade');
+  mine.tile = at(25, 8);
+  ok(blockaded(game, c), 'and it holds again once that ship sails off');
+  unit(game, 'cargo_ship', 0, sea);
+  ok(blockaded(game, c), 'a cargo ship breaks nothing');
+  ship.tile = at(12, 8);
+  ok(!blockaded(game, c), 'nor is it blockaded from beyond two tiles');
+  eq(cityHeal(game, c), 20, 'and it heals in full');
+  ship.tile = sea;
+  game.players[0].bot = false;
+  game.players[0].notes.length = 0;
+  endTurn(game);
+  ok(game.players[0].notes.some((n) => n.text.includes(`${c.name} is blockaded`)), 'its owner is told');
+  eq(!!viewFor(game, game.players[0], null).cities.find((x) => x.id === c.id)?.blockaded, blockaded(game, c), 'the view shows the blockade as it stands');
+});
+
+test('an embargo declared by a civ: no trade routes, resource or research deals; lifted after its turns', () => {
+  const { game, at } = blank();
+  const [a, b] = game.players;
+  a.met = [b.index];
+  b.met = [a.index];
+  a.gold = b.gold = 500;
+  const home = city(game, 0, at(5, 5));
+  const theirs = city(game, 1, at(12, 5));
+  ok(!embargoed(game, a.index, b.index), 'no embargo to begin with');
+  eq(declareEmbargo(game, a, b), null, 'declared');
+  ok(embargoed(game, a.index, b.index) && embargoed(game, b.index, a.index), 'it goes both ways');
+  ok(declareEmbargo(game, a, b) !== null, 'not twice');
+  const caravan = unit(game, 'caravan', 0, home.tile);
+  techsTo(game, 0, 1);
+  ok((startRoute(game, a, caravan, theirs.id) ?? '').includes('embargo'), 'no trade route to them');
+  ok((dealProblem(game, { from: a.index, to: b.index, items: [{ kind: 'goldPerTurn', from: a.index, amount: 1 }] }) ?? '').includes('embargoed'), 'no gold a turn');
+  eq(dealProblem(game, { from: a.index, to: b.index, items: [{ kind: 'gold', from: a.index, amount: 10 }] }), null, 'gold now is still allowed');
+  ok(game.relations!.events.some((e) => e.kind === 'embargo' && e.by === a.index && e.to === b.index), 'remembered');
+  ok((liftEmbargo(game, a, b) ?? '').includes('more before'), 'not lifted at once');
+  ok(liftEmbargo(game, b, a) !== null, 'only by the one who declared it');
+  const r = viewFor(game, a, null).players[b.index].relation;
+  ok(r?.embargoed === true && (r?.youEmbargo ?? 0) > 0, 'the view says so');
+  game.turn += embargoTurns(game);
+  ok(apply(game, a.index, { t: 'embargo', target: b.index, lift: true }).ok, 'lifted after its turns');
+  ok(!embargoed(game, a.index, b.index), 'trade is open again');
+  war(game, 0, 1);
+  ok(declareEmbargo(game, a, b) !== null, 'not while at war');
 });

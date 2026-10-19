@@ -9,7 +9,8 @@ import { banned, fundedGreatPeople, inForce } from './congress';
 import { projectEffects } from './projects';
 import { tradeLuxuries, tradeStrategics } from './diplomacy';
 import { aroundYields, naturalWonderOf, natureHappiness } from './nature';
-import { SPEEDS, type City, type Game, type Player } from './state';
+import { SPEEDS, type City, type Game, type Player, type Unit } from './state';
+import { teammates } from './teams';
 import { addYields, FEATURES, HILLS, IMPROVEMENTS, RESOURCES, tapped, tapsWith, TERRAINS, YIELD_KEYS, type Yields } from './terrain';
 import { isGreatPerson, isMilitary, UNITS } from './units';
 
@@ -54,8 +55,36 @@ export function cityEffects(game: Game, c: City, memo: CityMemo = {}): Effects[]
   return out;
 }
 
+/** Whether a tile is sea (water, not a lake). */
+export const seaTile = (game: Game, t: number) => !!TERRAINS[game.tiles[t].terrain].water && game.tiles[t].terrain !== 'lake';
+
 /** Whether a city is by the sea (not just a lake). */
-export const coastal = (game: Game, c: City) => neighbours(game.grid, c.tile).some((t) => TERRAINS[game.tiles[t].terrain].water && game.tiles[t].terrain !== 'lake');
+export const coastal = (game: Game, c: City) => neighbours(game.grid, c.tile).some((t) => seaTile(game, t));
+
+/** How near an enemy warship must be to a city to blockade it (tiles). */
+export const BLOCKADE_RANGE = 2;
+
+/** Whether a unit is a warship: one that fights at sea (not a cargo ship, work boat or great admiral). */
+const isWarship = (u: Unit) => UNITS[u.type]?.domain === 'sea' && isMilitary(UNITS[u.type]) && !isGreatPerson(u.type);
+
+/**
+ * The enemy warships blockading a city by the sea: those of a civ at war with its owner within
+ * `BLOCKADE_RANGE` tiles of it, while no warship of its own (or its team's) is as near to break it.
+ * None: it isn't blockaded.
+ */
+export function blockaders(game: Game, c: City): Unit[] {
+  if (!coastal(game, c)) return [];
+  const near = game.units.filter((u) => isWarship(u) && distance(game.grid, u.tile, c.tile) <= BLOCKADE_RANGE);
+  const enemies = near.filter((u) => atWar(game, u.owner, c.owner));
+  if (!enemies.length) return [];
+  return near.some((u) => u.owner === c.owner || teammates(game, u.owner, c.owner)) ? [] : enemies;
+}
+
+/**
+ * Whether a city is blockaded (`blockaders`): its sea tiles yield it nothing, its sea trade routes
+ * carry nothing, and it heals half as fast (`combat.ts`).
+ */
+export const blockaded = (game: Game, c: City) => blockaders(game, c).length > 0;
 
 /** Whether a military unit of the city's owner stands in it. */
 export const garrisoned = (game: Game, c: City) => game.units.some((u) => u.tile === c.tile && u.owner === c.owner && isMilitary(UNITS[u.type]));
@@ -274,7 +303,9 @@ export function cityYields(game: Game, c: City, mood = happiness(game, game.play
   // Its own tile: as a farmed one, at least 2 food, 1 production and 1 gold.
   const centre = workedYields(game, c, c.tile, effects);
   y = addYields(y, { food: Math.max(2, (centre.food ?? 0) + 1), prod: Math.max(1, centre.prod ?? 0), gold: Math.max(1, centre.gold ?? 0), science: centre.science, culture: centre.culture, faith: centre.faith });
-  for (const t of c.worked) y = addYields(y, workedYields(game, c, t, effects));
+  // (Blockaded, its sea tiles yield it nothing: the boats stay in harbour. Its lakes are its own.)
+  const blockade = blockaded(game, c);
+  for (const t of c.worked) if (!blockade || !seaTile(game, t)) y = addYields(y, workedYields(game, c, t, effects));
   const gp: Partial<Record<GreatKind, number>> = {};
   let specialists = 0;
   for (const [kind, n] of Object.entries(c.specialists) as [SpecialistKind, number][]) {

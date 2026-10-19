@@ -1,5 +1,6 @@
 import { atWar, capitalOf, civEffects, has, knows, knowsOf, nameTo, note, noteAll, speed } from './core';
 import { strategic } from './economy';
+import { embargoed } from './congress';
 import type { Game, Note, Player } from './state';
 import { sides, teammates } from './teams';
 import { eraOfCol, ERAS, TECHS } from './techs';
@@ -48,10 +49,10 @@ export interface Running {
   turns: number;
 }
 
-/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`; 'nuke': a nuclear weapon used on them; 'nukeSeen': a nuclear weapon used by a civ they knew, on anyone, `nuclearStrike`). */
+/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`; 'embargo': an embargo declared on them, `declareEmbargo`; 'nuke': a nuclear weapon used on them; 'nukeSeen': a nuclear weapon used by a civ they knew, on anyone, `nuclearStrike`). */
 export interface DiploEvent {
   turn: number;
-  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge' | 'nuke' | 'nukeSeen';
+  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge' | 'embargo' | 'nuke' | 'nukeSeen';
   by: number;
   to: number;
 }
@@ -62,6 +63,15 @@ export interface Relations {
   events: DiploEvent[];
   /** Deals a person turned down (or let lapse): who asked whom, when, and what was asked for (`askOf`). */
   declined?: { from: number; to: number; turn: number; ask: string }[];
+  /** Embargoes one civ has declared on another on its own (`declareEmbargo`): who, on whom, since when. */
+  embargoes?: Embargo[];
+}
+
+/** An embargo one civ declared on another (the World Congress's are its resolutions, `congress.ts`). */
+export interface Embargo {
+  by: number;
+  on: number;
+  turn: number;
 }
 
 /** What a deal asks of the side it's put to (its items from that side, in a fixed order), to tell a deal asked again. */
@@ -259,6 +269,9 @@ function itemProblem(game: Game, a: Player, b: Player, item: DealItem): string |
   }
 }
 
+/** What an embargo stops two civs trading: what would run between them for a while (gold now, borders, embassies and the rest still can be). */
+const EMBARGOED_ITEMS = new Set<DealItem['kind']>(['goldPerTurn', 'luxury', 'strategic', 'research']);
+
 /** What's wrong with a deal (null: it can be made). */
 export function dealProblem(game: Game, deal: Deal): string | null {
   const a = game.players[deal.from];
@@ -270,6 +283,7 @@ export function dealProblem(game: Game, deal: Deal): string | null {
   if (!deal.items.every(wellFormed)) return 'That deal makes no sense';
   const war = atWar(game, a.index, b.index);
   if (war && !deal.items.some((x) => x.kind === 'peace')) return "You're at war: only a peace deal";
+  if (embargoed(game, a.index, b.index) && deal.items.some((x) => EMBARGOED_ITEMS.has(x.kind))) return 'Trade between you is embargoed: no resources, gold a turn or research agreements';
   const seen = new Set<string>();
   for (const item of deal.items) {
     // The same thing twice is one thing, whatever else an item carries (a crafted key, another amount):
@@ -422,6 +436,8 @@ export function endDealings(game: Game, x: number, y: number) {
   const between = (i: number, j: number) => (i === x && j === y) || (i === y && j === x);
   rel.running = rel.running.filter((r) => !between(r.a, r.b));
   rel.offers = rel.offers.filter((o) => !between(o.from, o.to));
+  // (A civ gone from the game embargoes no one, and is embargoed by no one.)
+  if (rel.embargoes) rel.embargoes = rel.embargoes.filter((e) => game.players[e.by]?.alive && game.players[e.on]?.alive);
   for (const [p, q] of [[game.players[x], y], [game.players[y], x]] as const) {
     p.diplomacy.friends[q] = 0;
     p.diplomacy.pacts[q] = 0;
@@ -455,6 +471,62 @@ export function denounce(game: Game, p: Player, them: Player): string | null {
   }
   remember(game, 'denounce', p.index, them.index);
   noteAll(game, (r) => (r === p ? null : r === them ? { text: `${p.name} has denounced you!`, kind: 'war' } : knowsOf(r, p) || knowsOf(r, them) ? { text: `${nameTo(r, p, true)} has denounced ${nameTo(r, them)}!`, kind: 'war', topic: 'wars' } : null));
+  return null;
+}
+
+/** The turns an embargo a civ declared must stand before it can lift it (ten, at speed). */
+export const embargoTurns = (game: Game) => Math.max(5, Math.round(10 * speed(game)));
+
+/** The embargo a civ has declared on another, if it has. */
+export const embargoOn = (game: Game, by: number, on: number) => game.relations?.embargoes?.find((e) => e.by === by && e.on === on);
+
+/** Why a civ can't declare an embargo on another, if it can't. */
+export function cannotEmbargo(game: Game, p: Player, them: Player | undefined): string | null {
+  if (!dealer(p) || !dealer(them) || p === them) return 'Not a civ to embargo';
+  if (teammates(game, p.index, them.index)) return 'They are on your team';
+  if (!hasMet(game, p, them)) return "You haven't met them";
+  if (atWar(game, p.index, them.index)) return "You're at war: no trade runs between you anyway";
+  if (embargoOn(game, p.index, them.index)) return `You have an embargo on ${them.name} already`;
+  return null;
+}
+
+/**
+ * A civ declares an embargo on another, on its own: no trade routes run between them (those running
+ * end with the turn), the resources and gold a turn they had agreed stop, and no such deals are made
+ * until it's lifted. The world hears of it, and the civ embargoed remembers it.
+ */
+export function declareEmbargo(game: Game, p: Player, them: Player): string | null {
+  const why = cannotEmbargo(game, p, them);
+  if (why) return why;
+  const rel = relationsOf(game);
+  (rel.embargoes ??= []).push({ by: p.index, on: them.index, turn: game.turn });
+  const between = (r: Running) => (r.a === p.index && r.b === them.index) || (r.a === them.index && r.b === p.index);
+  rel.running = rel.running.filter((r) => !between(r) || !EMBARGOED_ITEMS.has(r.item.kind));
+  rel.offers = rel.offers.filter((o) => !((o.from === p.index && o.to === them.index) || (o.from === them.index && o.to === p.index)) || !o.items.some((x) => EMBARGOED_ITEMS.has(x.kind)));
+  p.diplomacy.research[them.index] = them.diplomacy.research[p.index] = 0;
+  remember(game, 'embargo', p.index, them.index);
+  noteAll(game, (r) =>
+    r === p
+      ? { text: `You have declared an embargo on ${them.name}: no trade runs between you until you lift it (after ${embargoTurns(game)} turns at the soonest).`, kind: 'info' }
+      : r === them
+        ? { text: `${p.name} has declared an embargo on you: no trade runs between you.`, kind: 'bad' }
+        : knowsOf(r, p) || knowsOf(r, them)
+          ? { text: `${nameTo(r, p, true)} has declared an embargo on ${nameTo(r, them)}.`, kind: 'info', topic: 'wars' }
+          : null,
+  );
+  return null;
+}
+
+/** A civ lifts the embargo it declared on another (once it has stood its turns). */
+export function liftEmbargo(game: Game, p: Player, them: Player | undefined): string | null {
+  const e = them && embargoOn(game, p.index, them.index);
+  if (!them || !e) return 'You have no embargo on them';
+  const left = e.turn + embargoTurns(game) - game.turn;
+  if (left > 0) return `An embargo stands ${embargoTurns(game)} turns: ${left} more before you can lift it`;
+  const rel = relationsOf(game);
+  rel.embargoes = (rel.embargoes ?? []).filter((x) => x !== e);
+  note(game, p.index, { text: `You have lifted your embargo on ${them.name}.`, kind: 'info' });
+  note(game, them.index, { text: `${p.name} has lifted its embargo on you.`, kind: 'good' });
   return null;
 }
 

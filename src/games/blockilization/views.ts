@@ -3,7 +3,7 @@ import { packKnown, packStatic, packYields, type CityInfo, type CityWire, type D
 import { BUILDINGS } from './rules/buildings';
 import { canPillage, cityMaxHp, cityStrength, strength, type Modifier } from './rules/combat';
 import { atWar, citiesOf, civEffects, has, knows, seesResource, seesUnit, techCost } from './rules/core';
-import { assignCitizens, cityEffects, cityYields, goldUpkeep, goldenCost, growthThreshold, happiness, luxuries, nextTile, policyCost, purchaseCost, SPECIALIST_YIELD, specialistSlots, strategic, tileCultureCost, tileGoldCost, tileYields, workedYields } from './rules/economy';
+import { assignCitizens, blockaded, cityEffects, cityYields, goldUpkeep, goldenCost, growthThreshold, happiness, luxuries, nextTile, policyCost, purchaseCost, SPECIALIST_YIELD, specialistSlots, strategic, tileCultureCost, tileGoldCost, tileYields, workedYields } from './rules/economy';
 import { ANARCHY_TURNS, blockers, buyable, canChooseIdeology, ideologySwitch, constructible, eraOf, faithPurchases, heldBuildings, itemCost, productionToward, reformationDue, score, trainable, trainOptions, upgradeCost, upgradeTo, workTurns } from './rules/game';
 import { distance, neighbours, within } from './rules/hex';
 import { pantheonCost } from './rules/religion';
@@ -28,7 +28,7 @@ import { teammates, teamOf } from './rules/teams';
 import { addYields, RESOURCES, YIELD_KEYS, type Yields } from './rules/terrain';
 import { isMilitary, UNITS } from './rules/units';
 import { opinionOf, stanceOf } from './rules/ai/opinion';
-import { dealer, dealGold, dealTurns, hasMet, researchCost, tradeable } from './rules/diplomacy';
+import { dealer, dealGold, dealTurns, embargoOn, embargoTurns, hasMet, researchCost, tradeable } from './rules/diplomacy';
 
 /**
  * What each player's screen is told: the terrain once, then their own view of the game after anything
@@ -49,6 +49,7 @@ function cityWire(game: Game, c: City, own: boolean, mood: number): CityWire {
   if (wonders.length) w.wonders = wonders;
   const walls = Math.min(3, WALLS.filter((b) => c.buildings.some((x) => (BUILDINGS[x]?.replaces ?? x) === b)).length);
   if (walls) w.walls = walls;
+  if (blockaded(game, c)) w.blockaded = true;
   if (!own) return w;
   const y = cityYields(game, c, mood);
   const item = c.queue[0];
@@ -176,7 +177,7 @@ function selfWire(game: Game, p: Player): SelfWire {
 /** What a player could put into a deal. */
 function tradeWire(game: Game, p: Player): SelfWire['trade'] {
   const t = tradeable(game, p);
-  return { luxuries: Object.fromEntries(t.luxuries), strategic: t.strategic, researchCost: researchCost(game, eraOf(p)), writing: knows(p, 'writing'), philosophy: knows(p, 'philosophy'), dealTurns: dealTurns(game) };
+  return { luxuries: Object.fromEntries(t.luxuries), strategic: t.strategic, researchCost: researchCost(game, eraOf(p)), writing: knows(p, 'writing'), philosophy: knows(p, 'philosophy'), dealTurns: dealTurns(game), embargoTurns: embargoTurns(game) };
 }
 
 /** The World Congress as a player sees it. */
@@ -258,6 +259,16 @@ function unVotesWire(game: Game): NonNullable<View['unVotes']> {
   return { votes: [...votes].map(([candidate, n]) => ({ candidate, votes: n })).sort((a, b) => b.votes - a.votes), needed };
 }
 
+/** The embargoes between a civ and the viewer (only what's so: an older view lacks them all). */
+function embargoWire(game: Game, me: Player, o: Player): Pick<Relation, 'youEmbargo' | 'embargoYou' | 'embargoed'> {
+  const mine = embargoOn(game, me.index, o.index);
+  return {
+    ...(mine ? { youEmbargo: Math.max(0, mine.turn + embargoTurns(game) - game.turn) } : {}),
+    ...(embargoOn(game, o.index, me.index) ? { embargoYou: true } : {}),
+    ...(embargoed(game, me.index, o.index) ? { embargoed: true } : {}),
+  };
+}
+
 /** How things stand between a civ and a player who's met it. */
 function relationWire(game: Game, me: Player, o: Player): Relation {
   const opinion = o.bot ? opinionOf(game, o, me) : null;
@@ -269,6 +280,7 @@ function relationWire(game: Game, me: Player, o: Player): Relation {
     research: o.diplomacy.research[me.index] ?? 0,
     denouncedYou: o.diplomacy.denounced[me.index] ?? 0,
     youDenounced: me.diplomacy.denounced[o.index] ?? 0,
+    ...embargoWire(game, me, o),
     embassyThere: !!me.diplomacy.embassy[o.index],
     embassyHere: !!o.diplomacy.embassy[me.index],
     gold: o.gold,

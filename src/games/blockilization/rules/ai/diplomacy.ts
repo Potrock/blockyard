@@ -1,6 +1,7 @@
 import { atWar, knows } from '../core';
 import { BUILDINGS } from '../buildings';
-import { askOf, dealTurns, dealer, declinedLately, denounced, friends, hasMet, lentLuxuries, luxuryCopies, pacted, relationsOf, researchCost, spareIncome, tradeable, type Deal, type DealItem } from '../diplomacy';
+import { askOf, cannotEmbargo, dealTurns, dealer, declinedLately, denounced, embargoOn, embargoTurns, friends, hasMet, lentLuxuries, luxuryCopies, pacted, relationsOf, researchCost, spareIncome, tradeable, type Deal, type DealItem } from '../diplomacy';
+import { embargoed } from '../congress';
 import { strategic } from '../economy';
 import { eraOf } from '../game';
 import type { Game, Player } from '../state';
@@ -199,13 +200,21 @@ export function negotiate(ctx: Ctx) {
   if (game.turn > 30) {
     const hated = known.filter((o) => !denounced(game, me, o.index) && !atWar(game, me, o.index) && (opinions.get(o.index) ?? 0) <= -25).sort((a, b) => (opinions.get(a.index) ?? 0) - (opinions.get(b.index) ?? 0))[0];
     if (hated) act(ctx, { t: 'denounce', target: hated.index });
+    // One it has denounced and hates still more is embargoed too (one a turn); lifted once it's no longer hated.
+    const loathed = known.find((o) => denounced(game, me, o.index) && !atWar(game, me, o.index) && !embargoOn(game, me, o.index) && (opinions.get(o.index) ?? 0) <= -40);
+    if (loathed && !cannotEmbargo(game, p, loathed)) act(ctx, { t: 'embargo', target: loathed.index });
+    const forgiven = known.find((o) => {
+      const e = embargoOn(game, me, o.index);
+      return e && game.turn - e.turn >= embargoTurns(game) && (opinions.get(o.index) ?? 0) > -15;
+    });
+    if (forgiven) act(ctx, { t: 'embargo', target: forgiven.index, lift: true });
   }
   if ((game.turn + me) % 3 !== 0) return;
   const offered = (mem.offered ??= {});
   // A person is asked at most every ten turns by each bot, and not while any deal waits for their
   // answer; what they've turned down lately (from anyone) isn't asked again for twenty.
   const partners = known
-    .filter((o) => !atWar(game, me, o.index) && !denounced(game, me, o.index) && !denounced(game, o.index, me) && (opinions.get(o.index) ?? 0) > -8)
+    .filter((o) => !atWar(game, me, o.index) && !denounced(game, me, o.index) && !denounced(game, o.index, me) && !embargoed(game, me, o.index) && (opinions.get(o.index) ?? 0) > -8)
     .filter((o) => o.bot || ((game.turn - (offered[o.index] ?? -99)) >= 10 && !relationsOf(game).offers.some((x) => x.to === o.index)))
     .sort((a, b) => (opinions.get(b.index) ?? 0) - (opinions.get(a.index) ?? 0));
   for (const o of partners) {

@@ -3,14 +3,14 @@ import { BUILDINGS, type Building } from './buildings';
 import { CIVS, unitFor } from './civs';
 import { canPillage, capture, citadelTurn, cityHeal, falloutTurn, cityMaxHp, cityFire, cityHooks, melee, nuke, pillage, ranged, rangeOf, type CombatResult } from './combat';
 import { aName, atWar, canStand, capitalOf, cityAt, cityById, citiesOf, civEffects, civOf, endWars, has, inSentence, knows, knowsOf, maxMoves, nameTo, note, noteAll, random, removeUnit, seesResource, spawnUnit, speed, techCost, unitById, unitsOf, updateAllVisibility, updateVisibility } from './core';
-import { assignCitizens, cityEffects, cityYields, claim, coastal, foodKept, goldUpkeep, goldenCost, greatCost, greatPeopleBonus, growthThreshold, happiness, isBuilding, luxuries, nextTile, policyCost, purchaseCost, scaled, SPECIALIST_YIELD, specialistSlots, strategic, tileCultureCost, tileGoldCost, workable, dissent, preferredIdeology } from './economy';
+import { assignCitizens, blockaders, cityEffects, cityYields, claim, coastal, foodKept, goldUpkeep, goldenCost, greatCost, greatPeopleBonus, growthThreshold, happiness, isBuilding, luxuries, nextTile, policyCost, purchaseCost, scaled, SPECIALIST_YIELD, specialistSlots, strategic, tileCultureCost, tileGoldCost, workable, dissent, preferredIdeology } from './economy';
 import { CHOOSABLE, type Effects, type GreatKind, type SpecialistKind } from './effects';
 import { barbarianTurn } from './barbarians';
 import { allyOf, cityStates, cityStateTurn, coup, CS_WAR_INFLUENCE, gift, giftUnit, tribute } from './citystates';
 import { congressTurn, inForce, propose as proposeResolution, RESOLUTION_KINDS, vote as voteOnResolution, type ResolutionKind } from './congress';
 import { cannotSendDiplomat, longGameTurn, partCost, partsBuildable, routesFull, routesGold, spiesOf, startRoute, stolen, surveillanceTurns, tourismOf } from './trade';
 import { canContribute, contribute, isProject, projectLeft } from './projects';
-import { answer, cityTaken, denounce, diplomacyTurn, endDealings, endWar, nuclearStrike, propose, remember, WAR_WHYS, warDeclared, warWords, type DealItem, type WarWhy } from './diplomacy';
+import { answer, cityTaken, declareEmbargo, denounce, liftEmbargo, diplomacyTurn, endDealings, endWar, nuclearStrike, propose, remember, WAR_WHYS, warDeclared, warWords, type DealItem, type WarWhy } from './diplomacy';
 import { canBuyReligious, capFollowers, faithBuildings, faithCost, faithTurn, faithUnit, foundReligion, inquisition, spread, spreadsOf } from './faith';
 import { fromPromotions, promotionsDue, promotionsFor, PROMOTIONS } from './promotions';
 import { liberate, liberation } from './liberation';
@@ -91,6 +91,7 @@ export type Order =
   | { t: 'deal'; target: number; items: DealItem[] }
   | { t: 'answer'; offer: number; accept: boolean }
   | { t: 'denounce'; target: number }
+  | { t: 'embargo'; target: number; lift?: boolean }
   | { t: 'automate'; unit: number; mode: 'work' | 'explore' | null }
   | { t: 'ready'; ready: boolean };
 
@@ -859,6 +860,7 @@ const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }
   deal: { target: 'int', items: 'list' },
   answer: { offer: 'int', accept: 'bool' },
   denounce: { target: 'int' },
+  embargo: { target: 'int', lift: 'bool?' },
   automate: { unit: 'int', mode: ['work', 'explore', null] },
   ready: { ready: 'bool' },
 };
@@ -1548,6 +1550,11 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       const why = denounce(game, p, game.players[o.target]);
       return why ? fail(why) : OK;
     }
+    case 'embargo': {
+      const them = game.players[o.target];
+      const why = o.lift ? liftEmbargo(game, p, them) : them ? declareEmbargo(game, p, them) : 'Not a civ to embargo';
+      return why ? fail(why) : OK;
+    }
     case 'automate': {
       const type = UNITS[u.type];
       if (o.mode === 'work' && !type.abilities?.includes('build') && !type.abilities?.includes('build_sea')) return fail('Only workers improve the land by themselves');
@@ -1922,7 +1929,16 @@ function cityTurn(game: Game, c: City, y: ReturnType<typeof cityYields>) {
       claim(game, c, t);
     }
   }
-  // Healing (less after an attack: `cityHeal`), resistance.
+  // A blockade from the sea begun or broken: its owner told, and those blockading it.
+  const ships = blockaders(game, c);
+  if (!!ships.length !== !!c.blockaded) {
+    c.blockaded = ships.length ? true : undefined;
+    if (ships.length) {
+      note(game, c.owner, { text: `${c.name} is blockaded: its sea tiles and sea trade routes yield nothing, and it heals half as fast. A warship of yours nearby breaks it.`, at: c.tile, kind: 'bad' });
+      for (const by of new Set(ships.map((u) => u.owner))) note(game, by, { text: `Your fleet blockades ${c.name}.`, at: c.tile, kind: 'war' });
+    } else note(game, c.owner, { text: `The blockade of ${c.name} is broken.`, at: c.tile, kind: 'good' });
+  }
+  // Healing (less after an attack, or blockaded: `cityHeal`), resistance.
   c.hp = Math.min(cityMaxHp(game, c), c.hp + cityHeal(game, c));
   c.attacked = undefined;
   if (c.resistance) c.resistance--;
