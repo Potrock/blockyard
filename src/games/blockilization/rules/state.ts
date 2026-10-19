@@ -117,6 +117,8 @@ export interface City {
   hp: number;
   /** Attacked since its last turn (so it heals less: `cityHeal`). */
   attacked?: boolean;
+  /** Blockaded from the sea at its last turn's end (`blockaded`), to tell its owner when that starts and ends. */
+  blockaded?: boolean;
   buildings: string[];
   queue: Production[];
   /** Units finished go back to the end of the queue, to be built again (the city screen's Repeat). */

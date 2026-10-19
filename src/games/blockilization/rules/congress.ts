@@ -69,8 +69,13 @@ const majors = (game: Game) => game.players.filter((p) => p.alive && !p.cityStat
 /** Whether a resolution is in force. */
 export const inForce = (game: Game, kind: ResolutionKind, test: (r: Resolution) => boolean = () => true) => !!game.congress?.active.some((r) => r.kind === kind && test(r));
 
-/** Whether trade routes between two civs are embargoed (either one embargoed). */
-export const embargoed = (game: Game, a: number, b: number) => a !== b && inForce(game, 'embargo', (r) => r.civ === a || r.civ === b);
+/**
+ * Whether trade between two civs is embargoed: either one embargoed by the World Congress, or one
+ * of them embargoing the other on its own (`diplomacy.ts`'s `declareEmbargo`). No trade routes run
+ * between them, and they make no deals of resources, gold a turn or research.
+ */
+export const embargoed = (game: Game, a: number, b: number) =>
+  a !== b && (inForce(game, 'embargo', (r) => r.civ === a || r.civ === b) || !!game.relations?.embargoes?.some((e) => (e.by === a && e.on === b) || (e.by === b && e.on === a)));
 
 /** Whether a luxury is banned (it gives no happiness). */
 export const banned = (game: Game, luxury: string) => inForce(game, 'ban_luxury', (r) => r.luxury === luxury);

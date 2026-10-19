@@ -235,6 +235,7 @@ export function cityAlerts(city: CityWire): El[] {
     ].filter(Boolean);
     out.push(h('div.cv-alert', {}, icon('info', 16, '#ffb36b'), `${said.join('. ')}.`));
   }
+  if (city.blockaded) out.push(h('div.cv-alert', {}, icon('war', 16, '#ff6b5e'), 'Blockaded by enemy warships: its sea tiles and sea trade routes yield nothing, and it heals half as fast. A warship of yours within 2 tiles breaks the blockade.'));
   return out;
 }
 

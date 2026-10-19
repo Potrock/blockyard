@@ -1,6 +1,6 @@
 import { BUILDINGS } from './buildings';
 import { atWar, canStand, cityAt, cityById, note, random, removeUnit, seesUnit, speed, updateVisibility } from './core';
-import { assignCitizens, cityEffects, civEffects, garrisoned, has, happiness } from './economy';
+import { assignCitizens, blockaded, cityEffects, civEffects, garrisoned, has, happiness } from './economy';
 import type { CombatWhen } from './effects';
 import { cityReligion } from './faith';
 import { distance, line, neighbours, within } from './hex';
@@ -62,7 +62,7 @@ export function cityFireStrength(game: Game, c: City): number {
 /**
  * What a city heals as its turn ends: 20, but 8 if it was attacked since its last turn, and nothing
  * if it's surrounded (every tile round it held by an enemy soldier or one no one can stand on): a
- * siege that keeps up its fire wears the walls down.
+ * siege that keeps up its fire wears the walls down. Blockaded from the sea (`blockaded`), half.
  */
 export function cityHeal(game: Game, c: City): number {
   const surrounded = neighbours(game.grid, c.tile).every((t) => {
@@ -71,7 +71,8 @@ export function cityHeal(game: Game, c: City): number {
     const m = occupants(game, t).military;
     return !!m && atWar(game, m.owner, c.owner);
   });
-  return surrounded ? 0 : c.attacked ? 8 : 20;
+  const heal = surrounded ? 0 : c.attacked ? 8 : 20;
+  return blockaded(game, c) ? Math.floor(heal / 2) : heal;
 }
 
 /** A city's hit points at full health: 200, and more with walls and the rest. */

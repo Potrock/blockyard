@@ -1,6 +1,6 @@
 import { allyOf, cityStates, influenceOf } from '../citystates';
 import { atWar, capitalOf, citiesOf } from '../core';
-import { denounced, friends, pacted, warWords, type DiploEvent } from '../diplomacy';
+import { denounced, embargoOn, friends, pacted, warWords, type DiploEvent } from '../diplomacy';
 import { cityReligion } from '../faith';
 import { distance } from '../hex';
 import type { Game, Player } from '../state';
@@ -62,6 +62,8 @@ export function opinionOf(game: Game, a: Player, b: Player): Opinion {
   if (denounced(game, bi, ai)) add('You denounced us', -12);
   else add('You denounced us once', sum((e) => e.kind === 'denounce' && e.by === bi && e.to === ai, 80, -6, 6, 0));
   if (denounced(game, ai, bi)) add('We have denounced you', -6);
+  if (embargoOn(game, bi, ai)) add('You have embargoed us', -8);
+  else add('You embargoed us once', sum((e) => e.kind === 'embargo' && e.by === bi && e.to === ai, 60, -4, 4, 0));
   const friendDenounced = myFriends.filter((o) => denounced(game, bi, o.index));
   if (friendDenounced.length) add(`You denounced our friend ${friendDenounced[0].name}`, -4);
 

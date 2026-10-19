@@ -152,6 +152,12 @@ export interface Relation {
   research: number;
   denouncedYou: number;
   youDenounced: number;
+  /** An embargo the viewer declared on them: the turns before it can be lifted (0: it can be now). */
+  youEmbargo?: number;
+  /** An embargo they declared on the viewer. */
+  embargoYou?: boolean;
+  /** Whether trade between them and the viewer is embargoed, by either or by the World Congress. */
+  embargoed?: boolean;
   /** The viewer's embassy in their capital, and theirs in the viewer's. */
   embassyThere: boolean;
   embassyHere: boolean;
@@ -238,6 +244,8 @@ export interface CityWire {
   maxHp: number;
   capital: boolean;
   strength: number;
+  /** Blockaded from the sea by enemy warships (`blockaded`): its sea tiles and sea trade routes yield nothing, and it heals half as fast. */
+  blockaded?: boolean;
   /** Own cities: what's being built, and when it's done; growth. */
   building?: { kind: Production['kind']; id: string; turns: number; progress: number };
   growth?: number;
@@ -343,7 +351,7 @@ export interface SelfWire {
   tourism: number;
   vote: number | null;
   /** What the viewer could put into a deal: luxuries (with copies) and strategic resources to spare, what a research agreement costs, Writing and Philosophy known. */
-  trade: { luxuries: Record<string, number>; strategic: Record<string, number>; researchCost: number; writing: boolean; philosophy: boolean; dealTurns: number };
+  trade: { luxuries: Record<string, number>; strategic: Record<string, number>; researchCost: number; writing: boolean; philosophy: boolean; dealTurns: number; embargoTurns: number };
 }
 
 export interface View {

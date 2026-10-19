@@ -102,6 +102,7 @@ function marks(p: PlayerSummary): El {
     p.opensBorders ? m('trade', '#6ab8ff', 'Their borders are open to you') : null,
     r.deals.length ? m('scroll', '#f6cf4a', `${r.deals.length} deal${r.deals.length > 1 ? 's' : ''} running`) : null,
     r.denouncedYou > 0 ? m('skull', '#ff6b5e', 'They have denounced you') : null,
+    r.embargoed ? m('trade', '#ff6b5e', 'Trade between you is embargoed') : null,
     store.view!.waiting.includes(p.index) ? m('turn', '#b7c3cf', 'Your deal awaits their answer') : null,
   );
 }
@@ -183,6 +184,10 @@ function civPane(p: PlayerSummary): El {
   if (p.openBorders || p.opensBorders) line('trade', '#6ab8ff', p.openBorders && p.opensBorders ? 'Borders open both ways' : p.opensBorders ? 'Their borders are open to you' : 'Your borders are open to them');
   if (r.youDenounced > 0) line('skull', '#f0a24a', `You have denounced them (${r.youDenounced} turns)`);
   if (r.denouncedYou > 0) line('skull', '#ff6b5e', `They have denounced you (${r.denouncedYou} turns)`);
+  if (r.youEmbargo !== undefined) line('trade', '#f0a24a', `You have declared an embargo on them${r.youEmbargo > 0 ? ` (you can lift it in ${r.youEmbargo} turns)` : ''}`);
+  if (r.embargoYou) line('trade', '#ff6b5e', 'They have declared an embargo on you');
+  if (r.embargoed && r.youEmbargo === undefined && !r.embargoYou) line('trade', '#ff6b5e', 'The World Congress embargoes trade between you');
+  if (r.embargoed) line('trade', '#b7c3cf', 'Embargoed: no trade routes, and no deals of resources, gold a turn or research');
   for (const d of r.deals) {
     const l = itemLabel(d.item, d.turns);
     const dir = 'from' in d.item ? (d.item.from === v.you ? 'You give' : 'They give') : 'Both';
@@ -229,6 +234,17 @@ function civPane(p: PlayerSummary): El {
       !mate && !p.war && r.friends <= 0 && r.youDenounced <= 0 && r.denouncedYou <= 0 ? h('button.cv-btn', { onclick: () => openTrade([{ kind: 'friendship' }]) }, icon('people', 14), 'Declare friendship…') : null,
       !mate && !p.war && r.youDenounced <= 0
         ? h('button.cv-btn', { onclick: () => ask(`Denounce ${p.name} before the world?${r.friends > 0 ? ' This ends your friendship.' : ''}`, 'Denounce', () => send({ t: 'denounce', target: p.index })) }, icon('skull', 14), 'Denounce')
+        : null,
+      !mate && !p.war && r.youEmbargo === undefined
+        ? h(
+            'button.cv-btn',
+            { onclick: () => ask(`Declare an embargo on ${p.name}? No trade routes will run between you, and your deals of resources, gold a turn and research with them end. It stands at least ${v.self.trade.embargoTurns} turns.`, 'Declare embargo', () => send({ t: 'embargo', target: p.index })) },
+            icon('trade', 14),
+            'Embargo',
+          )
+        : null,
+      r.youEmbargo !== undefined
+        ? h('button.cv-btn', { onclick: () => send({ t: 'embargo', target: p.index, lift: true }), disabled: r.youEmbargo > 0, title: r.youEmbargo > 0 ? `You can lift it in ${r.youEmbargo} turns` : undefined }, icon('trade', 14), 'Lift embargo')
         : null,
       p.war && p.peaceOffered
         ? h('button.cv-btn.gold', { onclick: () => send({ t: 'peace', target: p.index }), title: `${p.name} has offered peace: accept it` }, icon('peace', 14), 'Accept their peace')

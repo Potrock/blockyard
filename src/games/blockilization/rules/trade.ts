@@ -1,6 +1,6 @@
 import { BUILDINGS, SPACESHIP_PARTS } from './buildings';
 import { aName, atWar, cityById, cityAt, citiesOf, civOf, knows, nameTo, note, noteAll, random, speed, techCost } from './core';
-import { cityEffects, cityYields, civEffects, has, landBodies, waterBodies } from './economy';
+import { blockaded, cityEffects, cityYields, civEffects, has, landBodies, waterBodies } from './economy';
 import type { Effects } from './effects';
 import { embargoed } from './congress';
 import { remember } from './diplomacy';
@@ -112,7 +112,7 @@ export function startRoute(game: Game, p: Player, u: Unit, toId: number, cargo: 
 export function routeYield(game: Game, p: Player, r: Route): { gold: number; science: number; food: number; prod: number } {
   const from = cityById(game, r.from);
   const to = cityById(game, r.to);
-  if (!from || !to) return { gold: 0, science: 0, food: 0, prod: 0 };
+  if (!from || !to || routeBlockaded(game, r)) return { gold: 0, science: 0, food: 0, prod: 0 };
   if (to.owner === p.index) return r.cargo === 'prod' ? { gold: 0, science: 0, food: 0, prod: 2 + Math.floor(from.pop / 4) } : { gold: 0, science: 0, food: 3 + Math.floor(from.pop / 4), prod: 0 };
   const them = game.players[to.owner];
   const civ = civEffects(game, p);
@@ -122,6 +122,14 @@ export function routeYield(game: Game, p: Player, r: Route): { gold: number; sci
   if (p.ideology && them.ideology === p.ideology && has(civ, 'ideology_trade_gold')) gold += 3;
   const science = Math.max(0, Math.floor((them.techs.length - p.techs.length) / 3));
   return { gold, science, food: 0, prod: 0 };
+}
+
+/** Whether a sea route is held up by a blockade of either of its cities (it carries nothing, but still runs out). */
+export function routeBlockaded(game: Game, r: Route): boolean {
+  if (!r.sea) return false;
+  const from = cityById(game, r.from);
+  const to = cityById(game, r.to);
+  return (!!from && blockaded(game, from)) || (!!to && blockaded(game, to));
 }
 
 /** Whether a route still runs: both its cities standing, its own still, no war or embargo between them. */
@@ -142,7 +150,7 @@ export function routesGold(game: Game, p: Player): number {
     for (const r of routesOf(o)) {
       if (!running(game, o, r)) continue;
       if (o === p) gold += routeYield(game, p, r).gold;
-      else if (cityById(game, r.to)?.owner === p.index) gold += 1;
+      else if (cityById(game, r.to)?.owner === p.index && !routeBlockaded(game, r)) gold += 1;
     }
   return gold;
 }
