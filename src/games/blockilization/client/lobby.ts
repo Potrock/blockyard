@@ -157,21 +157,26 @@ export function seatTeam(seat: LobbySeat, canPick: boolean, send: (a: LobbyActio
   return h('span.lb-teams', {}, pick(null), ...Array.from({ length: TEAMS }, (_, t) => pick(t)));
 }
 
-/** The address of a room of this game (blank: the public game), to open again. */
-const roomAddress = (room: string) => `blockyard.gg/?game=blockilization${room === 'public' ? '' : `&room=${room}`}`;
+/** When a game was last played, in a few words. */
+function playedWhen(at: string): string {
+  const mins = (Date.now() - Date.parse(at)) / 60000;
+  if (!(mins >= 0)) return '';
+  if (mins < 60) return 'played just now';
+  if (mins < 60 * 24) return `played ${Math.round(mins / 60)} h ago`;
+  return `played ${new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+}
 
 /**
- * This person's saved games in other rooms: each one's turn, their civ and who else is in it, and
- * the room's address to open (a game's screen can't take you there itself), selected at a click
- * to copy. Saves are kept by room: the lobby otherwise offers only this room's.
+ * Every unfinished game this person has a seat in, wherever it was played: its turn, their civ, who
+ * else is in it and when it was last played. The host carries one on here (the others in it join
+ * them once it's under way); anyone with a seat in one can throw it away.
  */
-export function savedGamesBox(L: LobbyView): El | null {
+export function savedGamesBox(L: LobbyView, isHost: boolean, send: (a: LobbyAction) => void): El | null {
   if (!L.saves?.length) return null;
   return h(
     'div.lb-saves',
     {},
     h('div.cv-label.sect', {}, L.saves.length === 1 ? 'Your saved game' : 'Your saved games'),
-    h('small.cv-muted', {}, 'Saved in other rooms: open its address to carry on there.'),
     ...L.saves.map((g) => {
       const civ = g.civ ? CIVS[g.civ] : null;
       return h(
@@ -182,9 +187,11 @@ export function savedGamesBox(L: LobbyView): El | null {
           'div.cv-grow',
           {},
           h('b', {}, `Turn ${g.turn}${civ ? ` · ${civ.name}` : ''}`),
-          h('small.cv-muted', {}, `${g.room === 'public' ? 'The public game' : `Room ${g.room}`} · ${g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots'}`),
+          h('small.cv-muted', {}, [g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots', g.elsewhere ? 'being played in another room now' : playedWhen(g.at)].filter(Boolean).join(' · ')),
         ),
-        h('input.cv-input.lb-address', { value: roomAddress(g.room), readonly: 'readonly', onclick: (e: Event) => (e.target as HTMLInputElement).select(), title: 'Copy this address and open it' }),
+        isHost && !g.elsewhere && h('button.cv-btn.gold.small', { onclick: () => send({ a: 'resume', id: g.id }) }, 'Carry on'),
+        !isHost && h('small.cv-muted', {}, 'The host can carry it on'),
+        h('button.cv-btn.small', { onclick: () => send({ a: 'discard', id: g.id }), title: 'Throw this game away, for everyone in it' }, 'Discard'),
       );
     }),
   );
@@ -216,7 +223,6 @@ button.lb-team { opacity: .45; cursor: pointer; } button.lb-team.on { opacity: 1
 .lb-save { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(106,184,255,.06); border: 1px solid rgba(106,184,255,.25); }
 .lb-save b { display: block; font-size: 14px; }
 .lb-nociv.small { width: 26px; height: 26px; font-size: 16px; }
-.lb-address { width: 290px; max-width: 45%; font-size: 12px !important; }
 @media (max-width: 760px), (max-height: 520px) {
   .lb-foot { bottom: -14px; margin: 12px -14px -14px; padding: 8px 14px; }
   .lb-desc { margin-left: 90px; }

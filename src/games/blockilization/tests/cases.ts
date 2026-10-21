@@ -44,7 +44,7 @@ import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasM
 import { bindTeams } from '../rules/teams';
 import { cityInfo, mapWire, viewFor } from '../views';
 import { packStatic, unpackKnown, unpackStatic, type KnownTile } from '../protocol';
-import { forgetSave, noteOldSaves, noteSave, savedGames, SaveThrottle } from '../saves';
+import { autoKey, autosaveTurns, forgetGame, gameId, inGame, moveRoomSaves, playedElsewhere, saveGame, savedGames, SaveThrottle } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
@@ -3439,38 +3439,59 @@ test('the replay after a load carries on where it was (nothing twice); a turn co
   eq(JSON.stringify(loaded.replay).length - size, 3 + 3 * moved, `a turn's record: three characters, and three for each of the ${moved} tiles that changed hands`);
 });
 
-test('a person’s saved games in other rooms are listed, from notes kept beside the saves, older saves noted once', () => {
+test('saved games are each person’s, by account: listed in any room, carried on anywhere, never replaced by a new game; room saves moved over', () => {
   // A store as `game.store` is: every room's keys together.
   const data = new Map<string, unknown>();
   let reads = 0;
   const store = {
-    get: <T,>(k: string) => (k.startsWith('save:') && reads++, structuredClone(data.get(k)) as T | undefined),
+    get: <T,>(k: string) => ((k.startsWith('save:') || k.startsWith('game:')) && reads++, structuredClone(data.get(k)) as T | undefined),
     set: (k: string, v: unknown) => void data.set(k, structuredClone(v)),
     delete: (k: string) => void data.delete(k),
     keys: (prefix = '') => [...data.keys()].filter((k) => k.startsWith(prefix)),
   };
   const seat = (key: string, name: string, civ: string | null, bot = false) => ({ key, name, civ, bot });
   const ann = 'acct:ann';
-  // Saved before there were notes: Ann's game in room k3x9f2 with Bob, one of hers in the public game, and one without her.
-  data.set('save:k3x9f2', { game: { turn: 142, over: null }, seats: [seat(ann, 'Ann', 'rome'), seat('name:Bob', 'Bob', 'egypt'), seat('bot:1', 'Bot', 'china', true)] });
-  data.set('save:public', { game: { turn: 30, over: null }, seats: [seat(ann, 'Ann', 'greece'), seat('bot:1', 'Bot', 'zulu', true)] });
-  data.set('save:zz', { game: { turn: 99, over: null }, seats: [seat('name:Cy', 'Cy', 'inca')] });
-  data.set('savenote:gone', { turn: 5, seats: [seat(ann, 'Ann', 'rome')] });
-  noteOldSaves(store);
-  eq(reads, 3, 'each old save read once, to note it');
-  ok(!data.has('savenote:gone'), 'a note whose save is gone goes too');
-  const fresh = savedGames(store, ann, 'abc');
-  eq(JSON.stringify(fresh), JSON.stringify([{ room: 'k3x9f2', turn: 142, civ: 'rome', with: ['Bob'] }, { room: 'public', turn: 30, civ: 'greece', with: [] }]), 'Ann’s two, the latest turn first, no bots among who’s with her');
-  eq(reads, 3, 'listing them reads no save');
-  noteOldSaves(store);
-  eq(reads, 3, 'noted saves are not read again');
-  eq(savedGames(store, ann, 'public').length, 1, 'not the room she’s in (its lobby offers it already)');
-  // The game in k3x9f2 goes on, then is won; the public one is discarded.
-  noteSave(store, 'k3x9f2', { game: { turn: 143, over: null }, seats: [seat(ann, 'Ann', 'rome'), seat('name:Bob', 'Bob', 'egypt')] });
-  eq(savedGames(store, ann, 'abc')[0].turn, 143, 'a later save, a later turn');
-  noteSave(store, 'k3x9f2', { game: { turn: 150, over: { winner: 0 } }, seats: [seat(ann, 'Ann', 'rome')] });
-  forgetSave(store, 'public');
-  eq(savedGames(store, ann, 'abc').length, 0, 'a game won, or discarded, is no longer listed');
+  const at = (iso: string) => new Date(iso);
+  // Kept by room, as before: Ann and Bob's game in the public room (with autosaves), one in room k3x9f2, one won, and an old note.
+  data.set('save:public', { game: { turn: 79, over: null }, seats: [seat(ann, 'Ann', 'korea'), seat('acct:bob', 'Bob', 'arabia'), seat('bot:1', 'Bot', 'china', true)] });
+  data.set('autosave:public:78', { game: { turn: 78 }, seats: [] });
+  data.set('save:k3x9f2', { game: { turn: 30, over: null }, seats: [seat(ann, 'Ann', 'greece')] });
+  data.set('save:won', { game: { turn: 300, over: { winner: 0 } }, seats: [seat(ann, 'Ann', 'rome')] });
+  data.set('savenote:k3x9f2', { turn: 30, seats: [] });
+  moveRoomSaves(store, at('2026-10-21T00:00:00Z'));
+  ok(!store.keys('save:').length && !store.keys('savenote:').length && !data.has('autosave:public:78'), 'the room keys gone');
+  ok(data.has('game:room-public') && data.has('game:room-k3x9f2') && !data.has('game:room-won'), 'each unfinished game kept under an id of its own (a won one not)');
+  eq(JSON.stringify(autosaveTurns(store, 'room-public')), '[78]', 'its autosaves with it');
+  moveRoomSaves(store);
+  ok(data.has('game:room-public'), 'moved once: nothing left to move');
+  // Ann's lobby, in any room: both her games, the latest played first, not Bob's alone.
+  saveGame(store, 'room-k3x9f2', 'k3x9f2', { game: { turn: 31 }, seats: [seat(ann, 'Ann', 'greece')] }, at('2026-10-21T00:10:00Z'));
+  saveGame(store, 'solo-bob', 'zz', { game: { turn: 5 }, seats: [seat('acct:bob', 'Bob', 'inca')] }, at('2026-10-21T00:20:00Z'));
+  reads = 0;
+  const now = at('2026-10-21T00:30:00Z');
+  eq(JSON.stringify(savedGames(store, ann, 'fresh', now)), JSON.stringify([
+    { id: 'room-k3x9f2', turn: 31, civ: 'greece', with: [], at: '2026-10-21T00:10:00.000Z', elsewhere: false },
+    { id: 'room-public', turn: 79, civ: 'korea', with: ['Bob'], at: '2026-10-21T00:00:00.000Z', elsewhere: false },
+  ]), 'Ann’s two games, wherever they were played, latest first');
+  eq(reads, 0, 'listing them reads no save, only notes');
+  eq(savedGames(store, 'acct:bob', 'public', now).length, 2, 'Bob sees theirs too (the one with Ann, and his own)');
+  ok(inGame(store, 'room-public', ann) && !inGame(store, 'solo-bob', ann), 'only someone with a seat can carry one on or throw it away');
+  // A game being played right now in another room can't be carried on in a second one.
+  saveGame(store, 'solo-bob', 'zz', { game: { turn: 6 }, seats: [seat('acct:bob', 'Bob', 'inca')] }, at('2026-10-21T00:29:30Z'));
+  ok(playedElsewhere(store, 'solo-bob', 'public', now) && !playedElsewhere(store, 'solo-bob', 'zz', now), 'under way in room zz: not to be opened elsewhere');
+  ok(!playedElsewhere(store, 'solo-bob', 'public', at('2026-10-21T00:40:00Z')), 'some minutes quiet: free to carry on anywhere');
+  saveGame(store, 'solo-bob', 'zz', { game: { turn: 6 }, seats: [seat('acct:bob', 'Bob', 'inca')] }, at('2026-10-21T00:29:30Z'), false);
+  ok(!playedElsewhere(store, 'solo-bob', 'public', now), 'saved as its last person left: free at once');
+  // A new game (its own id) leaves every saved game alone; a won game goes, with its autosaves.
+  const id = gameId(() => 0.5);
+  ok(/^[a-z0-9]{10}$/.test(id) && id !== gameId(), `a new game's id (${id})`);
+  saveGame(store, id, 'public', { game: { turn: 1 }, seats: [seat('name:Player', 'Player', 'egypt')] });
+  ok(data.has('game:room-public') && data.has('game:room-k3x9f2'), 'a new game in the public room replaces nothing');
+  store.set(autoKey(id, 1), { game: { turn: 1 }, seats: [] });
+  saveGame(store, id, 'public', { game: { turn: 9, over: { winner: 0 } }, seats: [] });
+  ok(!data.has(`game:${id}`) && !data.has(`gamenote:${id}`) && !autosaveTurns(store, id).length, 'won: its save, note and autosaves gone');
+  forgetGame(store, 'room-public');
+  eq(savedGames(store, ann, 'fresh', now).length, 1, 'discarded: no longer listed');
 });
 
 test('the game’s save is throttled: an order’s at once, the rest at most every few seconds, none left waiting', () => {

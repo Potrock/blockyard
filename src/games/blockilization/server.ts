@@ -32,7 +32,7 @@ import { terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
 import { reshapeEdits, seasonal, seasonalSpots } from './seasons';
 import { seasonAt, type Season } from './rules/disasters';
 import { cityInfo, mapWire, statsFor, viewFor, yieldsWire } from './views';
-import { forgetSave, noteOldSaves, noteSave, savedGames, SaveThrottle } from './saves';
+import { autoKey, autosaveTurns, forgetGame, gameId, gameKey, inGame, moveRoomSaves, playedElsewhere, saveGame, savedGames, SaveThrottle, type Saved } from './saves';
 
 /**
  * Blockilization's server: the lobby (each person picks a civilization, the host sets the map and how
@@ -76,6 +76,8 @@ let stage: 'gather' | 'away' | 'edit' = 'gather';
 let stageAt = 0;
 /** A new game waiting for the world to be put back (after `restart`), and a saved one to carry on. */
 let pending: { game: Game; seats: LobbySeat[] } | null = null;
+/** The game played here: its id, which its save is kept under (`saves.ts`). */
+let playing: string | null = null;
 /** Who in the room needs a fresh view sent (players and those watching alike: `markAll`). */
 const dirty = new Set<string>();
 /** The tile yields each screen was last sent (sent again only when they change). */
@@ -117,20 +119,17 @@ const keyOf = (p: Player) => (p.account ? `acct:${p.account.id}` : `name:${p.nam
 const humans = (game: GameContext) => game.players.filter((p) => !p.bot);
 const seatOf = (p: Player) => seats.find((s) => s.key === keyOf(p));
 const indexOf = (p: Player) => (civGame ? civGame.players.findIndex((x) => x.user === keyOf(p)) : -1);
-const saveKey = (game: GameContext) => `save:${game.room}`;
-/** The saves from before their notes (`saves.ts`) noted, once a room starts. */
-let notedOld = false;
+/** The saves from when they were kept by room moved to their own ids (`saves.ts`), once a room starts. */
+let movedOld = false;
 
 function lobbyView(game: GameContext, p: Player): LobbyView {
-  const save = game.store.get<{ game: Game; seats: LobbySeat[] }>(saveKey(game));
   return {
     phase,
     host,
     you: keyOf(p),
     seats,
     settings,
-    save: save && !save.game.over ? { turn: save.game.turn, seats: save.seats.filter((s) => !s.bot).map((s) => s.name) } : null,
-    // (Before a game: theirs in other rooms, to go back to.)
+    // (Before a game: every game they have a seat in, to carry on here.)
     saves: phase === 'lobby' ? savedGames(game.store, keyOf(p), game.room) : [],
     progress: phase === 'building' && editsTotal ? 1 - edits.length / editsTotal : undefined,
     // (Not while a game's on: with it, anyone could work out the whole map.)
@@ -220,7 +219,7 @@ function sendViews(game: GameContext) {
     const i = indexOf(p);
     // A person whose civilization has fallen watches the rest of the game, as anyone watching does.
     const mine = i >= 0 && civGame.players[i].alive ? civGame.players[i] : null;
-    const view: View = { ...viewFor(civGame, mine, timerLeft(game), present), moving: phase === 'playing' && botQueue.length > 0, autosaves: mine && alone() ? autosaveTurns(game) : undefined };
+    const view: View = { ...viewFor(civGame, mine, timerLeft(game), present), moving: phase === 'playing' && botQueue.length > 0, autosaves: mine && alone() && playing ? autosaveTurns(game.store, playing) : undefined };
     // (The tiles left out when they're as last sent: the screen keeps what it knew.)
     const tiles = view.tiles.join('\n');
     const sent: Omit<View, 'tiles'> & { tiles?: View['tiles'] } = view;
@@ -540,7 +539,8 @@ function startNew(game: GameContext) {
   );
   g.started = new Date().toISOString();
   pending = { game: g, seats: seats.map((s) => ({ ...s })) };
-  clearAutosaves(game);
+  // (A game of its own: every other saved game stays as it was.)
+  playing = gameId();
   // A world already built (an earlier game in this room): put it back first.
   game.restart();
 }
@@ -550,10 +550,9 @@ const SAVE_EVERY = 5;
 const saves = new SaveThrottle(SAVE_EVERY);
 
 /** The game saved now (a turn's end, the game begun, the last person gone). */
-function save(game: GameContext) {
-  if (!civGame) return;
-  game.store.set(saveKey(game), { game: civGame, seats });
-  noteSave(game.store, game.room, { game: civGame, seats });
+function save(game: GameContext, open = true) {
+  if (!civGame || !playing) return;
+  saveGame(game.store, playing, game.room, { game: civGame, seats }, new Date(), open);
   saves.saved(game.clock.now);
 }
 
@@ -569,27 +568,20 @@ function saveSoon(game: GameContext) {
  * few are kept, not more; they go when the game's over, a new one starts or the save's discarded.
  */
 const AUTOSAVES = 3;
-const autoKey = (game: GameContext, turn: number) => `autosave:${game.room}:${turn}`;
-/** The turns kept, newest first. */
-const autosaveTurns = (game: GameContext) =>
-  game.store
-    .keys(`autosave:${game.room}:`)
-    .map((k) => Number(k.slice(k.lastIndexOf(':') + 1)))
-    .filter(Number.isFinite)
-    .sort((a, b) => b - a);
 /** Whether one person (no more) plays the game on. */
 const alone = () => !!civGame && civGame.players.filter((p) => p.user).length === 1;
 
 function autosave(game: GameContext) {
-  if (!civGame) return;
+  if (!civGame || !playing) return;
   if (!alone()) return clearAutosaves(game);
-  game.store.set(autoKey(game, civGame.turn), { game: civGame, seats });
-  for (const t of autosaveTurns(game).slice(AUTOSAVES)) game.store.delete(autoKey(game, t));
+  game.store.set(autoKey(playing, civGame.turn), { game: civGame, seats });
+  for (const t of autosaveTurns(game.store, playing).slice(AUTOSAVES)) game.store.delete(autoKey(playing, t));
 }
 
 /** The autosaves gone (those after `after`, if given: a future no longer, once an earlier turn's taken up again). */
 function clearAutosaves(game: GameContext, after = -Infinity) {
-  for (const t of autosaveTurns(game)) if (t > after) game.store.delete(autoKey(game, t));
+  if (!playing) return;
+  for (const t of autosaveTurns(game.store, playing)) if (t > after) game.store.delete(autoKey(playing, t));
 }
 
 /** The turn's over for everyone: the world moves on, the bots play their turn, and it's saved. */
@@ -624,9 +616,7 @@ function finish(game: GameContext) {
       recordFame(game, pl, p);
     }
   phase = 'over';
-  game.store.delete(saveKey(game));
-  forgetSave(game.store, game.room);
-  clearAutosaves(game);
+  if (playing) forgetGame(game.store, playing);
   markAll(game);
   sendLobby(game);
 }
@@ -784,18 +774,19 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
       startNew(game);
       return;
     case 'resume': {
-      if (!isHost) return;
-      const saved = game.store.get<{ game: Game; seats: LobbySeat[] }>(saveKey(game));
+      // The host carries on one of their own games here (not one under way in another room).
+      if (!isHost || typeof a.id !== 'string' || !inGame(game.store, a.id, key) || playedElsewhere(game.store, a.id, game.room)) return;
+      const saved = game.store.get<Saved<Game> & { seats: LobbySeat[] }>(gameKey(a.id));
       if (!saved) return;
       pending = { game: saved.game, seats: saved.seats };
+      playing = a.id;
       game.restart();
       return;
     }
     case 'discard':
-      if (!isHost) return;
-      game.store.delete(saveKey(game));
-      forgetSave(game.store, game.room);
-      clearAutosaves(game);
+      // Only someone with a seat in it can throw a saved game away.
+      if (typeof a.id !== 'string' || !inGame(game.store, a.id, key)) return;
+      forgetGame(game.store, a.id);
       break;
   }
   sendLobby(game);
@@ -1034,8 +1025,8 @@ export default defineServer(shared, {
         }
       }
       if (host === key) host = humans(game).find((p) => p !== player) ? keyOf(humans(game).find((p) => p !== player)!) : null;
-      // (The last person gone: what waited to be saved is, before the room stops.)
-      if (phase === 'playing' && saves.pending && !humans(game).some((p) => p !== player)) save(game);
+      // (The last person gone: saved, before the room stops, as no longer under way here: free to carry on elsewhere.)
+      if (phase === 'playing' && !humans(game).some((p) => p !== player)) save(game, false);
       // (The others' screens show who's away: their turn counts as done.)
       if (civGame) markAll(game);
       sendLobby(game);
@@ -1052,7 +1043,7 @@ export default defineServer(shared, {
         // Back to an autosave (the one person playing): the game as that turn began, the world rebuilt from it.
         const turn = Number((data as { turn?: unknown } | null)?.turn);
         if (indexOf(player) < 0 || !alone()) return;
-        const saved = game.store.get<{ game: Game; seats: LobbySeat[] }>(autoKey(game, turn));
+        const saved = playing ? game.store.get<{ game: Game; seats: LobbySeat[] }>(autoKey(playing, turn)) : undefined;
         if (!saved) return;
         clearAutosaves(game, turn);
         pending = { game: saved.game, seats: saved.seats };
@@ -1296,9 +1287,10 @@ export default defineServer(shared, {
     }
     phase = 'lobby';
     civGame = null;
+    playing = null;
     leftAt.clear();
-    if (!notedOld) noteOldSaves(game.store);
-    notedOld = true;
+    if (!movedOld) moveRoomSaves(game.store);
+    movedOld = true;
     seatPeople(game);
     setBots(seats.filter((s) => s.bot).length);
     for (const p of humans(game)) host ??= keyOf(p);
