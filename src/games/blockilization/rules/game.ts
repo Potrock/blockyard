@@ -64,7 +64,8 @@ export type Order =
   | { t: 'work'; city: number; tile: number }
   | { t: 'specialist'; city: number; kind: SpecialistKind; add: boolean }
   | { t: 'cityFire'; city: number; target: number }
-  | { t: 'research'; tech: string }
+  /** `was`: the research the one choosing saw (on a team, a teammate's choice made since stands, not undone unseen). */
+  | { t: 'research'; tech: string; was?: string | null }
   | { t: 'policy'; id: string }
   | { t: 'ideology'; id: string }
   | { t: 'switchIdeology'; id: string }
@@ -598,7 +599,11 @@ export function shareResearch(game: Game) {
       researching = p.researching;
       queue = [...p.techQueue];
       if (researching) pooled[researching] = (pooled[researching] ?? 0) + over;
-      else for (const m of team) if (!m.bot) note(game, m.index, { text: 'Choose what to research next.', kind: 'tech', remind: true });
+      else {
+        // (Nothing next: what's over waits for the next choice, as it does for a civ alone.)
+        p.spareScience = (p.spareScience ?? 0) + over;
+        for (const m of team) if (!m.bot) note(game, m.index, { text: 'Choose what to research next.', kind: 'tech', remind: true });
+      }
     }
     for (const m of team) {
       m.research = { ...pooled };
@@ -797,7 +802,7 @@ export function workTurns(game: Game, what: string): number {
 }
 
 /** What an order's field must be: a whole number, a tile of the map, a whole number or nothing, a string, one of some strings (or nothing, null or left out, where null is one), a list of strings, a list (checked where it's used), a yes or no, a production item; `?` when it may be left out. */
-type Field = 'int' | 'tile' | 'int|null' | 'string' | 'strings' | 'list' | 'bool' | 'bool?' | 'item' | readonly (string | null)[];
+type Field = 'int' | 'tile' | 'int|null' | 'string' | 'string?' | 'strings' | 'list' | 'bool' | 'bool?' | 'item' | readonly (string | null)[];
 
 /** The luxuries' ids (a resolution banning one names it). */
 const LUXURY_IDS = Object.keys(RESOURCES).filter((r) => RESOURCES[r].kind === 'luxury');
@@ -833,7 +838,7 @@ const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }
   focus: { city: 'int', focus: FOCUSES },
   work: { city: 'int', tile: 'tile' },
   cityFire: { city: 'int', target: 'tile' },
-  research: { tech: 'string' },
+  research: { tech: 'string', was: 'string?' },
   policy: { id: 'string' },
   ideology: { id: 'string' },
   switchIdeology: { id: 'string' },
@@ -883,6 +888,8 @@ export function wellFormed(game: Game, o: unknown): o is Order {
         return v === null || Number.isSafeInteger(v);
       case 'string':
         return typeof v === 'string';
+      case 'string?':
+        return v === undefined || v === null || typeof v === 'string';
       case 'strings':
         return Array.isArray(v) && v.every((x) => typeof x === 'string');
       case 'list':
@@ -1341,11 +1348,13 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       // On a team, the research is the team's (any of them may set it), but a bot doesn't undo a person's choice.
       const chooser = p.researchBy !== undefined ? game.players[p.researchBy] : undefined;
       if (p.bot && p.researching && chooser && !chooser.bot && chooser !== p) return fail("The team's people choose its research");
-      for (const m of teamOf(game, by)) m.researchBy = by;
+      // Two of them choosing at once: whoever was first keeps theirs, and the other's told (and can choose again, seeing it).
+      if (o.was !== undefined && p.researching && o.was !== p.researching && chooser && !chooser.bot && chooser !== p) return fail(`${chooser.name} just chose ${TECHS[p.researching].name} for the team`);
       if (canResearch(new Set(p.techs), o.tech)) {
+        for (const m of teamOf(game, by)) m.researchBy = by;
         p.researching = o.tech;
         p.techQueue = [];
-        spendSpare(p);
+        spendSpare(game, p);
         return OK;
       }
       // A far tech: queue the way there.
@@ -1358,9 +1367,10 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       };
       visit(o.tech);
       if (!order.length) return fail('Already known');
+      for (const m of teamOf(game, by)) m.researchBy = by;
       p.researching = order[0];
       p.techQueue = order.slice(1);
-      spendSpare(p);
+      spendSpare(game, p);
       return OK;
     }
     case 'policy': {
@@ -1631,10 +1641,14 @@ function bought(c: City, item: Production) {
 }
 
 /** Science kept with nothing to research goes into what's chosen. */
-function spendSpare(p: Player) {
-  if (!p.spareScience || !p.researching) return;
-  p.research[p.researching] = (p.research[p.researching] ?? 0) + p.spareScience;
-  p.spareScience = undefined;
+function spendSpare(game: Game, p: Player) {
+  if (!p.researching) return;
+  // (On a team, what any of them has spare: theirs is the team's research too, `shareResearch`.)
+  for (const m of teamOf(game, p.index)) {
+    if (!m.spareScience) continue;
+    p.research[p.researching] = (p.research[p.researching] ?? 0) + m.spareScience;
+    m.spareScience = undefined;
+  }
 }
 
 /** Keep the production toward what's being built now (it's being put aside). */
@@ -1811,7 +1825,7 @@ function playerTurn(game: Game, p: Player) {
     const first = Object.keys(TECHS).filter((t) => canResearch(new Set(p.techs), t)).sort((a, b) => TECHS[a].col - TECHS[b].col);
     if (p.bot && first[0]) p.researching = first[Math.floor(random(game) * Math.min(3, first.length))];
   }
-  if (!p.researching && science > 0 && teamOf(game, p.index).length < 2) p.spareScience = (p.spareScience ?? 0) + science;
+  if (!p.researching && science > 0) p.spareScience = (p.spareScience ?? 0) + science;
   else if (p.researching) {
     p.research[p.researching] = (p.research[p.researching] ?? 0) + science;
     const cost = techCost(game, p, p.researching);

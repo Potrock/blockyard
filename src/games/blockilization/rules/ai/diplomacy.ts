@@ -5,7 +5,7 @@ import { embargoed } from '../congress';
 import { strategic } from '../economy';
 import { eraOf } from '../game';
 import type { Game, Player } from '../state';
-import { teammates } from '../teams';
+import { teamedWithPeople, teammates } from '../teams';
 import { TECHS } from '../techs';
 import { UNIT_LIST } from '../units';
 import { act, makeCtx, mightOf, type Ctx } from './context';
@@ -133,6 +133,8 @@ export function evaluate(game: Game, bot: Player, deal: Deal): { accept: boolean
   const other = game.players[deal.from === bot.index ? deal.to : deal.from];
   const { value, opinion, worst } = weigh(ctx, deal);
   // A teammate gets what it asks for, short of what the bot can't spare (`-10000` items) or more than a little.
+  // (On a team with people, they make the team's peace: none bought from its bot, `wantsPeace`.)
+  if (deal.items.some((x) => x.kind === 'peace') && teamedWithPeople(game, bot.index)) return { accept: false, why: 'our team’s people make our peace' };
   if (teammates(game, bot.index, other.index)) return value > -60 ? { accept: true } : { accept: false, why: (worst && refusal(worst, bot.index)) ?? 'we need that ourselves' };
   const onlyGifts = deal.items.every((x) => x.kind === 'peace' || ('from' in x && x.from === other.index));
   if (opinion <= -25 && !onlyGifts) return { accept: false, why: 'we have nothing to discuss with you' };
