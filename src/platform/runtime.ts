@@ -57,7 +57,7 @@ import { Inventory as BlockPicker } from './ui/screens';
 import { cosmeticCatalog } from './cosmetics';
 import { entryOf, packagedEntry, packagedVersion, webOrigin } from './client/packaged';
 import { errorContext } from './client/errors';
-import { TitleScreen, type HomeScreen } from './ui/home';
+import { copyRoomLink, TitleScreen, type HomeScreen } from './ui/home';
 import { PauseMenu } from './ui/pause';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, isHandheld, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -826,6 +826,16 @@ export class Runtime {
         scene: new SceneService(this.renderer.entityScene, this.graphics, this.content.items),
         // Replays.
         replay: this.replays.service(),
+        // The game's rooms.
+        rooms: {
+          current: this.room ?? 'public',
+          go: (code) => {
+            if (!this.def.instances) throw new Error('rooms.go: this game has no rooms of its own (instances)');
+            if (code !== null && !ROOM_CODE.test(code)) throw new Error(`rooms.go: not a room's code: ${String(code)}`);
+            this.switchGame(this.def.id, code);
+          },
+          copyLink: (code) => copyRoomLink(code),
+        },
         // Shared services.
         camera: {
           get zoom() {

@@ -32,14 +32,15 @@ import { terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
 import { reshapeEdits, seasonal, seasonalSpots } from './seasons';
 import { seasonAt, type Season } from './rules/disasters';
 import { cityInfo, mapWire, statsFor, viewFor, yieldsWire } from './views';
-import { autoKey, autosaveTurns, forgetGame, gameId, gameKey, inGame, moveRoomSaves, playedElsewhere, saveGame, savedGames, SaveThrottle, type Saved } from './saves';
+import { autoKey, autosaveTurns, forgetGame, gameId, gameKey, inGame, moveRoomSaves, playedElsewhere, renameGame, roomCode, saveGame, savedGames, SaveThrottle, type Saved } from './saves';
 
 /**
  * Blockilization's server: the lobby (each person picks a civilization, the host sets the map and how
  * many bots), then the world built out of blocks (`terrain.ts`), then the game: everyone's orders as
  * they give them (`rules/game.ts` checks each), the turn ending when everyone's ready or the clock runs
  * out, the bots playing theirs (`rules/ai.ts`), and each person's screen sent their own view of it
- * (`views.ts`: only what their civilization can see). Each turn is saved, so a room can carry on later.
+ * (`views.ts`: only what their civilization can see). Each turn is saved, and each game is played at
+ * an address of its own (the room named for it, `saves.ts`), which opens it whenever anyone comes back.
  */
 
 type Phase = 'lobby' | 'building' | 'playing' | 'over';
@@ -129,8 +130,8 @@ function lobbyView(game: GameContext, p: Player): LobbyView {
     you: keyOf(p),
     seats,
     settings,
-    // (Before a game: every game they have a seat in, to carry on here.)
-    saves: phase === 'lobby' ? savedGames(game.store, keyOf(p), game.room) : [],
+    // (Before a game: every game they have a seat in, to go back to.)
+    saves: phase === 'lobby' ? savedGames(game.store, keyOf(p)) : [],
     progress: phase === 'building' && editsTotal ? 1 - edits.length / editsTotal : undefined,
     // (Not while a game's on: with it, anyone could work out the whole map.)
     seed: phase === 'lobby' ? chosenSeed : phase === 'over' ? (civGame?.seed ?? null) : null,
@@ -140,6 +141,35 @@ function lobbyView(game: GameContext, p: Player): LobbyView {
 
 function sendLobby(game: GameContext) {
   for (const p of humans(game)) game.clients.send(p, 'lobby', lobbyView(game, p));
+}
+
+/** What each person's lobby last listed of their games, in brief (sent again when it changes). */
+const listed = new Map<string, string>();
+/** Seconds between looks at whether anyone's games have moved on (played, begun, discarded in another room). */
+const LISTS_EVERY = 4;
+let listsAt = 0;
+
+/** A lobby's list of games sent again to whoever's has changed since: their games are played in rooms of their own. */
+function refreshLists(game: GameContext) {
+  for (const p of humans(game)) {
+    const key = keyOf(p);
+    const brief = JSON.stringify(savedGames(game.store, key).map((g) => [g.id, g.turn, g.live, g.civ, g.with]));
+    if (listed.get(key) === brief) continue;
+    const first = !listed.has(key);
+    listed.set(key, brief);
+    if (!first) game.clients.send(p, 'lobby', lobbyView(game, p));
+  }
+}
+
+/**
+ * The saved game this room is named for (`saves.ts`: a game's address), to open as the room starts:
+ * not in the public room, not a finished one, not one under way in another room just now (from
+ * before games had addresses).
+ */
+function ownGame(game: GameContext): { game: Game; seats: LobbySeat[] } | null {
+  if (game.room === 'public' || !roomCode(game.room) || playedElsewhere(game.store, game.room, game.room)) return null;
+  const saved = game.store.get<Saved<Game> & { seats: LobbySeat[] }>(gameKey(game.room));
+  return saved?.game && Array.isArray(saved.seats) && !saved.game.over ? { game: saved.game, seats: saved.seats } : null;
 }
 
 /** Everyone in the room is sent a fresh view: the players, and anyone watching. */
@@ -539,8 +569,10 @@ function startNew(game: GameContext) {
   );
   g.started = new Date().toISOString();
   pending = { game: g, seats: seats.map((s) => ({ ...s })) };
-  // (A game of its own: every other saved game stays as it was.)
-  playing = gameId();
+  // A game of its own (every other saved game stays as it was), named for this room when it's a room
+  // of one's own that no game has yet: its address is this room's (`saves.ts`). Begun in the public
+  // room (by a screen that can't go to a room of its own), it's played here, under an id of its own.
+  playing = game.room !== 'public' && roomCode(game.room) && !game.store.get(gameKey(game.room)) ? game.room : gameId();
   // A world already built (an earlier game in this room): put it back first.
   game.restart();
 }
@@ -773,8 +805,20 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
       if (!isHost || seats.length < 1 || (teamsOn && lobbySides(seats) < 2)) return;
       startNew(game);
       return;
+    case 'open': {
+      // Someone with a seat in a game goes to it (`goto`), at its own address. One from before games
+      // had addresses (an id that's no room's code) is given a new id first, unless it's under way somewhere now.
+      if (typeof a.id !== 'string' || !inGame(game.store, a.id, key)) return;
+      let id = a.id;
+      if (!roomCode(id)) {
+        if (playedElsewhere(game.store, id, game.room)) return;
+        renameGame(game.store, id, (id = gameId()));
+      }
+      game.clients.send(p, 'goto', { room: id });
+      break;
+    }
     case 'resume': {
-      // The host carries on one of their own games here (not one under way in another room).
+      // The host carries the game on here (a screen whose platform can't go to its room: `open` is the way otherwise), not one under way in another room.
       if (!isHost || typeof a.id !== 'string' || !inGame(game.store, a.id, key) || playedElsewhere(game.store, a.id, game.room)) return;
       const saved = game.store.get<Saved<Game> & { seats: LobbySeat[] }>(gameKey(a.id));
       if (!saved) return;
@@ -961,6 +1005,24 @@ function order(game: GameContext, p: Player, o: Order) {
 
 export default defineServer(shared, {
   setup(game) {
+    // A room of its own, with nothing of the last one's: this code can outlive a room (in development
+    // the next one starts in the same thread), and that one's game would be saved into this one's store.
+    phase = 'lobby';
+    settings = { ...DEFAULTS };
+    seats = [];
+    host = null;
+    civGame = null;
+    pending = null;
+    playing = null;
+    botQueue = [];
+    autoBots = true;
+    teamsOn = false;
+    chosenSeed = null;
+    movedOld = false;
+    saves.reset();
+    dirty.clear();
+    leftAt.clear();
+    listed.clear();
     // (For the headless tests, in development: the game as it stands, and its phase.)
     if (import.meta.env.DEV) (globalThis as unknown as { __civ: unknown }).__civ = { game: () => civGame, phase: () => phase };
     fightHooks.fought = (g, by, combat) => {
@@ -1289,8 +1351,16 @@ export default defineServer(shared, {
     civGame = null;
     playing = null;
     leftAt.clear();
+    listed.clear();
     if (!movedOld) moveRoomSaves(game.store);
     movedOld = true;
+    // A room named for a saved game opens it: its link is the way back to it, for everyone in it.
+    const own = ownGame(game);
+    if (own) {
+      playing = game.room;
+      begin(game, own.game, own.seats);
+      return;
+    }
     seatPeople(game);
     setBots(seats.filter((s) => s.bot).length);
     for (const p of humans(game)) host ??= keyOf(p);
@@ -1298,6 +1368,11 @@ export default defineServer(shared, {
   },
 
   update(game, dt) {
+    // (A restarted room's clock begins again.)
+    if (phase === 'lobby' && (game.clock.now - listsAt > LISTS_EVERY || game.clock.now < listsAt)) {
+      listsAt = game.clock.now;
+      refreshLists(game);
+    }
     if (phase === 'building' && civGame) {
       const size = extent(civGame.grid);
       const middle = { x: size.w / 2, y: SEA_Y + 40, z: size.d / 2 };

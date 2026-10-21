@@ -1,4 +1,4 @@
-import type { Client } from '@platform/client';
+import type { Client, ClientRooms } from '@platform/client';
 import { centre } from '../geometry';
 import type { CityInfo, CityWire, ClientToServer, LobbyAction, UnitWire, View } from '../protocol';
 import { takenAlive } from '../rules/combat';
@@ -28,7 +28,8 @@ import { decisions, NOTES_CSS, renderNoteCentre, renderNotesPart } from './notes
 import { ABILITY_TEXT, VICTORIES } from './concepts';
 import { OVERVIEW_CSS, renderOverview } from './overview';
 import { HOTKEYS_CSS, renderHotkeys, renderMenu } from './hotkeys';
-import { LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards } from './lobby';
+import { hubTop, inviteRow, LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards, type GameLinks } from './lobby';
+import { gameId, roomCode } from '../saves';
 import { ADVICE_CSS, adviceTag, researchHint } from './advice';
 import { POLITICS_CSS } from './politics';
 import { heldTile, tileMenuFree } from './input';
@@ -142,6 +143,29 @@ export const checkDeal = (data: { target: number; items: DealItem[]; key: string
 const lobby = (a: LobbyAction) => client.send('lobby', a);
 /** Any other message to the server. */
 export const tell = (name: ClientToServer['name'], data: unknown) => client.send(name, data);
+
+/**
+ * The platform's rooms (`client.rooms`): each game is played at an address of its own, the room
+ * named for it (`saves.ts`). An older platform has none: a game is carried on where its people are.
+ */
+export const rooms = (): ClientRooms | null => (client as Partial<Client> | undefined)?.rooms ?? null;
+
+/** Copy the link to a game (its room: this one by default) for friends, and say so (or show it, if it couldn't be copied). */
+export function copyGameLink(room?: string) {
+  void rooms()
+    ?.copyLink(room)
+    .then(({ link, copied }) => {
+      store.toast = { text: copied ? 'Link copied: send it to friends to join you' : `Copy this link to share it: ${link}`, until: client.time + (copied ? 3 : 15), good: true };
+      store.changed++;
+    });
+}
+
+/** A lobby's games: each at its own address (one from before addresses is given one first, `open`), and its link. */
+const gameLinks = (): GameLinks | null =>
+  rooms() && {
+    open: (g) => (roomCode(g.id) ? rooms()!.go(g.id) : lobby({ a: 'open', id: g.id })),
+    copy: (g) => copyGameLink(g.id),
+  };
 
 /**
  * The platform's pause menu (how to play, settings, invite friends, leave), where the platform lets
@@ -610,6 +634,24 @@ function renderBuilding(L: NonNullable<typeof store.lobby>): El {
   );
 }
 
+/**
+ * The public lobby, where a visit begins: a new game, set up in a room of its own that's its address
+ * from then on (friends join with its link), and the games this person has a seat in, each at its
+ * own address; then their Hall of Fame.
+ */
+function renderHub(L: NonNullable<typeof store.lobby>, brand: (sub: string) => El): El {
+  const guest = !L.you.startsWith('acct:');
+  return h(
+    'div.cv-lobby.cv-panel.cv-scroll',
+    {},
+    brand('Build an empire to stand the test of time.'),
+    hubTop(() => rooms()?.go(gameId())),
+    savedGamesBox(L, false, lobby, gameLinks()) ?? h('div.cv-muted.lb-none', {}, 'Your games will be here: each one you begin, for as long as it lasts, to go back to whenever you like.'),
+    guest && h('div.cv-muted.lb-none', {}, 'You’re playing as a guest: your games are kept under your name, for whoever plays by it. Sign in on the home page to keep them yours.'),
+    renderFame(),
+  );
+}
+
 function renderLobby(): El | null {
   const L = store.lobby;
   const brand = (sub: string) => h('div.brand', {}, h('h1', {}, 'Blockilization'), h('div.tag', {}, sub));
@@ -617,6 +659,9 @@ function renderLobby(): El | null {
   const isHost = L.host === L.you;
   const mine = L.seats.find((s) => s.key === L.you);
   if (L.phase === 'building') return renderBuilding(L);
+  // The public lobby: a new game (in a room of its own) and your games, each at its own address.
+  const here = rooms()?.current;
+  if (here === 'public') return renderHub(L, brand);
   // (`why`: what keeps a choice from being made, if anything.)
   const chips = <T extends string | number>(label: string, values: [T, string][], now: T, set: (v: T) => void, why?: (v: T) => string | null) =>
     h('div.row', {}, h('label', {}, label), ...values.map(([v, name]) => h(`button.chip${v === now ? '.on' : ''}`, { onclick: isHost && !why?.(v) ? () => set(v) : undefined, disabled: (!isHost || !!why?.(v)) && v !== now, title: why?.(v) ?? undefined }, name)));
@@ -627,7 +672,9 @@ function renderLobby(): El | null {
     'div.cv-lobby.cv-panel.cv-scroll',
     {},
     brand('Build an empire to stand the test of time.'),
-    savedGamesBox(L, isHost, lobby),
+    // (A room of its own: its link is the game's, from now on.)
+    here && inviteRow(() => copyGameLink(), () => rooms()!.go(null)),
+    savedGamesBox(L, isHost, lobby, gameLinks()),
     renderFame(),
     h('div.cv-label.sect', {}, 'Choose your civilization'),
     h(

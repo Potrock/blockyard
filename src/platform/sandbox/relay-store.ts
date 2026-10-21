@@ -3,8 +3,8 @@ import type { StoreOp, StoreSnapshot } from './protocol';
 
 /**
  * A sandboxed room's store: it starts from the game server's copy (`StoreSnapshot`), reads from
- * that, and sends every change back for the game server to keep (`StoreOp`). The room has no
- * database of its own. A room that doesn't keep its world (a copy, a room of a player's own) saves
+ * that, and sends every change back for the game server to keep (`StoreOp`); the changes the
+ * game's other rooms make come to it as they're made (`heard`). The room has no database of its own. A room that doesn't keep its world (a copy, a room of a player's own) saves
  * only the game's data, as `PrivateStore` does.
  */
 export class RelayStore implements Store {
@@ -55,6 +55,15 @@ export class RelayStore implements Store {
     if (value === undefined) this.values.delete(key);
     else this.values.set(key, value);
     this.send({ op: 'put', key, value });
+  }
+
+  /**
+   * Another room of the game changed its data (the game server passes each change on): this one
+   * reads it from now on. It isn't sent back, since the server has it already.
+   */
+  heard(key: string, value: unknown) {
+    if (value === undefined) this.values.delete(key);
+    else this.values.set(key, value);
   }
 
   flush() {

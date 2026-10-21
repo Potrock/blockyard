@@ -402,6 +402,29 @@ export interface ClientTrace {
   walls: { entry: PlainVec3; normal: PlainVec3; exit: PlainVec3; out: PlainVec3; block: number }[];
 }
 
+/**
+ * The game's rooms, for a game with `instances` (`GameMeta.instances`): the room this screen is in,
+ * going to another, and a room's invite link. A game whose matches outlive a visit (a saved game
+ * with an address of its own) puts each in a room named for it, and sends its players there.
+ */
+export interface ClientRooms {
+  /** The room this screen is in: `'public'`, or the code of a room of one's own (the server's `game.room`). */
+  readonly current: string;
+  /**
+   * Go to another room of this game: a room of one's own by its code (4 to 24 lower-case letters
+   * and digits; started if it isn't running), or the public game (null). The page's address
+   * follows (a reload or a copied link comes back there), and the game starts again on this screen
+   * in that room, at its home page. Throws for a code that isn't one, or a game without `instances`.
+   */
+  go(code: string | null): void;
+  /**
+   * Copy a room's link for a friend (`code`; this room by default, null the public game): the
+   * page's address, with that room. Resolves with the link, and whether it reached the clipboard
+   * (if not, show it to be copied by hand).
+   */
+  copyLink(code?: string | null): Promise<{ link: string; copied: boolean }>;
+}
+
 /** Things this screen puts in the world itself (never on the server, never on anyone else's screen). */
 export interface ClientScene {
   /** A group to put things in (`add` it to the world). */
@@ -441,6 +464,8 @@ export interface ClientServices {
   readonly scene: ClientScene;
   /** A replay playing on this screen (see `ClientReplay`). */
   readonly replay: ClientReplay;
+  /** The game's rooms: which this is, going to another, a room's link (see `ClientRooms`). */
+  readonly rooms: ClientRooms;
 }
 
 /** A game's code on each player's screen. */

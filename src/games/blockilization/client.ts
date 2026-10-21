@@ -3,7 +3,7 @@ import { centre, period, type CityInfo, type DealCheck, type FightWire, type Lob
 import { setAdvice } from './client/advice';
 import { cam, frameCamera } from './client/camera';
 import { drawFog, mountFog } from './client/fog';
-import { frameHandover, handoverView, holdFights, mountHandover } from './client/handover';
+import { frameHandover, handoverView, holdFights, mountHandover, resetHandover } from './client/handover';
 import { bindInput, previewAsk } from './client/input';
 import { drawOverlay, mountOverlay } from './client/overlay';
 import { defineModelLooks, drawModels, forgetGround, resetModels } from './client/models3d';
@@ -84,18 +84,25 @@ function board(): ClientKit {
           store.view = null;
           resetGame();
           resetWorkPlans();
+          resetHandover();
           // (The Civilopedia stays open: it can be read in the lobby.)
           if (store.panel !== 'pedia') store.panel = null;
         }
         store.changed++;
       });
       client.on('prefs', (d) => loadPrefs(d as Prefs));
+      // To one of your games, at its own address (`saves.ts`): the room named for it.
+      client.on('goto', (d) => {
+        const room = (d as { room?: unknown } | null)?.room;
+        if (typeof room === 'string') (client as Partial<Client>).rooms?.go(room);
+      });
       client.on('map', (d) => {
         setMap(d as MapWire);
         // (A new map: the last game's view is no guide to what's new in this one.)
         store.view = null;
         resetGame();
         resetWorkPlans();
+        resetHandover();
         told = { x: NaN, z: NaN, at: 0 };
         resetModels(client);
         resetLife(client);
