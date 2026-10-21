@@ -650,7 +650,7 @@ function renderHub(L: NonNullable<typeof store.lobby>, brand: (sub: string) => E
     hubTop(() => rooms()?.go(gameId())),
     savedGamesBox(L, false, lobby, gameLinks()) ?? h('div.cv-muted.lb-none', {}, 'Your games will be here: each one you begin, saved every turn for as long as it lasts, to go back to whenever you like.'),
     discardedBox(L, lobby),
-    guest && h('div.cv-muted.lb-none', {}, 'You’re playing as a guest: your games are kept under your name, for whoever plays by it. Sign in on the home page to keep them yours.'),
+    guest && h('div.cv-muted.lb-none', {}, 'You’re playing as a guest: your games are kept under your guest name, for whoever plays by it, and stay with it. Sign in on the home page so the games you begin are your account’s, wherever you play.'),
     renderFame(),
   );
 }
