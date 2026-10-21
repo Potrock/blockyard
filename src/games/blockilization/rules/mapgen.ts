@@ -1,4 +1,4 @@
-import { earthDry, earthLand, earthLatitude, earthRidges, earthRivers, earthWet, TRUE_STARTS, tileOfLonLat } from './earth';
+import { earthDry, earthSeas, earthLand, earthLatitude, earthRidges, earthRivers, earthWet, TRUE_STARTS, tileOfLonLat } from './earth';
 import { distance, neighbour, neighbours, rowOf, colOf, within, type Grid } from './hex';
 import { fitsSite, NATURAL_WONDER_LIST, type NaturalWonder } from './nature';
 import type { MapType, Tile } from './state';
@@ -100,6 +100,8 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
   const elev = fractal(g, rng, base, 5);
   // The Earth: its own land, the noise only the lie of it (higher along the great ranges).
   const earthShare = earth ? earthLand(g) : [];
+  // (The narrow seas drawn on: `earth.ts`.)
+  if (earth) for (const t of earthSeas(g)) earthShare[t] = 0;
   if (earth) {
     const ridges = earthRidges(g, (t) => neighbours(g, t));
     for (let t = 0; t < n; t++) elev[t] = isEarthLand(g, earthShare, t) ? 0.35 + 0.35 * elev[t] + ridges[t] : 0.3 * elev[t];
@@ -478,22 +480,51 @@ function pickStarts(g: Grid, tiles: Tile[], rng: Rng, count: number): number[] {
  * (`fallback`) clear of those.
  */
 function pickTrueStarts(g: Grid, tiles: Tile[], civs: string[], fallback: number[]): number[] {
-  const value = (t: number) => startValue(g, tiles, t);
-  const starts: number[] = [];
-  const clear = (t: number, gap: number) => starts.every((s) => distance(g, s, t) >= gap);
-  const left: number[] = [];
-  civs.forEach((civ, i) => {
-    const home = TRUE_STARTS[civ] ? tileOfLonLat(g, TRUE_STARTS[civ]) : -1;
-    // (Each tile further from home counts as much as a good deal of land: a start stays where it belongs.
-    // Where the old world is crowded, a start may be pushed out to six tiles; never nearer than four
-    // to another, as no others are: a first city moved a tile to better ground mustn't crowd out the next.)
-    const score = (t: number) => value(t) - 8 * distance(g, home, t);
-    const near = home < 0 ? [] : within(g, home, 6).filter((t) => Number.isFinite(value(t)) && clear(t, 4));
-    const best = near.sort((a, b) => score(b) - score(a))[0];
-    starts[i] = best ?? -1;
-    if (best === undefined) left.push(i);
-  });
-  for (const i of left) {
+  const value = tiles.map((_, t) => startValue(g, tiles, t));
+  const homes = civs.map((civ) => (TRUE_STARTS[civ] ? tileOfLonLat(g, TRUE_STARTS[civ]) : -1));
+  // Each civ's places, nearest home first: the tiles a city can be founded on, out to six tiles.
+  const places = homes.map((home) =>
+    home < 0 ? [] : within(g, home, 6).filter((t) => Number.isFinite(value[t])).sort((a, b) => distance(g, home, a) - distance(g, home, b) || value[b] - value[a]),
+  );
+  // (Placed one after another, the first civs take the best of a crowded old world and push the rest
+  // out to sea or desert; so the civs are placed in many orders, those with the fewest places first
+  // among them, and the order that leaves the starts nearest their homes kept.)
+  const place = (order: number[]) => {
+    const starts: number[] = civs.map(() => -1);
+    const clear = (t: number, gap: number) => starts.every((s) => s < 0 || distance(g, s, t) >= gap);
+    let cost = 0;
+    for (const i of order) {
+      if (homes[i] < 0) continue;
+      // (The nearest tile, the best land of those as near: a start stays where it belongs, desert or
+      // not. Four tiles apart where they can be, so a first city moved a tile to better ground doesn't
+      // crowd out the next; else three, as near as cities may be founded, counted a tile further.)
+      const score = (t: number) => value[t] - 1e6 * (distance(g, homes[i], t) + (clear(t, 4) ? 0 : 1));
+      const best = places[i].filter((t) => clear(t, 3)).sort((a, b) => score(b) - score(a))[0];
+      if (best === undefined) cost += 100;
+      else {
+        starts[i] = best;
+        cost += distance(g, homes[i], best) ** 2;
+      }
+    }
+    return { starts, cost };
+  };
+  const crowded = civs.map((_, i) => i).sort((a, b) => places[a].length - places[b].length);
+  let seed = 1;
+  const orders = [civs.map((_, i) => i), crowded];
+  for (let k = 0; k < 60; k++) {
+    const o = [...crowded];
+    for (let j = o.length - 1; j > 0; j--) {
+      seed = (seed * 16807) % 2147483647;
+      const r = seed % (j + 1);
+      [o[j], o[r]] = [o[r], o[j]];
+    }
+    orders.push(o);
+  }
+  let { starts } = orders.map(place).reduce((a, b) => (b.cost < a.cost ? b : a));
+  starts = [...starts];
+  const clear = (t: number, gap: number) => starts.every((s) => s < 0 || distance(g, s, t) >= gap);
+  for (let i = 0; i < civs.length; i++) {
+    if (starts[i] >= 0) continue;
     const t = fallback.find((x) => !starts.includes(x) && clear(x, 4)) ?? fallback.find((x) => !starts.includes(x) && clear(x, 3));
     if (t !== undefined) starts[i] = t;
   }

@@ -8,7 +8,7 @@ import { FIRST_FINDER_GOLDEN, FOUND_HAPPINESS, NATURAL_WONDERS, wondersBeside } 
 import { policyEffects } from './policies';
 import { fromPromotions } from './promotions';
 import { beliefEffects } from './religion';
-import { MAP_SIZES, SPEEDS, type City, type Game, type Note, type Player, type Settings, type Unit } from './state';
+import { earthSize, MAP_SIZES, SPEEDS, type City, type Game, type Note, type Player, type Settings, type Unit } from './state';
 import { RESOURCES, TERRAINS } from './terrain';
 import { bindTeams, teamOf } from './teams';
 import { baseTechCost, TECHS } from './techs';
@@ -76,12 +76,13 @@ export function newPlayer(index: number, seat: Seat, tiles: number, players: num
 
 /** A new game: the map made, each seat given a civ's start (a Settler and a Warrior, Civ V's), the fog drawn. */
 export function createGame(settings: Settings, seats: Seat[], seed: number): Game {
-  const size = MAP_SIZES[settings.size];
-  // (A new world wraps round east to west unless the lobby said not.)
+  // (The Earth in its own proportions, `earthSize`; a new world wraps round east to west unless the lobby said not.)
+  const size = settings.type === 'earth' ? earthSize(settings.size) : MAP_SIZES[settings.size];
   const grid: Grid = { width: size.width, height: size.height, ...(settings.wrap === false ? {} : { wrap: true }) };
   const cityStates = CITY_STATES.slice(0, Math.max(0, Math.min(CITY_STATES.length, settings.cityStates)));
-  // (On the Earth with true starts, each seat's civ and each city-state's own, to start where it began.)
-  const trueStarts = settings.type === 'earth' && settings.trueStarts ? [...seats.map((s) => s.civ), ...cityStates.map((cs) => cs.civ.id)] : undefined;
+  // (On the Earth, with true starts, each seat's civ and each city-state's own, to start where it began.)
+  // (True starts unless the lobby chose fair ones: the Earth's point.)
+  const trueStarts = settings.type === 'earth' && settings.trueStarts !== false ? [...seats.map((s) => s.civ), ...cityStates.map((cs) => cs.civ.id)] : undefined;
   const { tiles, starts } = generate(grid, seed, settings.type, seats.length, cityStates.length, trueStarts);
   // (The volcanoes after the rest, the world as the seed made it before there were any: `disasters.ts`.)
   if (settings.disasters) placeVolcanoes(grid, tiles, seed, starts);

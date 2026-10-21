@@ -406,3 +406,16 @@ export const MAP_SIZES: Record<MapSize, { name: string; width: number; height: n
   large: { name: 'Large', width: 50, height: 30, players: 8, cityStates: 8 },
   huge: { name: 'Huge', width: 60, height: 36, players: 10, cityStates: 10 },
 };
+
+/**
+ * The Earth map's tiles across and down at a size: a fifth more than the size's other maps have (the
+ * Earth is mostly sea: this gives about as much land), in the Earth's own proportions (360° of
+ * longitude to the 140° the map shows, its rows 0.866 of a tile apart), so its continents keep
+ * their shapes rather than being squeezed narrow.
+ */
+export function earthSize(size: MapSize): { width: number; height: number } {
+  const { width, height } = MAP_SIZES[size];
+  const across = 360 / 140 / 0.866;
+  const down = Math.round(Math.sqrt((1.2 * width * height) / across));
+  return { width: Math.round(down * across), height: down };
+}
