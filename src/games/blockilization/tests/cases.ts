@@ -17,7 +17,7 @@ import { colOf, distance, line, neighbour, neighbours, tileAt, within } from '..
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
 import { IMPROVEMENTS, TERRAINS, type ImprovementId } from '../rules/terrain';
-import { makeCtx } from '../rules/ai/context';
+import { makeCtx, militaryAt } from '../rules/ai/context';
 import { opinionOf } from '../rules/ai/opinion';
 import { planWar } from '../rules/ai/strategy';
 import { workers } from '../rules/ai/workers';
@@ -4101,6 +4101,59 @@ test('a unit at sea in a boat can’t fortify, nor have a fortifying bonus', () 
   const why: { label: string; percent: number }[] = [];
   strength(game, sw, 'defend', null, sw.tile, why);
   ok(!why.some((m) => m.label === 'Fortified'), 'and no bonus for it');
+});
+
+test('a ship and a soldier embarked beside it share a tile at sea: one of each, as with a soldier and a civilian', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  game.players[0].techs.push('optics');
+  for (let col = 10; col <= 13; col++) game.tiles[at(col, 8)].terrain = 'coast';
+  const sea = at(11, 8);
+  const water = (t: number) => !!TERRAINS[game.tiles[t].terrain].water;
+  const [shore, beach] = neighbours(game.grid, sea).filter((t) => !water(t));
+  const frigate = unit(game, 'frigate', 0, sea);
+  const pikeman = unit(game, 'pikeman', 0, shore);
+  ok(canEnter(game, pikeman, sea), 'a soldier may embark onto its own ship’s tile');
+  ok(apply(game, 0, { t: 'move', unit: pikeman.id, to: sea }).ok, 'sent there');
+  ok(pikeman.tile === sea && !!pikeman.embarked && frigate.tile === sea, 'the pikeman embarks beside the frigate');
+  eq(occupants(game, sea).military, frigate, 'the frigate is the one an attack meets');
+  eq(occupants(game, sea).behind, pikeman, 'the pikeman behind it');
+  eq(militaryAt(makeCtx(game, game.players[1]), sea), frigate, 'as the bots see it');
+  ok(!canEnter(game, unit(game, 'spearman', 0, beach), sea), 'but no second soldier embarks there');
+  const away = neighbours(game.grid, sea).find((t) => water(t))!;
+  ok(!canEnter(game, unit(game, 'trireme', 0, at(13, 8)), sea), 'nor a second ship comes');
+  ok(canEnter(game, unit(game, 'worker', 0, at(5, 5)), sea), 'a civilian may embark there too');
+  ok(apply(game, 0, { t: 'move', unit: frigate.id, to: away }).ok && frigate.tile === away, 'the frigate sails off');
+  eq(occupants(game, sea).military, pikeman, 'the pikeman alone holds the tile');
+  ok(apply(game, 0, { t: 'move', unit: frigate.id, to: sea }).ok && frigate.tile === sea, 'and the frigate comes back beside it');
+  // (Ashore, still one soldier to a tile.)
+  const archer = unit(game, 'archer', 0, at(6, 6));
+  ok(!canEnter(game, unit(game, 'warrior', 0, at(6, 7)), archer.tile), 'one soldier to a tile on land');
+});
+
+test('a ship fights for the soldier embarked beside it, which holds the tile if the ship sinks; a submarine, unseen, shields nothing', () => {
+  const { game, at } = blank();
+  city(game, 0, at(3, 3));
+  city(game, 1, at(25, 12));
+  war(game, 0, 1);
+  for (let col = 10; col <= 13; col++) game.tiles[at(col, 8)].terrain = 'coast';
+  const sea = at(11, 8);
+  const next = neighbours(game.grid, sea).find((t) => TERRAINS[game.tiles[t].terrain].water)!;
+  const frigate = unit(game, 'frigate', 0, sea, { hp: 1 });
+  const pikeman = unit(game, 'pikeman', 0, sea, { embarked: true });
+  const worker = unit(game, 'worker', 0, sea, { embarked: true });
+  const raider = unit(game, 'caravel', 1, next);
+  eq(previewAttack(game, raider, sea)?.defender.unit, 'frigate', 'the frigate is the one it would fight');
+  ok(apply(game, 1, { t: 'attack', unit: raider.id, target: sea }).ok, 'attacked');
+  ok(!game.units.includes(frigate), 'the frigate sinks');
+  eq(pikeman.hp, 100, 'the pikeman unhurt');
+  eq(raider.tile, next, 'the raider doesn’t move in past it');
+  eq(worker.owner, 0, 'nor takes the worker');
+  eq(occupants(game, sea).military, pikeman, 'the pikeman holds the tile now');
+  const sub = unit(game, 'submarine', 0, sea);
+  eq(occupants(game, sea).military, pikeman, 'beside a submarine, the pikeman is the one seen and fought');
+  eq(occupants(game, sea).behind, sub, 'the submarine under it');
 });
 
 test('a siege unit’s setting up for an attack that can’t be made costs nothing', () => {

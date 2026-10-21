@@ -4,7 +4,7 @@ import { dangerCost, dangerZones, type Danger } from '../danger';
 import { happiness, type CityYields } from '../economy';
 import { apply, eraOf, type Order } from '../game';
 import { distance, neighbours, path, within } from '../hex';
-import { ALL, stepCost } from '../movement';
+import { ALL, occupants, stepCost } from '../movement';
 import { questsFor, type QuestKind } from '../quests';
 import type { City, Game, Player, Unit } from '../state';
 import { teammates } from '../teams';
@@ -107,8 +107,9 @@ function occupancy(ctx: Ctx) {
     for (const u of ctx.game.units) {
       // (Aircraft hold no ground.)
       if (UNITS[u.type].domain === 'air') continue;
-      if (isMilitary(UNITS[u.type]) && !isGreatPerson(u.type)) military.set(u.tile, u);
-      else civilian.set(u.tile, u);
+      if (!isMilitary(UNITS[u.type]) || isGreatPerson(u.type)) civilian.set(u.tile, u);
+      // (At sea a ship and a soldier embarked beside it: the one an attack meets, as `occupants` says.)
+      else military.set(u.tile, military.has(u.tile) ? occupants(ctx.game, u.tile).military! : u);
     }
     ctx.cache.occupancy = { military, civilian };
   }
