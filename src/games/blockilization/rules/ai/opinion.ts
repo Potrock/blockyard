@@ -4,7 +4,7 @@ import { denounced, embargoOn, friends, pacted, warWords, type DiploEvent } from
 import { cityReligion } from '../faith';
 import { distance } from '../hex';
 import type { Game, Player } from '../state';
-import { teammates } from '../teams';
+import { masterOf, teammates } from '../teams';
 import { personalityOf } from './personality';
 
 /**
@@ -47,6 +47,11 @@ export function opinionOf(game: Game, a: Player, b: Player): Opinion {
 
   // Ties.
   if (teammates(game, ai, bi)) add('We are on the same team', 20);
+  // (A master and its vassal, `vassals.ts`: one served, the other serving, and what's remembered after.)
+  if (masterOf(game, bi) === a) add('You serve us', 12);
+  if (masterOf(game, ai) === b) add('You hold us as your vassal', -6);
+  add('You set us free', sum((e) => e.kind === 'freed' && e.by === bi && e.to === ai, 150, 12, 12, 0.5));
+  add('You broke free of us', sum((e) => e.kind === 'independence' && e.by === bi && e.to === ai, 120, -15, 15, 0.3));
   if (friends(game, ai, bi)) add('We have declared our friendship', 10);
   if (pacted(game, ai, bi)) add('We have a defensive pact', 5);
   if (a.diplomacy.embassy[bi] && b.diplomacy.embassy[ai]) add('We have embassies with each other', 2);

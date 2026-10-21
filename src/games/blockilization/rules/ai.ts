@@ -14,7 +14,7 @@ import { attacks, cityFire, exploreAbroad, exploreStep, moveUnits, pillageAll } 
 import { exploreSea, seaport } from './ai/navy';
 import { manageCities, pickProduction, spend, spendFaith } from './ai/production';
 import { settle } from './ai/settle';
-import { acceptsPeace, chooseAim, conquests, diplomacy, makePeace, planWar, trackWars } from './ai/strategy';
+import { acceptsPeace, chooseAim, conquests, diplomacy, makePeace, planWar, trackWars, vassalage } from './ai/strategy';
 import { workBoats, workers } from './ai/workers';
 import { evaluate, negotiate } from './ai/diplomacy';
 import { congressHooks } from './congress';
@@ -38,6 +38,7 @@ export function botTurn(game: Game, p: Player) {
     chooseAim(ctx);
     trackWars(ctx);
     makePeace(ctx);
+    vassalage(ctx);
     planWar(ctx);
     conquests(ctx);
     diplomacy(ctx);

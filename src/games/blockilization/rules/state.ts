@@ -197,6 +197,11 @@ export interface Player {
   startEra?: number;
   /** Their team, by number from 0 (`teams.ts`): none, they play for themselves. */
   team?: number;
+  /**
+   * The civ they serve, having capitulated to it (`vassals.ts`): since when, and the tribute they
+   * paid it at the last turn's end. None: they serve no one.
+   */
+  vassal?: { master: number; since: number; tribute: number };
   alive: boolean;
   /** Has said they're done this turn. */
   ready: boolean;

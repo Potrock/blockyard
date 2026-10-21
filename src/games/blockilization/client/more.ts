@@ -508,7 +508,7 @@ export function renderVictory(): El {
     h(
       'div.list.cv-scroll',
       {},
-      card('war', '#b8432f', 'Domination', teams ? 'Hold every original capital (a team, between its civs).' : 'Hold every original capital.', h('div.cv-muted', { style: 'font-size:12px' }, teams ? `${standing} side${standing === 1 ? '' : 's'} still stand${standing === 1 ? 's' : ''}.` : `${majors.filter((p) => p.alive).length} civilizations still stand.`)),
+      card('war', '#b8432f', 'Domination', teams ? 'Hold every original capital (a team, between its civs; vassals hold theirs for their master).' : 'Hold every original capital (vassals hold theirs for their master).', h('div.cv-muted', { style: 'font-size:12px' }, teams ? `${standing} side${standing === 1 ? '' : 's'} still stand${standing === 1 ? 's' : ''}.` : `${majors.filter((p) => p.alive).length} civilizations still stand.`)),
       card(
         'rocket',
         '#3a5a9a',

@@ -62,6 +62,8 @@ function leader(p: PlayerSummary): El {
     r && r.denouncedYou > 0 ? 'They have denounced you' : '',
     r && r.youDenounced > 0 ? 'You have denounced them' : '',
     typeof team === 'number' ? `Team ${team + 1}` : '',
+    p.master !== undefined ? (p.master === store.view?.you ? 'Your vassal' : `${store.view?.players[p.master]?.name ?? 'Another'}’s vassal`) : '',
+    store.view?.self.vassal?.master === p.index ? 'Your master' : '',
     `Score ${p.score}`,
     person ? (p.here === false ? 'Away' : p.ready ? 'Done with the turn' : sequenceAwaits(p.index) ? 'Waits for their turn (at war: one side at a time)' : sequencePlays(p.index) ? 'Taking their turn (at war: one side at a time)' : 'Still deciding') : '',
   ].filter(Boolean);
@@ -72,7 +74,7 @@ function leader(p: PlayerSummary): El {
     h('span.lr-face', {}, pic ? h('img', { src: pic, alt: '', draggable: 'false' }) : emblemEl(p.civ, 34)),
     p.war ? badge('tl', 'war', 'bad') : r && r.denouncedYou > 0 ? badge('tl', 'skull', 'bad') : null,
     r && r.pact > 0 ? badge('tr', 'shield', 'good') : r && r.friends > 0 ? badge('tr', 'peace', 'good') : null,
-    typeof team === 'number' ? h('span.lr-badge.bl.team', {}, String(team + 1)) : null,
+    typeof team === 'number' ? h('span.lr-badge.bl.team', {}, String(team + 1)) : p.master !== undefined || store.view?.self.vassal?.master === p.index ? badge('bl', 'crown', 'crown') : null,
     person ? badge('br', done ? 'check' : 'turn', done ? 'good' : 'wait') : null,
     stance && h('span.lr-mood', { style: `--mood:${tone(stance.color)}` }, ...[1, 2, 3, 4, 5].map((i) => h(`i${i <= stance.blocks ? '.on' : ''}`))),
     h('b.lr-score', {}, String(p.score)),
@@ -168,6 +170,7 @@ export const RIBBON_CSS = `
 .lr-badge { position: absolute; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 0 0 2px #07090c, inset 2px 2px 0 rgba(255,255,255,.25), inset -2px -2px 0 rgba(0,0,0,.3); z-index: 1; }
 .lr-badge.tl { left: -2px; top: -2px; } .lr-badge.tr { right: -2px; top: -2px; } .lr-badge.bl { left: -1px; top: 36px; } .lr-badge.br { right: -1px; top: 36px; }
 .lr-badge.bad { background: #b0412d; } .lr-badge.good { background: #3f8a2c; } .lr-badge.wait { background: #343c4d; color: #9aa4b5; }
+.lr-badge.crown { background: #9a7a1a; color: #fff3c4; }
 .lr-badge.team { background: #2a5a9a; font: 400 15px/1 'Jersey 10', monospace; text-shadow: 1px 1px 0 #07090c; }
 .lr-mood { display: flex; gap: 2px; padding: 2px; background: #07090c; }
 .lr-mood i { display: block; width: 8px; height: 4px; background: #262c37; }

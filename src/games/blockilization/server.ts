@@ -16,7 +16,7 @@ import { apply, endTurn, eraOf, fightHooks, learn, score, type Order } from './r
 import { advanceSequence, sequenceDone, warBegun } from './rules/turns';
 import { cityHooks, type CombatResult } from './rules/combat';
 import { botAnswer, CHAT_LENGTH, isEmote, isPing } from './rules/chat';
-import { dealVerdict, hasMet, type DealItem } from './rules/diplomacy';
+import { capitulationProblem, dealVerdict, hasMet, kneel, type DealItem } from './rules/diplomacy';
 import { previewAttack, previewCityFire } from './rules/preview';
 import { DIFFICULTIES } from './rules/difficulty';
 import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, TURN_CHOICES, type ChatLine, type ChatTo, type Game, type Settings } from './rules/state';
@@ -1281,7 +1281,7 @@ export default defineServer(shared, {
     game.commands.register('civ', {
       help: 'Blockilization tools',
       cheat: true,
-      usage: 'turn | turns [n] | gold [n] | tech [id] | spawn <unit> [player] | reveal | wonders [fog] | improve [pillaged] | grow [n] | decor | unit <type> [foe] [hp] [embarked] | take | win [how] [player] | revolt',
+      usage: 'turn | turns [n] | gold [n] | tech [id] | spawn <unit> [player] | reveal | wonders [fog] | improve [pillaged] | grow [n] | decor | unit <type> [foe] [hp] [embarked] | take | win [how] [player] | revolt | vassal [master] [player]',
       run(args) {
         const out = civCommand(args);
         // What a command changed is kept as an order's is: a restart, or a game carried on, still has it.
@@ -1448,7 +1448,21 @@ export default defineServer(shared, {
         markAll(game);
         return `${c.name} taken`;
       }
-      throw new Error('Try: turn, turns [n], gold [n], tech [id], spawn <unit> [player], reveal, wonders [fog], improve [pillaged], grow [n], decor, unit <type> [foe] [hp] [embarked], take');
+      if (cmd === 'vassal') {
+        // A civ made the first person's vassal (the first other one, unless a player's index is given), or the person
+        // made theirs with `master`: to try the vassal's screens.
+        const you = civGame.players.find((p) => !p.bot && p.alive);
+        const other = civGame.players[Number(args[2] ?? arg)] ?? civGame.players.find((p) => p !== you && p.alive && !p.cityState && p.civ !== 'barbarian');
+        if (!you || !other || other === you || other.cityState || other.civ === 'barbarian') throw new Error('Try: vassal [player] | vassal master [player]');
+        const [v, m] = arg === 'master' ? [you, other] : [other, you];
+        const why = capitulationProblem(civGame, v, m);
+        if (why) throw new Error(why);
+        kneel(civGame, v, m);
+        updateAllVisibility(civGame);
+        markAll(game);
+        return `${v.name} serves ${m.name}`;
+      }
+      throw new Error('Try: turn, turns [n], gold [n], tech [id], spawn <unit> [player], reveal, wonders [fog], improve [pillaged], grow [n], decor, unit <type> [foe] [hp] [embarked], take, vassal [master] [player]');
     }
   },
 

@@ -61,8 +61,14 @@ export function itemLabel(item: DealItem, turns: number): { glyph: string; color
       return { glyph: 'shield', color: '#6fd27a', text: 'A defensive pact' };
     case 'peace':
       return { glyph: 'peace', color: '#6fd27a', text: 'Peace (a treaty for 10 turns)' };
+    case 'vassal':
+      return { glyph: 'crown', color: '#f2c14e', text: item.from === store.view?.you ? 'Capitulation: you become their vassal' : 'Capitulation: they become your vassal' };
   }
 }
+
+/** Whether a civ is the viewer's vassal, or the viewer's master (`vassals.ts`). */
+const myVassal = (p: PlayerSummary) => p.master === store.view?.you;
+const myMaster = (p: PlayerSummary) => store.view?.self.vassal?.master === p.index;
 
 /** A line of a deal: its glyph and words. */
 function itemLine(item: DealItem, turns: number, remove?: () => void): El {
@@ -83,6 +89,7 @@ function sides(items: DealItem[], me: number) {
 function stanceChip(p: PlayerSummary): El {
   if (p.war) return h('span.cv-chip.bad', {}, icon('war', 12), 'At war');
   if (teammate(p.index) && typeof p.team === 'number') return h('span.cv-chip', { style: `color:#fff;border-color:${TEAM_COLORS[p.team]};background:${TEAM_COLORS[p.team]}55` }, icon('people', 12), 'Teammate');
+  if (myVassal(p) || myMaster(p)) return h('span.cv-chip', { style: 'color:#f2c14e;border-color:#f2c14e66;background:#f2c14e1c' }, icon('crown', 12), myVassal(p) ? 'Your vassal' : 'Your master');
   const o = p.relation?.opinion;
   if (!o) return h('span.cv-chip', {}, icon('people', 12), 'A person');
   const s = STANCE[o.stance] ?? STANCE.neutral;
@@ -99,6 +106,7 @@ function marks(p: PlayerSummary): El {
     {},
     r.friends > 0 ? m('people', '#6fd27a', 'Declaration of friendship') : null,
     r.pact > 0 ? m('shield', '#6fd27a', 'Defensive pact') : null,
+    p.master !== undefined ? m('crown', '#f2c14e', myVassal(p) ? 'Your vassal' : `${name(p.master)}’s vassal`) : null,
     r.embassyThere ? m('city', '#c8b8ff', 'Your embassy in their capital') : null,
     p.opensBorders ? m('trade', '#6ab8ff', 'Their borders are open to you') : null,
     r.deals.length ? m('scroll', '#f6cf4a', `${r.deals.length} deal${r.deals.length > 1 ? 's' : ''} running`) : null,
@@ -176,6 +184,11 @@ function civPane(p: PlayerSummary): El {
   const line = (glyph: string, color: string, text: string) => between.push(h('div.cv-dip-line', {}, h('span', { html: svg(glyph, 15, tone(color)) }), h('span', {}, text)));
   const mate = teammate(p.index);
   if (mate) line('people', TEAM_COLORS[p.team ?? 0] ?? '#6fd27a', 'Your teammate: at peace for good, borders open, each seeing what the other sees; you go to war, make peace and win together');
+  // A master and its vassal (`vassals.ts`).
+  const lord = v.self.vassal;
+  if (myVassal(p)) line('crown', '#f2c14e', `Your vassal: it pays you a quarter of its gold income in tribute (${r.tribute ?? 0} gold last turn), goes to war and makes peace with you, and its cities count as yours toward a domination victory`);
+  if (lord && myMaster(p)) line('crown', '#f2c14e', `Your master: you pay it a quarter of your gold income in tribute (about ${lord.tribute} gold a turn), and it makes your wars and your peace. ${lord.why ?? 'You may declare your independence.'}`);
+  else if (p.master !== undefined && !myVassal(p)) line('crown', '#b7c3cf', `${name(p.master)}’s vassal: at war with whoever ${name(p.master)} is, and at peace with the rest`);
   if (p.war) line('war', '#ff6b5e', 'You are at war');
   else if (p.peace > 0) line('peace', '#6fd27a', `A peace treaty holds for ${p.peace} more turns`);
   if (r.friends > 0) line('people', '#6fd27a', `Declaration of friendship (${r.friends} turns)`);
@@ -200,6 +213,8 @@ function civPane(p: PlayerSummary): El {
   const others: string[] = [];
   if (told(r.friendsWith).length) others.push(`Friends with ${told(r.friendsWith).join(', ')}`);
   if (told(r.denouncing).length) others.push(`Has denounced ${told(r.denouncing).join(', ')}`);
+  const vassals = v.players.filter((o) => o.master === p.index && o.met && o.index !== v.you).map((o) => o.name);
+  if (vassals.length) others.push(`Holds ${vassals.join(', ')} as vassal${vassals.length > 1 ? 's' : ''}`);
   const reasons = r.opinion
     ? r.opinion.reasons.length
       ? r.opinion.reasons.map((x) => h(`div.cv-dip-reason.${x.value > 0 ? 'good' : 'bad'}`, {}, h('b', {}, signed(x.value)), h('span', {}, x.text)))
@@ -250,18 +265,28 @@ function civPane(p: PlayerSummary): El {
       r.youEmbargo !== undefined
         ? h('button.cv-btn', { onclick: () => send({ t: 'embargo', target: p.index, lift: true }), disabled: r.youEmbargo > 0, title: r.youEmbargo > 0 ? `You can lift it in ${r.youEmbargo} turns` : undefined }, icon('trade', 14), 'Lift embargo')
         : null,
+      // (A vassal breaks free of its master; a master sets its vassal free: `vassals.ts`.)
+      lord && myMaster(p)
+        ? h(
+            'button.cv-btn.gold',
+            { onclick: () => ask(`Declare your independence from ${p.name}? You will pay no more tribute, and make your own wars and peace; a peace treaty holds between you for 10 turns, but ${p.name} won’t forget it.`, 'Declare independence', () => send({ t: 'independence' })), disabled: !!lord.why, title: lord.why ?? undefined },
+            icon('crown', 14),
+            'Declare independence',
+          )
+        : null,
+      myVassal(p) ? h('button.cv-btn', { onclick: () => ask(`Set ${p.name} free? Its tribute ends, and it makes its own wars and peace again; it will remember the kindness.`, 'Set them free', () => send({ t: 'release', target: p.index })) }, icon('crown', 14), 'Set them free') : null,
       p.war && p.peaceOffered
         ? h('button.cv-btn.gold', { onclick: () => send({ t: 'peace', target: p.index }), title: `${p.name} has offered peace: accept it` }, icon('peace', 14), 'Accept their peace')
         : p.war
-        ? h('button.cv-btn', { onclick: () => openTrade([{ kind: 'peace' }]) }, icon('peace', 14), 'Make peace…')
-        : mate
+        ? h('button.cv-btn', { onclick: () => openTrade([{ kind: 'peace' }]), disabled: !!lord || p.master !== undefined, title: lord ? `${name(lord.master)} makes your peace` : p.master !== undefined ? `${p.name} serves ${name(p.master)}: make peace with ${name(p.master)}` : undefined }, icon('peace', 14), 'Make peace…')
+        : mate || myVassal(p) || myMaster(p)
         ? null
         : h(
             'button.cv-btn.danger',
             {
               onclick: () => ask(`Declare war on ${p.name}?${r.friends > 0 ? ' You are friends: the world will remember the betrayal.' : ''}${r.deals.length ? ' Your deals with them end.' : ''}${teamWar(p)}`, 'Declare war', () => send({ t: 'war', target: p.index })),
-              disabled: p.peace > 0,
-              title: p.peace > 0 ? `A peace treaty holds for ${p.peace} more turns` : undefined,
+              disabled: p.peace > 0 || !!lord,
+              title: lord ? `${name(lord.master)} makes your wars` : p.peace > 0 ? `A peace treaty holds for ${p.peace} more turns` : undefined,
             },
             icon('war', 14),
             'Declare war',
@@ -275,12 +300,15 @@ function civPane(p: PlayerSummary): El {
   );
 }
 
-/** What else a war on a civ brings: teams go to war together (theirs, and the viewer's). */
+/** What else a war on a civ brings: sides go to war together (their team, master and vassals; the viewer's). */
 function teamWar(p: PlayerSummary): string {
   const v = store.view!;
   const theirs = typeof p.team === 'number' ? v.players.filter((o) => o.team === p.team && o !== p && o.alive).map((o) => o.name) : [];
   const ours = v.players.filter((o) => teammate(o.index) && o.alive).map((o) => o.name);
-  return `${theirs.length ? ` Their team (${theirs.join(', ')}) will be at war with you too.` : ''}${ours.length ? ` Your team (${ours.join(', ')}) goes to war with you.` : ''}`;
+  const lord = p.master !== undefined ? v.players[p.master] : undefined;
+  const served = v.players.filter((o) => o.alive && o.met && o.master !== undefined && (o.master === p.index || o.master === p.master) && o !== p).map((o) => o.name);
+  const mine = v.players.filter((o) => o.alive && o.master === v.you).map((o) => o.name);
+  return `${theirs.length ? ` Their team (${theirs.join(', ')}) will be at war with you too.` : ''}${lord ? ` Their master, ${lord.name}, goes to war with them.` : ''}${served.length ? ` ${lord ? 'Its' : 'Their'} vassals (${served.join(', ')}) too.` : ''}${ours.length ? ` Your team (${ours.join(', ')}) goes to war with you.` : ''}${mine.length ? ` Your vassals (${mine.join(', ')}) follow you to war.` : ''}`;
 }
 
 /** Open the trade table with a civ, starting from some items. */
@@ -382,6 +410,11 @@ function tradePane(p: PlayerSummary): El {
   const theirs: El[] = [];
   const both: El[] = [];
   if (war) both.push(option({ kind: 'peace' }, 'Peace', 'peace', '#6fd27a', 'A treaty for 10 turns'));
+  // (Capitulation, `vassals.ts`: the war ends with one serving the other.)
+  if (war) {
+    mine.push(option({ kind: 'vassal', from: me }, 'Capitulate', 'crown', '#f2c14e', 'become their vassal: the war ends'));
+    theirs.push(option({ kind: 'vassal', from: them }, 'Their capitulation', 'crown', '#f2c14e', 'they become your vassal'));
+  }
   mine.push(amountField({ kind: 'gold', from: me, amount: 0 }, s.gold, 'gold', '#f6cf4a', 'Gold'));
   mine.push(amountField({ kind: 'goldPerTurn', from: me, amount: 0 }, Math.max(0, s.income), 'coins', '#f6cf4a', `Gold a turn (${turns} turns)`));
   theirs.push(amountField({ kind: 'gold', from: them, amount: 0 }, r.gold, 'gold', '#f6cf4a', 'Gold'));
@@ -481,13 +514,22 @@ export function renderOffer(): El | null {
   const turns = v.self.trade.dealTurns;
   const parts = sides(offer.items, v.you);
   const list = (title: string, items: DealItem[]) => (items.length ? h('div.cv-trade-sum', {}, h('div.cv-label', {}, title), ...items.map((x) => itemLine(x, turns))) : null);
+  // (A capitulation, `vassals.ts`: demanded of the viewer, or offered by a beaten foe.)
+  const kneel = offer.items.find((x): x is Extract<DealItem, { kind: 'vassal' }> => x.kind === 'vassal');
+  const title = !kneel ? `${from.name} proposes a deal` : kneel.from === v.you ? `${from.name} demands that you kneel` : `${from.name} offers to kneel`;
+  const why = !kneel
+    ? null
+    : kneel.from === v.you
+      ? `Accept, and the war ends: you serve ${from.name} as its vassal, paying it a quarter of your gold income, and it makes your wars and your peace until you break free (with half its people) or it sets you free.`
+      : `Accept, and the war ends: ${from.name} serves you as your vassal, paying you a quarter of its gold income, going to war and making peace with you; its cities count as yours toward a domination victory.`;
   return h(
     'div.cv-confirm',
     {},
     h(
       'div.cv-panel.box.cv-offer',
       {},
-      h('div.cv-dip-head', {}, portrait(from.civ, 64), h('div.cv-grow', {}, h('div.cv-h', {}, `${from.name} proposes a deal`), h('small.cv-muted', {}, CIVS[from.civ]?.name ?? '')), stanceChip(from)),
+      h('div.cv-dip-head', {}, portrait(from.civ, 64), h('div.cv-grow', {}, h('div.cv-h', {}, title), h('small.cv-muted', {}, CIVS[from.civ]?.name ?? '')), stanceChip(from)),
+      why && h('small.cv-muted', {}, why),
       list('They give you', parts.theirs),
       list('Together', parts.both),
       list('You give them', parts.mine),

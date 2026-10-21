@@ -115,6 +115,8 @@ export interface PlayerSummary {
   here?: boolean;
   /** Their team, by number from 0 (null: they play for themselves). */
   team?: number | null;
+  /** The civ they serve as its vassal (`vassals.ts`), as anyone can tell (none: they serve no one). */
+  master?: number;
   score: number;
   cities: number;
   peace: number;
@@ -188,6 +190,8 @@ export interface Relation {
   /** The civs they're at war with, and have defensive pacts with, among those the viewer has met (the world's politics). */
   atWarWith: number[];
   pactsWith: number[];
+  /** Their vassal's tribute to the viewer, as last paid (they're the viewer's vassal). */
+  tribute?: number;
 }
 
 /** A deal another civ has put to the viewer, waiting for an answer. */
@@ -303,7 +307,13 @@ export interface SelfWire {
   index: number;
   civ: string;
   gold: number;
+  /** Gold a turn, all told: deals and tribute (paid to a master, or a vassal's to the viewer) counted. */
   income: number;
+  /**
+   * The viewer as a vassal (`vassals.ts`): its master, the tribute it pays a turn (as it would now),
+   * its people and the people it needs to break free, and why it can't yet (null: it can).
+   */
+  vassal?: { master: number; tribute: number; people: number; need: number; why: string | null };
   science: number;
   culture: number;
   culturePerTurn: number;

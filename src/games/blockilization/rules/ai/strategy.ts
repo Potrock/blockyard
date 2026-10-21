@@ -1,12 +1,13 @@
 import { allyOf, cityStates } from '../citystates';
 import { cityMaxHp, cityStrength } from '../combat';
-import { friends, pacted, warWords, type WarWhy } from '../diplomacy';
-import { capitalOf, citiesOf, knows, note, random } from '../core';
+import { askOf, capitulationProblem, dealer, dealProblem, declinedLately, friends, pacted, warWords, type Deal, type WarWhy } from '../diplomacy';
+import { atWar, capitalOf, citiesOf, knows, note, random } from '../core';
 import { score } from '../game';
 import { within } from '../hex';
 import type { City, Game, Player } from '../state';
 import { scenarioOf } from '../starts';
-import { teamedWithPeople, teammates, teamOf } from '../teams';
+import { masterOf, sameSide, sideOf, teamedWithPeople, teamOf } from '../teams';
+import { independence } from '../vassals';
 import { TERRAINS } from '../terrain';
 import { majors, tourismOf, unVote } from '../trade';
 import { act, cityOn, coastal, dist, landRoute, makeCtx, mightOf, nearestCity, runaways, sameLand, seaRoute, unitMight, type Ctx } from './context';
@@ -23,7 +24,8 @@ import { pledged } from '../pledges';
  * game goes: ahead in science, it reaches for the stars; rich in friends among the city-states, for
  * the United Nations), its wars (a weaker neighbour it can reach by land, an army gathered at the
  * border before war is declared, then the cities taken one by one) and its peace (when the war goes
- * badly, has gone on too long for its temper, or has won what it wanted).
+ * badly, has gone on too long for its temper, or has won what it wanted); beaten, it may kneel as a
+ * vassal, and beating another, demand it kneel (`vassals.ts`); a vassal breaks free when it can.
  */
 
 const AIMS: Aim[] = ['domination', 'science', 'culture', 'diplomatic'];
@@ -35,7 +37,7 @@ const AIMS: Aim[] = ['domination', 'science', 'culture', 'diplomatic'];
  */
 export function capitalsRace(ctx: Ctx): { held: number; left: City[]; pressing: boolean } {
   const { game } = ctx;
-  const ours = (i: number) => i === ctx.me || teammates(game, i, ctx.me);
+  const ours = (i: number) => i === ctx.me || sameSide(game, i, ctx.me);
   const firsts = game.cities.filter((c) => c.founder !== undefined && game.players[c.founder] && !game.players[c.founder].cityState && game.players[c.founder].civ !== 'barbarian' && !ours(c.founder) && game.cities.filter((x) => x.founder === c.founder).sort((a, b) => a.id - b.id)[0] === c);
   const held = firsts.filter((c) => ours(c.owner)).length;
   const left = firsts.filter((c) => !ours(c.owner));
@@ -99,8 +101,8 @@ export function wantsPeace(ctx: Ctx, them: number): boolean {
   if (mem.passive) return true;
   // (A city-state: peace, unless it's the war's target or sides with an enemy, its ally.)
   if (other.cityState) return !(mem.plan?.target === them) && !ctx.enemies.has(allyOf(game, them));
-  // (On a team with people, they make the team's peace.)
-  if (teamedWithPeople(game, ctx.me)) return false;
+  // (On a team with people, they make the team's peace; a vassal's master makes its.)
+  if (teamedWithPeople(game, ctx.me) || masterOf(game, ctx.me)) return false;
   const rec = mem.wars[them];
   const turns = rec ? game.turn - rec.since : 0;
   const ws = warScore(ctx, them);
@@ -139,16 +141,74 @@ export function acceptsPeace(game: Game, bot: Player, from: Player): boolean {
   return wantsPeace(ctx, from.index);
 }
 
-/** Offer peace where the bot wants it (to a person, every few turns; to a bot, it's decided at once). */
+/** Offer peace where the bot wants it (to a person, every few turns; to a bot, it's decided at once): or a capitulation, its own or theirs. */
 export function makePeace(ctx: Ctx) {
   const { game, mem } = ctx;
-  for (const w of ctx.wars) {
+  for (const w of [...ctx.wars]) {
+    if (capitulation(ctx, w)) continue;
     if (!wantsPeace(ctx, w)) continue;
     const them = game.players[w];
     if (!them.bot && (game.turn - (mem.wars[w]?.since ?? 0)) % 6 !== 0) continue;
     if (act(ctx, { t: 'peace', target: w }) && mem.plan?.target === w && !ctx.game.players[ctx.me].diplomacy.war[w]) mem.plan = undefined;
   }
   if (mem.plan && mem.plan.stage !== 'muster' && !ctx.p.diplomacy.war[mem.plan.target]) mem.plan = undefined;
+}
+
+/**
+ * Whether the bot, beaten, would capitulate to a civ it's at war with (`vassals.ts`): cities lost, the
+ * war going badly and their army twice its own (the bold hold out longer); or down to its last city
+ * before an army it can't stand.
+ */
+export function kneels(ctx: Ctx, them: number): boolean {
+  const { game, pers } = ctx;
+  const other = game.players[them];
+  if (!dealer(other) || !atWar(game, ctx.me, them) || capitulationProblem(game, ctx.p, other)) return false;
+  const rec = ctx.mem.wars[them];
+  const lost = rec ? rec.myCities - ctx.cities.length : 0;
+  const ratio = mightOf(ctx, them) / Math.max(1, mightOf(ctx, ctx.me));
+  if (lost < 1) return false;
+  return (warScore(ctx, them) < -40 - pers.boldness * 3 && ratio >= 2) || (ctx.cities.length <= 1 && ratio >= 3);
+}
+
+/** Whether the bot, beating a civ, would have it kneel rather than fight on: a war some turns old, cities taken, its army twice theirs. */
+function demands(ctx: Ctx, them: number): boolean {
+  const { game } = ctx;
+  const other = game.players[them];
+  if (!dealer(other) || capitulationProblem(game, other, ctx.p)) return false;
+  const rec = ctx.mem.wars[them];
+  if (!rec || game.turn - rec.since < 8) return false;
+  const took = rec.theirCities - citiesOf(game, them).length;
+  return took >= 1 && warScore(ctx, them) >= 30 && mightOf(ctx, ctx.me) >= mightOf(ctx, them) * 2;
+}
+
+/**
+ * A capitulation put to a civ the bot's at war with: its own, beaten, or theirs, demanded (a bot
+ * answers at once; a person is asked every few turns, and not again for a while once they've said no).
+ * True if the war's over by it.
+ */
+function capitulation(ctx: Ctx, them: number): boolean {
+  const { game, me } = ctx;
+  const other = game.players[them];
+  if (masterOf(game, me) || teamedWithPeople(game, me)) return false;
+  if (!other.bot && (game.turn + me) % 5 !== 0) return false;
+  const from = kneels(ctx, them) ? me : demands(ctx, them) ? them : undefined;
+  if (from === undefined) return false;
+  const deal: Deal = { from: me, to: them, items: [{ kind: 'vassal', from }] };
+  if (dealProblem(game, deal) || (!other.bot && declinedLately(game, them, askOf(deal), 15))) return false;
+  act(ctx, { t: 'deal', target: them, items: deal.items });
+  if (atWar(game, me, them)) return false;
+  // (Peace, by it: the war's plan is done, and what was being said of it.)
+  if (ctx.mem.plan?.target === them) ctx.mem.plan = undefined;
+  ctx.wars = ctx.wars.filter((w) => !game.players[me].diplomacy.war[w]);
+  return true;
+}
+
+/** A vassal declares its independence once it can, unless it has come to like its master. */
+export function vassalage(ctx: Ctx) {
+  const { game, p } = ctx;
+  const m = masterOf(game, ctx.me);
+  if (!m || independence(game, p).why || opinionOf(game, p, m).total >= 20) return;
+  if (act(ctx, { t: 'independence' })) ctx.wars = ctx.wars.filter((w) => p.diplomacy.war[w]);
 }
 
 /**
@@ -187,25 +247,25 @@ function bestTarget(ctx: Ctx): { target: number; city: number; desire: number; a
   const mine = mightOf(ctx, ctx.me);
   const leader = majors(game).filter((o) => o.alive).sort((a, b) => score(game, b) - score(game, a))[0];
   const close = runaways(ctx);
-  const allies = teamOf(game, ctx.me).filter((m) => m !== p).reduce((s, m) => s + mightOf(ctx, m.index) * 0.7, 0);
+  const allies = sideOf(game, ctx.me).filter((m) => m !== p).reduce((s, m) => s + mightOf(ctx, m.index) * 0.7, 0);
   const race = capitalsRace(ctx);
   let best: { target: number; city: number; desire: number; amphibious: boolean; why: WarWhy } | null = null;
-  // (On a team with people, they choose the team's wars: the bot fights them.)
-  if (teamedWithPeople(game, ctx.me)) return null;
+  // (On a team with people, they choose the team's wars: the bot fights them. A vassal's master chooses its.)
+  if (teamedWithPeople(game, ctx.me) || masterOf(game, ctx.me)) return null;
   for (const o of game.players) {
     if (o === p || !o.alive || o.civ === 'barbarian' || p.diplomacy.peaceTurns[o.index] > 0) continue;
     // (A city-state only for the warlike, and not one it pledged to protect unless it would break that pledge.)
     if (o.cityState && (pers.offense < 8 || (pledged(game, ctx.me, o.index) && !forsakes(ctx, o.index)))) continue;
     // Friends and pact partners are not attacked.
-    if (friends(game, ctx.me, o.index) || pacted(game, ctx.me, o.index) || teammates(game, ctx.me, o.index)) continue;
+    if (friends(game, ctx.me, o.index) || pacted(game, ctx.me, o.index) || sameSide(game, ctx.me, o.index)) continue;
     // (Pressing for the capitals: only those that hold one, however far, unless another's close to winning.)
     const holds = race.pressing && race.left.some((c) => c.owner === o.index);
     if (race.pressing && !holds && !close.has(o.index)) continue;
     const aim = targetCity(ctx, o);
     if (!aim || aim.near > (holds ? 30 : 18)) continue;
     const { city, near, amphibious } = aim;
-    // Their pact partners would join them (and the bot's teammates it).
-    const partners = game.players.filter((x) => x !== p && x !== o && (pacted(game, x.index, o.index) || teammates(game, x.index, o.index))).reduce((s, x) => s + mightOf(ctx, x.index), 0);
+    // Their pact partners and their side (teammates, master, vassals) would join them (and the bot's side it).
+    const partners = game.players.filter((x) => x !== p && x !== o && (pacted(game, x.index, o.index) || sameSide(game, x.index, o.index))).reduce((s, x) => s + mightOf(ctx, x.index), 0);
     const ratio = (mine + allies) / Math.max(1, mightOf(ctx, o.index) + partners * 0.7);
     let desire = pers.offense * 0.9 + pers.boldness * 0.3 + (mem.aim === 'domination' ? 6 : 0) + (ratio - 1.3) * 8 - near * 0.4;
     if (o.cityState) desire -= 6;
@@ -266,6 +326,8 @@ export function planWar(ctx: Ctx) {
   const { game, p, mem } = ctx;
   if (p.cityState) return;
   if (mem.passive) return void (mem.plan = undefined);
+  // (A vassal fights only its master's side's wars: a plan of its own, for a war it's now at peace in, is given up.)
+  if (masterOf(game, ctx.me) && mem.plan && mem.plan.why !== 'ally' && !p.diplomacy.war[mem.plan.target]) mem.plan = undefined;
   const plan = mem.plan;
   if (plan) {
     const them = game.players[plan.target];
@@ -371,11 +433,11 @@ function warned(ctx: Ctx, plan: WarPlan): boolean {
   return plan.warned !== undefined && game.turn - plan.warned >= WARNING_TURNS;
 }
 
-/** The civ a bot's team means to fight, if any: a bot teammate's war plan's target, else a major civ the team is at war with. */
+/** The civ a bot's team (or, for a vassal, its master's side) means to fight, if any: a bot of theirs' war plan's target, else a major civ they're at war with. */
 function teamWar(ctx: Ctx): number | undefined {
   const { game, p } = ctx;
-  if (p.team === undefined) return undefined;
-  const mates = teamOf(game, ctx.me).filter((m) => m !== p);
+  const mates = (masterOf(game, ctx.me) ? sideOf(game, ctx.me) : teamOf(game, ctx.me)).filter((m) => m !== p);
+  if (!mates.length) return undefined;
   const planned = mates.map((m) => m.ai?.plan?.target).find((t) => t !== undefined && game.players[t]?.alive);
   if (planned !== undefined) return planned;
   return ctx.wars.find((w) => !game.players[w].cityState && mates.some((m) => game.players[m.index].diplomacy.war[w]));
