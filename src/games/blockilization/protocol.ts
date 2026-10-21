@@ -47,9 +47,7 @@ export interface LobbyView {
   you: string;
   seats: LobbySeat[];
   settings: Settings;
-  /** A saved game this room can carry on: its turn and who was in it. */
-  save: { turn: number; seats: string[] } | null;
-  /** This person's saved games in other rooms (the public game's, or rooms of players' own), to go back to: in the lobby only. */
+  /** Every unfinished game this person has a seat in, wherever it was played, to carry on here: in the lobby only. */
   saves: SavedGame[];
   /** While the world's being built: how far along (0..1). */
   progress?: number;
@@ -69,8 +67,8 @@ export type LobbyAction =
   | { a: 'team'; seat: string; team: number | null }
   | { a: 'teamPreset'; preset: TeamPreset }
   | { a: 'start' }
-  | { a: 'resume' }
-  | { a: 'discard' }
+  | { a: 'resume'; id: string }
+  | { a: 'discard'; id: string }
   | { a: 'newGame' };
 
 /** Teams set up at once: the people against the bots, each person paired with a bot (then the rest in twos), or every civ for itself. */

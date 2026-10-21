@@ -1,6 +1,6 @@
 import type { Client } from '@platform/client';
 import { centre } from '../geometry';
-import type { CityInfo, CityWire, ClientToServer, LobbyAction, LobbyView, UnitWire, View } from '../protocol';
+import type { CityInfo, CityWire, ClientToServer, LobbyAction, UnitWire, View } from '../protocol';
 import { takenAlive } from '../rules/combat';
 import type { CombatPreview, PreviewSide } from '../rules/preview';
 import { BUILDINGS, SPACESHIP_PARTS } from '../rules/buildings';
@@ -581,12 +581,6 @@ function renderWatching(): El {
 // Lobby
 // -------------------------------------------------------------------------------------------------
 
-/** Who of a saved game's people isn't here yet (they can come back to their seat once it's under way). */
-function awayFromSave(L: LobbyView): string {
-  const away = L.save?.seats.filter((name) => !L.seats.some((s) => !s.bot && s.name === name)) ?? [];
-  return away.length ? ` · not here yet: ${away.join(', ')} (they can join once it's under way)` : '';
-}
-
 /** Things worth knowing on the first turns (the guide's and the Civilopedia's own words), one at a time while the world is made. */
 const FIRST_TIPS = [
   'Found your capital with your Settler at once: rivers, the coast and grassland make the best start.',
@@ -633,16 +627,7 @@ function renderLobby(): El | null {
     'div.cv-lobby.cv-panel.cv-scroll',
     {},
     brand('Build an empire to stand the test of time.'),
-    L.save &&
-      h(
-        'div.cv-alert',
-        { style: 'justify-content:center;background:rgba(106,184,255,.08);border-color:rgba(106,184,255,.3)' },
-        icon('turn', 18, '#6ab8ff'),
-        h('span', {}, `A saved game: turn ${L.save.turn} (${L.save.seats.join(', ')})${awayFromSave(L)}. Begin keeps it in a room of its own.`),
-        isHost && h('button.cv-btn.gold.small', { onclick: () => lobby({ a: 'resume' }) }, 'Carry on'),
-        isHost && h('button.cv-btn.small', { onclick: () => lobby({ a: 'discard' }) }, 'Discard'),
-      ),
-    savedGamesBox(L),
+    savedGamesBox(L, isHost, lobby),
     renderFame(),
     h('div.cv-label.sect', {}, 'Choose your civilization'),
     h(

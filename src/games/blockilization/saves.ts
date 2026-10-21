@@ -43,21 +43,41 @@ export class SaveThrottle {
   }
 }
 
-/** What a room's save is, in brief: the game's turn, and who's in it (people only), for the list of a person's saved games. */
-export interface SaveNote {
+/**
+ * Saved games belong to the people playing them, not to rooms. Each game has an id of its own and
+ * is kept under it (`game:<id>`) in the game's store: the server's database on its disk, which
+ * outlives every room (rooms stop, restart and come and go; the save stays). Beside it a note
+ * (`gamenote:<id>`) says what it is in a few dozen bytes: its turn, who's in it (by account), and
+ * where and when it was last played. A lobby reads only the notes to list a person's games, any of
+ * which can be carried on in whatever room they're in; a new game never touches another's save.
+ */
+
+/** A saved game, in brief. */
+export interface GameNote {
   turn: number;
   seats: { key: string; name: string; civ: string | null }[];
-}
-
-/** One of a person's saved games, in another room: where (`public`, or a room's code), the turn, their civ, and who else is in it. */
-export interface SavedGame {
+  /** The room it was last played in, and when (an ISO time). */
   room: string;
-  turn: number;
-  civ: string | null;
-  with: string[];
+  at: string;
+  /** Anyone still in that room playing it (else it was saved as the last of them left). */
+  open?: boolean;
 }
 
-/** The part of `game.store` the notes need. */
+/** One of a person's saved games, as their lobby lists it. */
+export interface SavedGame {
+  id: string;
+  turn: number;
+  /** Their civ in it. */
+  civ: string | null;
+  /** The other people in it. */
+  with: string[];
+  /** When it was last played (an ISO time). */
+  at: string;
+  /** Being played right now in another room (it can't be carried on in two at once). */
+  elsewhere: boolean;
+}
+
+/** The part of `game.store` the saves need. */
 interface Kept {
   get<T = unknown>(key: string): T | undefined;
   set(key: string, value: unknown): void;
@@ -65,74 +85,90 @@ interface Kept {
   keys(prefix?: string): string[];
 }
 
-/** A save as `server.ts` writes it (`save:<room>`): the game, and its seats. */
-interface Saved {
-  game: { turn: number; over?: unknown };
+/** A save as `server.ts` writes it: the game, and its seats. */
+export interface Saved<G = { turn: number; over?: unknown }> {
+  game: G;
   seats: { key: string; name: string; civ: string | null; bot: boolean }[];
 }
 
-/**
- * The notes of every room's save (`savenote:<room>`), kept beside the saves. A save is a few hundred
- * kilobytes and the lobby would have to read every room's to find a person's; a note is a few
- * dozen bytes. Saves are the game's, shared by all its rooms, so each lobby can list them all.
- */
-const noteKey = (room: string) => `savenote:${room}`;
+export const gameKey = (id: string) => `game:${id}`;
+const noteKey = (id: string) => `gamenote:${id}`;
+/** A game's autosaves (the game as each of its last few turns began): `autosave:<id>:<turn>`. */
+export const autoKey = (id: string, turn: number) => `autosave:${id}:${turn}`;
 
-/** A room's save was written: its note too (none for a game that's over). */
-export function noteSave(store: Kept, room: string, save: Saved) {
-  if (save.game.over) return store.delete(noteKey(room));
-  const note: SaveNote = { turn: save.game.turn, seats: save.seats.filter((s) => !s.bot).map((s) => ({ key: s.key, name: s.name, civ: s.civ })) };
-  store.set(noteKey(room), note);
+/** A game saved in the last two minutes with people still in its room is taken to be under way there. */
+const LIVE_MS = 2 * 60 * 1000;
+
+/** A game saved, in the room it's played in: the save, and its note. */
+export function saveGame(store: Kept, id: string, room: string, save: Saved, now = new Date(), open = true) {
+  if (save.game.over) return forgetGame(store, id);
+  store.set(gameKey(id), save);
+  const note: GameNote = { turn: save.game.turn, seats: save.seats.filter((s) => !s.bot).map((s) => ({ key: s.key, name: s.name, civ: s.civ })), room, at: now.toISOString(), open };
+  store.set(noteKey(id), note);
 }
 
-/** A room's save is gone (the game won, or discarded): its note too. */
-export const forgetSave = (store: Kept, room: string) => store.delete(noteKey(room));
+/** A game's turns kept as autosaves, newest first. */
+export const autosaveTurns = (store: Kept, id: string) =>
+  store
+    .keys(`autosave:${id}:`)
+    .map((k) => Number(k.slice(k.lastIndexOf(':') + 1)))
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a);
 
-/**
- * Notes for the saves made before there were notes (read once each, then never again), and none
- * kept for a save that's gone.
- */
-export function noteOldSaves(store: Kept) {
-  const saved = store.keys('save:');
-  for (const key of saved) {
-    const room = key.slice('save:'.length);
-    if (store.get(noteKey(room))) continue;
-    const save = store.get<Saved>(key);
-    if (save?.game && Array.isArray(save.seats)) noteSave(store, room, save);
-  }
-  for (const key of store.keys('savenote:')) if (!saved.includes(`save:${key.slice('savenote:'.length)}`)) store.delete(key);
+/** A game gone (won, or discarded by one of its people): its save, its note and its autosaves. */
+export function forgetGame(store: Kept, id: string) {
+  store.delete(gameKey(id));
+  store.delete(noteKey(id));
+  for (const t of autosaveTurns(store, id)) store.delete(autoKey(id, t));
 }
 
-/** The saved games a person (`who`: their seat's key) has a seat in, but for this room's own: the latest turns first. */
-export function savedGames(store: Kept, who: string, here: string): SavedGame[] {
+/** Whether a person (their seat's key) has a seat in a saved game. */
+export const inGame = (store: Kept, id: string, who: string) => !!store.get<GameNote>(noteKey(id))?.seats.some((s) => s.key === who);
+
+/** Whether a saved game is being played right now in a room other than `here`. */
+export function playedElsewhere(store: Kept, id: string, here: string, now = new Date()): boolean {
+  const note = store.get<GameNote>(noteKey(id));
+  return !!note && note.room !== here && note.open !== false && now.getTime() - Date.parse(note.at) < LIVE_MS;
+}
+
+/** The saved games a person (their seat's key) has a seat in, the latest played first. */
+export function savedGames(store: Kept, who: string, here: string, now = new Date()): SavedGame[] {
   const out: SavedGame[] = [];
-  for (const key of store.keys('savenote:')) {
-    const room = key.slice('savenote:'.length);
-    const note = store.get<SaveNote>(key);
+  for (const key of store.keys('gamenote:')) {
+    const id = key.slice('gamenote:'.length);
+    const note = store.get<GameNote>(key);
     const mine = note?.seats.find((s) => s.key === who);
-    if (room === here || !note || !mine) continue;
-    out.push({ room, turn: note.turn, civ: mine.civ, with: note.seats.filter((s) => s !== mine).map((s) => s.name) });
+    if (!note || !mine) continue;
+    out.push({ id, turn: note.turn, civ: mine.civ, with: note.seats.filter((s) => s !== mine).map((s) => s.name), at: note.at, elsewhere: playedElsewhere(store, id, here, now) });
   }
-  return out.sort((a, b) => b.turn - a.turn || a.room.localeCompare(b.room));
+  return out.sort((a, b) => b.at.localeCompare(a.at) || b.turn - a.turn);
 }
 
 /**
- * A room's save set aside in a room of its own (`to`, a new room's code), its note with it: a new
- * game begun where a game was saved doesn't lose it. Its people find it in their list of saved
- * games, with the new room's address. Whether there was one to set aside.
+ * Saves from when they were kept by room (`save:<room>`, its autosaves `autosave:<room>:<turn>`,
+ * and the notes beside them for a while, `savenote:<room>`): each made a game of its own, under an
+ * id from its room (so two rooms starting at once make the same one), and the room's keys gone.
  */
-export function setAside(store: Kept, room: string, to: string): boolean {
-  const save = store.get<Saved>(`save:${room}`);
-  if (!save || save.game.over) return false;
-  store.set(`save:${to}`, save);
-  noteSave(store, to, save);
-  store.delete(`save:${room}`);
-  forgetSave(store, room);
-  return true;
+export function moveRoomSaves(store: Kept, now = new Date()) {
+  for (const key of store.keys('save:')) {
+    const room = key.slice('save:'.length);
+    const save = store.get<Saved>(key);
+    const id = `room-${room}`;
+    if (save?.game && Array.isArray(save.seats) && !save.game.over && !store.get(gameKey(id))) {
+      saveGame(store, id, room, save, now);
+      for (const k of store.keys(`autosave:${room}:`)) {
+        const turn = Number(k.slice(k.lastIndexOf(':') + 1));
+        if (Number.isFinite(turn)) store.set(autoKey(id, turn), store.get(k));
+        store.delete(k);
+      }
+    }
+    store.delete(key);
+  }
+  for (const key of store.keys('savenote:')) store.delete(key);
 }
 
-/** A new room's code: eight letters and digits, as the platform's own (`?room=`). */
-export function roomCode(random = Math.random): string {
+/** A new game's id: ten letters and digits. */
+export function gameId(random = Math.random): string {
   const abc = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  return Array.from({ length: 8 }, () => abc[Math.floor(random() * abc.length)]).join('');
+  return Array.from({ length: 10 }, () => abc[Math.floor(random() * abc.length)]).join('');
 }
