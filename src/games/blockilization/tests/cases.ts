@@ -45,7 +45,7 @@ import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasM
 import { bindTeams } from '../rules/teams';
 import { cityInfo, mapWire, viewFor } from '../views';
 import { packStatic, unpackKnown, unpackStatic, type KnownTile } from '../protocol';
-import { autoKey, autosaveTurns, forgetGame, gameId, gameKey, inGame, moveRoomSaves, playedElsewhere, renameGame, roomCode, saveGame, savedGames, SaveThrottle } from '../saves';
+import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, tidyGames } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
@@ -3520,8 +3520,8 @@ test('saved games are each person’s, by account: listed in any room, carried o
   reads = 0;
   const now = at('2026-10-21T00:30:00Z');
   eq(JSON.stringify(savedGames(store, ann, now)), JSON.stringify([
-    { id: 'room-k3x9f2', turn: 31, civ: 'greece', with: [], at: '2026-10-21T00:10:00.000Z', live: false },
-    { id: 'room-public', turn: 79, civ: 'korea', with: ['Bob'], at: '2026-10-21T00:00:00.000Z', live: false },
+    { id: 'room-k3x9f2', turn: 31, civ: 'greece', with: [], at: '2026-10-21T00:10:00.000Z', live: false, backups: [] },
+    { id: 'room-public', turn: 79, civ: 'korea', with: ['Bob'], at: '2026-10-21T00:00:00.000Z', live: false, backups: [78] },
   ]), 'Ann’s two games, wherever they were played, latest first');
   eq(reads, 0, 'listing them reads no save, only notes');
   eq(savedGames(store, 'acct:bob', now).length, 2, 'Bob sees theirs too (the one with Ann, and his own)');
@@ -3550,7 +3550,67 @@ test('saved games are each person’s, by account: listed in any room, carried o
   ok((store.get<{ game: { turn: number } }>(gameKey('abcdefghij'))?.game.turn ?? 0) === 79 && JSON.stringify(autosaveTurns(store, 'abcdefghij')) === '[78]', 'its save and autosaves under the new id');
   eq(JSON.stringify(savedGames(store, ann, now).map((g) => [g.id, g.with])), JSON.stringify([['room-k3x9f2', []], ['abcdefghij', ['Bob']]]), 'listed under its new id, for both of them');
   forgetGame(store, 'abcdefghij');
-  eq(savedGames(store, ann, now).length, 1, 'discarded: no longer listed');
+  eq(savedGames(store, ann, now).length, 1, 'gone: no longer listed');
+});
+
+test('no game is lost: backups of its last turns to take it back to, and discarding only takes it off one person’s list, for a week', () => {
+  const data = new Map<string, unknown>();
+  const store = {
+    get: <T,>(k: string) => structuredClone(data.get(k)) as T | undefined,
+    set: (k: string, v: unknown) => void data.set(k, structuredClone(v)),
+    delete: (k: string) => void data.delete(k),
+    keys: (prefix = '') => [...data.keys()].filter((k) => k.startsWith(prefix)),
+  };
+  const ann = 'acct:ann';
+  const bob = 'acct:bob';
+  const seats = [
+    { key: ann, name: 'Ann', civ: 'korea', bot: false },
+    { key: bob, name: 'Bob', civ: 'arabia', bot: false },
+  ];
+  const at = (iso: string) => new Date(iso);
+  const day = 86400e3;
+  // Which backups are kept: the latest two, and one from before them (the latest tenth, else the earliest).
+  const kept = (turns: number[]) => JSON.stringify([...backupsKept(turns)].sort((a, b) => b - a));
+  eq(kept([45, 44, 43, 42, 41, 40, 39]), '[45,44,40]', 'the latest two, and the tenth turn before them');
+  eq(kept([52, 51, 50, 40]), '[52,51,50]', 'a later tenth in its place');
+  eq(kept([46, 45, 44, 43]), '[46,45,43]', 'no tenth: the earliest');
+  eq(kept([3, 2]), '[3,2]', 'two: both');
+  eq(kept([]), '[]', 'none: none');
+  // Ann and Bob's game, saved at turn 41 with its backups.
+  const save = (turn: number) => ({ game: { turn, over: null, players: [{ bot: false, notes: [] as { text: string }[] }] }, seats });
+  saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), false);
+  for (const t of [41, 40, 37]) store.set(autoKey('k3x9f2', t), save(t));
+  eq(JSON.stringify(savedGames(store, ann, at('2026-10-21T00:01:00Z'))[0].backups), '[41,40,37]', 'listed with its backups, the latest first');
+  // Taken back to the start of turn 37: the later backups go, and what it's given (a word to its people) is saved with it.
+  ok(!playedNow(store, 'k3x9f2', at('2026-10-21T00:01:00Z')), 'nobody playing it: free to take back');
+  ok(restoreTurn(store, 'k3x9f2', 37, at('2026-10-21T00:02:00Z'), (s) => (s.game as ReturnType<typeof save>['game']).players[0].notes.push({ text: 'Ann took it back' })), 'taken back');
+  const now = store.get<ReturnType<typeof save>>(gameKey('k3x9f2'))!;
+  ok(now.game.turn === 37 && now.game.players[0].notes[0]?.text === 'Ann took it back', 'saved as turn 37 began, with the word');
+  eq(JSON.stringify(autosaveTurns(store, 'k3x9f2')), '[37]', 'the backups after it gone');
+  ok(!(store.get<ReturnType<typeof save>>(autoKey('k3x9f2', 37))!.game.players[0].notes.length), 'the backup itself as it was');
+  ok(!restoreTurn(store, 'k3x9f2', 40), 'a turn with no backup: not taken back to');
+  // Bob discards it: off his list (listed a week as discarded, to bring back), still on Ann's.
+  discardGame(store, 'k3x9f2', bob, at('2026-10-21T01:00:00Z'));
+  ok(savedGames(store, bob, at('2026-10-22T00:00:00Z'))[0]?.discarded === '2026-10-21T01:00:00.000Z', 'Bob’s list: discarded');
+  ok(!savedGames(store, ann, at('2026-10-22T00:00:00Z'))[0]?.discarded, 'Ann’s: as it was');
+  keepGame(store, 'k3x9f2', bob);
+  ok(!savedGames(store, bob, at('2026-10-22T00:00:00Z'))[0]?.discarded, 'brought back');
+  discardGame(store, 'k3x9f2', bob, at('2026-10-21T01:00:00Z'));
+  eq(savedGames(store, bob, at('2026-10-29T00:00:00Z')).length, 0, 'a week on: off his list');
+  // Saved by someone playing it (Ann), Bob's discard stands; Bob back in it to play, it's his again.
+  saveGame(store, 'k3x9f2', 'k3x9f2', save(38), at('2026-10-21T02:00:00Z'), true, [ann]);
+  ok(!!savedGames(store, bob, at('2026-10-21T03:00:00Z'))[0]?.discarded, 'Ann playing it: still off Bob’s list');
+  saveGame(store, 'k3x9f2', 'k3x9f2', save(38), at('2026-10-21T02:00:00Z'), true, [ann, bob]);
+  ok(!savedGames(store, bob, at('2026-10-21T03:00:00Z'))[0]?.discarded, 'Bob back in it: on his list again');
+  // Kept until everyone in it has discarded it, and a week has gone by since the last of them did.
+  discardGame(store, 'k3x9f2', bob, at('2026-10-21T01:00:00Z'));
+  tidyGames(store, at('2026-11-01T00:00:00Z'));
+  ok(data.has(gameKey('k3x9f2')), 'Ann hasn’t discarded it: kept');
+  discardGame(store, 'k3x9f2', ann, at('2026-10-30T00:00:00Z'));
+  tidyGames(store, new Date(Date.parse('2026-10-30T00:00:00Z') + 6 * day));
+  ok(data.has(gameKey('k3x9f2')), 'the last of them six days ago: kept');
+  tidyGames(store, new Date(Date.parse('2026-10-30T00:00:00Z') + 7 * day));
+  ok(!store.keys().some((k) => k.includes('k3x9f2')), 'a week: gone, its note and backups with it');
 });
 
 test('the game’s save is throttled: an order’s at once, the rest at most every few seconds, none left waiting', () => {

@@ -71,7 +71,11 @@ export type LobbyAction =
   | { a: 'open'; id: string }
   /** Carry one on here (a platform whose screens can't go to another room). */
   | { a: 'resume'; id: string }
+  /** Take one off your list (the others in it play on), for a week to bring back (`keep`). */
   | { a: 'discard'; id: string }
+  | { a: 'keep'; id: string }
+  /** Take one back to the start of a turn it has a backup of (`SavedGame.backups`), while nobody's playing it. */
+  | { a: 'restore'; id: string; turn: number }
   | { a: 'newGame' };
 
 /** Teams set up at once: the people against the bots, each person paired with a bot (then the rest in twos), or every civ for itself. */

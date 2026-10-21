@@ -4,6 +4,7 @@ import { MemoryStore } from '../../src/platform/host/store';
 import type { HostBatch } from '../../src/platform/net/protocol';
 import type { Game } from '../../src/games/blockilization/rules/state';
 import type { LobbyView } from '../../src/games/blockilization/protocol';
+import { autosaveTurns, restoreTurn, tidyGames, type Saved } from '../../src/games/blockilization/saves';
 import { check, games } from './_harness';
 import { devGames } from '../../src/games/server';
 
@@ -14,6 +15,10 @@ import { devGames } from '../../src/games/server';
  * begun in the public room (where a screen can't go to another) is saved under an id of its own;
  * in another room its player's lobby lists it; a new game replaces no saved game; and one from
  * before games had addresses is given one when it's opened.
+ *
+ * And none is lost: every game keeps backups of its last turns' starts, to take it back to from the
+ * list while nobody's playing it (a room still up with it, emptied, plays it as it's saved now); a
+ * discarded game is listed a week to bring back, and only then goes.
  */
 export default async function blockilizationSaves() {
   const def = [...games, ...(await devGames())].find((g) => g.id === 'blockilization')!;
@@ -35,7 +40,7 @@ export default async function blockilizationSaves() {
             if (e.call.method === 'goto') goto = (e.call.args[0] as { room: string }).room;
           }
     };
-    const ann = host.connect('Ann');
+    let ann = host.connect('Ann');
     host.command(ann.id, { t: 'start' });
     step(0.5);
     const send = (data: unknown) => {
@@ -49,9 +54,20 @@ export default async function blockilizationSaves() {
       host.disconnect(ann.id);
       step(0.2);
     };
-    return { send, play, leave, lobby: () => lobby, goto: () => goto };
+    const rejoin = () => {
+      ann = host.connect('Ann');
+      host.command(ann.id, { t: 'start' });
+      step(0.5);
+    };
+    const exec = (line: string) => {
+      host.command(ann.id, { t: 'exec', id: 1, line });
+      step(2 / 30);
+    };
+    return { send, play, leave, rejoin, exec, lobby: () => lobby, goto: () => goto };
   };
   const ids = () => store.data() && [...store.data().keys()].filter((k) => k.startsWith('game:'));
+  // (The game's data, as `game.store` has it: what the saves' own functions take.)
+  const data = { get: <T>(k: string) => store.data().get(k) as T | undefined, set: (k: string, v: unknown) => void store.data().set(k, v), delete: (k: string) => void store.data().delete(k), keys: (prefix = '') => [...store.data().keys()].filter((k) => k.startsWith(prefix)) };
   const duel = { a: 'settings', size: 'duel', cityStates: 0, barbarians: false };
 
   // Ann begins a game in a room of her own: its id is the room's code, its address.
@@ -95,4 +111,49 @@ export default async function blockilizationSaves() {
   check(!!moved && /^[a-z0-9]{10}$/.test(moved) && store.data().has(`game:${moved}`) && !store.data().has('game:room-public'), `the old game given an address (${moved}), and she's sent there`);
   hub.send({ a: 'open', id: 'k3x9f2' });
   check(hub.goto() === 'k3x9f2', 'a game with an address: sent straight there');
+  hub.leave();
+
+  // Every game keeps backups of its turns' starts: the latest two, and one from up to ten turns before.
+  const again = room('k3x9f2');
+  again.play();
+  again.exec('civ turns 12');
+  const at = civ.game()!.turn;
+  const kept = autosaveTurns(data, 'k3x9f2');
+  check(kept.length === 3 && kept[0] === at && kept[1] === at - 1 && kept[2] % 10 === 0 && kept[2] < at - 1, `the last two turns' backups, and one from before: ${kept} (turn ${at})`);
+  again.leave();
+
+  // From her list (nobody playing it), she takes it back to the earliest: what came after goes, and
+  // everyone in it is told who did.
+  const list = room('public');
+  const row = list.lobby()?.saves.find((g) => g.id === 'k3x9f2');
+  check(JSON.stringify(row?.backups) === JSON.stringify(kept), `listed with its backups: ${JSON.stringify(row?.backups)}`);
+  list.send({ a: 'restore', id: 'k3x9f2', turn: kept[2] });
+  const back2 = store.data().get('game:k3x9f2') as Saved<Game>;
+  check(back2.game.turn === kept[2] && JSON.stringify(autosaveTurns(data, 'k3x9f2')) === `[${kept[2]}]`, `taken back to turn ${kept[2]} (${back2.game.turn}), the later backups gone (${autosaveTurns(data, 'k3x9f2')})`);
+  check(back2.game.players.some((p) => p.notes.some((n) => n.text === `Ann took the game back to the start of turn ${kept[2]}.`)), 'its people are told');
+
+  // Discarded: off her list, listed a week to bring back, and brought back.
+  list.send({ a: 'discard', id: 'k3x9f2' });
+  const off = list.lobby()?.saves.find((g) => g.id === 'k3x9f2');
+  check(!!off?.discarded && store.data().has('game:k3x9f2'), `discarded, still kept: ${JSON.stringify(off)}`);
+  list.send({ a: 'keep', id: 'k3x9f2' });
+  check(!list.lobby()?.saves.find((g) => g.id === 'k3x9f2')?.discarded, 'brought back');
+  // A game everyone in has discarded goes a week after the last of them did, not before.
+  list.send({ a: 'discard', id: second!.slice('game:'.length) });
+  tidyGames(data, new Date(Date.now() + 6 * 86400e3));
+  check(store.data().has(second!), 'kept for the week');
+  tidyGames(data, new Date(Date.now() + 8 * 86400e3));
+  check(!store.data().has(second!) && ![...store.data().keys()].some((k) => k.includes(second!.slice('game:'.length))), 'then gone, its note and backups with it');
+  list.leave();
+
+  // Back at the game: taken back while its room stood empty (but still up), whoever comes back plays it as it's saved now.
+  const last = room('k3x9f2');
+  last.play();
+  check(civ.game()!.turn === kept[2], `the room opens it at the turn it was taken back to (${civ.game()!.turn})`);
+  last.exec('civ turns 2');
+  last.leave();
+  restoreTurn(data, 'k3x9f2', kept[2] + 1);
+  last.rejoin();
+  last.play();
+  check(civ.game()!.turn === kept[2] + 1, `back in the room, the game as it's saved now: turn ${civ.game()!.turn}`);
 }

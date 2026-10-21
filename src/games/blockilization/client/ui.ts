@@ -28,7 +28,7 @@ import { decisions, NOTES_CSS, renderNoteCentre, renderNotesPart } from './notes
 import { ABILITY_TEXT, VICTORIES } from './concepts';
 import { OVERVIEW_CSS, renderOverview } from './overview';
 import { HOTKEYS_CSS, renderHotkeys, renderMenu } from './hotkeys';
-import { hubTop, inviteRow, LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards, type GameLinks } from './lobby';
+import { discardedBox, hubTop, inviteRow, LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards, type GameLinks } from './lobby';
 import { gameId, roomCode } from '../saves';
 import { ADVICE_CSS, adviceTag, researchHint } from './advice';
 import { POLITICS_CSS } from './politics';
@@ -646,7 +646,8 @@ function renderHub(L: NonNullable<typeof store.lobby>, brand: (sub: string) => E
     {},
     brand('Build an empire to stand the test of time.'),
     hubTop(() => rooms()?.go(gameId())),
-    savedGamesBox(L, false, lobby, gameLinks()) ?? h('div.cv-muted.lb-none', {}, 'Your games will be here: each one you begin, for as long as it lasts, to go back to whenever you like.'),
+    savedGamesBox(L, false, lobby, gameLinks()) ?? h('div.cv-muted.lb-none', {}, 'Your games will be here: each one you begin, saved every turn for as long as it lasts, to go back to whenever you like.'),
+    discardedBox(L, lobby),
     guest && h('div.cv-muted.lb-none', {}, 'You’re playing as a guest: your games are kept under your name, for whoever plays by it. Sign in on the home page to keep them yours.'),
     renderFame(),
   );
