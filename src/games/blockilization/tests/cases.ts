@@ -12,7 +12,7 @@ import { CIV_SYMBOL, glyphPaths } from '../client/icons';
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
 import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
-import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, wellFormed, type Order } from '../rules/game';
+import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, upgradeTo, wellFormed, type Order } from '../rules/game';
 import { colOf, distance, line, neighbour, neighbours, tileAt, within } from '../rules/hex';
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
@@ -1351,6 +1351,24 @@ test('upgrades: a move left, the resource, the price (a third less with Professi
   ok(upgradeCost(game, p, w) < cost, 'cheaper');
   ok(apply(game, 0, { t: 'upgrade', unit: w.id }).ok, 'upgraded');
   eq(w.type, 'swordsman', 'a swordsman');
+});
+
+test('a frigate upgrades to a battleship (Electricity, Oil), not to Combustion’s destroyer: a ship keeps its kind, ranged or melee', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(5, 5));
+  Object.assign(game.tiles[at(6, 5)], { terrain: 'coast', owner: 0 });
+  const frigate = unit(game, 'frigate', 0, at(6, 5));
+  techsTo(game, 0, 11);
+  p.techs.push('electronics');
+  ok(p.techs.includes('electricity') && !p.techs.includes('combustion'), 'Electricity and Electronics, not Combustion');
+  p.gold = 1000;
+  eq(upgradeTo(p, frigate), 'battleship', 'it would be a battleship');
+  ok(!apply(game, 0, { t: 'upgrade', unit: frigate.id }).ok, 'needs oil');
+  Object.assign(game.tiles[at(4, 5)], { resource: 'oil', amount: 2, improvement: 'oil_well', owner: 0 });
+  ok(apply(game, 0, { t: 'upgrade', unit: frigate.id }).ok, 'upgraded');
+  eq(frigate.type, 'battleship', 'a battleship');
+  for (const u of Object.values(UNITS)) if (u.domain === 'sea' && u.upgrade) eq(UNITS[u.upgrade].class, u.class, `${u.name} upgrades to a ship of its kind`);
 });
 
 test('moving: the Great Wall, the Iroquois’ forest paths, zones of control by domain', () => {
