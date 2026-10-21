@@ -69,6 +69,7 @@ import { bestUnit, ERA_STARTS, SCENARIOS, startEraOf, startWords, techsBefore, t
 import { TECH_LIST } from '../rules/techs';
 import { TURN_CHOICES } from '../rules/state';
 import { eraOf, foundCity } from '../rules/game';
+import { botAnswer, EMOTES, isEmote, isPing, moodOf, toneOf } from '../rules/chat';
 import { isMilitary } from '../rules/units';
 import { civEffects, has } from '../rules/core';
 
@@ -5897,4 +5898,43 @@ test('Island Kings: Astronomy known, a Caravel and a Galleass at sea by each sta
     ok(ships.length <= 2, `${p.civ}: no more than its two`);
   }
   ok(game.units.some((u) => u.type === 'caravel') && game.units.some((u) => u.type === 'galleass'), 'Caravels and Galleasses out on the water');
+});
+
+test('a bot leader spoken to answers as it feels: bold or meek at war, its stance at peace, a teammate as a friend', () => {
+  // (You lead Egypt; Montezuma, Gandhi and Nebuchadnezzar the rest.)
+  const game = newGame({}, ['egypt', 'aztec', 'india', 'babylon'], true);
+  const [you, aztec, india, babylon] = game.players;
+  const say = (bot: typeof you, said: { text?: string; emote?: string }) => botAnswer(game, bot, you, said, 0)!;
+  // At peace with nothing between them: neutral, a wave back for a greeting.
+  eq(moodOf(game, babylon, you), 'neutral', 'a stranger at peace is neutral');
+  ok(say(babylon, { emote: 'wave' }).text.length > 0, 'and answers a wave');
+  eq(toneOf('hello friend'), 'warm', 'a greeting is warm');
+  eq(toneOf('you will die'), 'cold', 'a threat is cold');
+  eq(toneOf('what are you building'), 'plain', 'a question is plain');
+  // At war: bold Montezuma swaggers, Gandhi (no bolder than 2) wants it over while he's no stronger.
+  aztec.diplomacy.war[you.index] = you.diplomacy.war[aztec.index] = true;
+  india.diplomacy.war[you.index] = you.diplomacy.war[india.index] = true;
+  eq(moodOf(game, aztec, you), 'bold', 'Montezuma at war is bold');
+  eq(moodOf(game, india, you), 'meek', 'Gandhi at war is meek');
+  const peace = say(india, { emote: 'peace' });
+  ok(/peace|war end/i.test(peace.text), `Gandhi asked for peace talks of it: ${peace.text}`);
+  ok(['peace', 'cry'].includes(peace.emote), 'with a dove');
+  const taunt = say(aztec, { text: 'surrender now' });
+  ok(!/peace|friend/i.test(taunt.text), `Montezuma doesn't take a threat kindly: ${taunt.text}`);
+  ok(!/\{you\}/.test(say(aztec, { emote: 'gg' }).text), 'its words name you, not a blank');
+  // Neither a city-state nor a person answers.
+  const cs = game.players.find((p) => p.cityState);
+  ok(!cs || botAnswer(game, cs, you, { text: 'hi' }, 0) === null, 'a city-state says nothing');
+  ok(botAnswer(game, you, aztec, { text: 'hi' }, 0) === null, 'nor does a person (they answer for themselves)');
+  // Teammates are friends.
+  you.team = babylon.team = 0;
+  eq(moodOf(game, babylon, you), 'friendly', 'a teammate is a friend');
+});
+
+test('the emotes and pings are a fixed few: anything else is refused', () => {
+  ok(isEmote('wave') && isEmote('skull'), 'the faces');
+  ok(!isEmote('toString') && !isEmote('<b>') && !isEmote(3), 'not anything else');
+  ok(isPing('look') && isPing('attack') && isPing('defend'), 'the pings');
+  ok(!isPing('nuke') && !isPing(undefined), 'not anything else');
+  ok(Object.values(EMOTES).every((e) => e.name.length > 0), 'each with its words');
 });

@@ -15,10 +15,11 @@ import { isMilitary, UNITS } from './rules/units';
 import { apply, endTurn, eraOf, fightHooks, learn, score, type Order } from './rules/game';
 import { advanceSequence, sequenceDone, warBegun } from './rules/turns';
 import { cityHooks, type CombatResult } from './rules/combat';
-import { dealVerdict, type DealItem } from './rules/diplomacy';
+import { botAnswer, CHAT_LENGTH, isEmote, isPing } from './rules/chat';
+import { dealVerdict, hasMet, type DealItem } from './rules/diplomacy';
 import { previewAttack, previewCityFire } from './rules/preview';
 import { DIFFICULTIES } from './rules/difficulty';
-import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, TURN_CHOICES, type Game, type Settings } from './rules/state';
+import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, TURN_CHOICES, type ChatLine, type ChatTo, type Game, type Settings } from './rules/state';
 import { LAST_START, SCENARIOS, startEraOf, turnLimitFor, withScenario } from './rules/starts';
 import { IDEOLOGIES } from './rules/policies';
 import { dissent } from './rules/economy';
@@ -450,6 +451,10 @@ function presetTeams(preset: TeamPreset) {
 /** Begin: the world's built from the new game's map, and the game starts once it's done. */
 function begin(game: GameContext, g: Game, withSeats: LobbySeat[]) {
   civGame = g;
+  // (What was said in the lobby goes on with the game: its chat after what it had.)
+  if (lobbyChat.length) g.chat = [...(g.chat ?? []), ...lobbyChat.map((l, n) => ({ ...l, id: (g.chat?.at(-1)?.id ?? 0) + n + 1 }))].slice(-CHAT_KEPT);
+  lobbyChat = [];
+  for (const p of humans(game)) game.clients.send(p, 'chatLog', chatFor(p));
   // (The room's clock starts again with each world.)
   saves.reset();
   demographics.clear();
@@ -863,6 +868,103 @@ function pin(game: GameContext, player: Player, data: unknown) {
 }
 
 // -------------------------------------------------------------------------------------------------
+// Chat
+// -------------------------------------------------------------------------------------------------
+
+/** How many lines are kept (with the game, or the lobby's); how many a person can say in `SPOKE_SPAN` seconds. */
+const CHAT_KEPT = 60;
+const SPOKE_MOST = 5;
+const SPOKE_SPAN = 8;
+/** What's been said in the lobby (once a game's begun, it's kept with the game). */
+let lobbyChat: ChatLine[] = [];
+/** When each person last spoke (the room's clock), and when a bot's leader last answered each person. */
+const spoke = new Map<string, number[]>();
+const answered = new Map<string, number>();
+
+const chatLog = () => (civGame ? (civGame.chat ??= []) : lobbyChat);
+
+/** Whether a line is for the player with this index (-1: watching, or in the lobby): everyone's, or theirs, or their team's. */
+function hears(line: ChatLine, i: number): boolean {
+  if (line.to === 'all') return true;
+  if (i < 0 || !civGame) return false;
+  if (line.from === i) return true;
+  if (line.to === 'team') return teammates(civGame, line.from, i);
+  return line.to === i;
+}
+
+/** The lines a person can see, for their screen as it comes in. */
+const chatFor = (p: Player) => chatLog().filter((l) => hears(l, indexOf(p)));
+
+/** A line said: kept, and sent to everyone it's for. */
+function sayLine(game: GameContext, line: Omit<ChatLine, 'id'>) {
+  const log = chatLog();
+  const said: ChatLine = { id: log.reduce((n, x) => Math.max(n, x.id), 0) + 1, ...line };
+  log.push(said);
+  if (log.length > CHAT_KEPT) log.splice(0, log.length - CHAT_KEPT);
+  for (const p of humans(game)) if (hears(said, indexOf(p))) game.clients.send(p, 'chat', said);
+  if (civGame) saveSoon(game);
+}
+
+/**
+ * Something a person said (`client/chat.ts`): words, a face, or a tile pointed at; for everyone in the
+ * room, or (playing) their team or a civ they've met. A few lines every few seconds at most. A bot's
+ * leader spoken to answers a moment later, as it feels about them (`rules/chat.ts`); and now and then
+ * one who's met them answers a face made at everyone.
+ */
+function chat(game: GameContext, player: Player, data: unknown) {
+  if (!data || typeof data !== 'object') return;
+  const d = data as { to?: unknown; text?: unknown; emote?: unknown; ping?: unknown };
+  const g = civGame;
+  const i = indexOf(player);
+  const me = g && i >= 0 ? g.players[i] : undefined;
+  let to: ChatTo = 'all';
+  if (d.to === 'team' && g && me && g.players.some((o) => o !== me && o.alive && teammates(g, i, o.index))) to = 'team';
+  else if (typeof d.to === 'number' && g && me) {
+    const them = g.players[d.to];
+    if (!them || them === me || !them.alive || them.cityState || them.civ === 'barbarian' || !hasMet(g, me, them)) return;
+    to = them.index;
+  } else if (d.to !== undefined && d.to !== 'all') return;
+  const text = typeof d.text === 'string' ? d.text.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, CHAT_LENGTH) : '';
+  const emote = isEmote(d.emote) ? d.emote : undefined;
+  let ping: ChatLine['ping'];
+  if (d.ping && typeof d.ping === 'object') {
+    const { tile, kind } = d.ping as { tile?: unknown; kind?: unknown };
+    // (A tile they know, while they're playing.)
+    if (!g || phase !== 'playing' || !me?.alive || typeof tile !== 'number' || !Number.isInteger(tile) || !me.explored[tile]) return;
+    ping = { tile, kind: isPing(kind) ? kind : 'look' };
+  }
+  if (!text && !emote && !ping) return;
+  const key = keyOf(player);
+  const now = game.clock.now;
+  // (A restarted room's clock begins again.)
+  const recent = (spoke.get(key) ?? []).filter((t) => now - t < SPOKE_SPAN && t <= now);
+  if (recent.length >= SPOKE_MOST) return;
+  recent.push(now);
+  spoke.set(key, recent);
+  const civ = me?.civ ?? seats.find((s) => s.key === key)?.civ ?? null;
+  sayLine(game, { name: me?.name ?? player.name, from: i, civ, to, text: text || undefined, emote, ping, turn: g?.turn });
+  if (!g || !me || ping || phase !== 'playing') return;
+  // A bot's leader spoken to answers (not too often to the same person); one who's met them, now and then, a face made at everyone.
+  let bot = typeof to === 'number' && g.players[to].bot ? g.players[to] : undefined;
+  let gap = 4;
+  if (!bot && to === 'all' && emote && Math.random() < 0.4) {
+    gap = 30;
+    const met = g.players.filter((o) => o.bot && o.alive && !o.cityState && o.civ !== 'barbarian' && hasMet(g, o, me));
+    bot = met[Math.floor(Math.random() * met.length)];
+  }
+  if (!bot) return;
+  const pair = `${bot.index}:${key}:${gap}`;
+  if (now - (answered.get(pair) ?? -Infinity) < gap && (answered.get(pair) ?? -Infinity) <= now) return;
+  answered.set(pair, now);
+  const b = bot;
+  game.clock.after(1 + Math.random() * 1.5, () => {
+    if (civGame !== g || phase !== 'playing') return;
+    const answer = botAnswer(g, b, me, { text, emote }, Math.random());
+    if (answer) sayLine(game, { name: b.name, from: b.index, civ: b.civ, bot: true, to: to === 'all' ? 'all' : i, text: answer.text, emote: answer.emote, turn: g.turn });
+  });
+}
+
+// -------------------------------------------------------------------------------------------------
 // Achievements and the Hall of Fame
 // -------------------------------------------------------------------------------------------------
 
@@ -1022,6 +1124,9 @@ export default defineServer(shared, {
     dirty.clear();
     leftAt.clear();
     listed.clear();
+    lobbyChat = [];
+    spoke.clear();
+    answered.clear();
     // (For the headless tests, in development: the game as it stands, and its phase.)
     if (import.meta.env.DEV) (globalThis as unknown as { __civ: unknown }).__civ = { game: () => civGame, phase: () => phase };
     fightHooks.fought = (g, by, combat) => {
@@ -1073,6 +1178,7 @@ export default defineServer(shared, {
       game.clients.send(player, 'prefs', player.store.get('prefs') ?? {});
       game.clients.send(player, 'fame', player.store.get('fame') ?? []);
       game.clients.send(player, 'lobby', lobbyView(game, player));
+      game.clients.send(player, 'chatLog', chatFor(player));
       if (civGame && phase !== 'building' && phase !== 'lobby') {
         game.clients.send(player, 'map', mapWire(civGame));
         dirty.add(keyOf(player));
@@ -1143,6 +1249,7 @@ export default defineServer(shared, {
         const advice: WorkAdvice = { unit: u.id, ...adviseWork(civGame, civGame.players[i], u) };
         game.clients.send(player, 'workAdvice', advice);
       } else if (name === 'pin') pin(game, player, data);
+      else if (name === 'chat') chat(game, player, data);
       else if (name === 'takeOver') takeOver(game, player, data);
       else if (name === 'preview') preview(game, player, data);
       else if (name === 'dealCheck') checkDeal(game, player, data);
@@ -1377,6 +1484,8 @@ export default defineServer(shared, {
     setBots(seats.filter((s) => s.bot).length);
     for (const p of humans(game)) host ??= keyOf(p);
     sendLobby(game);
+    // (Back in the lobby: its own chat, not the last game's.)
+    for (const p of humans(game)) game.clients.send(p, 'chatLog', chatFor(p));
   },
 
   update(game, dt) {

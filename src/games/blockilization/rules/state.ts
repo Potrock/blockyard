@@ -365,6 +365,8 @@ export interface Game {
   events?: WorldEvent[];
   /** Pins people have put on the map (the server's, `server.ts`: nothing in the rules looks at them). */
   pins?: MapPin[];
+  /** What's been said in the game, the last of it (the server's, `server.ts`; the bots' answers come from `chat.ts`). */
+  chat?: ChatLine[];
 }
 
 export interface Storm {
@@ -390,6 +392,25 @@ export interface MapPin {
   tile: number;
   icon: string;
   label: string;
+}
+
+/** Who a line of chat is for: everyone in the game, the sender's team, or one player (their index). */
+export type ChatTo = 'all' | 'team' | number;
+
+/** A line of chat (`chat.ts`): words, a face (an emote), or a tile pointed at (a ping), from a person or a bot's leader. */
+export interface ChatLine {
+  id: number;
+  /** Who said it: their name, their player's index (-1 in the lobby, or watching), their civ, and whether a bot's leader. */
+  name: string;
+  from: number;
+  civ: string | null;
+  bot?: boolean;
+  to: ChatTo;
+  text?: string;
+  emote?: string;
+  ping?: { tile: number; kind: string };
+  /** The game's turn when it was said (none: in the lobby). */
+  turn?: number;
 }
 
 /** How long everything takes at each speed (building, research, growth, the turns things last), Civ V's. */

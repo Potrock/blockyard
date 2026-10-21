@@ -6,7 +6,7 @@ import { prefs, setPrefs } from './prefs';
  * The game's sounds, synthesised (nothing recorded), short and low under the music:
  *
  * - The interface: a soft click for buttons, a whoosh as a panel opens, chimes for a new turn and a
- *   notification.
+ *   notification, a blip for a line of chat and a sonar's ping for a tile pointed at.
  * - Units on the move (`models3d.ts`): footsteps, hooves, oars, a rumble of wheels and tracks, an
  *   aircraft's whoosh. Fights: a clash of blades, a volley of arrows, a gun's boom and its blast where
  *   it lands, stone cracking when a city's hit; a city taken: drums and a falling horn.
@@ -57,7 +57,9 @@ export type Cue =
   | 'promote'
   | 'discover'
   | 'faith'
-  | 'march';
+  | 'march'
+  | 'chat'
+  | 'ping';
 
 /** Seconds before the same sound plays again (a march sound a little longer: many units moving at once are a few footsteps, not a crowd). */
 const REST = 0.12;
@@ -129,6 +131,23 @@ export function defineSounds(c: Client) {
       s.tone({ wave: 'sine', from: 1046, duration: 0.7, volume: 0.09, delay: 0.18 });
     },
     { reverb: 0.4 },
+  );
+  // A line of chat: a soft blip; a tile pointed at: a sonar's two pings, the second fainter.
+  a.define(
+    'civ_chat',
+    (s) => {
+      s.tone({ wave: 'sine', from: 660, to: 990, duration: 0.09, volume: 0.09 });
+      s.tone({ wave: 'sine', from: 1320, duration: 0.12, volume: 0.05, delay: 0.06 });
+    },
+    { reverb: 0.1 },
+  );
+  a.define(
+    'civ_ping',
+    (s) => {
+      s.tone({ wave: 'sine', from: 1568, to: 1480, duration: 0.5, volume: 0.16, fm: { ratio: 2, depth: 0.15, to: 0 } });
+      s.tone({ wave: 'sine', from: 1568, to: 1480, duration: 0.45, volume: 0.06, delay: 0.32 });
+    },
+    { reverb: 0.5 },
   );
   a.define(
     'civ_note',

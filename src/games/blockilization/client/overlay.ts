@@ -12,6 +12,7 @@ import { iconBitmap, resourceGlyph, unitGlyph, YIELD_COLOR } from './icons';
 import { activeLens, drawLens } from './lenses';
 import { marchingAt } from './models3d';
 import { drawPins } from './pins';
+import { drawPings } from './chat';
 import { drawWorkTips } from './workadvice';
 import { previewPath, routeOf, type Route } from './path';
 import { mapFont } from './pixel';
@@ -789,6 +790,8 @@ export function drawOverlay(now: number) {
 
   // Map pins (`pins.ts`): over the rest, where they can't be missed.
   drawPins({ ctx, hex: hexInto, glyph, zoomed, ui }, hits);
+  // Pings (`chat.ts`): a tile someone's pointed at, over everything.
+  drawPings({ ctx, hex: hexInto, glyph, zoomed, ui });
 
   // Fights: the damage done, rising over each side as the blow lands (`combatfx.ts`).
   store.fights = store.fights.filter((f) => figuresShowing(f, now) || now - f.t < 3);

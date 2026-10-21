@@ -26,6 +26,7 @@ import { askWorkAdvice, followWorkPlans, resetWorkPlans, setWorkAdvice } from '.
 import { setFame } from './client/fame';
 import { takeHelp } from './client/diplomacy';
 import { turnAlerts } from './client/yourturn';
+import { frameChat, takeChat, takeChatLog } from './client/chat';
 
 /**
  * Blockilization on each player's screen: no walking body and none of the shooter's kits; the camera
@@ -91,6 +92,9 @@ function board(): ClientKit {
         store.changed++;
       });
       client.on('prefs', (d) => loadPrefs(d as Prefs));
+      // What's said (`client/chat.ts`): each line as it's said, and what was said before, as this screen comes in.
+      client.on('chat', (d) => takeChat(d as Parameters<typeof takeChat>[0]));
+      client.on('chatLog', (d) => takeChatLog(d as Parameters<typeof takeChatLog>[0]));
       // To one of your games, at its own address (`saves.ts`): the room named for it.
       client.on('goto', (d) => {
         const room = (d as { room?: unknown } | null)?.room;
@@ -247,6 +251,7 @@ function board(): ClientKit {
       frameWorld(client);
       frameHandover(client.time, showFights);
       frameMoments(client);
+      frameChat();
       if (ui) ui.style.display = store.interfaceHidden ? 'none' : '';
       renderUI(client.time);
     },

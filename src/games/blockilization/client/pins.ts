@@ -10,6 +10,7 @@ import { openPedia, tileArticle } from './pedia';
 import { mapFont } from './pixel';
 import { cityAt, me, store } from './store';
 import { h, tell, touchScreen, type El } from './ui';
+import { pingButtons } from './chat';
 
 /**
  * Map pins, Civilization VI's: right-click a tile with no unit selected (on a touch screen, hold a
@@ -125,8 +126,8 @@ const pinWords = (p: MapPin) => `${p.label || look(p).name}${mine(p) ? '' : ` ($
 
 /**
  * The tile menu, where it was opened (kept on the screen): the pins on the tile, and Pin (or Change
- * and Take up, for yours there), and the tile's Civilopedia article; after Pin, the icons, the label
- * and Pin it. `free`: nothing in front of the map (else it's closed).
+ * and Take up, for yours there), a ping for the others, and the tile's Civilopedia article; after
+ * Pin, the icons, the label and Pin it. `free`: nothing in front of the map (else it's closed).
  */
 export function renderPinMenu(free: boolean): El | null {
   const v = store.view;
@@ -146,6 +147,8 @@ export function renderPinMenu(free: boolean): El | null {
       own ? item('pin', 'Change your pin', startEdit) : item('pin', 'Pin', startEdit, full()),
       !own && full() && h('small.cv-muted', {}, `You have ${MAX_PINS} pins down: take one up to pin another.`),
       !!own && item('close', 'Take up your pin', () => (takeUp(m.tile), closePinMenu())),
+      // (Or point at it for the others a moment: a ping, `chat.ts`.)
+      pingButtons(m.tile, () => closePinMenu()),
       !!article && item('book', 'Civilopedia', () => (closePinMenu(), openPedia(article))),
     );
   } else {
@@ -205,7 +208,7 @@ export function pinButtons(t: number, x: number, y: number): El {
   const pin = own
     ? [h('button.cv-btn.small', { onclick: edit }, icon('pin', 14), 'Change'), h('button.cv-btn.small.danger', { onclick: () => takeUp(t) }, icon('close', 14), 'Take up')]
     : [full() ? h('small.cv-muted', {}, `${MAX_PINS} pins down: take one up to pin here`) : h('button.cv-btn.small', { onclick: edit }, icon('pin', 14), 'Pin')];
-  return h('div.pn-card', {}, ...pin, !!article && h('button.cv-btn.small.icon', { onclick: () => openPedia(article), title: 'Civilopedia' }, icon('book', 14)));
+  return h('div.pn-card', {}, ...pin, !!article && h('button.cv-btn.small.icon', { onclick: () => openPedia(article), title: 'Civilopedia' }, icon('book', 14)), pingButtons(t));
 }
 
 /** The pins button over the minimap: the list, open or shut, and how many pins there are. */
