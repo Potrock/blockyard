@@ -1,7 +1,6 @@
 import { distance, neighbours } from '../rules/hex';
-import { isGreatPerson, isMilitary, UNITS } from '../rules/units';
 import type { UnitWire } from '../protocol';
-import { previewPath } from './path';
+import { placeOn, previewPath } from './path';
 import { enemyAt, me, store } from './store';
 import { sendFor } from './ui';
 
@@ -25,8 +24,6 @@ interface March {
 
 let marches: March[] = [];
 
-const soldier = (u: UnitWire) => !!UNITS[u.type] && isMilitary(UNITS[u.type]) && !isGreatPerson(u.type);
-
 /** Turns a unit's way to a tile takes now (this turn the first), or null if it can't get there. */
 function turnsTo(u: UnitWire, t: number): number | null {
   if (u.tile === t) return 0;
@@ -39,14 +36,14 @@ function turnsTo(u: UnitWire, t: number): number | null {
  * nearer the better, as long as each step nearer costs it no more than two turns more (so it
  * gathers round the place clicked, but a place on the far side of an enemy city, which would have it
  * walk all the way round while the others wait, goes to one on this side). Never one taken (`taken`:
- * tile|soldier) or one an enemy holds. Null if there's none it can get to.
+ * tile|place, `placeOn`) or one an enemy holds. Null if there's none it can get to.
  */
 function placeFor(u: UnitWire, to: number, taken: Set<string>): { t: number; turns: number } | null {
   const g = store.grid!;
   const ring = [to, ...neighbours(g, to), ...neighbours(g, to).flatMap((n) => neighbours(g, n))].filter((t, i, a) => a.indexOf(t) === i);
   let place: { t: number; turns: number; score: number } | null = null;
   for (const t of ring) {
-    if ((t !== u.tile && taken.has(`${t}|${soldier(u)}`)) || enemyAt(t)) continue;
+    if ((t !== u.tile && taken.has(`${t}|${placeOn(u, t)}`)) || enemyAt(t)) continue;
     const turns = turnsTo(u, t);
     const score = turns === null ? Infinity : turns + 2 * distance(g, t, to);
     if (turns !== null && (!place || score < place.score)) place = { t, turns, score };
@@ -60,15 +57,15 @@ export function marchTo(ids: number[], to: number) {
   if (!v || !store.grid) return;
   const units = ids.map((id) => v.units.find((u) => u.id === id && u.owner === me())).filter((u): u is UnitWire => !!u);
   for (const m of marches) for (const u of units) m.dests.delete(u.id);
-  // One soldier and one civilian to a tile; never where another of them stands (it may wait there till the last turn, in the way).
+  // One soldier and one civilian to a tile (at sea a ship and an embarked soldier too); never where another of them stands (it may wait there till the last turn, in the way).
   const taken = new Set<string>();
-  for (const u of v.units) if (u.owner === me()) taken.add(`${u.tile}|${soldier(u)}`);
+  for (const u of v.units) if (u.owner === me()) taken.add(`${u.tile}|${placeOn(u, u.tile)}`);
   const dests = new Map<number, number>();
   const turns = new Map<number, number>();
   for (const u of units) {
     const place = placeFor(u, to, taken);
     if (!place) continue;
-    taken.add(`${place.t}|${soldier(u)}`);
+    taken.add(`${place.t}|${placeOn(u, place.t)}`);
     dests.set(u.id, place.t);
     turns.set(u.id, place.turns);
   }
@@ -104,10 +101,10 @@ export function marchTurn() {
       }
       // (Its place since taken, as by one of its own stopping there on the way: the nearest free one now.)
       if (u && leg?.turns === null) {
-        const taken = new Set(v.units.filter((x) => x.owner === me() && x.id !== id).map((x) => `${x.tile}|${soldier(x)}`));
+        const taken = new Set(v.units.filter((x) => x.owner === me() && x.id !== id).map((x) => `${x.tile}|${placeOn(x, x.tile)}`));
         for (const [other, t] of m.dests) {
           const o = v.units.find((x) => x.id === other);
-          if (other !== id && o) taken.add(`${t}|${soldier(o)}`);
+          if (other !== id && o) taken.add(`${t}|${placeOn(o, t)}`);
         }
         leg = placeFor(u, m.to, taken);
         if (leg) m.dests.set(id, leg.t);
