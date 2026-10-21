@@ -32,7 +32,7 @@ import { terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
 import { reshapeEdits, seasonal, seasonalSpots } from './seasons';
 import { seasonAt, type Season } from './rules/disasters';
 import { cityInfo, mapWire, statsFor, viewFor, yieldsWire } from './views';
-import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, gameNote, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, tidyGames, type Saved } from './saves';
+import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, gameNote, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, stillPlayed, tidyGames, type Saved } from './saves';
 
 /**
  * Blockilization's server: the lobby (each person picks a civilization, the host sets the map and how
@@ -603,6 +603,10 @@ function changedSince(game: GameContext): { game: Game; seats: LobbySeat[] } | n
   const saved = game.store.get<Saved<Game> & { seats: LobbySeat[] }>(gameKey(playing));
   return saved?.game && Array.isArray(saved.seats) && !saved.game.over ? { game: saved.game, seats: saved.seats } : null;
 }
+
+/** Seconds between a room's word that its game's still being played, while anyone's in it (`stillPlayed`). */
+const STILL_EVERY = 30;
+let stillAt = 0;
 
 /** Something changed (an order, a pin): saved now, or with what comes in the next few seconds. */
 function saveSoon(game: GameContext) {
@@ -1476,6 +1480,11 @@ export default defineServer(shared, {
     if (phase !== 'playing' || !civGame) return;
     // What waited to be saved (orders a moment ago), once it's been long enough since the last save.
     if (saves.tick(game.clock.now)) save(game);
+    // (Played, if quietly: said every half a minute while anyone's here. A restarted room's clock begins again.)
+    if (playing && humans(game).length && (game.clock.now - stillAt > STILL_EVERY || game.clock.now < stillAt)) {
+      stillAt = game.clock.now;
+      stillPlayed(game.store, playing);
+    }
     // The bots play, one a tick; once they all have, everyone sees what they did.
     const bot = botQueue.shift();
     if (bot !== undefined) {

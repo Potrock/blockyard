@@ -45,7 +45,7 @@ import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasM
 import { bindTeams } from '../rules/teams';
 import { cityInfo, mapWire, viewFor } from '../views';
 import { packStatic, unpackKnown, unpackStatic, type KnownTile } from '../protocol';
-import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, tidyGames } from '../saves';
+import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, stillPlayed, tidyGames } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
@@ -3581,6 +3581,12 @@ test('no game is lost: backups of its last turns to take it back to, and discard
   saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), false);
   for (const t of [41, 40, 37]) store.set(autoKey('k3x9f2', t), save(t));
   eq(JSON.stringify(savedGames(store, ann, at('2026-10-21T00:01:00Z'))[0].backups), '[41,40,37]', 'listed with its backups, the latest first');
+  // Played quietly (no order for minutes), its room says so every half a minute: not to be taken back meanwhile.
+  saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), true);
+  ok(!playedNow(store, 'k3x9f2', at('2026-10-21T00:03:00Z')), 'three minutes without a save or a word: taken as not played');
+  stillPlayed(store, 'k3x9f2', at('2026-10-21T00:02:40Z'));
+  ok(playedNow(store, 'k3x9f2', at('2026-10-21T00:03:00Z')), 'its room’s word a moment ago: being played');
+  saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), false);
   // Taken back to the start of turn 37: the later backups go, and what it's given (a word to its people) is saved with it.
   ok(!playedNow(store, 'k3x9f2', at('2026-10-21T00:01:00Z')), 'nobody playing it: free to take back');
   ok(restoreTurn(store, 'k3x9f2', 37, at('2026-10-21T00:02:00Z'), (s) => (s.game as ReturnType<typeof save>['game']).players[0].notes.push({ text: 'Ann took it back' })), 'taken back');

@@ -176,6 +176,16 @@ export const inGame = (store: Kept, id: string, who: string) => !!store.get<Game
 /** Whether a game's note says it's being played right now (saved a moment ago, with people still there). */
 const live = (note: GameNote, now: Date) => note.open !== false && now.getTime() - Date.parse(note.at) < LIVE_MS;
 
+/**
+ * A game's room says it's still being played (its people may give no order for minutes, reading or
+ * away from the keys): its note's time is now, nothing else changed. Every half a minute or so, so
+ * no one takes a game back to an earlier turn while it's played.
+ */
+export function stillPlayed(store: Kept, id: string, now = new Date()) {
+  const note = gameNote(store, id);
+  if (note) store.set(noteKey(id), { ...note, at: now.toISOString(), open: true });
+}
+
 /** Whether a saved game is being played right now, anywhere. */
 export function playedNow(store: Kept, id: string, now = new Date()): boolean {
   const note = gameNote(store, id);
