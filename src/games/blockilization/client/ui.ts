@@ -638,7 +638,7 @@ function renderLobby(): El | null {
         'div.cv-alert',
         { style: 'justify-content:center;background:rgba(106,184,255,.08);border-color:rgba(106,184,255,.3)' },
         icon('turn', 18, '#6ab8ff'),
-        h('span', {}, `A saved game: turn ${L.save.turn} (${L.save.seats.join(', ')})${awayFromSave(L)}`),
+        h('span', {}, `A saved game: turn ${L.save.turn} (${L.save.seats.join(', ')})${awayFromSave(L)}. Begin keeps it in a room of its own.`),
         isHost && h('button.cv-btn.gold.small', { onclick: () => lobby({ a: 'resume' }) }, 'Carry on'),
         isHost && h('button.cv-btn.small', { onclick: () => lobby({ a: 'discard' }) }, 'Discard'),
       ),

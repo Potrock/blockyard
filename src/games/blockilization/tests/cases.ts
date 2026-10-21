@@ -44,7 +44,7 @@ import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasM
 import { bindTeams } from '../rules/teams';
 import { cityInfo, mapWire, viewFor } from '../views';
 import { packStatic, unpackKnown, unpackStatic, type KnownTile } from '../protocol';
-import { forgetSave, noteOldSaves, noteSave, savedGames, SaveThrottle } from '../saves';
+import { forgetSave, noteOldSaves, noteSave, roomCode, savedGames, SaveThrottle, setAside } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
@@ -3471,6 +3471,15 @@ test('a person’s saved games in other rooms are listed, from notes kept beside
   noteSave(store, 'k3x9f2', { game: { turn: 150, over: { winner: 0 } }, seats: [seat(ann, 'Ann', 'rome')] });
   forgetSave(store, 'public');
   eq(savedGames(store, ann, 'abc').length, 0, 'a game won, or discarded, is no longer listed');
+  // A new game begun in the public room where Ann's was saved: hers is kept in a room of its own.
+  noteSave(store, 'public', { game: { turn: 80, over: null }, seats: [seat(ann, 'Ann', 'japan')] });
+  data.set('save:public', { game: { turn: 80, over: null }, seats: [seat(ann, 'Ann', 'japan')] });
+  const code = roomCode(() => 0.5);
+  ok(/^[a-z0-9]{8}$/.test(code), `a room code like the platform's (${code})`);
+  ok(setAside(store, 'public', code), 'set aside');
+  ok(!data.has('save:public') && (data.get(`save:${code}`) as { game: { turn: number } }).game.turn === 80, 'moved, not copied');
+  eq(JSON.stringify(savedGames(store, ann, 'public')), JSON.stringify([{ room: code, turn: 80, civ: 'japan', with: [] }]), 'in Ann’s list, at its new room');
+  ok(!setAside(store, 'public', roomCode()), 'nothing to set aside: nothing done');
 });
 
 test('the game’s save is throttled: an order’s at once, the rest at most every few seconds, none left waiting', () => {

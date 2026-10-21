@@ -32,7 +32,7 @@ import { terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
 import { reshapeEdits, seasonal, seasonalSpots } from './seasons';
 import { seasonAt, type Season } from './rules/disasters';
 import { cityInfo, mapWire, statsFor, viewFor, yieldsWire } from './views';
-import { forgetSave, noteOldSaves, noteSave, savedGames, SaveThrottle } from './saves';
+import { forgetSave, noteOldSaves, noteSave, roomCode, savedGames, SaveThrottle, setAside } from './saves';
 
 /**
  * Blockilization's server: the lobby (each person picks a civilization, the host sets the map and how
@@ -540,6 +540,8 @@ function startNew(game: GameContext) {
   );
   g.started = new Date().toISOString();
   pending = { game: g, seats: seats.map((s) => ({ ...s })) };
+  // (A game saved here isn't lost to the new one: it's kept in a room of its own, in its people's lists.)
+  setAside(game.store, game.room, roomCode());
   clearAutosaves(game);
   // A world already built (an earlier game in this room): put it back first.
   game.restart();

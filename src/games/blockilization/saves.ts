@@ -115,3 +115,24 @@ export function savedGames(store: Kept, who: string, here: string): SavedGame[] 
   }
   return out.sort((a, b) => b.turn - a.turn || a.room.localeCompare(b.room));
 }
+
+/**
+ * A room's save set aside in a room of its own (`to`, a new room's code), its note with it: a new
+ * game begun where a game was saved doesn't lose it. Its people find it in their list of saved
+ * games, with the new room's address. Whether there was one to set aside.
+ */
+export function setAside(store: Kept, room: string, to: string): boolean {
+  const save = store.get<Saved>(`save:${room}`);
+  if (!save || save.game.over) return false;
+  store.set(`save:${to}`, save);
+  noteSave(store, to, save);
+  store.delete(`save:${room}`);
+  forgetSave(store, room);
+  return true;
+}
+
+/** A new room's code: eight letters and digits, as the platform's own (`?room=`). */
+export function roomCode(random = Math.random): string {
+  const abc = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  return Array.from({ length: 8 }, () => abc[Math.floor(random() * abc.length)]).join('');
+}
