@@ -54,6 +54,8 @@ export interface GameBlocks {
   defs: Map<string, BlockDefinition>;
   /** Tells textures apart for reuse: equal keys, equal pixels ('' for none). */
   textureKey: string;
+  /** Each block's other looks (`BlockDefinition.looks`) by name: a texture layer per face (+X -X +Y -Y +Z -Z), in place of its own. */
+  looks: Map<string, Record<string, number[]>>;
 }
 
 /** A built-in block as the engine describes it (the fields a game block can start from). */
@@ -164,11 +166,14 @@ export function gameBlocks(def: Pick<GameDefinition, 'id' | 'blocks'>, palette?:
     if (id === undefined) objectIds.set(s, (id = nextObject++));
     return `o:${id}`;
   };
-  /** The texture layer for a face, painting a new one only when nothing the same exists. */
-  const layer = (source: BlockTexture | BuiltinTexture, look: Omit<TextureLayer, 'source'>, name: string): number => {
+  /**
+   * The texture layer for a face, painting a new one only when nothing the same exists (`own`: a
+   * block's alone, for one that takes other looks: `BlockDefinition.looks`).
+   */
+  const layer = (source: BlockTexture | BuiltinTexture, look: Omit<TextureLayer, 'source'>, name: string, own?: string): number => {
     // A built-in texture as it is: its own layer.
-    if (typeof source === 'object' && 'layer' in source && !look.tint && look.glow === null && !look.grass) return source.layer;
-    const key = `${sourceKey(source)}|${look.tint?.join(',') ?? ''}|${look.glow}|${look.clear}|${look.grass}`;
+    if (own === undefined && typeof source === 'object' && 'layer' in source && !look.tint && look.glow === null && !look.grass) return source.layer;
+    const key = `${sourceKey(source)}|${look.tint?.join(',') ?? ''}|${look.glow}|${look.clear}|${look.grass}|${own ?? ''}`;
     let i = layerOf.get(key);
     if (i === undefined) {
       i = b.textures.size + textures.length;
@@ -181,7 +186,12 @@ export function gameBlocks(def: Pick<GameDefinition, 'id' | 'blocks'>, palette?:
   };
 
   const variants: Variant[] = [];
-  for (const [name, d] of defs) variants.push(...expand(name, d, b, layer));
+  const looks = new Map<string, Record<string, number[]>>();
+  for (const [name, d] of defs) {
+    const own = expand(name, d, b, layer);
+    variants.push(...own.variants);
+    if (own.looks) looks.set(name, own.looks);
+  }
 
   // A server's ids first (keeping the ones this game lacks as "missing"), then the rest.
   let ordered = variants;
@@ -217,6 +227,7 @@ export function gameBlocks(def: Pick<GameDefinition, 'id' | 'blocks'>, palette?:
     textureNames,
     defs,
     textureKey: textures.length ? `${def.id}:${json}` : '',
+    looks,
   };
 }
 
@@ -228,8 +239,17 @@ function missing(key: string, tex: number): Variant {
   return { name, label: words(name), state, shape: 'cube', facing: 0, top: false, layer: 0, tex: Array(6).fill(tex), uvt: [0, 0, 0, 0, 0, 0], solid: true, emit: 0, tint: false, cull_self: false, replaceable: false, placeable: false, breakable: true, double: 0 };
 }
 
-/** One definition as its variants. */
-function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTexture | BuiltinTexture, look: Omit<TextureLayer, 'source'>, name: string) => number): Variant[] {
+/** The texture a definition gives a face, and the field that gives it (written facing north: its front is the north face, its back the south). */
+function given(tx: BlockTexture | BlockFaces | undefined, face: (typeof FACES)[number]): { texture: BlockTexture; field: string } | undefined {
+  if (tx === undefined) return undefined;
+  if (isTexture(tx)) return { texture: tx, field: 'all' };
+  const fields = face === 'north' ? ['front', 'north'] : face === 'south' ? ['back', 'south'] : [face];
+  for (const field of [...fields, ...(SIDES.has(face) ? ['side'] : []), 'all'] as (keyof BlockFaces)[]) if (tx[field] !== undefined) return { texture: tx[field], field };
+  return undefined;
+}
+
+/** One definition as its variants, and its other looks' texture layers (`BlockDefinition.looks`), if it has any. */
+function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTexture | BuiltinTexture, look: Omit<TextureLayer, 'source'>, name: string, own?: string) => number): { variants: Variant[]; looks?: Record<string, number[]> } {
   const where = `block "${name}"`;
   if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`${where}: names are lower case letters, digits and _`);
   if (b.byName.has(name)) throw new Error(`${where}: that's a built-in block's name`);
@@ -254,31 +274,30 @@ function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTe
   const tint = d.tint && d.tint !== 'grass' ? rgb(d.tint, where) : null;
   const glowOwn = d.glow !== undefined ? Math.max(0, Math.min(1, d.glow)) : null;
 
-  // A face's texture: given for it, or the block it's like has one there.
-  const faceTexture = (f: number): number => {
+  // A face's texture: given for it, or the block it's like has one there (`fallback`: for a look's,
+  // the block's own where the look gives none; `own`: a layer of its own, as `layer` takes it).
+  const faceTexture = (f: number, tx = d.texture, fallback?: number, own?: string): number => {
     const face = FACES[f];
-    let t: BlockTexture | undefined;
-    const tx = d.texture;
-    if (tx !== undefined) {
-      if (isTexture(tx)) t = tx;
-      else {
-        // Written facing north: its front is the north face, its back the south.
-        const named = face === 'north' ? (tx.front ?? tx.north) : face === 'south' ? (tx.back ?? tx.south) : tx[face];
-        t = named ?? (SIDES.has(face) ? tx.side : undefined) ?? tx.all;
-      }
-    }
+    const t = given(tx, face)?.texture;
+    if (t === undefined && fallback !== undefined) return fallback;
     if (t === undefined && like) {
-      return layer({ layer: like.tex[f] }, { tint, glow: glowOwn, clear, grass: grass && !like.tint }, `${name}_${face}`);
+      return layer({ layer: like.tex[f] }, { tint, glow: glowOwn, clear, grass: grass && !like.tint }, `${name}_${face}`, own);
     }
     if (t === undefined) throw new Error(`${where}: no texture for its ${face} face (give \`all\` or \`side\`)`);
     if (typeof t === 'string' && /^[a-z0-9_]+$/.test(t)) {
       const builtinLayer = b.textures.get(t);
       if (builtinLayer === undefined) throw new Error(`${where}: "${t}" isn't a built-in texture (an image needs its URL: import it with ?url)`);
-      return layer({ layer: builtinLayer }, { tint, glow: glowOwn, clear, grass }, `${name}_${face}`);
+      return layer({ layer: builtinLayer }, { tint, glow: glowOwn, clear, grass }, `${name}_${face}`, own);
     }
-    return layer(t, { tint, glow: glowOwn ?? emit / 15, clear, grass }, `${name}_${face}`);
+    return layer(t, { tint, glow: glowOwn ?? emit / 15, clear, grass }, `${name}_${face}`, own);
   };
-  const tex = FACES.map((_, f) => faceTexture(f));
+  // A block that takes other looks has its own layers, as the screen shows a look by swapping them:
+  // a face's apart from another's (the same texture) where a look gives the two different ones.
+  const own = (f: number) => d.looks && `${name}|${Object.values(d.looks).map((tx) => given(tx, FACES[f])?.field ?? '').join(',')}`;
+  const tex = FACES.map((_, f) => faceTexture(f, d.texture, undefined, own(f)));
+  // Its other looks, painted as its own are (faces a look doesn't give keep its own).
+  let looks: Record<string, number[]> | undefined;
+  for (const [look, tx] of Object.entries(d.looks ?? {})) (looks ??= {})[look] = FACES.map((_, f) => faceTexture(f, tx, tex[f]));
   const uvt = like && d.texture === undefined ? [...like.uvt] : [0, 0, 0, 0, 0, 0];
 
   const base: Variant = {
@@ -309,14 +328,14 @@ function expand(name: string, d: BlockDefinition, b: Builtin, layer: (s: BlockTe
   }
   if (d.full !== undefined && shape !== 'slab') throw new Error(`${where}: only a slab has a full block`);
   // Facing: a variant per way, turned from the way it's written (the first is the picker's).
-  if (facing) return TURNS[facing].map(([state, tilt, turn], i) => ({ ...base, state, tilt, turn, placeable: base.placeable && i === 0 }));
+  if (facing) return { variants: TURNS[facing].map(([state, tilt, turn], i) => ({ ...base, state, tilt, turn, placeable: base.placeable && i === 0 })), looks };
   switch (shape) {
     case 'slab':
-      return [false, true].map((top) => ({ ...base, state: `type=${top ? 'top' : 'bottom'}`, top, placeable: base.placeable && !top, full: d.full }));
+      return { variants: [false, true].map((top) => ({ ...base, state: `type=${top ? 'top' : 'bottom'}`, top, placeable: base.placeable && !top, full: d.full })), looks };
     case 'stairs':
-      return FACINGS.flatMap((facing, f) => [false, true].map((top) => ({ ...base, state: `facing=${facing},half=${top ? 'top' : 'bottom'}`, facing: f, top, placeable: base.placeable && f === 0 && !top })));
+      return { variants: FACINGS.flatMap((facing, f) => [false, true].map((top) => ({ ...base, state: `facing=${facing},half=${top ? 'top' : 'bottom'}`, facing: f, top, placeable: base.placeable && f === 0 && !top }))), looks };
     default:
-      return [base];
+      return { variants: [base], looks };
   }
 }
 

@@ -135,6 +135,21 @@ export default function gameblocks() {
   const bars = pixelArt({ pixels: ['#.#.', '#.#.', '####', '#.#.'], palette: { '#': '#3b3f44' } });
   check(bars[3] === 255 && bars[4 * 4 + 3] === 0 && bars[(8 * 16 + 5) * 4 + 3] === 255, 'pixel art 4x4 scaled to 16x16');
 
+  // Other looks (`looks`, shown on a screen by swapping texture layers): a block that has them has
+  // layers of its own (not one shared with a block without), its faces' apart where a look tells
+  // them apart, and each look's layer per face (its own where the look gives none).
+  const GRASSY = { color: '#4c9a30' };
+  const SNOW = { color: '#ffffff' };
+  const seasonal = gameBlocks({ id: 'looks', blocks: { lawn: { texture: GRASSY }, lawn_snowy: { texture: GRASSY, looks: { winter: { top: SNOW } } }, hedge: { texture: GRASSY, looks: { autumn: { color: '#c4541e' }, winter: { top: SNOW } } } } });
+  const texOf = (name: string) => (JSON.parse(seasonal.json) as { name: string; tex: number[] }[]).find((v) => v.name === name)!.tex;
+  const [lawn, snowy, hedge] = ['lawn', 'lawn_snowy', 'hedge'].map(texOf);
+  const TOP = 2;
+  check(new Set(lawn).size === 1 && !snowy.some((l) => l === lawn[0]) && !hedge.some((l) => snowy.includes(l) || l === lawn[0]), `blocks with looks have layers of their own: ${lawn} / ${snowy} / ${hedge}`);
+  check(snowy[TOP] !== snowy[0] && snowy.filter((l) => l === snowy[0]).length === 5, `the face a look gives apart from the rest: ${snowy}`);
+  const winter = seasonal.looks.get('lawn_snowy')!.winter;
+  check(winter[TOP] !== snowy[TOP] && winter.every((l, f) => f === TOP || l === snowy[f]) && seasonal.looks.get('hedge')!.winter[TOP] === winter[TOP], `a look's own layers, the same look's shared: ${winter}`);
+  check(seasonal.looks.get('hedge')!.autumn.every((l) => l === seasonal.looks.get('hedge')!.autumn[0] && !hedge.includes(l)) && !seasonal.looks.has('lawn'), 'a look for every face; none for a block without');
+
   // Mistakes are named.
   const wrong = (blocks: Record<string, BlockDefinition>) => {
     try {

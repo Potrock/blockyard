@@ -387,6 +387,12 @@ export interface ClientWorld {
    * moved by a whole period sees the same picture at once, with nothing to load or mesh.
    */
   wrap?(wrap: { x: number; period: number } | null): void;
+  /**
+   * Show the blocks' looks of this name (`BlockDefinition.looks`): every block that has one is drawn
+   * in it from now on, at once, with nothing built or meshed again; the rest as they are. Null (or a
+   * name no block has): each block in its own look. Only what's drawn: the world's blocks are as they were.
+   */
+  looks?(name: string | null): void;
 }
 
 /** Where a traced bullet ended on this screen (`ClientWorld.trace`). */

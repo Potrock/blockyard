@@ -47,6 +47,26 @@ export interface SharedUniforms {
   uAlbedo: Uniform<THREE.Texture>;
   uMaterial: Uniform<THREE.Texture>;
   uBiome: Uniform<THREE.Texture>;
+  /** A texel per texture layer: the layer drawn in its place (red + green * 256: `setLooks`). */
+  uLooks: Uniform<THREE.Texture>;
+}
+
+/** Texture layers a game's blocks can have (`blocks.ts`: 10 bits in a chunk's vertex). */
+const LAYERS = 1024;
+
+/** The texture `uLooks` reads: a texel per layer, each its own to begin with. */
+function layerLooks(): THREE.DataTexture {
+  const data = new Uint8Array(LAYERS * 4);
+  for (let i = 0; i < LAYERS; i++) {
+    data[i * 4] = i & 255;
+    data[i * 4 + 1] = i >> 8;
+  }
+  const t = new THREE.DataTexture(data, LAYERS, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.magFilter = t.minFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
+  t.colorSpace = THREE.NoColorSpace;
+  t.needsUpdate = true;
+  return t;
 }
 
 const BIAS = new THREE.Matrix4().set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
@@ -111,6 +131,8 @@ export class Renderer {
   private tmpM = new THREE.Matrix4();
   private tmpV = new THREE.Vector3();
   private vp = new THREE.Matrix4();
+  /** `uLooks`: each texture layer's own, until `setLooks`. */
+  private looks = layerLooks();
 
   constructor(canvas: HTMLCanvasElement, settings: RenderSettings, noise: THREE.Texture, torchLayer: number) {
     this.settings = { ...settings };
@@ -161,6 +183,7 @@ export class Renderer {
       uAlbedo: { value: new THREE.Texture() },
       uMaterial: { value: new THREE.Texture() },
       uBiome: { value: new THREE.Texture() },
+      uLooks: { value: this.looks },
     };
     const U = this.uniforms;
 
@@ -194,7 +217,7 @@ export class Renderer {
       shadow: new THREE.RawShaderMaterial({
         vertexShader: Shaders.shadow.vertex,
         fragmentShader: Shaders.shadow.fragment,
-        uniforms: { uTime: U.uTime, uWind: U.uWind, uAlbedo: U.uAlbedo },
+        uniforms: { uTime: U.uTime, uWind: U.uWind, uAlbedo: U.uAlbedo, uLooks: U.uLooks },
         glslVersion: THREE.GLSL3,
         defines: { TORCH_LAYER: torchLayer },
         side: THREE.DoubleSide,
@@ -294,6 +317,21 @@ export class Renderer {
     this.uniforms.uAlbedo.value = albedo;
     this.uniforms.uMaterial.value = material;
     this.uniforms.uBiome.value = biome;
+  }
+
+  /**
+   * The texture layers drawn in others' places (`ClientWorld.looks`): each face whose layer is a key
+   * drawn with its value instead; none, each as it is. Nothing is meshed again: the chunks' vertices
+   * keep their layers, and the shaders look each up here.
+   */
+  setLooks(swaps: ReadonlyMap<number, number> | null) {
+    const data = this.looks.image.data as Uint8Array;
+    for (let i = 0; i < LAYERS; i++) {
+      const to = swaps?.get(i) ?? i;
+      data[i * 4] = to & 255;
+      data[i * 4 + 1] = to >> 8;
+    }
+    this.looks.needsUpdate = true;
   }
 
   /** Compile every program up front so the first frames don't stall. */

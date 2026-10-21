@@ -2,7 +2,7 @@ import { baseX, centre, centreNear, HEX, HEX_W, hexW, SEA_Y, tileAt, UNIT_SPOTS 
 import { neighbour, type Grid } from './rules/hex';
 import type { Game } from './rules/state';
 import { TERRAINS } from './rules/terrain';
-import { PLANT_BLOCKS, TREE_BLOCKS, type Edit } from './terrain';
+import { PLANT_BLOCKS, SNOWY, TREE_BLOCKS, type Edit } from './terrain';
 
 /**
  * The land's improvements and roads in blocks, as the server sets them in the world (`server.ts`):
@@ -30,8 +30,9 @@ export type Placed = [x: number, y: number, z: number, block: string, under: str
 export const SURFACE_BLOCKS = new Set([
   'civ_grass', 'civ_plains', 'civ_desert', 'civ_tundra', 'civ_snow', 'civ_floodplain', 'civ_marsh', 'civ_dirt', 'civ_rock', 'civ_coast_floor', 'civ_ocean_floor',
   'water', 'ice', 'civ_farmland', 'civ_road', 'civ_rail_x', 'civ_rail_z', 'civ_ash', 'civ_fallout', 'spruce_planks', 'civ_bank', 'gravel',
-  // (The world's changes and the seasons': rich soil, flooded silt, a volcano's ash and crater, snow lying in winter: `seasons.ts`.)
-  'civ_loam', 'civ_silt', 'civ_ashrock', 'civ_magma', 'civ_frost',
+  // (The world's changes: rich soil, flooded silt, a volcano's ash and crater; and the ground snow lies on in winter, `terrain.ts`' `SNOWY`.)
+  'civ_loam', 'civ_silt', 'civ_ashrock', 'civ_magma',
+  ...Object.values(SNOWY),
 ]);
 
 /** The top of the land at every column of the map, as the world was built (`terrain.ts`'s blocks, trees aside), and the plant on it. */

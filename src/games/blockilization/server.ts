@@ -18,7 +18,7 @@ import { cityHooks, type CombatResult } from './rules/combat';
 import { dealVerdict, type DealItem } from './rules/diplomacy';
 import { previewAttack, previewCityFire } from './rules/preview';
 import { DIFFICULTIES } from './rules/difficulty';
-import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, SPEEDS, TURN_CHOICES, TURN_LIMITS, type Game, type Settings } from './rules/state';
+import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, TURN_CHOICES, TURN_LIMITS, type Game, type Settings } from './rules/state';
 import { IDEOLOGIES } from './rules/policies';
 import { dissent } from './rules/economy';
 import { TECHS } from './rules/techs';
@@ -29,8 +29,7 @@ import { allyOf } from './rules/citystates';
 import { teammates } from './rules/teams';
 import { decorKey, decorOf, Ground, type Placed } from './improvements';
 import { terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
-import { reshapeEdits, seasonal, seasonalSpots } from './seasons';
-import { seasonAt, type Season } from './rules/disasters';
+import { reshapeEdits, seasonalBlocks } from './seasons';
 import { cityInfo, mapWire, statsFor, viewFor, yieldsWire } from './views';
 import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, gameNote, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, stillPlayed, tidyGames, type Saved } from './saves';
 
@@ -106,11 +105,6 @@ let ground: Ground | null = null;
 const decor = new Map<number, { key: string; placed: Placed[] }>();
 let decorQueue: { add: boolean; at: Placed }[] = [];
 let decorChecked = 0;
-/** The seasons in blocks (`seasons.ts`): the blocks that change with them (each as it is the rest of
- * the year), the season the world shows now, and the blocks still to swap for the next. */
-let seasonSpots: Edit[] = [];
-let shownSeason: Season | null = null;
-let seasonQueue: [x: number, y: number, z: number, from: string, to: string][] = [];
 /** Each tile's land as the world was last built or sent (`landKey`), and the blocks still to set
  * where the world has changed it since (the sea risen over it, an eruption's ash). */
 let shaped: string[] = [];
@@ -362,9 +356,7 @@ function setDecor(game: GameContext) {
       left.push(op);
       continue;
     }
-    // (What it covers may be wearing its season's look: snow over the grass a farm goes on.)
-    const want = op.add ? under : block;
-    if (now === id(want) || now === id(seasonal(want, shownSeason))) game.world.setBlock(x, y, z, op.add ? block : seasonal(under, shownSeason));
+    if (now === id(op.add ? under : block)) game.world.setBlock(x, y, z, op.add ? block : under);
     done++;
   }
   decorQueue = left;
@@ -376,67 +368,21 @@ function setDecor(game: GameContext) {
  */
 const landKey = (t: Game['tiles'][number]) => packStatic({ ...t, feature: undefined });
 
-/** The season the world shows at a game's turn (`rules/disasters.ts`). */
-const seasonNow = (g: Game) => seasonAt(g.turn, SPEEDS[g.settings.speed] ?? 1);
-
-/**
- * The season turned since the world last showed it: its blocks queued to swap (each only where it
- * still stands as it was), a chunk at a time (a band of them a tick: each screen draws each chunk
- * again once, not once for every block in it).
- */
-function turnSeason(g: Game) {
-  const now = seasonNow(g);
-  if (now === shownSeason || seasonQueue.length || reshapeQueue.length) return;
-  for (const [x, y, z, base] of seasonSpots) {
-    const from = seasonal(base, shownSeason);
-    const to = seasonal(base, now);
-    if (from !== to) seasonQueue.push([x, y, z, from, to]);
-  }
-  seasonQueue.sort((a, b) => (a[2] >> 4) - (b[2] >> 4) || (a[0] >> 4) - (b[0] >> 4));
-  shownSeason = now;
-}
-
-/** Some of the season's blocks swapped (a few thousand a tick; one in a chunk not loaded waits). */
-function setSeason(game: GameContext) {
-  const ids = new Map<string, number>();
-  const id = (name: string) => ids.get(name) ?? ids.set(name, game.world.blockId(name)).get(name)!;
-  const left: typeof seasonQueue = [];
-  let done = 0;
-  for (const op of seasonQueue) {
-    const [x, y, z, from, to] = op;
-    if (done >= 3000) {
-      left.push(op);
-      continue;
-    }
-    const now = game.world.getBlock(x, y, z);
-    if (now < 0) {
-      left.push(op);
-      continue;
-    }
-    if (now === id(from)) game.world.setBlock(x, y, z, to);
-    done++;
-  }
-  seasonQueue = left;
-}
-
 /**
  * Tiles whose land the world has changed (the sea over them, rich soil, a flood's silt): their columns
  * built again from the map as it is now (and their improvements set again after), the ground the
  * improvements stand on measured again, and every screen told of the land as it now is.
  */
 function reshape(game: GameContext, g: Game) {
-  if (!ground || reshapeQueue.length || seasonQueue.length) return;
+  if (!ground || reshapeQueue.length) return;
   const now = g.tiles.map(landKey);
   const changed = now.flatMap((s, t) => (s !== shaped[t] ? [t] : []));
   if (!changed.length) return;
   // (Worked out from the land round them alone: the whole map's blocks take a large map a fifth of a
-  // second, the room standing still meanwhile. The rest of the ground and the season's blocks are as they were.)
+  // second, the room standing still meanwhile. The rest of the ground is as it was.)
   const built = reshapeEdits(g.grid, g.tiles, changed);
   ground.rebuild(built.columns, built.built);
-  const spots = seasonalSpots(g.grid, g.tiles, built.built, ground, built.columns);
-  seasonSpots = [...seasonSpots.filter(([x, , z]) => !built.columns.has(`${x},${z}`)), ...spots];
-  const look = new Map(spots.map(([x, y, z, base]) => [`${x},${y},${z}`, seasonal(base, shownSeason)]));
-  reshapeQueue = built.edits.map((e) => [e[0], e[1], e[2], look.get(`${e[0]},${e[1]},${e[2]}`) ?? e[3]]);
+  reshapeQueue = built.edits;
   // (Their improvements' blocks went with the old columns: set again once the new ones stand.)
   for (const t of built.tiles) decor.delete(t);
   const wire: ReshapeWire = { tiles: Object.fromEntries(changed.map((t) => [t, packStatic(g.tiles[t])])) };
@@ -509,20 +455,16 @@ function begin(game: GameContext, g: Game, withSeats: LobbySeat[]) {
   researchAdvice.clear();
   seats = withSeats;
   settings = g.settings;
-  edits = terrainEdits(g.grid, g.tiles);
+  // (The blocks that turn with the seasons as their twins: each screen shows the season's looks, `seasons.ts`.)
+  edits = seasonalBlocks(g.grid, g.tiles, terrainEdits(g.grid, g.tiles));
   woods = new Set(g.tiles.flatMap((t, i) => (t.feature === 'forest' || t.feature === 'jungle' ? [i] : [])));
   const land = extent(g.grid);
   ground = new Ground(Math.ceil(land.w), Math.ceil(land.d), edits, period(g.grid));
   decor.clear();
   decorQueue = [];
-  // The world as its season shows it (snow on the hills in winter...), and its land as it's built.
-  seasonSpots = seasonalSpots(g.grid, g.tiles, edits, ground);
-  shownSeason = seasonNow(g);
-  seasonQueue = [];
+  // The land as it's built.
   reshapeQueue = [];
   shaped = g.tiles.map(landKey);
-  const look = new Map(seasonSpots.map(([x, y, z, base]) => [`${x},${y},${z}`, seasonal(base, shownSeason)]));
-  if (look.size) for (const e of edits) e[3] = look.get(`${e[0]},${e[1]},${e[2]}`) ?? e[3];
   // A saved game's improvements and roads are set with the rest of the world, while the screens look
   // away (set afterwards, every screen would draw each of their chunks again for each batch).
   for (let t = 0; t < g.tiles.length; t++) {
@@ -1471,11 +1413,9 @@ export default defineServer(shared, {
       if (game.clock.now - decorChecked > 0.5) {
         decorChecked = game.clock.now;
         reshape(game, civGame);
-        turnSeason(civGame);
         refreshDecor(civGame);
       }
       if (reshapeQueue.length) setReshape(game);
-      if (seasonQueue.length) setSeason(game);
       if (decorQueue.length) setDecor(game);
     }
     // (A restarted room's clock begins again.)

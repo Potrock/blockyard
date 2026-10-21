@@ -522,6 +522,8 @@ export class Runtime {
       this.renderer.setTextures(this.textures.albedo, this.textures.material, this.biome.texture);
     }
     const biome = this.biome;
+    // (Each block in its own look: a game before may have shown others.)
+    this.renderer.setLooks(null);
     // Over the void the sky goes on below the horizon, an abyss; a void world with ground has a horizon like any other.
     this.renderer.uniforms.uVoid.value = def.world?.terrain === 'void' && !def.world.ground ? 1 : 0;
     this.graphics = new EntityGraphics(this.renderer.uniforms);
@@ -903,6 +905,7 @@ export class Runtime {
             if (w && !(w.x % 16 === 0 && w.period % 16 === 0 && w.period > 0)) throw new Error(`world.wrap: x and period must be whole chunks (multiples of 16), the period above 0 (got ${w.x}, ${w.period})`);
             this.chunks.setWrap(w && { cx0: w.x / 16, n: w.period / 16 });
           },
+          looks: (name) => this.renderer.setLooks(name === null ? null : this.looksNamed(name)),
         },
       },
       item: (id) => this.content.items.get(id),
@@ -914,6 +917,20 @@ export class Runtime {
     this.clientStarted = false;
     this.title.progress(0.1, 'Generating terrain…');
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  /**
+   * The texture layers the blocks' looks of a name swap (`BlockDefinition.looks`): each face's own
+   * layer of every block that has one (its own alone: no other block's), for the look's.
+   */
+  private looksNamed(name: string): Map<number, number> {
+    const swaps = new Map<number, number>();
+    for (const [block, looks] of this.blocks.looks) {
+      const look = looks[name];
+      const own = this.registry.byName.get(block);
+      if (look && own) own.tex.forEach((layer, f) => swaps.set(layer, look[f]));
+    }
+    return swaps;
   }
 
   /** Built-in monster / item atlas generated in Rust (placeholder until the module exists). */
