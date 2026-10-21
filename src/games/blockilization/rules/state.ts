@@ -147,6 +147,8 @@ export interface City {
   works?: Record<string, string[]>;
   /** Wonders built here (for the map and the score). */
   wonders?: string[];
+  /** Buildings it was founded with in a game begun in a later era (`starts.ts`): free of upkeep, as Civ V's free buildings are, until the city is taken. */
+  free?: string[];
   /** Production put into each item it switched away from (kept, as Civ V does). */
   saved?: Record<string, number>;
   /** "We love the king" days, and the luxury it demands. */
@@ -191,6 +193,8 @@ export interface Player {
     pledges?: Record<number, number>;
     broken?: Record<number, number>;
   };
+  /** The era a game begun later started them in (`starts.ts`): theirs till their techs take them past it. */
+  startEra?: number;
   /** Their team, by number from 0 (`teams.ts`): none, they play for themselves. */
   team?: number;
   alive: boolean;
@@ -312,6 +316,9 @@ export interface Settings {
   trueStarts?: boolean;
   /** Volcanoes, floods, storms and the rising sea (`disasters.ts`, `climate.ts`): a new game's are on unless the lobby turns them off; a game saved before them has none, so it plays on as it began. */
   disasters?: boolean;
+  /** The era the game begins in (`starts.ts`, by `ERAS`; unset: the Ancient Era), and its scenario (`SCENARIOS`), if it's one. */
+  startEra?: number;
+  scenario?: string;
 }
 
 export interface Game {
@@ -389,8 +396,8 @@ export interface MapPin {
 export const SPEEDS: Record<Speed, number> = { quick: 0.67, standard: 1, epic: 1.5, marathon: 3 };
 /** A game's turn limit at each speed, Civ V's: 330 turns quick, 500 standard, 750 epic, 1500 marathon (the lobby sets it as the speed is chosen). */
 export const TURN_LIMITS: Record<Speed, number> = { quick: 330, standard: 500, epic: 750, marathon: 1500 };
-/** The turn limits the lobby offers. */
-export const TURN_CHOICES = [150, 250, 330, 500, 750, 1500];
+/** The turn limits the lobby offers (the shorter for games begun in a later era, `starts.ts`). */
+export const TURN_CHOICES = [100, 150, 200, 250, 330, 500, 750, 1500];
 /** How long golden ages last at each speed (Civ V's: they don't stretch as far as the rest). */
 export const GOLDEN_SPEEDS: Record<Speed, number> = { quick: 0.8, standard: 1, epic: 1.25, marathon: 2 };
 export const SPEED_NAMES: Record<Speed, string> = { quick: 'Quick', standard: 'Standard', epic: 'Epic', marathon: 'Marathon' };

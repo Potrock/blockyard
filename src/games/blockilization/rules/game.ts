@@ -24,6 +24,7 @@ import { recordReplay } from './replay';
 import { GOLDEN_SPEEDS, type City, type Game, type Player, type Production, type Unit } from './state';
 import { sideName, sides, teamOf, teammates } from './teams';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
+import { eraStartOf, scenarioOf, startEraOf } from './starts';
 import { startSequence, waitsFor, warBegun } from './turns';
 import { climateTurn } from './climate';
 import { disasterTurn } from './disasters';
@@ -354,12 +355,36 @@ export function foundCity(game: Game, owner: number, t: number): City {
       p.freeBuildings![b] = left - 1;
       if (!c.buildings.some((x) => isBuilding(x, b))) c.buildings.push(unitFor(p.civ, b, BUILDINGS));
     }
+  if (startEraOf(game.settings) > 0 || scenarioOf(game.settings)) foundedInEra(game, p, c, first);
   assignCitizens(game, c);
   // A bot's new city starts on a Warrior; a person's asks what to build (Civ V's way: a Warrior in the Middle Ages is no help).
   c.queue = p.bot ? [{ kind: 'unit', id: unitFor(p.civ, 'warrior', UNITS) }] : [];
   updateVisibility(game, p);
   note(game, owner, { text: `${name} is founded.`, at: t, kind: 'city' });
   return c;
+}
+
+/**
+ * A city founded in a game begun in a later era (`starts.ts`): bigger, with the age's everyday
+ * buildings standing (those its civ knows and its site allows, its own version where it has one),
+ * free of upkeep.
+ * A capital's founding brings the rest of the start: culture banked for the era's first policies,
+ * and its scenario's buildings and units there (the Cold War's Manhattan Project and bombs).
+ */
+function foundedInEra(game: Game, p: Player, c: City, capital: boolean) {
+  const start = eraStartOf(game.settings);
+  c.pop += start.pop;
+  for (const b of start.buildings) {
+    const id = unitFor(p.civ, b, BUILDINGS);
+    if (!BUILDINGS[id] || !canConstruct(game, p, c, BUILDINGS[id], true)) continue;
+    c.buildings.push(id);
+    (c.free ??= []).push(id);
+  }
+  const sc = scenarioOf(game.settings);
+  if (!capital || p.cityState || p.civ === 'barbarian') return;
+  for (let n = 0; n < start.policies; n++) p.culture += policyCost(game, p, p.policies.length + n);
+  for (const b of sc?.capitalBuildings ?? []) if (!c.buildings.includes(b)) c.buildings.push(b);
+  for (const id of sc?.capitalUnits ?? []) spawnUnit(game, id, p.index, c.tile);
 }
 
 /** Gold plundered from a city taken (Civ V's, roughly: more for a bigger city; doubled by a Burial Tomb). */
@@ -403,6 +428,8 @@ function captureCity(game: Game, c: City, by: number) {
   c.queue = [];
   c.prod = 0;
   c.locked = [];
+  // (What it was founded with free, its captor pays for.)
+  c.free = undefined;
   // (Burning, it's put out: its new owner decides again, and its founder, back, keeps it.)
   c.razing = undefined;
   capFollowers(c);
@@ -616,11 +643,12 @@ export function shareResearch(game: Game) {
   }
 }
 
-/** The era a player is in: their furthest tech's. */
+/** The era a player is in: their furthest tech's (or, begun in a later era, that one till they're past it). */
 export function eraOf(p: Player): number {
   let col = 0;
   for (const t of p.techs) col = Math.max(col, TECHS[t]?.col ?? 0);
-  return ERAS.indexOf(eraOfCol(col));
+  // (Begun in a later era: in it from the first turn, its techs still to learn.)
+  return Math.max(p.startEra ?? 0, ERAS.indexOf(eraOfCol(col)));
 }
 
 function adoptPolicy(game: Game, p: Player, id: string) {

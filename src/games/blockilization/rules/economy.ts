@@ -683,7 +683,8 @@ export function goldUpkeep(game: Game, p: Player): { buildings: number; units: n
   const civ = civEffects(game, p);
   const uCheaper = Math.min(75, civ.reduce((s, e) => s + (e.unitUpkeep ?? 0), 0));
   let buildings = 0;
-  for (const c of citiesOf(game, p.index)) for (const b of c.buildings) buildings += BUILDINGS[b]?.upkeep ?? 0;
+  // (Not those a city was founded with free, in a game begun in a later era.)
+  for (const c of citiesOf(game, p.index)) for (const b of c.buildings) if (!c.free?.includes(b)) buildings += BUILDINGS[b]?.upkeep ?? 0;
   // Oligarchy: garrisons are free.
   const garrisonsFree = has(civ, 'garrison_free');
   // The Ottomans' warships count a third, the Zulu's melee units (gunpowder ones too) a half.
@@ -707,9 +708,8 @@ export function goldUpkeep(game: Game, p: Player): { buildings: number; units: n
   return { buildings: Math.floor(buildings), units: Math.floor(units * (1 - uCheaper / 100)), roads: Math.floor(roads) };
 }
 
-/** Culture for the next social policy (Civ V's: 25 + (3n)^2.01, 10% more for each city past the first, at speed). */
-export function policyCost(game: Game, p: Player): number {
-  const n = p.policies.length;
+/** Culture for the next social policy, or the one `n` policies in (Civ V's: 25 + (3n)^2.01, 10% more for each city past the first, at speed). */
+export function policyCost(game: Game, p: Player, n = p.policies.length): number {
   const cities = citiesOf(game, p.index).length;
   const civ = civEffects(game, p);
   const cheaper = Math.min(50, civ.reduce((s, e) => s + (e.policyCost ?? 0), 0));

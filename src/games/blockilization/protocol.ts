@@ -59,7 +59,9 @@ export interface LobbyView {
 
 export type LobbyAction =
   | { a: 'civ'; civ: string }
-  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; hybridTurns?: boolean; barbarians?: boolean; wrap?: boolean; trueStarts?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty; disasters?: boolean }
+  | { a: 'settings'; size?: MapSize; type?: MapType; speed?: Speed; timer?: number; dynamicTimer?: boolean; hybridTurns?: boolean; barbarians?: boolean; wrap?: boolean; trueStarts?: boolean; cityStates?: number; turnLimit?: number; difficulty?: Difficulty; disasters?: boolean; startEra?: number }
+  /** A scenario set up at once (`rules/starts.ts`), or none (null: the settings as they are, without its twist). */
+  | { a: 'scenario'; id: string | null }
   | { a: 'bots'; count: number }
   | { a: 'victories'; victories: Partial<Settings['victories']> }
   | { a: 'seed'; seed: number | null }
@@ -261,6 +263,8 @@ export interface CityWire {
   foodNeed?: number;
   yields?: { food: number; prod: number; gold: number; science: number; culture: number; faith: number; surplus: number };
   buildings?: string[];
+  /** Own cities: the buildings it was founded with free (a game begun in a later era), which cost no upkeep. */
+  free?: string[];
   queue?: Production[];
   /** Own cities: units finished are built again (they go back to the end of the queue). */
   repeat?: boolean;

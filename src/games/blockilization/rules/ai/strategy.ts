@@ -5,6 +5,7 @@ import { capitalOf, citiesOf, knows, note, random } from '../core';
 import { score } from '../game';
 import { within } from '../hex';
 import type { City, Game, Player } from '../state';
+import { scenarioOf } from '../starts';
 import { teamedWithPeople, teammates, teamOf } from '../teams';
 import { TERRAINS } from '../terrain';
 import { majors, tourismOf, unVote } from '../trade';
@@ -125,7 +126,8 @@ export function wantsPeace(ctx: Ctx, them: number): boolean {
     if (plan.stage === 'regroup' && game.turn - (plan.changed ?? game.turn) > 20) return true;
     return game.turn - (plan.taken ?? rec?.since ?? game.turn) > patience;
   }
-  // Someone else's war on it: once it's held them off for a while.
+  // Someone else's war on it: once it's held them off for a while (in a world at war, a while longer).
+  if (rec && !rec.ours && scenarioOf(game.settings)?.war) return turns >= 20;
   if (rec && !rec.ours) return turns >= 8 && ws > -10 ? true : turns >= 20;
   return turns >= 6;
 }
@@ -313,6 +315,22 @@ export function planWar(ctx: Ctx) {
       mem.plan = { target: joint, city: aim.city, stage: p.diplomacy.war[joint] ? 'attack' : 'muster', since: game.turn, rally: rallyFor(ctx, city.tile, aim.amphibious), amphibious: aim.amphibious || undefined, why: 'ally' };
     }
     return;
+  }
+  // No plan, in a world at war (the World War): its army takes the war to the enemy whose city it can
+  // best reach, once it's found one (looked for every few turns).
+  if (scenarioOf(game.settings)?.war && game.turn >= 8 && (game.turn + ctx.me) % 3 === 0) {
+    let best: { target: number; aim: NonNullable<ReturnType<typeof targetCity>> } | null = null;
+    for (const w of ctx.wars) {
+      const o = game.players[w];
+      if (o.cityState || o.civ === 'barbarian') continue;
+      const aim = targetCity(ctx, o);
+      if (aim && (!best || aim.near < best.aim.near)) best = { target: w, aim };
+    }
+    if (best) {
+      const city = game.cities.find((c) => c.id === best.aim.city)!;
+      mem.plan = { target: best.target, city: best.aim.city, stage: 'attack', since: game.turn, rally: rallyFor(ctx, city.tile, best.aim.amphibious), amphibious: best.aim.amphibious || undefined, why: 'land' };
+      return;
+    }
   }
   // No plan: now and then, look for a war worth making (not while fighting one, broke, unhappy or
   // still settling the land).

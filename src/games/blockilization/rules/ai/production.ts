@@ -6,6 +6,7 @@ import { canBuyReligious, cityReligion, faithBuildings, faithCost } from '../fai
 import { canConstruct, canProduce, constructible, defaultBuild, faithPurchases, itemCost, placeFor, productionToward, seaWork, trainable } from '../game';
 import { within } from '../hex';
 import type { City, Production, Unit } from '../state';
+import { calendarTurn, startEraOf } from '../starts';
 import { maxRoutes, partsBuildable, routesOf } from '../trade';
 import { TECH_LIST } from '../techs';
 import { RESOURCES } from '../terrain';
@@ -84,7 +85,8 @@ export function wants(ctx: Ctx): Wants {
   const workers = p.cityState ? 0 : Math.min(Math.ceil(n * 1.2) + 1, Math.max(1, n) + (game.turn > 80 ? 2 : 0));
   // The army: a garrison a city, then more by character, era and wars.
   let military = n + 1 + Math.floor(pers.defense / 4) + Math.floor(ctx.era / 2);
-  if (game.turn < 50) military = Math.max(2, n + 1);
+  // (Early on, a garrison each and one more: unless the game began in a later era, armies and all.)
+  if (game.turn < 50 && !startEraOf(game.settings)) military = Math.max(2, n + 1);
   if (mem.plan) military = n + armyNeed(ctx) + 1;
   if (ctx.wars.length) military += Math.max(2, Math.ceil(n / 2));
   if (p.cityState) military = 2 + ctx.era;
@@ -322,7 +324,7 @@ function cityStateBuild(ctx: Ctx, c: City, military: number): Production {
 
 /**
  * What a city builds toward its empire's victory: the Apollo Program in its best city and the
- * spaceship's parts in the rest (a bot going to the stars, or any that can from turn 200 or near the
+ * spaceship's parts in the rest (a bot going to the stars, or any that can from turn 200 (as the calendar counts, `calendarTurn`) or near the
  * end of learning: with nothing left to learn, its three strongest cities at least); the United
  * Nations for a diplomat.
  */
@@ -335,7 +337,7 @@ function victoryProduction(ctx: Ctx, c: City): Production | null {
   if (top === c && (mem.aim === 'diplomatic' || diplomaticRival(ctx) !== null) && canConstruct(game, p, c, BUILDINGS.united_nations)) return { kind: 'building', id: 'united_nations' };
   // (Keen on the stars: a bot going there, any bot from turn 200 or with three techs or fewer left to learn.)
   const left = TECH_LIST.filter((t) => t.id !== 'future_tech' && !knows(p, t.id)).length;
-  const keen = mem.aim === 'science' || game.turn > 200 || left <= 3;
+  const keen = mem.aim === 'science' || calendarTurn(game) > 200 || left <= 3;
   if (!keen || !knows(p, 'rocketry')) return null;
   const strongest = [...ctx.cities].filter((x) => !x.puppet).sort((a, b) => yieldsOf(ctx, b).prod - yieldsOf(ctx, a).prod);
   if (strongest[0] === c && canConstruct(game, p, c, BUILDINGS.apollo_program) && !ctx.cities.some((x) => x !== c && x.queue[0]?.id === 'apollo_program')) return { kind: 'building', id: 'apollo_program' };
@@ -344,7 +346,7 @@ function victoryProduction(ctx: Ctx, c: City): Production | null {
   const best = yieldsOf(ctx, strongest[0]).prod;
   // (Late on, more of its cities join in; with nothing left to learn, its three strongest at least.)
   const among = left === 0 && strongest.indexOf(c) < 3;
-  if (!parts.length || (yieldsOf(ctx, c).prod < best * (game.turn > 200 ? 0.35 : 0.6) && !among)) return null;
+  if (!parts.length || (yieldsOf(ctx, c).prod < best * (calendarTurn(game) > 200 ? 0.35 : 0.6) && !among)) return null;
   const unique = parts.filter((x) => SPACESHIP_PARTS.find((part) => part.id === x)?.count === 1);
   const freeStronger = strongest.slice(0, strongest.indexOf(c)).filter((x) => x.queue[0]?.kind !== 'project').length;
   const part = (freeStronger === 0 && unique[0]) || parts.find((x) => !unique.includes(x)) || parts[0];

@@ -1,12 +1,17 @@
 import { lobbySides, TEAMS, type LobbyAction, type LobbySeat, type LobbyView } from '../protocol';
 import { KEEP_DISCARDED, roomCode, type GameMap, type SavedGame } from '../saves';
 import { CIVS } from '../rules/civs';
-import { MAP_SIZES, mapTypeWord, SPEED_NAMES, type MapSize, type MapType, type Settings, type Speed } from '../rules/state';
+import { BUILDINGS } from '../rules/buildings';
+import { aName } from '../rules/core';
+import { bestUnit, ERA_STARTS, SCENARIO_LIST, scenarioOf, startEraOf, startTechs, startWords } from '../rules/starts';
+import { MAP_SIZES, mapTypeWord, SPEED_NAMES, SPEEDS, type MapSize, type MapType, type Settings, type Speed } from '../rules/state';
+import { ERA_NAMES, ERAS } from '../rules/techs';
+import { UNITS } from '../rules/units';
 import { VICTORIES } from './concepts';
 import { emblemEl, icon } from './icons';
 import { openPedia } from './pedia';
 import { ask, store, TEAM_COLORS } from './store';
-import { h, tile, type El } from './ui';
+import { h, tile, year, type El } from './ui';
 
 /**
  * The lobby's setup beyond the map's size: what each map type and speed is like, the ways to win
@@ -30,6 +35,77 @@ const SPEED_TEXT: Record<Speed, string> = {
   epic: 'Half as long again as Standard: more turns in every era, 750 in all.',
   marathon: 'Three times as long as Standard: wars and wonders that take an age, 1500 turns in all.',
 };
+
+/**
+ * The scenarios (`rules/starts.ts`): a card for each, lit when the game is it (the host picks one,
+ * which sets the game up as it says, and picks it again for the settings without its twist); the
+ * chosen one's story under them.
+ */
+export function scenarioCards(L: LobbyView, isHost: boolean, send: (a: LobbyAction) => void): El {
+  const now = scenarioOf(L.settings);
+  return h(
+    'div',
+    {},
+    h(
+      'div.lb-wins',
+      {},
+      ...SCENARIO_LIST.map((sc) => {
+        const lit = now?.id === sc.id;
+        return h(
+          `button.lb-win${lit ? '.on' : ''}`,
+          { onclick: isHost ? () => send({ a: 'scenario', id: lit ? null : sc.id }) : undefined, disabled: !isHost, title: isHost ? (lit ? 'Back to a game of your own settings' : `Set the game up as ${sc.name}`) : undefined },
+          tile(sc.glyph, lit ? sc.color : '#3a4450', 34),
+          h('div.cv-grow', {}, h('b', {}, sc.name), h('small', {}, sc.sub)),
+          h('span.lb-check', {}, lit ? icon('check', 13) : null),
+        );
+      }),
+    ),
+    h('div.lb-how', {}, now ? `${now.text} ${L.settings.turnLimit} turns.` : 'Or set up a game of your own below. A scenario sets the era, the map and the ways to win at once, with a twist of its own; change anything after.'),
+  );
+}
+
+/** A start's army and the rest in words: "3 Settlers, 3 Workers, 4 Infantry, 2 Machine Guns..." (a civ's unique units aside). */
+function startUnits(era: number, techs: string[]): string {
+  const start = ERA_STARTS[era];
+  const count = new Map<string, number>([['settler', start.settlers], ['worker', start.workers]]);
+  for (const [role, n] of start.army) {
+    const id = bestUnit('', techs, role);
+    if (id) count.set(id, (count.get(id) ?? 0) + n);
+  }
+  const named = [...count].filter(([, n]) => n > 0).map(([id, n]) => (n === 1 ? aName(UNITS[id].name) : `${n} ${plural(UNITS[id].name)}`));
+  return named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}` : named[0];
+}
+
+/** A unit's name for more than one (Infantry stays Infantry, a Landsknecht's are Landsknechte aside). */
+const plural = (name: string) => (/(Infantry|Armor|Artillery)$/.test(name) ? name : /man$/.test(name) ? name.replace(/man$/, 'men') : `${name}s`);
+
+/** The era the game begins in (the host picks): a chip for each, and what a start in it brings. */
+export function eraRow(L: LobbyView, isHost: boolean, send: (a: LobbyAction) => void): El {
+  const s = L.settings;
+  const now = startEraOf(s);
+  const start = ERA_STARTS[now];
+  const techs = startTechs({ startEra: now });
+  const gold = Math.round(start.gold * SPEEDS[s.speed]);
+  const buildings = start.buildings.map((b) => aName(BUILDINGS[b]?.name ?? b));
+  const list = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0]);
+  return h(
+    'div',
+    {},
+    h(
+      'div.row',
+      {},
+      h('label', {}, 'Starting era'),
+      ...ERA_STARTS.map((_, era) => h(`button.chip${era === now ? '.on' : ''}`, { onclick: isHost ? () => send({ a: 'settings', startEra: era }) : undefined, disabled: !isHost && era !== now }, ERA_NAMES[ERAS[era]].replace(/ Era$/, ''))),
+    ),
+    h(
+      'div.lb-desc',
+      {},
+      now === 0
+        ? 'From the dawn of history, as Civilization V begins: a Settler and a Warrior, and everything still to discover.'
+        : `Begin in ${ERA_NAMES[ERAS[now]].startsWith('Ren') ? 'the Renaissance' : `the ${ERA_NAMES[ERAS[now]]}`}, in ${year(1, start.calendar)}, knowing every tech before it (${techs.length}): ${startUnits(now, techs)}, with ${gold} gold${start.policies ? ` and culture for ${start.policies} ${start.policies === 1 ? 'policy' : 'policies'}` : ''}. Every city is founded with ${start.pop ? `${start.pop + 1} citizens and ` : ''}${list(buildings)} standing, free of upkeep.`,
+    ),
+  );
+}
 
 /** A line under the map type's choices, and under the speed's. */
 export const mapTypeText = (t: MapType) => h('div.lb-desc', {}, MAP_TYPE_TEXT[t]);
@@ -86,7 +162,7 @@ export function lobbyFoot(L: LobbyView, isHost: boolean, send: (a: LobbyAction) 
       'div.cv-grow',
       {},
       h('b', {}, civ ? `${civ.name}, led by ${civ.leader}` : 'A civilization chosen for you'),
-      h('small.cv-muted', {}, `${civ ? '' : 'Or pick one above · '}${MAP_SIZES[s.size].name} ${mapTypeWord(s.type)} map · ${people > 1 ? `${people} people, ` : ''}${bots} bot${bots === 1 ? '' : 's'}`),
+      h('small.cv-muted', {}, `${civ ? '' : 'Or pick one above · '}${startWords(s) ? `${startWords(s)} · ` : ''}${MAP_SIZES[s.size].name} ${mapTypeWord(s.type)} map · ${people > 1 ? `${people} people, ` : ''}${bots} bot${bots === 1 ? '' : 's'}`),
     ),
     isHost
       ? h('button.cv-btn.gold.lb-begin', { onclick: () => send({ a: 'start' }), disabled: stuck, title: stuck ? 'Everyone is on one team' : undefined }, 'Begin')
@@ -167,13 +243,14 @@ function playedWhen(at: string): string {
   return `played ${new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 }
 
-/** A game's map in a few words, to tell one's games apart: "Small continents, quick" (Standard speed unsaid). */
+/** A game's map in a few words, to tell one's games apart: "Small continents, quick" (Standard speed unsaid), after its scenario or later era ("Cold War, small continents"). */
 function mapWords(m: GameMap | undefined): string {
   const size = MAP_SIZES[m?.size as MapSize]?.name;
   const type = m && m.type in MAP_TYPE_TEXT ? mapTypeWord(m.type as MapType) : null;
   if (!size || !type) return '';
   const speed = m!.speed !== 'standard' ? SPEED_NAMES[m!.speed as Speed]?.toLowerCase() : null;
-  return `${size} ${type}${speed ? `, ${speed}` : ''}`;
+  const start = startWords(m!);
+  return `${start ? `${start}, ${size.toLowerCase()}` : size} ${type}${speed ? `, ${speed}` : ''}`;
 }
 
 /** Who else is in a game and whether they're playing it now: "Bob is playing now", "with Bob and Cat", "you and the bots". */

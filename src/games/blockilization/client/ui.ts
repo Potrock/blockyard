@@ -10,6 +10,7 @@ import type { Order } from '../rules/game';
 import { distance, neighbours, type Grid } from '../rules/hex';
 import { MAP_SIZES, MAP_TYPE_NAMES, MAP_TYPES, mapTypeWord, SPEED_LIST, SPEED_NAMES, TURN_CHOICES, type City, type MapSize, type MapType, type Speed } from '../rules/state';
 import { ERA_NAMES, ERAS, TECHS } from '../rules/techs';
+import { eraStartOf, startWords } from '../rules/starts';
 import { addYields, FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId } from '../rules/terrain';
 import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNITS } from '../rules/units';
 import { ALL_POLICIES, IDEOLOGIES, TREES } from '../rules/policies';
@@ -28,7 +29,7 @@ import { decisions, NOTES_CSS, renderNoteCentre, renderNotesPart } from './notes
 import { ABILITY_TEXT, VICTORIES } from './concepts';
 import { OVERVIEW_CSS, renderOverview } from './overview';
 import { HOTKEYS_CSS, renderHotkeys, renderMenu } from './hotkeys';
-import { discardedBox, hubTop, inviteRow, LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards, type GameLinks } from './lobby';
+import { discardedBox, eraRow, hubTop, inviteRow, LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, scenarioCards, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards, type GameLinks } from './lobby';
 import { gameId, roomCode } from '../saves';
 import { ADVICE_CSS, adviceTag, researchHint } from './advice';
 import { POLITICS_CSS } from './politics';
@@ -182,10 +183,16 @@ export const touchScreen = () => typeof matchMedia === 'function' && matchMedia(
 /** 'Click' or, on a touch screen, 'Tap' (capitalised as asked). */
 export const click = (cap = false) => (touchScreen() ? (cap ? 'Tap' : 'tap') : cap ? 'Click' : 'click');
 
-/** The calendar: a year for each turn (4000 BC to 2050 AD over the quick game's 330 turns). */
-export function year(turn: number): string {
+/**
+ * The calendar: a year for each turn (4000 BC to 2050 AD over the quick game's 330 turns). A game
+ * begun in a later era starts its calendar at its era's turn (`calendar`: 1950 AD for the Atomic).
+ */
+export function year(turn: number, from = store.lobby ? eraStartOf(store.lobby.settings).calendar : 0): string {
   const marks: [number, number][] = [[0, -4000], [75, -1000], [135, 500], [200, 1500], [260, 1850], [300, 1950], [330, 2050], [600, 2300]];
-  let y = -4000;
+  turn += from;
+  // (Past the last mark, a year a turn: a marathon, or a late start, runs on past it.)
+  const [lastTurn, lastYear] = marks[marks.length - 1];
+  let y = lastYear + Math.max(0, turn - lastTurn);
   for (let i = 1; i < marks.length; i++)
     if (turn <= marks[i][0]) {
       const [t0, y0] = marks[i - 1];
@@ -631,7 +638,7 @@ function renderBuilding(L: NonNullable<typeof store.lobby>): El {
     h('div.bd-art', {}, h('img', { src: coverArt, alt: '', draggable: 'false' }), h('h1', {}, 'Blockilization')),
     h('div.bd-what', {}, h('b', {}, 'Shaping the world…'), h('span', {}, `${Math.round(done * 100)}%`)),
     h('div.cv-progress', {}, h('i', { style: `width:${Math.round(done * 100)}%` })),
-    h('div.bd-world', {}, `A ${MAP_SIZES[s.size].name.toLowerCase()} ${mapTypeWord(s.type)} map · ${civs} ${civs === 1 ? 'civilization' : 'civilizations'}${s.cityStates ? ` · ${s.cityStates} city-states` : ''}`),
+    h('div.bd-world', {}, `${startWords(s) ? `${startWords(s)} · ` : ''}A ${MAP_SIZES[s.size].name.toLowerCase()} ${mapTypeWord(s.type)} map · ${civs} ${civs === 1 ? 'civilization' : 'civilizations'}${s.cityStates ? ` · ${s.cityStates} city-states` : ''}`),
     h('div.bd-tip', {}, tile('lightbulb', '#2f5fa0', 30), h('span', {}, tip)),
   );
 }
@@ -712,7 +719,10 @@ function renderLobby(): El | null {
     ),
     teamsRow(L, isHost, lobby),
     !mine && h('small.cv-muted', {}, 'Every place on this map is taken: you’ll watch the game. A place comes free if the host picks a larger map, or someone leaves.'),
+    h('div.cv-label.sect', {}, 'Scenarios'),
+    scenarioCards(L, isHost, lobby),
     h('div.cv-label.sect', {}, 'The world'),
+    eraRow(L, isHost, lobby),
     chips('Map size', (Object.keys(MAP_SIZES) as MapSize[]).map((k) => [k, `${MAP_SIZES[k].name} · ${MAP_SIZES[k].players}`]), s.size, (v) => lobby({ a: 'settings', size: v }), (v) => (MAP_SIZES[v].players < people ? `Room for ${MAP_SIZES[v].players}: ${people} people are playing` : null)),
     chips('Map type', MAP_TYPES.map((t): [MapType, string] => [t, MAP_TYPE_NAMES[t]]), s.type, (v) => lobby({ a: 'settings', type: v })),
     mapTypeText(s.type),
@@ -1929,12 +1939,12 @@ function cityBuildings(city: CityWire, info: CityInfo | null): El[] {
       'div.cv-bld',
       { 'data-pedia': pediaKey('building', id) },
       b && b.kind !== 'building' && wonderPicture(id) ? pic(wonderPicture(id), 32) : tile(g.glyph, '#22303f', 32, g.color),
-      h('div.cv-grow', {}, h('div', { style: 'display:flex;gap:6px;align-items:baseline' }, h('b', {}, b?.name ?? id), b?.upkeep ? h('small.cv-muted', {}, `${b.upkeep} gold upkeep`) : null), text && h('small.cv-muted', {}, text), workSlots(city, id)),
+      h('div.cv-grow', {}, h('div', { style: 'display:flex;gap:6px;align-items:baseline' }, h('b', {}, b?.name ?? id), city.free?.includes(id) ? h('small.cv-muted', {}, 'came with the city: no upkeep') : b?.upkeep ? h('small.cv-muted', {}, `${b.upkeep} gold upkeep`) : null), text && h('small.cv-muted', {}, text), workSlots(city, id)),
     );
   };
   const wonders = list.filter((id) => BUILDINGS[id] && BUILDINGS[id].kind !== 'building');
   const buildings = list.filter((id) => !wonders.includes(id));
-  const upkeep = list.reduce((s, id) => s + (BUILDINGS[id]?.upkeep ?? 0), 0);
+  const upkeep = list.reduce((s, id) => s + (city.free?.includes(id) ? 0 : (BUILDINGS[id]?.upkeep ?? 0)), 0);
   return [
     !list.length && h('div.cv-muted', {}, 'Nothing built here yet.'),
     buildings.length > 0 && h('div.cv-label', {}, `Buildings (${buildings.length})${upkeep ? ` · ${upkeep} gold upkeep a turn` : ''}`),
