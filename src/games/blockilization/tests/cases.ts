@@ -58,7 +58,10 @@ import { blank, city, techsTo, unit, war } from './world';
 import { liberation, LIBERATE_INFLUENCE } from '../rules/liberation';
 import { cannotPledge, pledged, PLEDGE_BROKEN, PLEDGE_REST } from '../rules/pledges';
 import { restingInfluence } from '../rules/citystates';
-import { conquests, wantsPeace } from '../rules/ai/strategy';
+import { conquests, kneels, makePeace, trackWars, wantsPeace } from '../rules/ai/strategy';
+import { kneel } from '../rules/diplomacy';
+import { masterOf, sameSide, vassalsOf } from '../rules/teams';
+import { breakFree, release, SERVICE, tributeOf, vassalsTurn } from '../rules/vassals';
 import { forsakes, freeable, pledges as botPledges, turnsOn } from '../rules/ai/liberation';
 import { openProject, startProject, type WorldProject } from '../rules/projects';
 import { expectedTier, leavesProject, projectPlan, worldProject } from '../rules/ai/projects';
@@ -5937,4 +5940,147 @@ test('the emotes and pings are a fixed few: anything else is refused', () => {
   ok(isPing('look') && isPing('attack') && isPing('defend'), 'the pings');
   ok(!isPing('nuke') && !isPing(undefined), 'not anything else');
   ok(Object.values(EMOTES).every((e) => e.name.length > 0), 'each with its words');
+});
+
+test('vassals: a capitulation ends the war, and from then the vassal’s wars and peace are its master’s', () => {
+  const { game } = dealers(['egypt', 'babylon', 'germany', 'france']);
+  const [egypt, babylon, germany] = game.players;
+  // (People at war with people, all playing at once.)
+  game.settings.hybridTurns = false;
+  ok(apply(game, 0, { t: 'war', target: 1 }).ok, 'Egypt makes war on Babylon');
+  ok(apply(game, 1, { t: 'war', target: 3 }).ok, 'and Babylon has a war of its own, on France');
+  ok(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'vassal', from: 0 }, { kind: 'vassal', from: 1 }] }) !== null, 'not both kneeling at once');
+  ok(dealProblem(game, { from: 2, to: 3, items: [{ kind: 'vassal', from: 3 }] }) !== null, 'nor at peace');
+  eq(dealProblem(game, { from: 0, to: 1, items: [{ kind: 'vassal', from: 1 }] }), null, 'a capitulation alone is a peace deal');
+  makeDeal(game, { from: 0, to: 1, items: [{ kind: 'vassal', from: 1 }] });
+  eq(masterOf(game, 1), egypt, 'Babylon serves Egypt');
+  ok(!atWar(game, 0, 1), 'their war is over');
+  ok(!atWar(game, 1, 3), 'and Babylon’s war on France with it (Egypt is at peace with France)');
+  ok(babylon.diplomacy.openBorders[0] > 0 && egypt.diplomacy.openBorders[1] > 0, 'their borders open to each other');
+  ok(babylon.diplomacy.embassy[0] && egypt.diplomacy.embassy[1], 'embassies both ways');
+  ok(babylon.notes.some((n) => n.text.startsWith('You have capitulated to')) && egypt.notes.some((n) => n.text.includes('is your vassal now')), 'both are told');
+  ok(sameSide(game, 0, 1) && vassalsOf(game, 0).includes(babylon), 'one side now');
+  // A war on the vassal is a war on its master; its master's wars are its.
+  ok(apply(game, 2, { t: 'war', target: 1 }).ok, 'Germany declares war on Babylon');
+  ok(atWar(game, 2, 0) && atWar(game, 2, 1), 'and is at war with Egypt too');
+  ok(egypt.notes.some((n) => n.text.includes('you stand with')), 'Egypt is told why');
+  ok(!apply(game, 1, { t: 'peace', target: 2 }).ok, 'Babylon makes no peace of its own');
+  ok(dealProblem(game, { from: 2, to: 1, items: [{ kind: 'peace' }] }) !== null, 'nor deals for one');
+  ok(!apply(game, 1, { t: 'war', target: 3 }).ok, 'nor war');
+  ok(!apply(game, 0, { t: 'war', target: 1 }).ok, 'and its master makes none on it');
+  endWar(game, egypt, germany);
+  ok(!atWar(game, 1, 2), 'Egypt’s peace with Germany is Babylon’s');
+  ok(apply(game, 0, { t: 'war', target: 3 }).ok, 'Egypt declares war on France');
+  ok(atWar(game, 1, 3), 'Babylon follows it');
+  ok(dealProblem(game, { from: 3, to: 1, items: [{ kind: 'vassal', from: 1 }] }) !== null, 'a vassal can’t kneel to another');
+  ok(dealProblem(game, { from: 3, to: 0, items: [{ kind: 'vassal', from: 0 }] }) !== null, 'nor its master (it has a vassal)');
+  // On the screen: who serves whom, and the vassal's lot.
+  const view = viewFor(game, babylon, null);
+  eq(view.players[1].master, 0, 'its master shown');
+  eq(view.self.vassal?.master, 0, 'and its own screen says whom it serves');
+  ok(!!view.self.vassal?.why, `not free to go yet: ${view.self.vassal?.why}`);
+});
+
+test('vassals: a quarter of the vassal’s gold income is its master’s; it breaks free with half its master’s people after ten turns, is set free, or goes free when its master falls', () => {
+  const { game, at } = dealers(['egypt', 'babylon', 'germany']);
+  const [egypt, babylon, germany] = game.players;
+  for (const c of game.cities) c.pop = c.owner === 0 ? 8 : 2;
+  kneel(game, babylon, egypt);
+  babylon.gold = 100;
+  egypt.gold = 0;
+  babylon.lastIncome = { gold: 22, science: 0, culture: 0, faith: 0, happiness: 0, tourism: 0 };
+  vassalsTurn(game);
+  eq(tributeOf(22), 5, 'a quarter (rounded down)');
+  eq(babylon.gold, 95, 'paid by the vassal');
+  eq(egypt.gold, 5, 'to its master');
+  eq(babylon.vassal?.tribute, 5, 'and kept for the screens');
+  eq(tributeOf(-10), 0, 'nothing of a loss');
+  eq(viewFor(game, egypt, null).players[1].relation?.tribute, 5, 'its master sees what it got');
+  egypt.bot = babylon.bot = true;
+  eq(moodOf(game, egypt, babylon), 'master', 'a master speaks to its vassal as one');
+  eq(moodOf(game, babylon, egypt), 'vassal', 'and its vassal back');
+  egypt.bot = babylon.bot = false;
+  // Independence: not before ten turns' service, nor with too few people.
+  ok(/served/.test(breakFree(game, babylon) ?? ''), 'too soon');
+  babylon.vassal!.since = game.turn - SERVICE;
+  ok(/half/.test(breakFree(game, babylon) ?? ''), `too few people (${breakFree(game, babylon)})`);
+  game.cities.find((c) => c.owner === 1)!.pop = 4;
+  eq(breakFree(game, babylon), null, 'with half its master’s people, it breaks free');
+  ok(!masterOf(game, 1), 'free');
+  eq(babylon.diplomacy.peaceTurns[0], 10, 'a peace treaty between them');
+  ok(!(babylon.diplomacy.openBorders[0] > 0), 'their borders close');
+  ok(opinionOf(game, egypt, babylon).reasons.some((r) => r.text === 'You broke free of us' && r.value < 0), 'Egypt doesn’t forget it');
+  // Set free by its master.
+  kneel(game, babylon, egypt);
+  ok(release(game, germany, babylon) !== null, 'only its master sets it free');
+  eq(release(game, egypt, babylon), null, 'Egypt sets Babylon free');
+  ok(!masterOf(game, 1) && opinionOf(game, babylon, egypt).reasons.some((r) => r.text === 'You set us free' && r.value > 0), 'free, and grateful');
+  // Its master gone, it serves no one.
+  kneel(game, babylon, egypt);
+  egypt.alive = false;
+  ok(!masterOf(game, 1), 'a fallen master is no master');
+  vassalsTurn(game);
+  ok(!babylon.vassal && babylon.notes.some((n) => n.text.includes('serve no one')), 'and it is told it is free');
+  void at;
+});
+
+test('vassals: a master holds its vassals’ capitals toward domination; a vassal wins nothing of its own', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany'], { size: 'small' });
+  game.settings.victories = { domination: true, science: false, culture: false, diplomatic: false, score: true };
+  const capitals = [at(3, 3), at(14, 3), at(24, 14)].map((t, i) => city(game, i, t));
+  capitals[2].owner = 0;
+  for (const t of game.tiles) if (t.city === capitals[2].id) t.owner = 0;
+  checkVictory(game);
+  ok(!game.over, 'Babylon still holds its capital');
+  kneel(game, game.players[1], game.players[0]);
+  checkVictory(game);
+  ok(game.over?.how === 'domination' && game.over.winner === 0, `Babylon’s capital held for Egypt by its vassal: Egypt has conquered the world (${JSON.stringify(game.over)})`);
+  // All that's left of the world kneeling: conquered too.
+  const two = blank(['egypt', 'babylon'], { size: 'small' });
+  two.game.settings.victories = { domination: true, science: false, culture: false, diplomatic: false, score: false };
+  [two.at(3, 3), two.at(16, 3)].forEach((t, i) => city(two.game, i, t));
+  kneel(two.game, two.game.players[1], two.game.players[0]);
+  checkVictory(two.game);
+  eq(two.game.over?.winner, 0, 'its only rival its vassal, Egypt has conquered the world');
+  // On score, a vassal never wins.
+  const late = blank(['egypt', 'babylon'], { size: 'small' });
+  late.game.settings.victories.score = true;
+  late.game.settings.turnLimit = 0;
+  [late.at(3, 3), late.at(16, 3)].forEach((t, i) => city(late.game, i, t));
+  late.game.players[1].techs = Object.keys(TECHS).slice(0, 12);
+  kneel(late.game, late.game.players[1], late.game.players[0]);
+  checkVictory(late.game);
+  eq(late.game.over?.winner, 0, 'the master wins on score, its richer vassal no matter');
+});
+
+test('vassals: a beaten bot kneels (to the winner, not before it’s beaten); the winner takes it, and demands it of a beaten person', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { size: 'small' });
+  const [egypt, babylon] = game.players;
+  for (const p of game.players) p.met = [0, 1];
+  [at(3, 3), at(6, 3), at(9, 3)].forEach((t) => city(game, 0, t));
+  const lost = [at(14, 8), at(18, 8), at(22, 8)].map((t) => city(game, 1, t));
+  for (let i = 0; i < 8; i++) unit(game, 'swordsman', 0, at(3 + i, 6));
+  unit(game, 'warrior', 1, at(22, 11));
+  ok(apply(game, 0, { t: 'war', target: 1 }).ok, 'war');
+  for (const p of game.players) trackWars(makeCtx(game, p));
+  const asked = { from: 0, to: 1, items: [{ kind: 'vassal', from: 1 }] } as const;
+  const no = evaluate(game, babylon, { ...asked, items: [...asked.items] });
+  ok(!no.accept, `not beaten yet (no city lost): Babylon won’t kneel (${no.why})`);
+  // Two cities lost to an army many times its own.
+  for (const c of lost.slice(0, 2)) {
+    c.owner = 0;
+    for (const t of game.tiles) if (t.city === c.id) t.owner = 0;
+  }
+  ok(kneels(makeCtx(game, babylon), 0), 'beaten, it would kneel');
+  ok(evaluate(game, babylon, { ...asked, items: [...asked.items] }).accept, 'and accepts the demand');
+  ok(evaluate(game, egypt, { from: 1, to: 0, items: [{ kind: 'vassal', from: 1 }] }).accept, 'Egypt would take its capitulation');
+  // Babylon a person now: Egypt, winning a war some turns old, demands it (every few turns).
+  babylon.bot = false;
+  egypt.ai!.wars[1].since = game.turn - 10;
+  egypt.ai!.wars[1].theirCities = 3;
+  while ((game.turn + 0) % 5 !== 0) game.turn++;
+  makePeace(makeCtx(game, egypt));
+  const offer = relationsOf(game).offers.find((o) => o.from === 0 && o.to === 1);
+  ok(!!offer && offer.items.some((x) => x.kind === 'vassal' && x.from === 1), `Egypt demands Babylon kneel (${JSON.stringify(offer?.items)})`);
+  ok(atWar(game, 0, 1), 'the war goes on till it answers');
 });

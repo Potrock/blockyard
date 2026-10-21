@@ -24,7 +24,8 @@ import { electionTurns, influence, maxRoutes, partsBuildable, routeHome, routeWa
 import type { GreatKind } from './rules/effects';
 import { dissent, greatCost } from './rules/economy';
 import { ALL_POLICIES } from './rules/policies';
-import { teammates, teamOf } from './rules/teams';
+import { masterOf, teammates, teamOf } from './rules/teams';
+import { independence, tributeFrom, tributeOf } from './rules/vassals';
 import { addYields, RESOURCES, YIELD_KEYS, type Yields } from './rules/terrain';
 import { isMilitary, UNITS } from './rules/units';
 import { opinionOf, stanceOf } from './rules/ai/opinion';
@@ -113,11 +114,17 @@ function selfWire(game: Game, p: Player): SelfWire {
   const teamScience = science + mates.reduce((n, m) => n + citiesOf(game, m.index).reduce((s, c) => s + cityYields(game, c, happiness(game, m)).science, 0), 0);
   const techCosts: Record<string, number> = {};
   for (const id of Object.keys(TECHS)) techCosts[id] = techCost(game, p, id);
+  // (A vassal pays its master a share of what it makes; a master gets its vassals' tribute: `vassals.ts`.)
+  const made = gold + routesGold(game, p) - up.buildings - up.units - up.roads;
+  const lord = masterOf(game, p.index);
+  const tribute = lord ? tributeOf(made) : 0;
+  const free = lord ? independence(game, p) : null;
   return {
     index: p.index,
     civ: p.civ,
     gold: p.gold,
-    income: gold + routesGold(game, p) - up.buildings - up.units - up.roads + dealGold(game, p),
+    income: made + dealGold(game, p) - tribute + tributeFrom(game, p),
+    ...(lord && free ? { vassal: { master: lord.index, tribute, people: free.people, need: free.need, why: free.why } } : {}),
     science,
     culture: p.culture,
     culturePerTurn: culture,
@@ -298,6 +305,7 @@ function relationWire(game: Game, me: Player, o: Player): Relation {
     // (The world's politics, among the civilizations the viewer knows: nothing of those they don't.)
     atWarWith: game.players.filter((x) => x !== o && x.alive && !x.cityState && x.civ !== 'barbarian' && atWar(game, o.index, x.index) && hasMet(game, me, x)).map((x) => x.index),
     pactsWith: game.players.filter((x) => x !== o && (o.diplomacy.pacts[x.index] ?? 0) > 0 && hasMet(game, me, x)).map((x) => x.index),
+    ...(masterOf(game, o.index) === me ? { tribute: o.vassal?.tribute ?? 0 } : {}),
   };
 }
 
@@ -385,6 +393,7 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
       peaceOffered: !!p && atWar(game, me.index, o.index) && !!(o as Player & { peaceOffer?: number[] }).peaceOffer?.includes(me.index),
       here: o.user ? !present || present.has(o.user) : undefined,
       team: o.team ?? null,
+      ...(masterOf(game, o.index) ? { master: masterOf(game, o.index)!.index } : {}),
       met: met(o),
       ready: o.ready,
       score: score(game, o),

@@ -110,6 +110,11 @@ interface Result {
   /** Nuclear weapons built (each seen once) and fired (strikes that landed, not bombs shot down); the turn of the first strike. */
   nukesBuilt: number;
   nukesFired: number;
+  /** Capitulations (a civ become another's vassal), vassals that broke free, vassals set free; vassals at the end. */
+  knelt: number;
+  brokeFree: number;
+  setFree: number;
+  vassals: number;
   firstNuke?: number;
   /** The world's disasters: eruptions, floods, storms risen, times the sea rose, and the carbon burnt by the end. */
   eruptions: number;
@@ -144,7 +149,7 @@ function play(seed: number): Result {
   const seats = civs.slice(0, n).map((c, i) => ({ user: null, name: c.leader, civ: c.id, bot: true, team: teams ? (i < n / 2 ? 0 : 1) : undefined }));
   const g: Game = createGame(settings, seats, seed);
   const majors = g.players.filter((p) => !p.cityState && p.civ !== 'barbarian');
-  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, pledgesBroken: 0, eraLeader: [], eraMedian: [], eruptions: 0, floods: 0, storms: 0, rises: 0, co2: 0, nukesBuilt: 0, nukesFired: 0, errors: [] };
+  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, pledgesBroken: 0, eraLeader: [], eraMedian: [], eruptions: 0, floods: 0, storms: 0, rises: 0, co2: 0, nukesBuilt: 0, nukesFired: 0, knelt: 0, brokeFree: 0, setFree: 0, vassals: 0, errors: [] };
   const pledgesSeen = new Set<string>();
   let living = g.players.map((p) => p.alive);
   const owners = new Map<number, number>();
@@ -162,6 +167,8 @@ function play(seed: number): Result {
     nuked(game, by, hit, at);
   };
   const nukesSeen = new Set<number>();
+  // Capitulations and the ends of them, as they happen (the world's memory of them fades).
+  const vassalEvents = new Set<string>();
   const learn = stolen.learn;
   stolen.learn = (game, p, tech) => {
     r.stolen++;
@@ -247,6 +254,15 @@ function play(seed: number): Result {
     });
     spies = majors.map((p) => spiesOf(p).length);
     for (const u of g.units) if (UNITS[u.type]?.abilities?.includes('nuke') && !nukesSeen.has(u.id)) (nukesSeen.add(u.id), r.nukesBuilt++);
+    for (const e of g.relations?.events ?? []) {
+      const key = `${e.kind}:${e.by}:${e.to}:${e.turn}`;
+      if ((e.kind === 'vassal' || e.kind === 'independence' || e.kind === 'freed') && !vassalEvents.has(key)) {
+        vassalEvents.add(key);
+        if (e.kind === 'vassal') r.knelt++;
+        else if (e.kind === 'independence') r.brokeFree++;
+        else r.setFree++;
+      }
+    }
     if (g.turn === 60) r.cities60 = cityCount();
     if (g.turn === 120) r.cities120 = cityCount();
     if (g.turn === 40 || g.turn === 70 || g.turn === 100) r.wonders.push(Object.keys(g.wonders).length);
@@ -259,13 +275,14 @@ function play(seed: number): Result {
     if (turns.length * 2 > majors.length) r.eraMedian[e] = turns[Math.floor(majors.length / 2)];
   }
   r.liberated = (g.relations?.events ?? []).filter((e) => e.kind === 'liberate').length;
+  r.vassals = g.players.filter((p) => p.alive && p.vassal && g.players[p.vassal.master]?.alive).length;
   r.how = g.over?.how ?? 'none';
   r.winner = g.over ? `${g.players[g.over.winner].civ}${teams ? ` (team ${(g.players[g.over.winner].team ?? 0) + 1})` : ''}` : '';
   r.turn = g.turn;
   r.rises = g.climate?.rises ?? 0;
   r.co2 = g.climate?.co2 ?? 0;
   const scores = majors.map((p) => `${p.civ}${p.alive ? '' : '†'}:${g.cities.filter((c) => c.owner === p.index).length}c/${p.techs.length}t/${score(g, p)}`).join(' ');
-  console.log(`seed ${seed}: ${r.how} by ${r.winner} T${r.turn} | c60 [${r.cities60.join(',')}] c120 [${r.cities120.join(',')}] wonders [${r.wonders.join(',')}] wars ${r.wars} taken ${r.captured} dead ${r.eliminated} broke ${r.broke} neg ${r.negative} religions [${r.religions.join(',')}] mood ${avg(r.mood).toFixed(1)} unhappy ${pct(r.unhappy, r.mood.length)} size5 ${avg(r.toFive).toFixed(0)}t steals ${r.stolen} caught ${r.caught} quests ${r.quests} passed ${r.passed} freed ${r.liberated}/${r.revived} pledges ${r.pledges}/${r.pledgesEnded}/${r.pledgesBroken} nukes ${r.nukesBuilt}/${r.nukesFired}${r.firstNuke ? ` (T${r.firstNuke})` : ''} | world ${r.eruptions} eruptions ${r.floods} floods ${r.storms} storms ${r.rises} sea rises (${r.co2} carbon) | bot ms avg ${avg(r.ms).toFixed(1)} max ${Math.max(...r.ms).toFixed(0)} late avg ${avg(r.lateMs).toFixed(1)} | ${scores}`);
+  console.log(`seed ${seed}: ${r.how} by ${r.winner} T${r.turn} | c60 [${r.cities60.join(',')}] c120 [${r.cities120.join(',')}] wonders [${r.wonders.join(',')}] wars ${r.wars} taken ${r.captured} dead ${r.eliminated} broke ${r.broke} neg ${r.negative} religions [${r.religions.join(',')}] mood ${avg(r.mood).toFixed(1)} unhappy ${pct(r.unhappy, r.mood.length)} size5 ${avg(r.toFive).toFixed(0)}t steals ${r.stolen} caught ${r.caught} quests ${r.quests} passed ${r.passed} freed ${r.liberated}/${r.revived} pledges ${r.pledges}/${r.pledgesEnded}/${r.pledgesBroken} nukes ${r.nukesBuilt}/${r.nukesFired}${r.firstNuke ? ` (T${r.firstNuke})` : ''} vassals ${r.knelt}/${r.brokeFree}/${r.setFree} (${r.vassals} at the end) | world ${r.eruptions} eruptions ${r.floods} floods ${r.storms} storms ${r.rises} sea rises (${r.co2} carbon) | bot ms avg ${avg(r.ms).toFixed(1)} max ${Math.max(...r.ms).toFixed(0)} late avg ${avg(r.lateMs).toFixed(1)} | ${scores}`);
   for (const e of r.errors) console.log('  ERROR', e);
   // The World Congress's projects: when each opened and was done (its cost), and who placed (g, s, b).
   const projects = (g.congress?.projects ?? []).map((x) => `${x.id} T${x.since}-${x.done ? `T${x.done}` : 'open'} (${x.cost})${x.tiers ? ` ${Object.entries(x.tiers).map(([i, t]) => `${t[0]}:${g.players[Number(i)].civ}`).join(' ')}` : ''}`);
@@ -298,6 +315,7 @@ const era = (f: (r: Result) => number | undefined) => {
 console.log(`eras (first civ / median civ)  ${ERAS.slice(1).map((name, i) => `${name} ${era((r) => r.eraLeader[i + 1])}/${era((r) => r.eraMedian[i + 1])}`).join('  ')}`);
 console.log(`spies        ${avg(results.map((r) => r.stolen)).toFixed(1)} techs stolen/game   ${avg(results.map((r) => r.caught)).toFixed(1)} spies caught/game   quests ${avg(results.map((r) => r.quests)).toFixed(1)} done/game   resolutions ${avg(results.map((r) => r.passed)).toFixed(1)} passed/game`);
 console.log(`liberation   ${avg(results.map((r) => r.liberated)).toFixed(1)} cities liberated/game (${avg(results.map((r) => r.revived)).toFixed(1)} civs brought back)   pledges ${avg(results.map((r) => r.pledges)).toFixed(1)} made/game, ${avg(results.map((r) => r.pledgesEnded)).toFixed(1)} ended, ${avg(results.map((r) => r.pledgesBroken)).toFixed(1)} broken by their pledgers`);
+console.log(`vassals      ${avg(results.map((r) => r.knelt)).toFixed(1)} capitulations/game   ${avg(results.map((r) => r.brokeFree)).toFixed(1)} broke free   ${avg(results.map((r) => r.vassals)).toFixed(1)} vassals at the end   in ${results.filter((r) => r.knelt).length}/${results.length} games`);
 console.log(`nukes        ${avg(results.map((r) => r.nukesBuilt)).toFixed(1)} built/game   ${avg(results.map((r) => r.nukesFired)).toFixed(1)} fired/game   in ${results.filter((r) => r.nukesFired).length}/${results.length} games${results.some((r) => r.firstNuke) ? `   first strike T${avg(results.flatMap((r) => (r.firstNuke ? [r.firstNuke] : []))).toFixed(0)}` : ''}`);
 console.log(`world        ${avg(results.map((r) => r.eruptions)).toFixed(1)} eruptions/game   ${avg(results.map((r) => r.floods)).toFixed(1)} floods/game   ${avg(results.map((r) => r.storms)).toFixed(1)} storms/game   ${avg(results.map((r) => r.rises)).toFixed(1)} sea rises/game   carbon ${fmt(results.map((r) => r.co2))}`);
 console.log(`broke turns  ${avg(results.map((r) => r.broke)).toFixed(1)}/game   negative-income turns ${avg(results.map((r) => r.negative)).toFixed(1)}/game`);

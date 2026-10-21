@@ -2,7 +2,7 @@ import { atWar, capitalOf, civEffects, has, knows, knowsOf, nameTo, note, noteAl
 import { strategic } from './economy';
 import { embargoed } from './congress';
 import type { Game, Note, Player } from './state';
-import { sides, teammates } from './teams';
+import { FOR_GOOD, masterOf, sameSide, sides, teammates, vassalsOf } from './teams';
 import { eraOfCol, ERAS, TECHS } from './techs';
 import { RESOURCES, tapped } from './terrain';
 
@@ -11,8 +11,9 @@ import { RESOURCES, tapped } from './terrain';
  * resources for a while, open borders, embassies, research agreements, declarations of friendship,
  * defensive pacts, peace), a person answering in their own time, a bot at once; a civ can denounce
  * another; declaring war cancels what two civs had agreed, betrays a friendship, and brings in the
- * victim's defensive pacts. Everything that happens between civs is remembered for a while, for the
- * bots' opinions of each other (`ai/opinion.ts`).
+ * victim's defensive pacts. A civ beaten in war can capitulate instead of making peace, to serve the
+ * victor as its vassal (`vassals.ts`). Everything that happens between civs is remembered for a while,
+ * for the bots' opinions of each other (`ai/opinion.ts`).
  */
 
 /** What a deal can hold: from one side (`from`), or both alike. */
@@ -26,7 +27,9 @@ export type DealItem =
   | { kind: 'research' }
   | { kind: 'friendship' }
   | { kind: 'pact' }
-  | { kind: 'peace' };
+  | { kind: 'peace' }
+  /** Capitulation: the side it's from becomes the other's vassal (with the peace it comes with). */
+  | { kind: 'vassal'; from: number };
 
 /** A deal one civ puts to another. */
 export interface Deal {
@@ -49,10 +52,10 @@ export interface Running {
   turns: number;
 }
 
-/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`; 'embargo': an embargo declared on them, `declareEmbargo`; 'nuke': a nuclear weapon used on them; 'nukeSeen': a nuclear weapon used by a civ they knew, on anyone, `nuclearStrike`). */
+/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`; 'embargo': an embargo declared on them, `declareEmbargo`; 'nuke': a nuclear weapon used on them; 'nukeSeen': a nuclear weapon used by a civ they knew, on anyone, `nuclearStrike`; 'vassal': `by` capitulated to `to`, `kneel`; 'freed': `by` set `to`, its vassal, free; 'independence': `by` broke free of `to`, its master, `vassals.ts`). */
 export interface DiploEvent {
   turn: number;
-  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge' | 'embargo' | 'nuke' | 'nukeSeen';
+  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge' | 'embargo' | 'nuke' | 'nukeSeen' | 'vassal' | 'freed' | 'independence';
   by: number;
   to: number;
 }
@@ -199,7 +202,7 @@ export function nuclearStrike(game: Game, by: number, hit: number[], at: number)
 
 const whole = (n: unknown) => Number.isSafeInteger(n) && (n as number) > 0;
 
-const KINDS: Record<DealItem['kind'], 'one' | 'both'> = { gold: 'one', goldPerTurn: 'one', luxury: 'one', strategic: 'one', openBorders: 'one', embassy: 'one', research: 'both', friendship: 'both', pact: 'both', peace: 'both' };
+const KINDS: Record<DealItem['kind'], 'one' | 'both'> = { gold: 'one', goldPerTurn: 'one', luxury: 'one', strategic: 'one', openBorders: 'one', embassy: 'one', research: 'both', friendship: 'both', pact: 'both', peace: 'both', vassal: 'one' };
 
 /** Whether something sent as a deal's item has an item's shape (a crafted order could send anything). */
 function wellFormed(item: unknown): item is DealItem {
@@ -264,9 +267,28 @@ function itemProblem(game: Game, a: Player, b: Player, item: DealItem): string |
       if (!friends(game, a.index, b.index)) return 'A defensive pact needs a declaration of friendship first';
       if (!a.diplomacy.embassy[b.index] || !b.diplomacy.embassy[a.index]) return 'A defensive pact needs embassies both ways';
       return pacted(game, a.index, b.index) ? 'A defensive pact holds already' : null;
-    case 'peace':
-      return war ? null : 'Not at war';
+    case 'peace': {
+      if (!war) return 'Not at war';
+      // (A vassal's peace is its master's to make: `vassals.ts`.)
+      const vassal = [a, b].find((x) => masterOf(game, x.index));
+      return vassal ? `${vassal.name} serves ${masterOf(game, vassal.index)!.name}, who makes its peace` : null;
+    }
+    case 'vassal':
+      return war ? capitulationProblem(game, giver, taker) : 'Only to end a war';
   }
+}
+
+/**
+ * Why a civ can't capitulate to another (null: it can), Civ IV's rules: a civ alone (a team stands or
+ * falls together), with no vassals of its own and a city still to keep, to a civ that serves no one.
+ */
+export function capitulationProblem(game: Game, v: Player, m: Player): string | null {
+  if (v.team !== undefined) return `${v.name} is on a team: a team stands or falls together`;
+  if (masterOf(game, v.index)) return `${v.name} serves ${masterOf(game, v.index)!.name} already`;
+  if (masterOf(game, m.index)) return `${m.name} is a vassal itself`;
+  if (vassalsOf(game, v.index).length) return `${v.name} has vassals of its own`;
+  if (!game.cities.some((c) => c.owner === v.index)) return `${v.name} has no city left to keep`;
+  return null;
 }
 
 /** What an embargo stops two civs trading: what would run between them for a while (gold now, borders, embassies and the rest still can be). */
@@ -282,7 +304,8 @@ export function dealProblem(game: Game, deal: Deal): string | null {
   // (Every item's shape first: a crafted order could send anything, `null` among them.)
   if (!deal.items.every(wellFormed)) return 'That deal makes no sense';
   const war = atWar(game, a.index, b.index);
-  if (war && !deal.items.some((x) => x.kind === 'peace')) return "You're at war: only a peace deal";
+  // (A capitulation is a peace too: its own.)
+  if (war && !deal.items.some((x) => x.kind === 'peace' || x.kind === 'vassal')) return "You're at war: only a peace deal";
   if (embargoed(game, a.index, b.index) && deal.items.some((x) => EMBARGOED_ITEMS.has(x.kind))) return 'Trade between you is embargoed: no resources, gold a turn or research agreements';
   const seen = new Set<string>();
   for (const item of deal.items) {
@@ -294,9 +317,10 @@ export function dealProblem(game: Game, deal: Deal): string | null {
     const why = itemProblem(game, a, b, item);
     if (why) return why;
   }
-  // Gold both ways at once is the same as less gold one way: one side only.
+  // Gold both ways at once is the same as less gold one way: one side only. And one side kneels, not both.
   const gold = deal.items.filter((x) => x.kind === 'gold');
   if (gold.length > 1) return 'Gold from one side only';
+  if (deal.items.filter((x) => x.kind === 'vassal').length > 1) return 'One side capitulates, not both';
   // A research agreement: each side pays its cost.
   if (deal.items.some((x) => x.kind === 'research')) {
     const cost = researchCost(game, Math.max(0, ...[a, b].map(eraIndex)));
@@ -359,7 +383,11 @@ export function makeDeal(game: Game, deal: Deal) {
         pairNews(game, a, b, 'info', (x, y) => `${x} and ${y} have signed a defensive pact.`);
         break;
       case 'peace':
-        endWar(game, a, b);
+        // (With a capitulation, the peace is its: `kneel` makes it.)
+        if (!deal.items.some((x) => x.kind === 'vassal')) endWar(game, a, b);
+        break;
+      case 'vassal':
+        kneel(game, game.players[item.from], other(item.from));
         break;
     }
   }
@@ -367,8 +395,8 @@ export function makeDeal(game: Game, deal: Deal) {
   rel.offers = rel.offers.filter((o) => !(o.from === a.index && o.to === b.index) && !(o.from === b.index && o.to === a.index));
 }
 
-/** Two civs make peace (a treaty for ten turns), and with them their teams (`teams.ts`). */
-export function endWar(game: Game, a: Player, b: Player) {
+/** Two civs make peace (a treaty for ten turns), and with them their sides (`teams.ts`): told to the world unless `quiet`. */
+export function endWar(game: Game, a: Player, b: Player, quiet = false) {
   for (const [x, y] of sides(game, a.index, b.index)) {
     const p = game.players[x] as Player & { peaceOffer?: number[] };
     const q = game.players[y] as Player & { peaceOffer?: number[] };
@@ -378,7 +406,44 @@ export function endWar(game: Game, a: Player, b: Player) {
     if (q.peaceOffer) q.peaceOffer = q.peaceOffer.filter((o) => o !== x);
   }
   remember(game, 'peace', a.index, b.index);
-  pairNews(game, a, b, 'good', (x, y) => `${x} and ${y} have made peace.`);
+  if (!quiet) pairNews(game, a, b, 'good', (x, y) => `${x} and ${y} have made peace.`);
+}
+
+/**
+ * A civ capitulates to the one it was at war with (a peace deal's item), Civ IV's way. The war ends,
+ * and it serves its master from now on (`vassals.ts`): it's at war with whoever its master's side is
+ * at war with, and at peace with the rest (its own wars end; its master's are its); its defensive
+ * pacts end (its master's side is its shield now); their borders are open to each other for good,
+ * with embassies both ways.
+ */
+export function kneel(game: Game, v: Player, m: Player) {
+  if (atWar(game, v.index, m.index)) endWar(game, v, m, true);
+  v.vassal = { master: m.index, since: game.turn, tribute: 0 };
+  for (const o of game.players) {
+    if (o === v || !dealer(o)) continue;
+    v.diplomacy.pacts[o.index] = o.diplomacy.pacts[v.index] = 0;
+    if (sameSide(game, o.index, v.index)) continue;
+    const war = atWar(game, m.index, o.index);
+    if (war === atWar(game, v.index, o.index)) continue;
+    v.diplomacy.war[o.index] = o.diplomacy.war[v.index] = war;
+    if (war) {
+      v.diplomacy.openBorders[o.index] = o.diplomacy.openBorders[v.index] = 0;
+      endDealings(game, v.index, o.index);
+    }
+  }
+  v.diplomacy.openBorders[m.index] = m.diplomacy.openBorders[v.index] = FOR_GOOD;
+  v.diplomacy.embassy[m.index] = m.diplomacy.embassy[v.index] = true;
+  for (const [x, y] of [[v, m], [m, v]]) if (!(x.met ??= []).includes(y.index)) x.met.push(y.index);
+  remember(game, 'vassal', v.index, m.index);
+  noteAll(game, (r) =>
+    r === v
+      ? { text: `You have capitulated to ${m.name}: you serve ${m.name} now. Your master makes your wars and your peace, and takes a quarter of your gold income in tribute; your borders are open to each other. After ten turns, with half its people, you may declare your independence.`, kind: 'war' }
+      : r === m
+        ? { text: `${v.name} has capitulated: ${v.name} is your vassal now. It pays you a quarter of its gold income, goes to war and makes peace with you, and its cities count as yours toward a domination victory.`, kind: 'good' }
+        : knowsOf(r, v) || knowsOf(r, m)
+          ? { text: `${nameTo(r, v, true)} has capitulated to ${nameTo(r, m)}, and serves it now as its vassal.${atWar(game, r.index, v.index) ? ' Its war with you goes on, as its master’s does.' : ''}`, kind: 'war', topic: 'wars' }
+          : null,
+  );
 }
 
 /** Why a civ goes to war, as a bot names it (to the civ it means to fight, before and as it declares). */
@@ -409,7 +474,7 @@ export function warDeclared(game: Game, by: number, on: number) {
   // The victim's pacts: its partners join the war (unless at war already, or bound to peace).
   if (!dealer(t) || !dealer(p)) return;
   for (const ally of game.players) {
-    if (ally === p || ally === t || !dealer(ally) || !pacted(game, ally.index, on) || atWar(game, ally.index, by) || ally.diplomacy.peaceTurns[by] > 0 || teammates(game, ally.index, by)) continue;
+    if (ally === p || ally === t || !dealer(ally) || !pacted(game, ally.index, on) || atWar(game, ally.index, by) || ally.diplomacy.peaceTurns[by] > 0 || sameSide(game, ally.index, by) || masterOf(game, ally.index)) continue;
     // (With their teams: a team goes to war together.)
     for (const [x, y] of sides(game, ally.index, by)) {
       const a = game.players[x];

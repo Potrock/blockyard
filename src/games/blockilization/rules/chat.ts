@@ -2,7 +2,7 @@ import { opinionOf, stanceOf, type Stance } from './ai/opinion';
 import { personalityOf } from './ai/personality';
 import { atWar } from './core';
 import type { Game, Player } from './state';
-import { teammates } from './teams';
+import { masterOf, teammates } from './teams';
 
 /**
  * What the people in a game say to each other, and the faces their leaders make (`server.ts` passes
@@ -50,7 +50,10 @@ export interface Answer {
 }
 
 /** What a leader says back, by how it feels and how it was spoken to (`{you}`: the one it's answering). */
-const LINES: Record<'bold' | 'meek' | Stance, Partial<Record<Tone, [EmoteId, string][]>> & { plain: [EmoteId, string][] }> = {
+/** How a leader feels toward whoever spoke to it: at war, bold or meek; their master, or their vassal (`vassals.ts`); else its stance. */
+export type Mood = 'bold' | 'meek' | 'master' | 'vassal' | Stance;
+
+const LINES: Record<Mood, Partial<Record<Tone, [EmoteId, string][]>> & { plain: [EmoteId, string][] }> = {
   bold: {
     warm: [
       ['laugh', 'Peace? Not while you still have cities.'],
@@ -78,6 +81,34 @@ const LINES: Record<'bold' | 'meek' | Stance, Partial<Record<Tone, [EmoteId, str
     cold: [
       ['cry', 'Have you no mercy?'],
       ['angry', 'We will defend our home to the last.'],
+    ],
+  },
+  master: {
+    warm: [
+      ['laugh', 'Loyal as ever, {you}. Good.'],
+      ['gg', 'Serve us well, and you will want for nothing.'],
+    ],
+    plain: [
+      ['eyes', 'Your tribute had better not be late, {you}.'],
+      ['think', 'You may speak, vassal.'],
+    ],
+    cold: [
+      ['skull', 'Remember who spared your cities, {you}.'],
+      ['angry', 'Mind your tongue, vassal.'],
+    ],
+  },
+  vassal: {
+    warm: [
+      ['peace', 'We serve, {you}, as we swore to.'],
+      ['wave', 'Your loyal vassal greets you.'],
+    ],
+    plain: [
+      ['think', 'As you command, {you}.'],
+      ['cry', 'Our tribute is on its way.'],
+    ],
+    cold: [
+      ['angry', 'We kneel, {you}. We do not forget.'],
+      ['eyes', 'One day we will stand on our own again.'],
     ],
   },
   hostile: {
@@ -128,9 +159,11 @@ const LINES: Record<'bold' | 'meek' | Stance, Partial<Record<Tone, [EmoteId, str
   },
 };
 
-/** How `bot` feels toward `p`: at war (and bold about it, or not), or its stance. */
-export function moodOf(game: Game, bot: Player, p: Player): 'bold' | 'meek' | Stance {
+/** How `bot` feels toward `p`: at war (and bold about it, or not), their master or vassal, or its stance. */
+export function moodOf(game: Game, bot: Player, p: Player): Mood {
   if (teammates(game, bot.index, p.index)) return 'friendly';
+  if (masterOf(game, p.index) === bot) return 'master';
+  if (masterOf(game, bot.index) === p) return 'vassal';
   if (atWar(game, bot.index, p.index)) {
     // (Bold leaders, and any winning the war, swagger; the rest want it over.)
     const ours = game.cities.filter((c) => c.owner === bot.index).length;

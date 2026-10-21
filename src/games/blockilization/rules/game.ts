@@ -22,7 +22,8 @@ import { adoptable, ALL_POLICIES, IDEOLOGIES, policyMet, TREES, treeDone } from 
 import { BELIEF_LIST, BELIEFS, pantheonCost, takenBeliefs } from './religion';
 import { recordReplay } from './replay';
 import { GOLDEN_SPEEDS, type City, type Game, type Player, type Production, type Unit } from './state';
-import { sideName, sides, teamOf, teammates } from './teams';
+import { masterOf, sameSide, sideName, sides, teamOf, teammates } from './teams';
+import { breakFree, release, vassalsTurn } from './vassals';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { eraStartOf, scenarioOf, startEraOf } from './starts';
 import { startSequence, waitsFor, warBegun } from './turns';
@@ -94,6 +95,9 @@ export type Order =
   | { t: 'answer'; offer: number; accept: boolean }
   | { t: 'denounce'; target: number }
   | { t: 'embargo'; target: number; lift?: boolean }
+  /** A vassal's declaration of independence; a master setting a vassal free (`vassals.ts`). */
+  | { t: 'independence' }
+  | { t: 'release'; target: number }
   | { t: 'automate'; unit: number; mode: 'work' | 'explore' | null }
   | { t: 'ready'; ready: boolean };
 
@@ -895,6 +899,8 @@ const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }
   answer: { offer: 'int', accept: 'bool' },
   denounce: { target: 'int' },
   embargo: { target: 'int', lift: 'bool?' },
+  independence: {},
+  release: { target: 'int' },
   automate: { unit: 'int', mode: ['work', 'explore', null] },
   ready: { ready: 'bool' },
 };
@@ -1517,7 +1523,11 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       const t = game.players[o.target];
       if (!t?.alive || o.target === by || atWar(game, by, o.target)) return fail('Already at war');
       if (teammates(game, by, o.target)) return fail('They are on your team');
-      // A team goes to war together: each of one side's civs with each of the other's (`teams.ts`).
+      // (A vassal's wars are its master's to make; and a master's side doesn't fight its own vassals: `vassals.ts`.)
+      const lord = masterOf(game, by);
+      if (lord) return fail(lord.index === o.target ? `You serve ${lord.name}: declare your independence first` : `You serve ${lord.name}, who makes your wars`);
+      if (sameSide(game, by, o.target)) return fail(masterOf(game, o.target)?.index === by ? `${t.name} is your vassal: set it free first` : `${t.name} is on your side`);
+      // A team (with its vassals) goes to war together: each of one side's civs with each of the other's (`teams.ts`).
       const pairs = sides(game, by, o.target).filter(([a, b]) => !atWar(game, a, b));
       const treaty = Math.max(0, ...pairs.map(([a, b]) => game.players[a].diplomacy.peaceTurns[b] ?? 0));
       if (treaty > 0) return fail(`A peace treaty holds for ${treaty} more turn${treaty === 1 ? '' : 's'}`);
@@ -1541,6 +1551,8 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
             ? { text: `${p.name} has declared war on you!${o.why ? ` “${warWords(game, o.why, by, o.target)}.”` : ''}`, kind: 'war' }
             : teammates(game, r.index, by) || teammates(game, r.index, o.target)
               ? { text: `${p.name} has declared war on ${t.name}: your team is at war with ${teammates(game, r.index, by) ? 'them' : 'theirs'}.`, kind: 'war' }
+              : sameSide(game, r.index, by) || sameSide(game, r.index, o.target)
+                ? { text: `${p.name} has declared war on ${t.name}: you stand with ${sameSide(game, r.index, by) ? p.name : t.name}, at war with ${sameSide(game, r.index, by) ? t.name : p.name} too.`, kind: 'war' }
               : knowsOf(r, p) || knowsOf(r, t)
                 ? { text: `${nameTo(r, p, true)} has declared war on ${nameTo(r, t)}!`, kind: 'war', topic: 'wars' }
                 : null,
@@ -1554,6 +1566,11 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       const t = game.players[o.target];
       if (!t || !atWar(game, by, o.target)) return fail('Not at war');
       if (t.civ === 'barbarian') return fail('The barbarians make no peace');
+      // (A vassal's peace is its master's, where its master is at war too: `vassals.ts`.)
+      const lord = masterOf(game, by);
+      if (lord && atWar(game, lord.index, o.target)) return fail(`You serve ${lord.name}, who makes your peace`);
+      const served = masterOf(game, o.target);
+      if (served && atWar(game, served.index, by)) return fail(`${t.name} serves ${served.name}: make peace with ${served.name}`);
       // A bot weighs an offer once a turn; a person gets it, and it takes effect when both have offered.
       const mine = ((p as Player & { peaceOffer?: number[] }).peaceOffer ??= []);
       const theirs = (t as Player & { peaceOffer?: number[] }).peaceOffer ?? [];
@@ -1592,6 +1609,14 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
     case 'embargo': {
       const them = game.players[o.target];
       const why = o.lift ? liftEmbargo(game, p, them) : them ? declareEmbargo(game, p, them) : 'Not a civ to embargo';
+      return why ? fail(why) : OK;
+    }
+    case 'independence': {
+      const why = breakFree(game, p);
+      return why ? fail(why) : OK;
+    }
+    case 'release': {
+      const why = release(game, p, game.players[o.target]);
       return why ? fail(why) : OK;
     }
     case 'automate': {
@@ -1746,6 +1771,7 @@ function complete(game: Game, c: City, item: Production) {
 export function endTurn(game: Game) {
   for (const p of game.players) if (p.alive && p.civ !== 'barbarian') playerTurn(game, p);
   shareResearch(game);
+  vassalsTurn(game);
   diplomacyTurn(game);
   strandedAircraft(game);
   // Units: fresh moves, healing, work done, paths followed.
@@ -2161,10 +2187,13 @@ export function checkVictory(game: Game) {
   if (game.settings.victories.domination && !(unfounded && standing.length > 1)) {
     const capitals = game.cities.filter((c) => c.founder !== undefined && game.players[c.founder] && !game.players[c.founder].cityState && game.cities.filter((x) => x.founder === c.founder).sort((a, b) => a.id - b.id)[0] === c);
     for (const p of standing) {
-      // (A team holds them together, and wins together.)
-      const ours = (i: number) => i === p.index || teammates(game, i, p.index);
+      // (A team holds them together, and wins together; a side's vassals hold theirs for it, and win
+      // nothing of their own: `vassals.ts`.)
+      if (masterOf(game, p.index)) continue;
+      const ours = (i: number) => i === p.index || sameSide(game, i, p.index);
       if (standing.some((o) => !ours(o.index)) && !capitals.every((c) => ours(c.owner))) continue;
-      if (majors.some((o) => !ours(o.index))) {
+      // (Someone conquered: a civ not on its team, its vassals among them.)
+      if (majors.some((o) => o !== p && !teammates(game, o.index, p.index))) {
         game.over = { winner: p.index, how: 'domination' };
         noteAll(game, { text: `${sideName(p)} has conquered the world!`, kind: 'war' });
         return;
@@ -2175,7 +2204,8 @@ export function checkVictory(game: Game) {
   // (A team's score is its civs' together; its best civ stands for it.)
   if (game.settings.victories.score && game.turn > game.settings.turnLimit) {
     const sideScore = (p: Player) => teamOf(game, p.index).reduce((n, m) => n + score(game, m), 0);
-    const best = living.sort((a, b) => sideScore(b) - sideScore(a) || score(game, b) - score(game, a))[0];
+    // (A vassal wins nothing of its own.)
+    const best = living.filter((p) => !masterOf(game, p.index)).sort((a, b) => sideScore(b) - sideScore(a) || score(game, b) - score(game, a))[0];
     if (best) {
       game.over = { winner: best.index, how: 'score' };
       noteAll(game, { text: `Time is up: ${sideName(best)} wins with the highest score.`, kind: 'good' });

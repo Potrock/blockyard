@@ -1,13 +1,13 @@
 import { atWar } from './core';
 import type { Order } from './game';
 import type { Game, Player } from './state';
-import { teamOf } from './teams';
+import { sideOf } from './teams';
 
 /**
  * Hybrid turns, Civilization V's: everyone plays at once, but people at war with each other take
  * their turns one side at a time, so a war isn't a race of clicks. Each turn the people at war with
- * another person are put in order (a side a segment: teammates play theirs together), the order
- * turning round a place each turn so no one always moves first. The side whose segment it is plays;
+ * another person are put in order (a side a segment: teammates, and a master and its vassals, play
+ * theirs together), the order turning round a place each turn so no one always moves first. The side whose segment it is plays;
  * the others at war wait (their cities, research and diplomacy are theirs meanwhile, not their units).
  * Everyone else, and the bots, play at once as before. A side's segment ends when each of it has
  * ended the turn (or gone); the turn ends when the last segment has, and everyone else is done.
@@ -32,7 +32,7 @@ function sidesInOrder(game: Game, warring: number[], first?: number): number[][]
   const sides: number[][] = [];
   for (const i of warring) {
     if (sides.some((s) => s.includes(i))) continue;
-    sides.push(teamOf(game, i).filter((m) => warring.includes(m.index)).map((m) => m.index));
+    sides.push(sideOf(game, i).filter((m) => warring.includes(m.index)).map((m) => m.index));
   }
   if (first !== undefined) {
     const at = sides.findIndex((s) => s.includes(first));

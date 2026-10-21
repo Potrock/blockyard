@@ -1,4 +1,4 @@
-import { atWar, knows } from '../core';
+import { atWar, citiesOf, knows } from '../core';
 import { BUILDINGS } from '../buildings';
 import { askOf, cannotEmbargo, dealTurns, dealer, declinedLately, denounced, embargoOn, embargoTurns, friends, hasMet, lentLuxuries, luxuryCopies, pacted, relationsOf, researchCost, spareIncome, tradeable, type Deal, type DealItem } from '../diplomacy';
 import { embargoed } from '../congress';
@@ -10,7 +10,7 @@ import { TECHS } from '../techs';
 import { UNIT_LIST } from '../units';
 import { act, makeCtx, mightOf, type Ctx } from './context';
 import { opinionOf } from './opinion';
-import { warScore, wantsPeace } from './strategy';
+import { kneels, warScore, wantsPeace } from './strategy';
 
 /**
  * The bots at the table. A deal is weighed item by item in gold (a luxury it lacks is worth its
@@ -75,6 +75,12 @@ function itemValue(ctx: Ctx, other: Player, item: DealItem, opinion: number): nu
       return friends(game, me, other.index) && opinion >= 22 ? 40 + (ctx.wars.length ? 40 : 0) : -400;
     case 'peace':
       return wantsPeace(ctx, other.index) ? 250 : -(120 + Math.max(0, warScore(ctx, other.index)) * 5);
+    case 'vassal':
+      // Its own capitulation only when beaten (`kneels`), and a relief then; another's, worth more
+      // than its cities taken one by one (its tribute, its army beside the bot's, its capital toward
+      // a domination victory).
+      if (mine) return kneels(ctx, other.index) ? 300 : -10000;
+      return 250 + citiesOf(game, other.index).length * 60 + (ctx.mem.aim === 'domination' ? 150 : 0);
   }
 }
 
@@ -97,6 +103,7 @@ function refusal(item: DealItem, me: number): string | null {
   if (item.kind === 'friendship') return "we don't know you well enough for friendship";
   if (item.kind === 'pact') return 'a pact is only for our closest friends';
   if (item.kind === 'peace') return 'this war is not over';
+  if (item.kind === 'vassal' && item.from === me) return 'we would sooner fall than kneel';
   if (item.kind === 'luxury' && item.from === me) return 'we will not give up our only copy';
   if (item.kind === 'goldPerTurn' && item.from === me) return "we can't pay that much a turn";
   if (item.kind === 'strategic' && item.from === me) return `we need our ${item.resource} ourselves`;
@@ -110,8 +117,10 @@ function weigh(ctx: Ctx, deal: Deal): { value: number; opinion: number; worst: D
   let value = 0;
   let worst: DealItem | null = null;
   let low = Infinity;
+  // (A capitulation is the deal's peace: the peace that comes with it is worth nothing more.)
+  const kneeling = deal.items.some((x) => x.kind === 'vassal');
   for (const item of deal.items) {
-    const v = itemValue(ctx, other, item, opinion);
+    const v = item.kind === 'peace' && kneeling ? 0 : itemValue(ctx, other, item, opinion);
     value += v;
     if (v < low) (low = v), (worst = item);
   }
@@ -134,12 +143,14 @@ export function evaluate(game: Game, bot: Player, deal: Deal): { accept: boolean
   const { value, opinion, worst } = weigh(ctx, deal);
   // A teammate gets what it asks for, short of what the bot can't spare (`-10000` items) or more than a little.
   // (On a team with people, they make the team's peace: none bought from its bot, `wantsPeace`.)
-  if (deal.items.some((x) => x.kind === 'peace') && teamedWithPeople(game, bot.index)) return { accept: false, why: 'our team’s people make our peace' };
+  if (deal.items.some((x) => x.kind === 'peace' || x.kind === 'vassal') && teamedWithPeople(game, bot.index)) return { accept: false, why: 'our team’s people make our peace' };
   if (teammates(game, bot.index, other.index)) return value > -60 ? { accept: true } : { accept: false, why: (worst && refusal(worst, bot.index)) ?? 'we need that ourselves' };
   const onlyGifts = deal.items.every((x) => x.kind === 'peace' || ('from' in x && x.from === other.index));
-  if (opinion <= -25 && !onlyGifts) return { accept: false, why: 'we have nothing to discuss with you' };
-  if (denounced(game, bot.index, other.index) && !onlyGifts) return { accept: false, why: 'we have denounced you' };
-  const short = -(value + opinion * 3);
+  // (Beaten, a leader kneels to the one it hates as readily as to any: it has no choice.)
+  const beaten = deal.items.some((x) => x.kind === 'vassal' && x.from === bot.index) && kneels(ctx, other.index);
+  if (opinion <= -25 && !onlyGifts && !beaten) return { accept: false, why: 'we have nothing to discuss with you' };
+  if (denounced(game, bot.index, other.index) && !onlyGifts && !beaten) return { accept: false, why: 'we have denounced you' };
+  const short = -(value + (beaten ? 0 : opinion * 3));
   if (short <= 0) return { accept: true };
   const flat = worst && refusal(worst, bot.index);
   if (flat && short > 200) return { accept: false, why: flat };
