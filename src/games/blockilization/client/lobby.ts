@@ -1,11 +1,11 @@
 import { lobbySides, TEAMS, type LobbyAction, type LobbySeat, type LobbyView } from '../protocol';
-import { roomCode, type SavedGame } from '../saves';
+import { KEEP_DISCARDED, roomCode, type SavedGame } from '../saves';
 import { CIVS } from '../rules/civs';
 import { MAP_SIZES, mapTypeWord, type MapType, type Settings, type Speed } from '../rules/state';
 import { VICTORIES } from './concepts';
 import { emblemEl, icon } from './icons';
 import { openPedia } from './pedia';
-import { ask, TEAM_COLORS } from './store';
+import { ask, store, TEAM_COLORS } from './store';
 import { h, tile, type El } from './ui';
 
 /**
@@ -174,23 +174,42 @@ export interface GameLinks {
 }
 
 /**
- * Every unfinished game this person has a seat in, wherever it was played: its turn, their civ, who
+ * The games a person has a seat in, to go back to: each with their civ in it, which turn it's at, who
  * else is in it and when it was last played (or that it's being played now). Each is played at an
  * address of its own: Play goes there (Join, while it's being played), and its link brings friends.
- * Anyone with a seat in one can throw it away, once they've said so. (On a platform whose screens
- * can't go to another room, the host carries a game on here instead.)
+ * Anyone in one can take it back to the start of an earlier turn while nobody's playing it (its
+ * backups), or discard it: off their list, the others' still, for a week to bring back. (On a
+ * platform whose screens can't go to another room, the host carries a game on here instead.)
  */
 export function savedGamesBox(L: LobbyView, isHost: boolean, send: (a: LobbyAction) => void, links: GameLinks | null): El | null {
-  if (!L.saves?.length) return null;
+  const games = (L.saves ?? []).filter((g) => !g.discarded);
+  if (!games.length) return null;
   const discard = (g: SavedGame) =>
-    ask(`Throw away this game (turn ${g.turn}${g.with.length ? `, with ${g.with.join(', ')}` : ''})? It goes for everyone in it, and can’t be carried on again.`, 'Throw it away', () => send({ a: 'discard', id: g.id }));
+    ask(
+      g.with.length
+        ? `Take this game off your list (turn ${g.turn}, with ${g.with.join(', ')})? They can play on without you, and you can bring it back from Discarded for a week.`
+        : `Discard this game (turn ${g.turn})? You can bring it back from Discarded for a week; then it’s gone.`,
+      'Discard',
+      () => send({ a: 'discard', id: g.id }),
+    );
+  const restore = (g: SavedGame, turn: number) =>
+    ask(`Take this game back to the start of turn ${turn}? Everything played since is lost${g.with.length ? ', for everyone in it: they’re told who did' : ''}.`, `Back to turn ${turn}`, () => {
+      turnsOf = null;
+      send({ a: 'restore', id: g.id, turn });
+    });
+  const toggleTurns = (g: SavedGame) => {
+    turnsOf = turnsOf === g.id ? null : g.id;
+    store.changed++;
+  };
   return h(
     'div.lb-saves',
     {},
-    h('div.cv-label.sect', {}, L.saves.length === 1 ? 'Your game' : 'Your games'),
-    ...L.saves.map((g) => {
+    h('div.cv-label.sect', {}, games.length === 1 ? 'Your game' : 'Your games'),
+    ...games.flatMap((g) => {
       const civ = g.civ ? CIVS[g.civ] : null;
-      return h(
+      // (Taken back only while nobody's playing it.)
+      const earlier = g.backups.length > 0 && !g.live;
+      const row = h(
         `div.lb-save${g.live ? '.live' : ''}`,
         {},
         civ ? emblemEl(civ.id, 26) : h('span.lb-nociv.small', {}, '?'),
@@ -205,7 +224,43 @@ export function savedGamesBox(L: LobbyView, isHost: boolean, send: (a: LobbyActi
         links && roomCode(g.id) && h('button.cv-btn.small', { onclick: () => links.copy(g), title: 'Copy the link to this game, for friends to join you' }, 'Copy link'),
         !links && isHost && !g.live && h('button.cv-btn.gold.small', { onclick: () => send({ a: 'resume', id: g.id }) }, 'Carry on'),
         !links && !isHost && h('small.cv-muted', {}, 'The host can carry it on'),
-        h('button.cv-btn.small', { onclick: () => discard(g), title: 'Throw this game away, for everyone in it' }, 'Discard'),
+        earlier && h('button.cv-btn.small', { onclick: () => toggleTurns(g), title: 'Take the game back to the start of an earlier turn' }, turnsOf === g.id ? 'Hide turns' : 'Earlier turns'),
+        h('button.cv-btn.small', { onclick: () => discard(g), title: g.with.length ? 'Take this game off your list: the others play on' : 'Discard this game (for a week you can bring it back)' }, 'Discard'),
+      );
+      if (!earlier || turnsOf !== g.id) return [row];
+      return [
+        row,
+        h(
+          'div.lb-turns',
+          {},
+          h('small.cv-muted', {}, 'Back to the start of'),
+          ...g.backups.map((t) => h('button.cv-btn.small', { onclick: () => restore(g, t), title: t === g.turn ? 'This turn, as it began' : `${g.turn - t} turn${g.turn - t === 1 ? '' : 's'} back` }, `Turn ${t}`)),
+        ),
+      ];
+    }),
+  );
+}
+
+/** The game whose earlier turns are shown, under its row (its id). */
+let turnsOf: string | null = null;
+
+/** The games a person has discarded this last week, to bring back to their list (then they're gone from it). */
+export function discardedBox(L: LobbyView, send: (a: LobbyAction) => void): El | null {
+  const gone = (L.saves ?? []).filter((g) => g.discarded);
+  if (!gone.length) return null;
+  const until = (at: string) => new Date(Date.parse(at) + KEEP_DISCARDED).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return h(
+    'div.lb-saves',
+    {},
+    h('div.cv-label.sect', {}, 'Discarded'),
+    ...gone.map((g) => {
+      const civ = g.civ ? CIVS[g.civ] : null;
+      return h(
+        'div.lb-save.gone',
+        {},
+        civ ? emblemEl(civ.id, 26) : h('span.lb-nociv.small', {}, '?'),
+        h('div.cv-grow', {}, h('b', {}, `Turn ${g.turn}${civ ? ` · ${civ.name}` : ''}`), h('small.cv-muted', {}, [g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots', `bring it back by ${until(g.discarded!)}`].join(' · '))),
+        h('button.cv-btn.small', { onclick: () => send({ a: 'keep', id: g.id }), title: 'Back on your list of games' }, 'Bring back'),
       );
     }),
   );
@@ -260,6 +315,9 @@ button.lb-team { opacity: .45; cursor: pointer; } button.lb-team.on { opacity: 1
 .lb-save { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(106,184,255,.06); border: 1px solid rgba(106,184,255,.25); }
 .lb-save b { display: block; font-size: 14px; }
 .lb-save.live { border-color: rgba(120,220,140,.45); background: rgba(120,220,140,.07); }
+.lb-save.gone { background: rgba(255,255,255,.03); border-color: var(--line); }
+.lb-save.gone b { color: var(--muted); }
+.lb-turns { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 5px 0 2px 46px; }
 .lb-new, .lb-invite { display: flex; align-items: center; gap: 12px; margin: 4px 0 8px; padding: 10px 12px; background: rgba(242,193,78,.07); border: 1px solid rgba(242,193,78,.35); border-radius: 10px; }
 .lb-invite { background: rgba(106,184,255,.06); border-color: rgba(106,184,255,.3); }
 .lb-new b, .lb-invite b { display: block; font-size: 16px; }

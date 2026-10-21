@@ -32,7 +32,7 @@ import { terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
 import { reshapeEdits, seasonal, seasonalSpots } from './seasons';
 import { seasonAt, type Season } from './rules/disasters';
 import { cityInfo, mapWire, statsFor, viewFor, yieldsWire } from './views';
-import { autoKey, autosaveTurns, forgetGame, gameId, gameKey, inGame, moveRoomSaves, playedElsewhere, renameGame, roomCode, saveGame, savedGames, SaveThrottle, type Saved } from './saves';
+import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, gameNote, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, stillPlayed, tidyGames, type Saved } from './saves';
 
 /**
  * Blockilization's server: the lobby (each person picks a civilization, the host sets the map and how
@@ -153,7 +153,7 @@ let listsAt = 0;
 function refreshLists(game: GameContext) {
   for (const p of humans(game)) {
     const key = keyOf(p);
-    const brief = JSON.stringify(savedGames(game.store, key).map((g) => [g.id, g.turn, g.live, g.civ, g.with]));
+    const brief = JSON.stringify(savedGames(game.store, key).map((g) => [g.id, g.turn, g.live, g.civ, g.with, g.backups, g.discarded]));
     if (listed.get(key) === brief) continue;
     const first = !listed.has(key);
     listed.set(key, brief);
@@ -587,12 +587,32 @@ function startNew(game: GameContext) {
 const SAVE_EVERY = 5;
 const saves = new SaveThrottle(SAVE_EVERY);
 
+/** The mark of this room's last save of its game (`GameNote.mark`): another's change to it since (a turn taken back) shows. */
+let wrote: string | null = null;
+
 /** The game saved now (a turn's end, the game begun, the last person gone). */
 function save(game: GameContext, open = true) {
   if (!civGame || !playing) return;
-  saveGame(game.store, playing, game.room, { game: civGame, seats }, new Date(), open);
+  // (Whoever's here, playing it again, has it back on their list if they'd discarded it.)
+  const here = open ? humans(game).map(keyOf) : [];
+  wrote = saveGame(game.store, playing, game.room, { game: civGame, seats }, new Date(), open, here)?.mark ?? null;
   saves.saved(game.clock.now);
 }
+
+/**
+ * The game as saved, if it's changed since this room last saved it: taken back a turn from the
+ * lobby while the room was empty, and still going (a room stops a minute after its last person
+ * leaves). Whoever comes back plays it as it is now, not as this room had it.
+ */
+function changedSince(game: GameContext): { game: Game; seats: LobbySeat[] } | null {
+  if (!playing || !wrote || gameNote(game.store, playing)?.mark === wrote) return null;
+  const saved = game.store.get<Saved<Game> & { seats: LobbySeat[] }>(gameKey(playing));
+  return saved?.game && Array.isArray(saved.seats) && !saved.game.over ? { game: saved.game, seats: saved.seats } : null;
+}
+
+/** Seconds between a room's word that its game's still being played, while anyone's in it (`stillPlayed`). */
+const STILL_EVERY = 30;
+let stillAt = 0;
 
 /** Something changed (an order, a pin): saved now, or with what comes in the next few seconds. */
 function saveSoon(game: GameContext) {
@@ -600,20 +620,21 @@ function saveSoon(game: GameContext) {
 }
 
 /**
- * Autosaves, for a game with one person in it (with more, one can't take a turn back for all): the
- * game as each of the last few turns began, any of which they can go back to from the game's menu.
- * A late game's save is a few hundred kilobytes (about 410 KB at turn 330 on a large map), so a
- * few are kept, not more; they go when the game's over, a new one starts or the save's discarded.
+ * Backups, for every game: the game as a turn began, a few of them (`backupsKept`), that anyone in
+ * it can take it back to from their games' list while it isn't being played, and one person playing
+ * alone from the game's menu (with more, one can't take a turn back for all while they play). A late
+ * game's save is a few hundred kilobytes (about 410 KB at turn 330 on a large map), and every room
+ * of the game holds every game's data, so three are kept, not more; they go when the game's over.
  */
-const AUTOSAVES = 3;
 /** Whether one person (no more) plays the game on. */
 const alone = () => !!civGame && civGame.players.filter((p) => p.user).length === 1;
 
 function autosave(game: GameContext) {
   if (!civGame || !playing) return;
-  if (!alone()) return clearAutosaves(game);
   game.store.set(autoKey(playing, civGame.turn), { game: civGame, seats });
-  for (const t of autosaveTurns(game.store, playing).slice(AUTOSAVES)) game.store.delete(autoKey(playing, t));
+  const turns = autosaveTurns(game.store, playing);
+  const kept = backupsKept(turns);
+  for (const t of turns) if (!kept.has(t)) game.store.delete(autoKey(playing, t));
 }
 
 /** The autosaves gone (those after `after`, if given: a future no longer, once an earlier turn's taken up again). */
@@ -699,8 +720,7 @@ function handOn(game: GameContext, timeUp: boolean): boolean {
 
 /**
  * Someone watching takes a bot's place: its civilization is theirs to play from now on (with its
- * team, its research, all it has), as Civilization V lets a person join a game under way. The
- * autosaves go: with another person in it, no one takes a turn back for all.
+ * team, its research, all it has), as Civilization V lets a person join a game under way.
  */
 function takeOver(game: GameContext, player: Player, data: unknown) {
   if (!civGame || phase !== 'playing' || indexOf(player) >= 0) return;
@@ -718,7 +738,6 @@ function takeOver(game: GameContext, player: Player, data: unknown) {
   const seat = seats.find((s) => s.bot && s.civ === t.civ);
   const mine: LobbySeat = { key, name: player.name, civ: t.civ, bot: false, here: true, team: seat?.team ?? t.team ?? null };
   seats = seat ? seats.map((s) => (s === seat ? mine : s)) : [...seats, mine];
-  clearAutosaves(game);
   noteAll(civGame, (r) => (r === t ? { text: `You have taken ${was}'s place: the ${CIVS[t.civ]?.name ?? t.civ} are yours to lead.`, kind: 'good' } : { text: `${player.name} has taken ${knowsOf(r, t) ? `${was}'s place, leading the ${CIVS[t.civ]?.name ?? t.civ}` : 'the place of a leader you haven’t met'}.`, kind: 'info' }));
   yieldsSent.delete(key);
   tilesSent.delete(key);
@@ -834,10 +853,21 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
       return;
     }
     case 'discard':
-      // Only someone with a seat in it can throw a saved game away.
+      // Off their list (the others in it play on), for a week to bring back (`saves.ts`).
       if (typeof a.id !== 'string' || !inGame(game.store, a.id, key)) return;
-      forgetGame(game.store, a.id);
+      discardGame(game.store, a.id, key);
       break;
+    case 'keep':
+      if (typeof a.id !== 'string' || !inGame(game.store, a.id, key)) return;
+      keepGame(game.store, a.id, key);
+      break;
+    case 'restore': {
+      // Anyone in a game takes it back to the start of a turn it has a backup of, while no one's playing it; everyone in it is told.
+      if (typeof a.id !== 'string' || typeof a.turn !== 'number' || !inGame(game.store, a.id, key) || playedNow(game.store, a.id)) return;
+      const who = p.name;
+      restoreTurn(game.store, a.id, a.turn, new Date(), (s) => noteAll(s.game as Game, { text: `${who} took the game back to the start of turn ${a.turn}.`, kind: 'info' }));
+      break;
+    }
   }
   sendLobby(game);
 }
@@ -1020,6 +1050,7 @@ export default defineServer(shared, {
     civGame = null;
     pending = null;
     playing = null;
+    wrote = null;
     botQueue = [];
     autoBots = true;
     teamsOn = false;
@@ -1031,14 +1062,6 @@ export default defineServer(shared, {
     listed.clear();
     // (For the headless tests, in development: the game as it stands, and its phase.)
     if (import.meta.env.DEV) (globalThis as unknown as { __civ: unknown }).__civ = { game: () => civGame, phase: () => phase };
-    // (A room of its own: nothing of another room's left over, where rooms share this code, as the headless tests' do.)
-    phase = 'lobby';
-    civGame = null;
-    playing = null;
-    pending = null;
-    seats = [];
-    host = null;
-    saves.reset();
     fightHooks.fought = (g, by, combat) => {
       if (g === civGame) showFights(game, by, combat);
     };
@@ -1074,6 +1097,12 @@ export default defineServer(shared, {
         markAll(game);
       }
       sendLobby(game);
+      // Back in a room that had emptied, whose game was taken back a turn meanwhile: it's played as it's saved now.
+      const changed = phase === 'playing' && humans(game).every((p) => p === player) ? changedSince(game) : null;
+      if (changed) {
+        pending = changed;
+        game.restart();
+      }
     });
     game.events.on('playerReady', ({ player }) => {
       player.hud.widget('board', {});
@@ -1366,7 +1395,11 @@ export default defineServer(shared, {
     playing = null;
     leftAt.clear();
     listed.clear();
-    if (!movedOld) moveRoomSaves(game.store);
+    // (Once a room: the saves from before games had ids moved to theirs, and games discarded by all a week ago gone.)
+    if (!movedOld) {
+      moveRoomSaves(game.store);
+      tidyGames(game.store);
+    }
     movedOld = true;
     // A room named for a saved game opens it: its link is the way back to it, for everyone in it.
     const own = ownGame(game);
@@ -1453,6 +1486,11 @@ export default defineServer(shared, {
     if (phase !== 'playing' || !civGame) return;
     // What waited to be saved (orders a moment ago), once it's been long enough since the last save.
     if (saves.tick(game.clock.now)) save(game);
+    // (Played, if quietly: said every half a minute while anyone's here. A restarted room's clock begins again.)
+    if (playing && humans(game).length && (game.clock.now - stillAt > STILL_EVERY || game.clock.now < stillAt)) {
+      stillAt = game.clock.now;
+      stillPlayed(game.store, playing);
+    }
     // The bots play, one a tick; once they all have, everyone sees what they did.
     const bot = botQueue.shift();
     if (bot !== undefined) {
