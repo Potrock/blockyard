@@ -223,6 +223,23 @@ export function passable(ctx: Ctx, u: Unit, t: number, passing = false): boolean
 }
 
 /**
+ * `route`'s working memory, kept between searches (a search's marks told apart by its number): whether
+ * a unit may pass each tile it's looked at, and the danger there (`dangerCost`), the same from
+ * whichever side it's stepped onto, so each is worked out once a search, not once a step.
+ */
+const onto = {
+  mark: new Uint32Array(0),
+  open: new Uint8Array(0),
+  danger: new Float64Array(0),
+  search: 0,
+  /** A new search over a map of this many tiles: its number. */
+  begin(size: number): number {
+    if (this.mark.length < size) Object.assign(this, { mark: new Uint32Array(size), open: new Uint8Array(size), danger: new Float64Array(size), search: 0 });
+    return ++this.search;
+  },
+};
+
+/**
  * The way a unit would take to a tile (as the rules would find it, but from the turn's lookups); null if
  * there's none. Round its own units where it can (through them where it can't); and a land unit ashore
  * going somewhere on its own land keeps to the land, through them if need be, rather than take to the
@@ -236,16 +253,28 @@ export function route(ctx: Ctx, u: Unit, to: number): number[] | null {
   const water = (t: number) => !!TERRAINS[game.tiles[t].terrain].water;
   const zones = warZones(ctx);
   const ashore = land && !u.embarked && sameLand(game, u.tile, to);
-  const way = (passing: boolean) =>
-    path(game.grid, u.tile, to, (a, b) => {
+  // (Nowhere beside the tile it could step onto it from, even through its own units: a peak, the open
+  // ocean before Astronomy, a tile ringed by others' units. No way there, without two searches of the
+  // map to find so.)
+  if (u.tile !== to && !neighbours(game.grid, to).some((n) => Number.isFinite(stepCost(game, u, n, to)) && (n === u.tile || passable(ctx, u, n, true)))) return null;
+  const way = (passing: boolean) => {
+    // (What a tile is to the unit, whichever side it's stepped onto from: once a search.)
+    const search = onto.begin(game.tiles.length);
+    return path(game.grid, u.tile, to, (a, b) => {
       const c = stepCost(game, u, a, b);
       if (!Number.isFinite(c)) return Infinity;
-      if (b !== to && !passable(ctx, u, b, passing)) return Infinity;
+      if (onto.mark[b] !== search) {
+        onto.mark[b] = search;
+        onto.open[b] = b === to || passable(ctx, u, b, passing) ? 1 : 0;
+        if (onto.open[b] && zones) onto.danger[b] = dangerCost(zones, b, moves, land && water(b));
+      }
+      if (!onto.open[b]) return Infinity;
       // (Through its own units on its own land, it's to keep to the land: the water costs it dear.)
       const step = (c >= ALL ? moves : c) + (passing && ashore && water(b) ? 10 : 0);
       // (Out of enemy cities' fire and away from enemy soldiers where a way round costs little more, as the rules' own paths.)
-      return zones ? step + dangerCost(zones, b, moves, land && water(b)) : step;
+      return zones ? step + onto.danger[b] : step;
     }, 2500);
+  };
   const round = way(false);
   if (round && (!ashore || !round.some(water))) return round;
   // (Hemmed in by its own, or kept to the land: through them.)
