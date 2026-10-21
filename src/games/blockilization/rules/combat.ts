@@ -327,12 +327,13 @@ export function melee(game: Game, u: Unit, target: number): CombatResult | null 
   const died = u.hp <= 0;
   if (killed) {
     die(game, def, u);
-    // The winner moves in (Civ V: melee units advance into the tile), taking any civilian there.
+    // The winner moves in (Civ V: melee units advance into the tile), taking any civilian there;
+    // not past a soldier still holding it (one embarked beside a ship that fell, or a ship behind one).
     if (!died) {
       if (UNITS[u.type].abilities?.includes('kill_heal')) u.hp = Math.min(100, u.hp + 25);
-      const civ = occupants(game, target).civilian;
-      if (civ && civ.owner !== u.owner) capture(game, u, civ);
-      if (!occupants(game, target).military && canStand(game, u.type, target)) {
+      const left = occupants(game, target);
+      if (left.civilian && left.civilian.owner !== u.owner && !left.military) capture(game, u, left.civilian);
+      if (!left.military && canStand(game, u.type, target)) {
         u.tile = target;
         u.embarked = false;
         u.setUp = false;

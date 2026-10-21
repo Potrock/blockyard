@@ -224,7 +224,8 @@ export function drawModels(client: Client, dt: number) {
   // The bots' moves have just come: what's seen of others' marches waits for each civ's turn on the screen.
   const staging = handoverStaging();
   const staged: { s: Shown; owner: number }[] = [];
-  // Units: one per tile on show (a civilian and a soldier together stand aside of each other).
+  // Units: one per tile on show (two together, as a civilian and a soldier, or a ship and a soldier
+  // embarked beside it, stand aside of each other; a third stands between them).
   standing.clear();
   const byTile = new Map<number, UnitWire[]>();
   for (const u of v.units) {
@@ -240,7 +241,7 @@ export function drawModels(client: Client, dt: number) {
       // (One on show: its tile at the copy nearest where it stands, so a move over the seam goes the short way.)
       const c = s ? centreNear(g, t, s.x) : nearest;
       const two = list.length > 1;
-      const spot = UNIT_SPOTS[two ? 1 + Math.min(i, 1) : 0];
+      const spot = UNIT_SPOTS[two && i < 2 ? 1 + i : 0];
       const tx = c.x + spot[0];
       const tz = c.z + spot[1];
       const model = unitModel(u.type);

@@ -5,27 +5,47 @@ import { dangerCost, dangerZones, type Danger } from './danger';
 import { ALL, distance, findWay, neighbours } from './hex';
 import type { Game, Unit } from './state';
 import { FEATURES, HILLS, RAIL_MOVE, ROAD_MOVE, TERRAINS } from './terrain';
-import { isGreatPerson, isMilitary, UNITS } from './units';
+import { isGreatPerson, isMilitary, stackKind, UNITS } from './units';
 
 /**
  * Moving: what each step costs (terrain, features, roads, rivers; the Great Wall's border and the
  * Iroquois' forest paths), who can stand where (one military and one civilian unit to a tile, Civ
- * V's), zones of control (stepping from one tile next to an enemy to another ends the move),
- * embarking onto the sea with Optics, and paths over several turns (wary of enemy cities and
- * soldiers in a war: `danger.ts`). Aircraft don't walk: they're based in cities and aboard carriers
- * (`air.ts`).
+ * V's, and at sea a ship and a soldier embarked beside it), zones of control (stepping from one
+ * tile next to an enemy to another ends the move), embarking onto the sea with Optics, and paths
+ * over several turns (wary of enemy cities and soldiers in a war: `danger.ts`). Aircraft don't
+ * walk: they're based in cities and aboard carriers (`air.ts`).
  */
 
-/** The military unit and the civilian on a tile, if any. */
-export function occupants(game: Game, t: number): { military?: Unit; civilian?: Unit } {
-  const out: { military?: Unit; civilian?: Unit } = {};
+/**
+ * The units on a tile, if any: the military unit (the one an attack meets), the civilian, and at
+ * sea, where a ship and a soldier embarked beside it share a tile (`stackKind`), the other of the
+ * two (`behind`). The ship fights for the soldier in its boat, unless it's a submarine (hidden under
+ * the water, it can't shield what's seen on it).
+ */
+export function occupants(game: Game, t: number): { military?: Unit; behind?: Unit; civilian?: Unit } {
+  const out: { military?: Unit; behind?: Unit; civilian?: Unit } = {};
+  const water = !!TERRAINS[game.tiles[t]?.terrain]?.water;
+  let soldier: Unit | undefined;
+  let boat: Unit | undefined;
   for (const u of game.units) {
     // (Aircraft hold no ground: they're based in cities and aboard carriers, `air.ts`.)
     if (u.tile !== t || isAircraft(u)) continue;
-    if (isMilitary(UNITS[u.type]) && !isGreatPerson(u.type)) out.military = u;
-    else out.civilian = u;
+    const kind = stackKind(u.type, water);
+    if (kind === 'civilian') out.civilian = u;
+    else if (kind === 'embarked') boat = u;
+    else soldier = u;
   }
+  out.military = soldier && boat && UNITS[soldier.type].abilities?.includes('invisible') ? boat : (soldier ?? boat);
+  if (soldier && boat) out.behind = out.military === soldier ? boat : soldier;
   return out;
+}
+
+/** The unit holding the place on a tile that a unit of this type would take there (`stackKind`), if any: one of each to a tile. */
+export function holding(game: Game, type: string, t: number, here = occupants(game, t)): Unit | undefined {
+  const water = !!TERRAINS[game.tiles[t]?.terrain]?.water;
+  const kind = stackKind(type, water);
+  if (kind === 'civilian') return here.civilian;
+  return [here.military, here.behind].find((m) => !!m && stackKind(m.type, water) === kind);
 }
 
 /** Every civilian on a tile: a city may hold more than one (what it builds, traders waiting to set off). */
@@ -122,7 +142,8 @@ export function canEnter(game: Game, u: Unit, t: number, passing = false): boole
   // civilian: else a worker resting there kept the traders out, their routes unrun, and a great person
   // was born outside and had to walk in.)
   const waits = (!!UNITS[u.type].abilities?.includes('trade_route') || isGreatPerson(u.type)) && city?.owner === u.owner;
-  if (!passing && (military ? here.military && here.military !== u : here.civilian && here.civilian !== u && !waits)) return false;
+  const held = holding(game, u.type, t, here);
+  if (!passing && held && held !== u && (military || !waits)) return false;
   // Closed borders: no entering another civ's land in peace without open borders (Civ V's).
   const owner = game.tiles[t].owner;
   if (owner >= 0 && owner !== u.owner && !atWar(game, u.owner, owner)) {
@@ -171,7 +192,7 @@ export function planPath(game: Game, u: Unit, to: number, anywhere = false): num
 
 /** Whether one of a unit's own side's units of its kind holds a tile and stays there (fortified, asleep, on alert, at work, with no way to go). */
 function staysThere(game: Game, u: Unit, t: number): boolean {
-  const here = occupants(game, t)[isMilitary(UNITS[u.type]) && !isGreatPerson(u.type) ? 'military' : 'civilian'];
+  const here = holding(game, u.type, t);
   return !!here && here !== u && here.owner === u.owner && !here.path?.length && (!!here.stance || !!here.work);
 }
 
@@ -245,7 +266,7 @@ export function advance(game: Game, u: Unit): void {
         }
       }
       // Waiting with all its moves behind one of its own that's set to stay (fortified, asleep, on alert): said, as that one won't move on by itself.
-      const ahead = occupants(game, next)[isMilitary(UNITS[u.type]) && !isGreatPerson(u.type) ? 'military' : 'civilian'];
+      const ahead = holding(game, u.type, next);
       if (!zoc && u.moves >= (u.turnMoves ?? Infinity) && ahead?.owner === u.owner && ahead.stance && !ahead.path?.length) {
         const how = ahead.stance === 'fortify' ? 'fortified' : ahead.stance === 'sleep' ? 'asleep' : 'on alert';
         note(game, u.owner, { text: `Your ${UNITS[u.type].name} waits behind your ${UNITS[ahead.type].name} (${how}): move that one, or give this one new orders.`, at: u.tile, kind: 'info' });
@@ -320,13 +341,13 @@ function throughOwn(game: Game, u: Unit): boolean {
 }
 
 /**
- * The unit of a unit's own side and kind (soldier or civilian) on a tile next to it, that the two
- * could swap places with (Civ V's): each able to step onto the other's tile, ignoring the other.
+ * The unit of a unit's own side and kind (soldier or civilian; at sea, ship or embarked soldier) on
+ * a tile next to it, that the two could swap places with (Civ V's): each able to step onto the
+ * other's tile, ignoring the other.
  */
 export function swapWith(game: Game, u: Unit, to: number): Unit | null {
   if (!neighbours(game.grid, u.tile).includes(to) || u.moves <= 0) return null;
-  const military = isMilitary(UNITS[u.type]) && !isGreatPerson(u.type);
-  const other = occupants(game, to)[military ? 'military' : 'civilian'];
+  const other = holding(game, u.type, to);
   if (!other || other.owner !== u.owner || other === u || isAircraft(other) || other.carrier !== undefined) return null;
   if (!Number.isFinite(stepCost(game, u, u.tile, to)) || !Number.isFinite(stepCost(game, other, to, u.tile))) return null;
   // (Each may stand where the other stood: its own kind's place there is the one being left.)

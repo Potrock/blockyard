@@ -139,6 +139,30 @@ const RIVERS: LonLat[][] = [
   [[23, -12], [25, -17], [30, -16], [35, -18]], // the Zambezi
 ];
 
+/**
+ * The narrow seas, along their middles: at a map's coarse size they'd fill in (a tile half land is
+ * land), joining Africa to Europe and Arabia to Africa, so they're drawn on as sea, a tile wide.
+ */
+const SEAS: LonLat[][] = [
+  [[-5.5, 36], [0, 37], [5, 38], [10, 38.5], [13, 37], [18, 35], [24, 34.5], [30, 33.5], [34.5, 33.5]], // the Mediterranean
+  [[12.5, 44], [15, 43], [18.5, 41]], // the Adriatic
+  [[23, 39], [25, 38.5], [26, 40]], // the Aegean
+  [[28, 43], [31, 43.5], [35, 43], [39, 42.5], [41.5, 41.5]], // the Black Sea
+  [[34, 28], [36.5, 24], [39, 19], [41.5, 15], [43.3, 12.6]], // the Red Sea
+  [[48.5, 29.5], [50.5, 27.5], [53, 25.5], [56.5, 26.5]], // the Persian Gulf
+  [[50.5, 46], [51, 43], [51, 40], [52, 38]], // the Caspian
+  [[-5, 49.5], [0, 50], [2, 51.5], [4, 54], [5, 57.5]], // the Channel and the North Sea
+  [[11, 55], [15, 55.5], [19, 57.5], [20, 60], [22, 63], [24, 65]], // the Baltic
+  [[-80, 60], [-86, 58], [-89, 60], [-85, 63]], // Hudson Bay
+];
+
+/** The tiles the narrow seas run over. */
+export function earthSeas(g: Grid): Set<number> {
+  // (Not over a great river's tiles: at the coarse sizes the Red Sea runs a tile from the Nile.)
+  const rivers = new Set(earthRivers(g).flat());
+  return new Set(SEAS.flatMap((s) => tilesAlong(g, s)).filter((t) => !rivers.has(t)));
+}
+
 /** Each tile's rise from the ranges: their crests, and a little the land beside them. */
 export function earthRidges(g: Grid, neighbours: (t: number) => number[]): number[] {
   const out = new Array<number>(g.width * g.height).fill(0);

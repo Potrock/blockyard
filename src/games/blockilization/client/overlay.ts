@@ -618,7 +618,7 @@ export function drawOverlay(now: number) {
     }
   }
 
-  // Units: a flag each (civilian and military on one tile side by side).
+  // Units: a flag each (those on one tile side by side: a civilian and a soldier, a ship and an embarked soldier).
   const byTile = new Map<number, typeof view.units>();
   for (const u of view.units) {
     if (!known[u.tile]?.visible && u.owner !== me()) continue;
@@ -639,13 +639,14 @@ export function drawOverlay(now: number) {
     const garrison = !!cityAt(t) && !!known[t];
     const banner = garrison ? toScreen(c.x, tileY(t) + 6, c.z) : null;
     list.forEach((u, i) => {
-      const off = list.length > 1 ? (i === 0 ? -0.9 : 0.9) : 0;
+      const side = i - (list.length - 1) / 2;
+      const off = side * 1.8;
       // (On the march, over its model.)
       const walking = marchingAt(u.id);
       const s = walking
         ? toScreen(walking.x, walking.y + 4.4, walking.z)
         : banner
-          ? { x: banner.x + (list.length > 1 ? (i === 0 ? -1 : 1) * (fw / 2 + 2) : 0), y: banner.y + bannerH / 2 + 9 * ui + fw / 2 }
+          ? { x: banner.x + side * (fw + 4), y: banner.y + bannerH / 2 + 9 * ui + fw / 2 }
           : toScreen(c.x + off, tileY(t) + 4.4, c.z);
       if (!s) return;
       flags.push({ u, t, x: s.x, y: s.y });

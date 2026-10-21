@@ -2,7 +2,7 @@ import type { UnitWire, View } from '../protocol';
 import { dangerCost, dangerZones, type Danger } from '../rules/danger';
 import { ALL, findWay, neighbours, type Walker } from '../rules/hex';
 import { FEATURES, HILLS, RAIL_MOVE, ROAD_MOVE, TERRAINS } from '../rules/terrain';
-import { isGreatPerson, isMilitary, UNITS } from '../rules/units';
+import { isGreatPerson, isMilitary, stackKind, UNITS } from '../rules/units';
 import { cityAt, enemyAt, me, outOfReach, store } from './store';
 
 /**
@@ -54,13 +54,13 @@ function mover(u: UnitWire, view: View) {
     if (to.river && !from.river && !techs.has('construction')) c = ALL;
     return c;
   };
-  /** Whether it could stop on a tile (or, `passing`, go through it: its own side's units don't bar the way): one unit of each kind to a tile, no foreign city, closed borders. */
+  /** Whether it could stop on a tile (or, `passing`, go through it: its own side's units don't bar the way): one unit of each kind to a tile (`placeOn`), no foreign city, closed borders. */
   const canEnter = (t: number, passing = false): boolean => {
     for (const x of view.units) {
       if (x.tile !== t || x.id === u.id) continue;
       const xType = UNITS[x.type];
       const xMilitary = !!xType && isMilitary(xType) && !isGreatPerson(x.type);
-      if (x.owner !== me() ? xMilitary || !military || passing || !view.players[x.owner]?.war : xMilitary === military && !passing) return false;
+      if (x.owner !== me() ? xMilitary || !military || passing || !view.players[x.owner]?.war : placeOn(x, t) === placeOn(u, t) && !passing) return false;
     }
     const city = cityAt(t);
     if (city && city.owner !== me()) return false;
@@ -159,8 +159,9 @@ export function previewPath(u: UnitWire, to: number): Route | null {
   let route: Route | null = null;
   // One of its own of its kind next to it: the two swap places (as the rules do).
   if (swapsWith(u, to)) route = { tiles: [to], turns: [0] };
-  // (Never onto one of its own of its kind, one soldier and one civilian to a tile; nor onto another
-  // civ's unit it isn't at war with; nor into land closed to it; nor, for a civilian, at an enemy.)
+  // (Never onto one of its own of its kind, one soldier and one civilian to a tile, and at sea a ship
+  // and an embarked soldier; nor onto another civ's unit it isn't at war with; nor into land closed
+  // to it; nor, for a civilian, at an enemy.)
   else if (to !== u.tile && reachable(u, to) && !ownThere(u, to) && !neutralThere(to) && !closedTo(u, to) && (soldier(u) || !enemyAt(to))) {
     const m = mover(u, view);
     // Turn by turn, as the rules find it (`findWay`): through its own side's units, its turns ending
@@ -182,7 +183,7 @@ export function previewPath(u: UnitWire, to: number): Route | null {
       // (One of its own of its kind there to stay: fortified, asleep, at work.)
       held: anywhere
         ? undefined
-        : memo((t) => view.units.some((x) => x.tile === t && x.id !== u.id && x.owner === me() && soldier(x) === soldier(u) && !x.path?.length && (!!x.stance || !!x.work))),
+        : memo((t) => view.units.some((x) => x.tile === t && x.id !== u.id && x.owner === me() && placeOn(x, t) === placeOn(u, t) && !x.path?.length && (!!x.stance || !!x.work))),
       risk: m.risk,
       halts: zoc ? (a, b) => zoc(a) && zoc(b) : undefined,
       full: fullMoves(u),
@@ -228,6 +229,9 @@ let charge: { key: string; view: View | null; at: number | null } = { key: '', v
 
 const soldier = (x: UnitWire) => !!UNITS[x.type] && isMilitary(UNITS[x.type]) && !isGreatPerson(x.type);
 
+/** The place a unit takes on a tile, one unit to each (the rules' `stackKind`: a civilian's, a soldier's, and at sea an embarked soldier's beside a ship). */
+export const placeOn = (x: UnitWire, t: number) => stackKind(x.type, !!TERRAINS[store.terrain[t]?.terrain]?.water);
+
 /** The unit of yours of its kind next to it that a unit would swap places with if sent there (the rules' `swapWith`, as far as this screen can tell). */
 export function swapsWith(u: UnitWire, t: number): UnitWire | undefined {
   const view = store.view;
@@ -238,8 +242,8 @@ export function swapsWith(u: UnitWire, t: number): UnitWire | undefined {
   return Number.isFinite(mover(u, view).cost(u.tile, t)) && Number.isFinite(mover(other, view).cost(t, u.tile)) ? other : undefined;
 }
 
-/** One of the player's own units of the same kind (soldier or civilian) on a tile: a unit can't stop there. */
-const ownThere = (u: UnitWire, t: number) => store.view?.units.find((x) => x.tile === t && x.owner === me() && x.id !== u.id && soldier(x) === soldier(u));
+/** One of the player's own units of the same kind (soldier or civilian; at sea, ship or embarked soldier) on a tile: a unit can't stop there. */
+const ownThere = (u: UnitWire, t: number) => store.view?.units.find((x) => x.tile === t && x.owner === me() && x.id !== u.id && placeOn(x, t) === placeOn(u, t));
 
 /** Another civ's unit on a tile that the player isn't at war with: no unit of theirs can stop there (nor attack it). */
 const neutralThere = (t: number) => store.view?.units.find((x) => x.tile === t && x.owner !== me() && !store.view?.players[x.owner]?.war);

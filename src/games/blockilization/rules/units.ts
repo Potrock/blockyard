@@ -221,3 +221,14 @@ export const isMilitary = (u: UnitType) => u.strength > 0 || (u.ranged ?? 0) > 0
 export const canFortify = (type: UnitType) => isMilitary(type) && type.domain === 'land' && type.class !== 'mounted' && type.class !== 'armor';
 /** Whether a unit type is a great person (not the Great War's infantry and bombers, which only share the word). */
 export const isGreatPerson = (type: string) => UNITS[type]?.class === 'great';
+
+/**
+ * The place a unit takes on a tile, one unit to each (Civ V's one soldier and one civilian to a
+ * tile): a civilian's (great people too), a soldier's, or, at sea, a land soldier's in its boat
+ * (embarked), so a ship and a soldier it sails with share the water (Civ VI's escort).
+ */
+export function stackKind(type: string, water: boolean): 'civilian' | 'soldier' | 'embarked' {
+  const u = UNITS[type];
+  if (!u || !isMilitary(u) || isGreatPerson(type)) return 'civilian';
+  return water && u.domain === 'land' ? 'embarked' : 'soldier';
+}
