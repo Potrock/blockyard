@@ -51,6 +51,15 @@ export function mountHandover(client: Client, layer: HTMLElement) {
   (layer.querySelector('.cv-root') ?? layer).append(words);
 }
 
+/** A game gone from the screen (back to the lobby, another game's map, another room): nothing is moving or waiting to be shown. */
+export function resetHandover() {
+  moving = staging = false;
+  held = [];
+  timed = [];
+  until = 0;
+  upSince = null;
+}
+
 /** A view came: the bots began (or are still) playing, or they're done and their moves are here. */
 export function handoverView(v: View) {
   if (v.moving) moving = true;
@@ -123,7 +132,7 @@ export function frameHandover(now: number, show: (fights: FightWire[], now: numb
   const busy = moving || staging || now < until;
   if (busy && upSince === null) upSince = now;
   if (!busy && upSince !== null && now - upSince >= LEAST) upSince = null;
-  const on = upSince !== null && !store.view?.over;
+  const on = upSince !== null && !!store.view && !store.view.over;
   words?.classList.toggle('on', on);
   // (Over the advisor's tip or an attack's preview, when one's at the foot of the screen too.)
   if (on && words) {

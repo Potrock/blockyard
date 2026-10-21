@@ -7,7 +7,7 @@ import { togglePins } from './pins';
 import { prefs, setPrefs, TOPIC_NAMES, type Pace, type UiSize } from './prefs';
 import { isMuted, toggleMute } from './sound';
 import { ask, store } from './store';
-import { canOpenPlatformMenu, h, openPlatformMenu, setLook, setTips, tell, tile, tipsOn, togglePanel, type El } from './ui';
+import { canOpenPlatformMenu, copyGameLink, h, openPlatformMenu, rooms, setLook, setTips, tell, tile, tipsOn, togglePanel, type El } from './ui';
 
 /**
  * Every keyboard shortcut, listed (? shows them: `input.ts` does what they say), and the game's menu
@@ -167,7 +167,10 @@ export function renderMenu(): El {
         item('keyboard', 'Keyboard shortcuts', () => togglePanel('keys'), '?'),
         // (Where the platform lets a game open its own menu.)
         canOpenPlatformMenu() && item('gear', 'Settings…', () => platformMenu('settings')),
-        canOpenPlatformMenu() && item('people', 'Invite friends, how to play…', () => platformMenu('help')),
+        // (A game played at an address of its own: its link brings friends, and the way back to your other games.)
+        rooms() && rooms()!.current !== 'public' && item('people', 'Invite friends to this game', () => (close(), copyGameLink())),
+        rooms() && item('globe', 'Your games', () => ask('Go to your games? This one is kept as it is: come back to it from there, or by its link.', 'Your games', () => rooms()!.go(null), false)),
+        canOpenPlatformMenu() && item('info', 'How to play, invite friends…', () => platformMenu('help')),
         item('close', 'Leave the game', () => ask('Leave the game? Your civilization is kept: come back to carry on.', 'Leave', () => tell('exit', null)), undefined, '.danger'),
       ),
       h(

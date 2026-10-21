@@ -147,7 +147,7 @@ export interface Limits {
 /** Turned away when the server runs as many rooms as it may. */
 const BUSY = { code: CLOSE_FULL, reason: 'The server is busy right now' };
 
-const LIMITS: Limits = { playersPerGame: 16, perAddress: 6, messagesPerSecond: 300, maxMessage: 16 * 1024, rooms: 12, roomsPerAddress: 2, uploadedRooms: 8 };
+const LIMITS: Limits = { playersPerGame: 16, perAddress: 6, messagesPerSecond: 300, maxMessage: 16 * 1024, rooms: 12, roomsPerAddress: 3, uploadedRooms: 8 };
 
 /** Turned away when uploaded games' rooms are as many as may run. */
 const UPLOADED_BUSY = { code: CLOSE_FULL, reason: 'Uploaded games are full right now' };
@@ -248,6 +248,11 @@ export function serve(o: ServeOptions): Promise<GameServer> {
   const rooms = new Map<string, Room>();
   /** Stores opened in this thread: one per game, shared by its rooms here. */
   const stores = new Map<string, Store>();
+  /**
+   * The sandboxed rooms running, by game: each reads `game.store` from a copy of its own, so each
+   * is told of the changes the game's other rooms make (`ToRoom` `data`), as the server keeps them.
+   */
+  const hearing = new Map<string, Set<(key: string, value: unknown) => void>>();
   const perAddress = new Map<string, number>();
   const clock = () => performance.now() / 1000;
   let nextClient = 1;
@@ -478,6 +483,11 @@ export function serve(o: ServeOptions): Promise<GameServer> {
       void after.then(async () => {
         const shared = storeOf(room.def.id);
         const snapshot: StoreSnapshot = { world: keeps ? (shared?.world() ?? null) : null, players: keeps ? (shared?.players?.() ?? {}) : {}, data: [...(shared?.data() ?? new Map())], keeps };
+        // (From the snapshot on, the other rooms' changes to the game's data: held until it's started.)
+        const others = hearing.get(room.def.id) ?? hearing.set(room.def.id, new Set()).get(room.def.id)!;
+        const hear = (key: string, value: unknown) => post({ t: 'data', key, value });
+        others.add(hear);
+        const deaf = () => others.delete(hear);
         const born = performance.now();
         let heard = 0;
         watchdog = setInterval(() => {
@@ -511,6 +521,8 @@ export function serve(o: ServeOptions): Promise<GameServer> {
                 if (c.value === undefined) data.delete(c.key);
                 else data.set(c.key, c.value);
                 shared.put(c.key, c.value);
+                // And the game's other sandboxed rooms read it from now on.
+                for (const tell of others) if (tell !== hear) tell(c.key, c.value);
               }
               else if (c.op === 'flush') shared.flush();
               else if (!keeps) return;
@@ -520,6 +532,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
             },
             exit: (code) => {
               exited = true;
+              deaf();
               clearInterval(watchdog);
               if (room.link === link) failed(room, link, code === null ? 'the sandbox went away' : `its process ended (${code})`);
               done();
@@ -530,6 +543,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
           queue.length = 0;
         } catch (err) {
           exited = true;
+          deaf();
           clearInterval(watchdog);
           failed(room, link, `the sandbox couldn't start it: ${err instanceof Error ? err.message : String(err)}`, "The game couldn't start: try again in a moment");
           done();

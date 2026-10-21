@@ -18,11 +18,11 @@ async function until(what: string, ok: () => boolean, ms = 30000) {
   for (const t0 = Date.now(); !ok(); await wait(50)) if (Date.now() - t0 > ms) throw new Error(`timed out: ${what}`);
 }
 
-/** A game of four files whose server code is `server` (its rules object). */
-function tiny(root: string, id: string, server = '{}'): string {
+/** A game of four files whose server code is `server` (its rules object); `meta`, more of its meta (`instances: true`). */
+function tiny(root: string, id: string, server = '{}', meta = ''): string {
   const dir = join(root, id);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'meta.ts'), `import { defineMeta } from '@platform';\nexport default defineMeta({ id: '${id}', title: 'Tiny ${id}' });\n`);
+  writeFileSync(join(dir, 'meta.ts'), `import { defineMeta } from '@platform';\nexport default defineMeta({ id: '${id}', title: 'Tiny ${id}'${meta ? `, ${meta}` : ''} });\n`);
   writeFileSync(join(dir, 'shared.ts'), `import { defineShared } from '@platform';\nimport meta from './meta';\nexport const shared = defineShared({ ...meta, world: { terrain: 'void' } });\n`);
   writeFileSync(join(dir, 'server.ts'), `import { defineServer } from '@platform';\nimport { shared } from './shared';\nexport default defineServer(shared, ${server});\n`);
   writeFileSync(join(dir, 'client.ts'), `import { defineClient } from '@platform/client';\nimport { shared } from './shared';\nexport default defineClient(shared);\n`);
@@ -49,7 +49,8 @@ function player(port: number, game: string, name: string) {
  * machine), its supervisor (at `permission` isolation: Node's permission model, what any machine
  * can do; `full` adds no network and a user of its own, on Linux), and the game server's link to it.
  * An upload is smoke-tested there; a game reaching for the file system or other programs is
- * refused; rooms run there, their store changes kept by the game server; a stuck one is stopped;
+ * refused; rooms run there, their store changes kept by the game server (and passed on to the game's
+ * other rooms there); a stuck one is stopped;
  * only the game server (with the token) may connect.
  */
 export default async function sandboxedRooms() {
@@ -67,7 +68,11 @@ export default async function sandboxedRooms() {
   const link = new SandboxLink({ url, token: 'sekrit', idle: 2 });
   const library = GameLibrary.open({ root: join(dir, 'games'), publicUrl, platform: 'test', taken: () => false, build: (folder, out, id) => buildGame(folder, { out, id }), smoke: (d) => link.smoke(gameFiles(d), publicUrl) });
   const stores = new Map<string, MemoryStore>();
-  const srv = await serve({ games: [], library, sandbox: link, store: (g) => stores.get(g) ?? (stores.set(g, new MemoryStore()), stores.get(g)!), port: 0, seed: 1, wasm, dev: true, stuckAfter: 3, idleStop: 0.3, saveEvery: 1, log: (l) => logs.push(l) });
+  // (Rooms of players' own are offered where rooms run apart: here every room runs in the sandbox, none in a worker.)
+  const worker = () => {
+    throw new Error('no rooms in workers here');
+  };
+  const srv = await serve({ games: [], library, sandbox: link, worker, store: (g) => stores.get(g) ?? (stores.set(g, new MemoryStore()), stores.get(g)!), port: 0, seed: 1, wasm, dev: true, stuckAfter: 3, idleStop: 0.3, idleStopOwn: 0.3, saveEvery: 1, log: (l) => logs.push(l) });
   try {
     // Only the game server, with the token.
     const wrong = new SandboxLink({ url, token: 'guess' });
@@ -103,6 +108,22 @@ export default async function sandboxedRooms() {
     await until('the next run counts on', () => stores.get('counter')?.data().get('visits') === 2);
     b.close();
 
+    // Two rooms of a game at once, each with a copy of the game's data: each reads what the other
+    // writes as it's written (the game server passes each change on), not only what was there when
+    // it started.
+    const seen = `{ setup(game) { game.store.set('here:' + game.room, true); }, update(game) { const n = game.store.keys('here:').length; if (game.store.get('saw:' + game.room) !== n) game.store.set('saw:' + game.room, n); } }`;
+    check((await library.install(tiny(dir, 'rooms', seen, 'instances: true'), 'local')).ok, 'a game that notes its rooms');
+    const data = () => stores.get('rooms')?.data();
+    const pub = player(srv.port, 'rooms', 'Ann');
+    await until('the public room counts itself', () => data()?.get('saw:public') === 1);
+    const own = player(srv.port, 'rooms/k3x9f2', 'Bob');
+    await until('a room of its own starts, seeing the public one', () => data()?.get('saw:k3x9f2') === 2);
+    await until('the public room sees the new one, started after it', () => data()?.get('saw:public') === 2);
+    pub.close();
+    own.close();
+    await until('both stop', () => srv.rooms === 0, 15000);
+    await until('their processes end', () => supervisor.running === 0, 15000);
+
     // A room stuck in a loop: stopped, its players told, its process killed.
     check((await library.install(tiny(dir, 'stuck', `{ update(game) { if (game.players.some((p) => p.name === 'Hang')) for (;;) {} } }`), 'local')).ok, 'a game that gets stuck');
     const h = player(srv.port, 'stuck', 'Hang');
@@ -112,7 +133,7 @@ export default async function sandboxedRooms() {
 
     // Idle, the link lets the sandbox go (so its machine can sleep).
     await until('disconnected when idle', () => logs.some((l) => l.includes('game server gone')), 15000);
-    console.log(`  sandbox: smoke tests and rooms in processes of their own (${link.isolation ?? 'permission'} isolation); file system and programs denied; store changes kept by the game server; a stuck room killed; the token; idle disconnect`);
+    console.log(`  sandbox: smoke tests and rooms in processes of their own (${link.isolation ?? 'permission'} isolation); file system and programs denied; store changes kept by the game server and heard by the game's other rooms; a stuck room killed; the token; idle disconnect`);
   } catch (err) {
     console.log(logs.slice(-25).join('\n'));
     throw err;

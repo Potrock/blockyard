@@ -1,10 +1,11 @@
 import { lobbySides, TEAMS, type LobbyAction, type LobbySeat, type LobbyView } from '../protocol';
+import { roomCode, type SavedGame } from '../saves';
 import { CIVS } from '../rules/civs';
 import { MAP_SIZES, mapTypeWord, type MapType, type Settings, type Speed } from '../rules/state';
 import { VICTORIES } from './concepts';
 import { emblemEl, icon } from './icons';
 import { openPedia } from './pedia';
-import { TEAM_COLORS } from './store';
+import { ask, TEAM_COLORS } from './store';
 import { h, tile, type El } from './ui';
 
 /**
@@ -166,34 +167,70 @@ function playedWhen(at: string): string {
   return `played ${new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 }
 
+/** Going to a game at its own address, and copying its link (none on a platform whose screens can't go to another room). */
+export interface GameLinks {
+  open(g: SavedGame): void;
+  copy(g: SavedGame): void;
+}
+
 /**
  * Every unfinished game this person has a seat in, wherever it was played: its turn, their civ, who
- * else is in it and when it was last played. The host carries one on here (the others in it join
- * them once it's under way); anyone with a seat in one can throw it away.
+ * else is in it and when it was last played (or that it's being played now). Each is played at an
+ * address of its own: Play goes there (Join, while it's being played), and its link brings friends.
+ * Anyone with a seat in one can throw it away, once they've said so. (On a platform whose screens
+ * can't go to another room, the host carries a game on here instead.)
  */
-export function savedGamesBox(L: LobbyView, isHost: boolean, send: (a: LobbyAction) => void): El | null {
+export function savedGamesBox(L: LobbyView, isHost: boolean, send: (a: LobbyAction) => void, links: GameLinks | null): El | null {
   if (!L.saves?.length) return null;
+  const discard = (g: SavedGame) =>
+    ask(`Throw away this game (turn ${g.turn}${g.with.length ? `, with ${g.with.join(', ')}` : ''})? It goes for everyone in it, and can’t be carried on again.`, 'Throw it away', () => send({ a: 'discard', id: g.id }));
   return h(
     'div.lb-saves',
     {},
-    h('div.cv-label.sect', {}, L.saves.length === 1 ? 'Your saved game' : 'Your saved games'),
+    h('div.cv-label.sect', {}, L.saves.length === 1 ? 'Your game' : 'Your games'),
     ...L.saves.map((g) => {
       const civ = g.civ ? CIVS[g.civ] : null;
       return h(
-        'div.lb-save',
+        `div.lb-save${g.live ? '.live' : ''}`,
         {},
         civ ? emblemEl(civ.id, 26) : h('span.lb-nociv.small', {}, '?'),
         h(
           'div.cv-grow',
           {},
           h('b', {}, `Turn ${g.turn}${civ ? ` · ${civ.name}` : ''}`),
-          h('small.cv-muted', {}, [g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots', g.elsewhere ? 'being played in another room now' : playedWhen(g.at)].filter(Boolean).join(' · ')),
+          h('small.cv-muted', {}, [g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots', g.live ? 'being played now' : playedWhen(g.at)].filter(Boolean).join(' · ')),
         ),
-        isHost && !g.elsewhere && h('button.cv-btn.gold.small', { onclick: () => send({ a: 'resume', id: g.id }) }, 'Carry on'),
-        !isHost && h('small.cv-muted', {}, 'The host can carry it on'),
-        h('button.cv-btn.small', { onclick: () => send({ a: 'discard', id: g.id }), title: 'Throw this game away, for everyone in it' }, 'Discard'),
+        links && h('button.cv-btn.gold.small', { onclick: () => links.open(g), title: g.live ? 'Join the others playing it' : 'Go to this game' }, g.live ? 'Join' : 'Play'),
+        // (A game from before games had addresses has none until it's opened.)
+        links && roomCode(g.id) && h('button.cv-btn.small', { onclick: () => links.copy(g), title: 'Copy the link to this game, for friends to join you' }, 'Copy link'),
+        !links && isHost && !g.live && h('button.cv-btn.gold.small', { onclick: () => send({ a: 'resume', id: g.id }) }, 'Carry on'),
+        !links && !isHost && h('small.cv-muted', {}, 'The host can carry it on'),
+        h('button.cv-btn.small', { onclick: () => discard(g), title: 'Throw this game away, for everyone in it' }, 'Discard'),
       );
     }),
+  );
+}
+
+/** The public lobby's top, where a visit begins: a new game, set up in a room of its own (whose link is its address from then on). */
+export function hubTop(start: () => void): El {
+  return h(
+    'div.lb-new',
+    {},
+    tile('city', '#c8963a', 40),
+    h('div.cv-grow', {}, h('b', {}, 'A new game'), h('small.cv-muted', {}, 'Set it up in a room of its own and send friends its link to join you. The game stays at that link, saved every turn, until it’s won.')),
+    h('button.cv-btn.gold.lb-start', { onclick: start }, 'New game'),
+  );
+}
+
+/** In a room of one's own, before its game begins: its link, for friends (the game is played and kept at it), and the way back to one's games. */
+export function inviteRow(copy: () => void, back: () => void): El {
+  return h(
+    'div.lb-invite',
+    {},
+    icon('people', 20, '#6ab8ff'),
+    h('div.cv-grow', {}, h('b', {}, 'This game’s own room'), h('small.cv-muted', {}, 'Friends join with its link, now or later: the game is played and kept here.')),
+    h('button.cv-btn.small', { onclick: copy }, 'Copy invite link'),
+    h('button.cv-btn.small', { onclick: back }, 'Your games'),
   );
 }
 
@@ -222,6 +259,12 @@ button.lb-team { opacity: .45; cursor: pointer; } button.lb-team.on { opacity: 1
 .lb-saves { margin-bottom: 4px; }
 .lb-save { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(106,184,255,.06); border: 1px solid rgba(106,184,255,.25); }
 .lb-save b { display: block; font-size: 14px; }
+.lb-save.live { border-color: rgba(120,220,140,.45); background: rgba(120,220,140,.07); }
+.lb-new, .lb-invite { display: flex; align-items: center; gap: 12px; margin: 4px 0 8px; padding: 10px 12px; background: rgba(242,193,78,.07); border: 1px solid rgba(242,193,78,.35); border-radius: 10px; }
+.lb-invite { background: rgba(106,184,255,.06); border-color: rgba(106,184,255,.3); }
+.lb-new b, .lb-invite b { display: block; font-size: 16px; }
+.lb-start { font-size: 22px !important; padding: 5px 26px 6px !important; }
+.lb-none { margin: 6px 0 10px; font-size: 12.5px; }
 .lb-nociv.small { width: 26px; height: 26px; font-size: 16px; }
 @media (max-width: 760px), (max-height: 520px) {
   .lb-foot { bottom: -14px; margin: 12px -14px -14px; padding: 8px 14px; }
