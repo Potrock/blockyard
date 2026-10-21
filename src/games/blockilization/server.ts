@@ -1005,6 +1005,24 @@ function order(game: GameContext, p: Player, o: Order) {
 
 export default defineServer(shared, {
   setup(game) {
+    // A room of its own, with nothing of the last one's: this code can outlive a room (in development
+    // the next one starts in the same thread), and that one's game would be saved into this one's store.
+    phase = 'lobby';
+    settings = { ...DEFAULTS };
+    seats = [];
+    host = null;
+    civGame = null;
+    pending = null;
+    playing = null;
+    botQueue = [];
+    autoBots = true;
+    teamsOn = false;
+    chosenSeed = null;
+    movedOld = false;
+    saves.reset();
+    dirty.clear();
+    leftAt.clear();
+    listed.clear();
     // (For the headless tests, in development: the game as it stands, and its phase.)
     if (import.meta.env.DEV) (globalThis as unknown as { __civ: unknown }).__civ = { game: () => civGame, phase: () => phase };
     fightHooks.fought = (g, by, combat) => {
