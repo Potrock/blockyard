@@ -22,6 +22,7 @@ import { opinionOf } from '../rules/ai/opinion';
 import { planWar } from '../rules/ai/strategy';
 import { workers } from '../rules/ai/workers';
 import { civilians } from '../rules/ai/civilians';
+import { evaluate } from '../rules/ai/diplomacy';
 import { congressProposal, congressVote } from '../rules/ai/congress';
 import { moveUnits } from '../rules/ai/military';
 import { exploreSea } from '../rules/ai/navy';
@@ -3318,6 +3319,55 @@ test('team research: one research for the team, set by any of them; a bot doesn�
   eq(b.researching, 'pottery', 'its way there, for both');
   ok(b.techQueue.includes('writing'), 'queued for both');
   ok(apply(game, 2, { t: 'research', tech: 'mining' }).ok && game.players[2].researching === 'mining', 'a civ alone is its own master');
+});
+
+test('team research: two people choosing at once, the first keeps theirs (the second is told, and can choose again)', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
+  const [a, b] = game.players;
+  for (const p of game.players) p.techs.push('agriculture');
+  a.bot = b.bot = false;
+  // Both see nothing chosen; the first's order lands first.
+  ok(apply(game, 0, { t: 'research', tech: 'pottery', was: null }).ok, 'the first chooses');
+  const late = apply(game, 1, { t: 'research', tech: 'mining', was: null });
+  ok(!late.ok && /just chose Pottery/.test(late.error ?? ''), `the second's, from what they saw before it, is turned back (${late.error})`);
+  eq(a.researching, 'pottery', 'still the first one’s');
+  eq(b.researchBy, 0, 'and theirs it says');
+  // Seeing it, the other may change it.
+  ok(apply(game, 1, { t: 'research', tech: 'mining', was: 'pottery' }).ok, 'seeing it, changed on purpose');
+  eq(a.researching, 'mining', 'for both');
+  eq(a.researchBy, 1, 'the choice now the second one’s');
+  ok(apply(game, 1, { t: 'research', tech: 'mining', was: 'pottery' }).ok, 'their own choice they may change as they like');
+  ok(!apply(game, 0, { t: 'research', tech: 'agriculture' }).ok && a.researchBy === 1, 'a choice turned back changes nobody’s');
+});
+
+test('team research: a turn with nothing chosen, the team’s science waits for the choice (as a civ alone’s does)', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
+  const [a, b] = game.players;
+  for (const p of game.players) p.techs.push('agriculture');
+  a.bot = b.bot = false;
+  const science = (i: number) => game.cities.filter((c) => c.owner === i).reduce((n, c) => n + cityYields(game, c).science, 0);
+  const both = science(0) + science(1);
+  ok(both > 0, 'they make science');
+  endTurn(game);
+  eq(a.researching, null, 'nothing chosen');
+  ok(apply(game, 1, { t: 'research', tech: 'pottery' }).ok, 'then one chooses');
+  eq(a.research.pottery, both, `what both made meanwhile goes into it (${science(0)} + ${science(1)})`);
+  eq(b.research.pottery, both, 'for both');
+});
+
+test('teams: a bot on a team with a person sells no peace for the team (its people make it)', () => {
+  const { game } = dealers(['egypt', 'babylon', 'china']);
+  teamUp(game, [0, 1]);
+  game.players[1].bot = true;
+  ok(apply(game, 0, { t: 'war', target: 2 }).ok, 'the person takes the team to war');
+  ok(game.players[1].diplomacy.war[2], 'the bot with them');
+  game.players[2].gold = 5000;
+  const answer = evaluate(game, game.players[1], { from: 2, to: 1, items: [{ kind: 'peace' }, { kind: 'gold', from: 2, amount: 5000 }] });
+  ok(!answer.accept, `peace and a fortune offered to the bot, declined (${answer.why})`);
 });
 
 test('team research: what each puts in is pooled; finished between them, it’s learned by all and the rest goes on', () => {

@@ -2,7 +2,7 @@ import { ERA_NAMES, ERAS, eraOfCol, pathTo, TECH_LIST, TECHS } from '../rules/te
 import { ERA_COLOR, icon, svg, techEra, techGlyph } from './icons';
 import { entryArt, entryName, techUnlocks } from './pedia';
 import { adviceChips, adviceTag, researchAdvice, techAdvice } from './advice';
-import { store } from './store';
+import { ask, store } from './store';
 import { h, researchChooser, send, tile, togglePanel, type El } from './ui';
 
 /**
@@ -303,12 +303,21 @@ export function renderTechTree(): El {
 
 /**
  * Research chosen: with nothing being researched before (what the turn was waiting on), the tree
- * closes and it's back to the map; choosing another later, it stays open.
+ * closes and it's back to the map; choosing another later, it stays open. On a team, a teammate's
+ * choice is the whole team's: it's replaced only on a yes, and the order says what was seen (one
+ * a teammate made meanwhile isn't undone unseen, `research` in `rules/game.ts`).
  */
 function chooseResearch(tech: string) {
-  const first = !store.view?.self.researching;
-  send({ t: 'research', tech });
-  if (first && store.panel === 'tech') togglePanel('tech');
+  const v = store.view!;
+  const was = v.self.researching;
+  const go = () => {
+    send({ t: 'research', tech, was });
+    if (!was && store.panel === 'tech') togglePanel('tech');
+  };
+  const by = v.self.researchBy;
+  const mate = by !== null && by !== v.you ? v.players[by] : undefined;
+  if (was && was !== tech && mate && !mate.bot) ask(`${mate.name} chose ${TECHS[was].name} for the team. Research ${TECHS[tech].name} instead?`, 'Change research', go, false);
+  else go();
 }
 
 function scrollTo(scroller: El, id: string) {
