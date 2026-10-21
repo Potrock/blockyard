@@ -334,6 +334,8 @@ export interface SelfWire {
   researchBy: number | null;
   research: Record<string, number>;
   techQueue: string[];
+  /** The techs whose eureka the viewer (or their team) has had (`rules/eurekas.ts`). */
+  eurekas: string[];
   techCosts: Record<string, number>;
   policies: string[];
   ideology: string | null;

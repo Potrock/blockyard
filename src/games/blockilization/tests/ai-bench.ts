@@ -10,6 +10,7 @@ import { spiesOf, stolen } from '../rules/trade';
 import { UNITS } from '../rules/units';
 import { ERAS } from '../rules/techs';
 import { eraTurnLimit, SCENARIOS, withScenario } from '../rules/starts';
+import { EUREKAS } from '../rules/eurekas';
 
 /**
  * The bots' benchmark: bot-only games on several seeds and map sizes, played to the end, with what
@@ -104,6 +105,9 @@ interface Result {
   pledgesEnded: number;
   /** Pledges broken by their pledgers' own doing (a tribute demanded of, or war declared on, the city-state). */
   pledgesBroken: number;
+  /** Eurekas had by each civ by the end (on average), and the share of the techs they learned they'd had one for. */
+  eurekas: number;
+  boosted: number;
   /** The turn each era was first reached by the leader, and by the median civ (by era index). */
   eraLeader: number[];
   eraMedian: number[];
@@ -149,7 +153,7 @@ function play(seed: number): Result {
   const seats = civs.slice(0, n).map((c, i) => ({ user: null, name: c.leader, civ: c.id, bot: true, team: teams ? (i < n / 2 ? 0 : 1) : undefined }));
   const g: Game = createGame(settings, seats, seed);
   const majors = g.players.filter((p) => !p.cityState && p.civ !== 'barbarian');
-  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, pledgesBroken: 0, eraLeader: [], eraMedian: [], eruptions: 0, floods: 0, storms: 0, rises: 0, co2: 0, nukesBuilt: 0, nukesFired: 0, knelt: 0, brokeFree: 0, setFree: 0, vassals: 0, errors: [] };
+  const r: Result = { seed, cities60: [], cities120: [], wonders: [], wars: 0, captured: 0, eliminated: 0, how: '', winner: '', turn: 0, broke: 0, negative: 0, ms: [], lateMs: [], endMs: [], religions: [], mood: [], unhappy: 0, toFive: [], stolen: 0, caught: 0, quests: 0, passed: 0, liberated: 0, revived: 0, pledges: 0, pledgesEnded: 0, pledgesBroken: 0, eurekas: 0, boosted: 0, eraLeader: [], eraMedian: [], eruptions: 0, floods: 0, storms: 0, rises: 0, co2: 0, nukesBuilt: 0, nukesFired: 0, knelt: 0, brokeFree: 0, setFree: 0, vassals: 0, errors: [] };
   const pledgesSeen = new Set<string>();
   let living = g.players.map((p) => p.alive);
   const owners = new Map<number, number>();
@@ -275,6 +279,8 @@ function play(seed: number): Result {
     if (turns.length * 2 > majors.length) r.eraMedian[e] = turns[Math.floor(majors.length / 2)];
   }
   r.liberated = (g.relations?.events ?? []).filter((e) => e.kind === 'liberate').length;
+  r.eurekas = avg(majors.map((p) => p.eurekas?.length ?? 0));
+  r.boosted = avg(majors.map((p) => p.techs.filter((t) => p.eurekas?.includes(t)).length / Math.max(1, p.techs.filter((t) => t in EUREKAS).length)));
   r.vassals = g.players.filter((p) => p.alive && p.vassal && g.players[p.vassal.master]?.alive).length;
   r.how = g.over?.how ?? 'none';
   r.winner = g.over ? `${g.players[g.over.winner].civ}${teams ? ` (team ${(g.players[g.over.winner].team ?? 0) + 1})` : ''}` : '';
@@ -313,6 +319,7 @@ const era = (f: (r: Result) => number | undefined) => {
   return ts.length ? `T${avg(ts).toFixed(0)}${ts.length < results.length ? ` (${ts.length}/${results.length})` : ''}` : '-';
 };
 console.log(`eras (first civ / median civ)  ${ERAS.slice(1).map((name, i) => `${name} ${era((r) => r.eraLeader[i + 1])}/${era((r) => r.eraMedian[i + 1])}`).join('  ')}`);
+console.log(`eurekas      ${avg(results.map((r) => r.eurekas)).toFixed(1)} a civ   ${Math.round(avg(results.map((r) => r.boosted)) * 100)}% of the techs learned had their boost first`);
 console.log(`spies        ${avg(results.map((r) => r.stolen)).toFixed(1)} techs stolen/game   ${avg(results.map((r) => r.caught)).toFixed(1)} spies caught/game   quests ${avg(results.map((r) => r.quests)).toFixed(1)} done/game   resolutions ${avg(results.map((r) => r.passed)).toFixed(1)} passed/game`);
 console.log(`liberation   ${avg(results.map((r) => r.liberated)).toFixed(1)} cities liberated/game (${avg(results.map((r) => r.revived)).toFixed(1)} civs brought back)   pledges ${avg(results.map((r) => r.pledges)).toFixed(1)} made/game, ${avg(results.map((r) => r.pledgesEnded)).toFixed(1)} ended, ${avg(results.map((r) => r.pledgesBroken)).toFixed(1)} broken by their pledgers`);
 console.log(`vassals      ${avg(results.map((r) => r.knelt)).toFixed(1)} capitulations/game   ${avg(results.map((r) => r.brokeFree)).toFixed(1)} broke free   ${avg(results.map((r) => r.vassals)).toFixed(1)} vassals at the end   in ${results.filter((r) => r.knelt).length}/${results.length} games`);

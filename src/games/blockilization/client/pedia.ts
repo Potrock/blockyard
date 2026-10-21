@@ -7,6 +7,7 @@ import { PROMOTION_LIST, PROMOTIONS } from '../rules/promotions';
 import { isProject as isWorldProject, PROJECT_IDS, PROJECTS, type ProjectId } from '../rules/projects';
 import { PROJECT_LOOK } from './congress';
 import { BELIEF_LIST, BELIEFS } from '../rules/religion';
+import { EUREKAS } from '../rules/eurekas';
 import { SPEEDS } from '../rules/state';
 import { baseTechCost, ERA_NAMES, ERAS, eraOfCol, TECH_LIST, TECHS, type Era, type Tech } from '../rules/techs';
 import { FALLOUT, FEATURES, HILLS, IMPROVEMENTS, MOUNTAIN, RESOURCES, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId, type TerrainId, type Yields } from '../rules/terrain';
@@ -507,6 +508,8 @@ function techPage(id: string): Page {
   const facts: Fact[] = [['science', YIELD_COLOR.science, 'Cost', `${s?.techCosts[id] ?? techCostShown(t)} science`]];
   facts.push(['turn', ERA_COLOR[techEra(id)], 'Era', ERA_NAMES[eraOfCol(t.col)]]);
   if (s) facts.push(known ? ['check', '#6fd27a', 'Status', 'Known'] : s.researching === id ? ['science', '#f2c14e', 'Status', 'Researching now'] : ['lock', '#8fa1b3', 'Status', 'Not yet known']);
+  const eureka = EUREKAS[id];
+  if (eureka) facts.push(['bolt', '#e0b020', 'Eureka', s?.eurekas.includes(id) ? `${eureka.goal}: had` : `${eureka.goal}: a third of it`]);
   const body: El[] = [];
   if (t.note) body.push(h('ul.pd-list', {}, ...t.note.split('; ').map((n) => h('li', {}, n))));
   return {

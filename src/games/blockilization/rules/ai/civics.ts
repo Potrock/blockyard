@@ -82,7 +82,8 @@ export function research(ctx: Ctx) {
   for (const t of TECH_LIST) {
     if (known.has(t.id) || t.id === 'future_tech' || t.col > frontier + 2) continue;
     const way = pathTo(known, t.id);
-    const cost = way.reduce((s, x) => s + techCost(game, p, x), 0);
+    // (What's already put in, a eureka's third among it, is science it no longer costs.)
+    const cost = way.reduce((s, x) => s + Math.max(techCost(game, p, x) * 0.1, techCost(game, p, x) - (p.research[x] ?? 0)), 0);
     let value = techValue(ctx, t.id, resources);
     if (space && SPACESHIP_PARTS.some((part) => part.tech === t.id)) value += 30;
     // (A faithful leader wants its shrine, and a pantheon, early.)

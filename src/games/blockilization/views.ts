@@ -142,6 +142,7 @@ function selfWire(game: Game, p: Player): SelfWire {
     researchBy: mates.length && p.researchBy !== undefined ? p.researchBy : null,
     research: p.research,
     techQueue: p.techQueue,
+    eurekas: p.eurekas ?? [],
     techCosts,
     policies: p.policies,
     ideology: p.ideology ?? null,

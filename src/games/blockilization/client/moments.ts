@@ -3,7 +3,8 @@ import { BUILDINGS } from '../rules/buildings';
 import { CIVS } from '../rules/civs';
 import { FIRST_FINDER_GOLDEN, FOUND_HAPPINESS, NATURAL_WONDERS } from '../rules/nature';
 import { SPEEDS } from '../rules/state';
-import { ERA_NAMES, ERAS } from '../rules/techs';
+import { EUREKAS } from '../rules/eurekas';
+import { ERA_NAMES, ERAS, TECHS } from '../rules/techs';
 import { isGreatPerson, UNITS } from '../rules/units';
 import { PROJECT_LOOK } from './congress';
 import { wonderPicture } from './icons';
@@ -38,6 +39,9 @@ const ERA_LINES = [
   'The atom split and the sky crossed: power beyond imagining.',
   'A world wired together, and the stars within reach.',
 ];
+
+/** Names in a sentence: "A, B and C". */
+const list = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0] ?? '');
 
 export function moments(prev: View | null, v: View) {
   // Your own civilization fallen (your screen now watches the rest of the game). Its panels go (one
@@ -107,6 +111,12 @@ export function moments(prev: View | null, v: View) {
     out.push({ kick: 'Religion founded', title: r?.name ?? 'A new faith', text: 'Your prophet has given your people a faith of their own.', glyph: { name: 'faith', color: '#7a6a9a' }, light: true });
     play('faith');
   }
+  // Eurekas: deeds that brought techs a third of the way (a few at once, one card for them all).
+  const eurekas = b.eurekas.filter((id) => !a.eurekas.includes(id) && EUREKAS[id] && TECHS[id]);
+  if (eurekas.length === 1 || eurekas.length === 2)
+    for (const id of eurekas) out.push({ kick: 'Eureka!', title: TECHS[id].name, text: `${EUREKAS[id].goal}: done. A third of its research is yours.`, glyph: { name: 'bolt', color: '#d8a82a' }, light: true });
+  else if (eurekas.length) out.push({ kick: 'Eureka!', title: `${eurekas.length} breakthroughs`, text: `A third of the research done for ${list(eurekas.map((id) => TECHS[id].name))}.`, glyph: { name: 'bolt', color: '#d8a82a' }, light: true });
+  if (eurekas.length) play('discover');
   if (b.goldenTurns > 0 && a.goldenTurns === 0) {
     out.push({ kick: 'Golden age', title: 'A golden age begins', text: `${b.goldenTurns} turns of more production, gold and culture.`, glyph: { name: 'golden', color: '#c8892a' }, light: true });
     play('golden');

@@ -12,7 +12,8 @@ import { canStand, cityAt, cityById, citiesOf, createGame, knowsOf, noteAll, spa
 import { distance, neighbours, within } from './rules/hex';
 import { NATURAL_WONDERS } from './rules/nature';
 import { isMilitary, UNITS } from './rules/units';
-import { apply, endTurn, eraOf, fightHooks, learn, score, type Order } from './rules/game';
+import { apply, endTurn, eraOf, fightHooks, learn, score, shareResearch, type Order } from './rules/game';
+import { boost, boosted, EUREKAS } from './rules/eurekas';
 import { advanceSequence, sequenceDone, warBegun } from './rules/turns';
 import { cityHooks, type CombatResult } from './rules/combat';
 import { botAnswer, CHAT_LENGTH, isEmote, isPing } from './rules/chat';
@@ -1462,7 +1463,18 @@ export default defineServer(shared, {
         markAll(game);
         return `${v.name} serves ${m.name}`;
       }
-      throw new Error('Try: turn, turns [n], gold [n], tech [id], spawn <unit> [player], reveal, wonders [fog], improve [pillaged], grow [n], decor, unit <type> [foe] [hp] [embarked], take, vassal [master] [player]');
+      if (cmd === 'eureka') {
+        // A tech's eureka for everyone playing, as if its deed were done (the one named, or each one's research).
+        if (arg && !EUREKAS[arg]) throw new Error(`No eureka for ${arg}`);
+        for (const p of civGame.players) {
+          const id = arg ?? p.researching;
+          if (!p.bot && id && EUREKAS[id] && !boosted(civGame, p, id)) boost(civGame, p, id);
+        }
+        shareResearch(civGame);
+        markAll(game);
+        return 'Eureka';
+      }
+      throw new Error('Try: turn, turns [n], gold [n], tech [id], eureka [id], spawn <unit> [player], reveal, wonders [fog], improve [pillaged], grow [n], decor, unit <type> [foe] [hp] [embarked], take, vassal [master] [player]');
     }
   },
 
