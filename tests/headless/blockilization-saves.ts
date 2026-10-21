@@ -116,6 +116,8 @@ export default async function blockilizationSaves() {
   // Every game keeps backups of its turns' starts: the latest two, and one from up to ten turns before.
   const again = room('k3x9f2');
   again.play();
+  const note = store.data().get('gamenote:k3x9f2') as { here?: string[]; map?: { size: string } };
+  check(JSON.stringify(note.here) === '["name:Ann"]' && note.map?.size === 'duel', `its note says who's in it now, and its map: ${JSON.stringify(note)}`);
   again.exec('civ turns 12');
   const at = civ.game()!.turn;
   const kept = autosaveTurns(data, 'k3x9f2');

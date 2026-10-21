@@ -578,8 +578,10 @@ function renderWatching(): El {
     'div.cv-top.cv-panel',
     {},
     h('div.civ', {}, icon('globe', 22), h('b', {}, v.fallen !== undefined ? 'Fallen' : 'Watching')),
-    h('span.cv-muted', {}, v.fallen !== undefined ? 'Your civilization has fallen: you watch the rest of the game, every civilization’s land shown.' : bots.length ? 'Every civilization’s land is shown. Take a bot’s place to play.' : 'Every civilization’s land is shown. Join a new game from the lobby to play.'),
+    h('span.cv-muted', {}, v.fallen !== undefined ? 'Your civilization has fallen: you watch the rest of the game, every civilization’s land shown.' : bots.length ? 'Every civilization’s land is shown. Take a bot’s place to play.' : 'Every civilization’s land is shown. To play, begin a game of your own.'),
     bots.length > 0 && h(`button.cv-btn.small${store.takeOverOpen ? '.on' : ''}`, { onclick: toggle, title: 'Lead one of the bots’ civilizations from here on' }, icon('people', 14), 'Take a bot’s place'),
+    // (Nothing to take here: one's own games, and a new one, are in the public lobby.)
+    !bots.length && rooms() && h('button.cv-btn.small', { onclick: () => rooms()!.go(null), title: 'Your games, and a new one' }, 'Your games'),
     bots.length > 0 &&
       store.takeOverOpen &&
       h(

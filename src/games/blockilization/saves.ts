@@ -81,6 +81,17 @@ export interface GameNote {
   left?: Record<string, string>;
   /** This save's own mark (a few letters, new each time): a room sees whether its game's been saved by another since. */
   mark?: string;
+  /** Who's in its room now (by seat key), while it's open. */
+  here?: string[];
+  /** Its map and speed, to tell one's games apart. */
+  map?: GameMap;
+}
+
+/** A game's map and speed, as its settings name them (`rules/state.ts`). */
+export interface GameMap {
+  size: string;
+  type: string;
+  speed: string;
 }
 
 /** One of a person's saved games, as their lobby lists it. */
@@ -99,6 +110,9 @@ export interface SavedGame {
   backups: number[];
   /** When they discarded it, if they have: listed a week (`KEEP_DISCARDED`) to bring back. */
   discarded?: string;
+  /** The others in it who are playing it now (their names), while it's being played. */
+  playing: string[];
+  map?: GameMap;
 }
 
 /** The part of `game.store` the saves need. */
@@ -110,7 +124,7 @@ interface Kept {
 }
 
 /** A save as `server.ts` writes it: the game, and its seats. */
-export interface Saved<G = { turn: number; over?: unknown }> {
+export interface Saved<G = { turn: number; over?: unknown; settings?: GameMap }> {
   game: G;
   seats: { key: string; name: string; civ: string | null; bot: boolean }[];
 }
@@ -129,8 +143,8 @@ export const KEEP_DISCARDED = 7 * 24 * 60 * 60 * 1000;
 export const gameNote = (store: Kept, id: string) => store.get<GameNote>(noteKey(id));
 
 /**
- * A game saved, in the room it's played in: the save, and its note (whoever's here, by seat key, no
- * longer among those who've discarded it). The note, if it's saved (a game over isn't: it's gone).
+ * A game saved, in the room it's played in: the save, and its note (whoever's here, by seat key, as
+ * here, and no longer among those who've discarded it). The note, if it's saved (a game over isn't: it's gone).
  */
 export function saveGame(store: Kept, id: string, room: string, save: Saved, now = new Date(), open = true, here: readonly string[] = []): GameNote | null {
   if (save.game.over) {
@@ -141,6 +155,9 @@ export function saveGame(store: Kept, id: string, room: string, save: Saved, now
   const left = Object.fromEntries(Object.entries(gameNote(store, id)?.left ?? {}).filter(([key]) => !here.includes(key)));
   const note: GameNote = { turn: save.game.turn, seats: save.seats.filter((s) => !s.bot).map((s) => ({ key: s.key, name: s.name, civ: s.civ })), room, at: now.toISOString(), open, mark: gameId().slice(0, 6) };
   if (Object.keys(left).length) note.left = left;
+  if (open && here.length) note.here = [...here];
+  const map = save.game.settings;
+  if (map) note.map = { size: map.size, type: map.type, speed: map.speed };
   store.set(noteKey(id), note);
   return note;
 }
@@ -178,12 +195,13 @@ const live = (note: GameNote, now: Date) => note.open !== false && now.getTime()
 
 /**
  * A game's room says it's still being played (its people may give no order for minutes, reading or
- * away from the keys): its note's time is now, nothing else changed. Every half a minute or so, so
- * no one takes a game back to an earlier turn while it's played.
+ * away from the keys), and by whom (`here`, by seat key): its note's time is now, nothing else
+ * changed. Every half a minute or so, so no one takes a game back to an earlier turn while it's
+ * played; and as people come and go, so their lists show who's in it now.
  */
-export function stillPlayed(store: Kept, id: string, now = new Date()) {
+export function stillPlayed(store: Kept, id: string, now = new Date(), here?: readonly string[]) {
   const note = gameNote(store, id);
-  if (note) store.set(noteKey(id), { ...note, at: now.toISOString(), open: true });
+  if (note) store.set(noteKey(id), { ...note, at: now.toISOString(), open: true, ...(here ? { here: [...here] } : {}) });
 }
 
 /** Whether a saved game is being played right now, anywhere. */
@@ -211,8 +229,11 @@ export function savedGames(store: Kept, who: string, now = new Date()): SavedGam
     if (!note || !mine) continue;
     const discarded = note.left?.[who];
     if (discarded && now.getTime() - Date.parse(discarded) >= KEEP_DISCARDED) continue;
-    const g: SavedGame = { id, turn: note.turn, civ: mine.civ, with: note.seats.filter((s) => s !== mine).map((s) => s.name), at: note.at, live: live(note, now), backups: autosaveTurns(store, id) };
+    const others = note.seats.filter((s) => s !== mine);
+    const on = live(note, now);
+    const g: SavedGame = { id, turn: note.turn, civ: mine.civ, with: others.map((s) => s.name), at: note.at, live: on, backups: autosaveTurns(store, id), playing: on ? others.filter((s) => note.here?.includes(s.key)).map((s) => s.name) : [] };
     if (discarded) g.discarded = discarded;
+    if (note.map) g.map = note.map;
     out.push(g);
   }
   return out.sort((a, b) => b.at.localeCompare(a.at) || b.turn - a.turn);

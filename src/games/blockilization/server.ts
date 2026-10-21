@@ -153,7 +153,7 @@ let listsAt = 0;
 function refreshLists(game: GameContext) {
   for (const p of humans(game)) {
     const key = keyOf(p);
-    const brief = JSON.stringify(savedGames(game.store, key).map((g) => [g.id, g.turn, g.live, g.civ, g.with, g.backups, g.discarded]));
+    const brief = JSON.stringify(savedGames(game.store, key).map((g) => [g.id, g.turn, g.live, g.civ, g.with, g.backups, g.discarded, g.playing]));
     if (listed.get(key) === brief) continue;
     const first = !listed.has(key);
     listed.set(key, brief);
@@ -1097,6 +1097,8 @@ export default defineServer(shared, {
         markAll(game);
       }
       sendLobby(game);
+      // (Their games' lists show who's in it now.)
+      if (phase === 'playing' && playing) stillPlayed(game.store, playing, new Date(), humans(game).map(keyOf));
       // Back in a room that had emptied, whose game was taken back a turn meanwhile: it's played as it's saved now.
       const changed = phase === 'playing' && humans(game).every((p) => p === player) ? changedSince(game) : null;
       if (changed) {
@@ -1132,6 +1134,7 @@ export default defineServer(shared, {
       if (host === key) host = humans(game).find((p) => p !== player) ? keyOf(humans(game).find((p) => p !== player)!) : null;
       // (The last person gone: saved, before the room stops, as no longer under way here: free to carry on elsewhere.)
       if (phase === 'playing' && !humans(game).some((p) => p !== player)) save(game, false);
+      else if (phase === 'playing' && playing) stillPlayed(game.store, playing, new Date(), humans(game).filter((p) => p !== player).map(keyOf));
       // (The others' screens show who's away: their turn counts as done.)
       if (civGame) markAll(game);
       sendLobby(game);
@@ -1489,7 +1492,7 @@ export default defineServer(shared, {
     // (Played, if quietly: said every half a minute while anyone's here. A restarted room's clock begins again.)
     if (playing && humans(game).length && (game.clock.now - stillAt > STILL_EVERY || game.clock.now < stillAt)) {
       stillAt = game.clock.now;
-      stillPlayed(game.store, playing);
+      stillPlayed(game.store, playing, new Date(), humans(game).map(keyOf));
     }
     // The bots play, one a tick; once they all have, everyone sees what they did.
     const bot = botQueue.shift();
