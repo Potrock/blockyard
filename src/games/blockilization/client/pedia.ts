@@ -1010,12 +1010,15 @@ function card(key: string, note: string | null): El | null {
 /**
  * Hovers and right-clicks on anything in the interface with a `data-pedia` key; on a touch screen, a
  * finger held on it shows its card (staying until the next touch; a tap on the card opens the article),
- * and the tap that ends the hold does nothing else.
+ * and the tap that ends the hold does nothing else. In a list marked `pd-beside` (the city's), the card
+ * stands beside the list, level with what's hovered, where it can't hide the rows below.
  */
 export function bindPedia(root: El) {
   const holder = h('div.pd-hover');
   root.append(holder);
   let shown = '';
+  // (What the card is for: where it stands, beside a `pd-beside` list.)
+  let anchor: Element | null = null;
   let touchCard = false;
   let holding = 0;
   let held = false;
@@ -1041,6 +1044,7 @@ export function bindPedia(root: El) {
       if (!c) return;
       held = true;
       shown = key;
+      anchor = el ?? null;
       touchCard = true;
       c.classList.add('touch');
       c.addEventListener('click', (e) => {
@@ -1066,19 +1070,38 @@ export function bindPedia(root: El) {
     },
     true,
   );
+  let at = { x: 0, y: 0 };
   const place = (x: number, y: number) => {
+    at = { x, y };
     const el = holder.firstElementChild as HTMLElement | null;
     if (!el) return;
     // (In the interface's own lengths: the screen's over its scale.)
     const k = store.uiScale;
-    el.style.left = `${Math.max(8, Math.min(window.innerWidth / k - el.offsetWidth - 8, x / k + 18))}px`;
-    el.style.top = `${Math.max(8, Math.min(window.innerHeight / k - el.offsetHeight - 8, y / k + 18))}px`;
+    const [W, H, w] = [window.innerWidth / k, window.innerHeight / k, el.offsetWidth];
+    const top = (y: number) => `${Math.max(8, Math.min(H - el.offsetHeight - 8, y))}px`;
+    // Beside a `pd-beside` list, on its side with more room, if the card fits there: by the cursor, it'd
+    // cover the rows below. (On a narrow screen, where the list is all there is, it's by the cursor.)
+    const list = anchor?.isConnected ? anchor.closest('.pd-beside') : null;
+    if (list) {
+      const p = list.getBoundingClientRect();
+      const [left, right] = [p.left / k, p.right / k];
+      const [room, side] = left >= W - right ? [left, left - w - 8] : [W - right, right + 8];
+      if (room >= w + 16) {
+        el.style.left = `${side}px`;
+        el.style.top = top(anchor!.getBoundingClientRect().top / k);
+        return;
+      }
+    }
+    el.style.left = `${Math.max(8, Math.min(W - w - 8, x / k + 18))}px`;
+    el.style.top = top(y / k + 18);
   };
   root.addEventListener('pointerover', (ev) => {
     if (ev.pointerType === 'touch') return;
     const el = (ev.target as Element).closest?.('[data-pedia]');
     const key = el?.getAttribute('data-pedia') ?? '';
-    if (key === shown) return;
+    anchor = el ?? null;
+    // (The same thing in another row, as what's being built is in the list of what could be too: the card goes to it.)
+    if (key === shown) return place(ev.clientX, ev.clientY);
     shown = key;
     const c = key ? card(key, el?.getAttribute('data-note') ?? null) : null;
     holder.replaceChildren(...(c ? [c] : []));
@@ -1104,11 +1127,16 @@ export function bindPedia(root: El) {
     holder.replaceChildren();
     openPedia(key);
   });
-  // A redraw can take away what was hovered: its card goes with it.
+  // A redraw can take away what was hovered: its card goes with it. (Or put it back, new: the card stays, by the new one.)
   new MutationObserver(() => {
-    if (shown && !touchCard && !root.querySelector(`[data-pedia="${CSS.escape(shown)}"]:hover`)) {
+    if (!shown || touchCard) return;
+    const now = root.querySelector(`[data-pedia="${CSS.escape(shown)}"]:hover`);
+    if (!now) {
       shown = '';
       holder.replaceChildren();
+    } else if (now !== anchor) {
+      anchor = now;
+      place(at.x, at.y);
     }
   }).observe(root, { childList: true, subtree: true });
 }
