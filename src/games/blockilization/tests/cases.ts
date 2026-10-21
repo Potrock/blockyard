@@ -1353,7 +1353,7 @@ test('upgrades: a move left, the resource, the price (a third less with Professi
   eq(w.type, 'swordsman', 'a swordsman');
 });
 
-test('a frigate upgrades to a battleship (Electricity, Oil), not to Combustion’s destroyer: a ship keeps its kind, ranged or melee', () => {
+test('a frigate upgrades to a battleship (Electronics, Oil), not to Combustion’s destroyer: a ship keeps its kind, ranged or melee', () => {
   const { game, at } = blank();
   const p = game.players[0];
   city(game, 0, at(5, 5));
@@ -1361,7 +1361,7 @@ test('a frigate upgrades to a battleship (Electricity, Oil), not to Combustion�
   const frigate = unit(game, 'frigate', 0, at(6, 5));
   techsTo(game, 0, 11);
   p.techs.push('electronics');
-  ok(p.techs.includes('electricity') && !p.techs.includes('combustion'), 'Electricity and Electronics, not Combustion');
+  ok(!p.techs.includes('combustion'), 'Electronics, not Combustion');
   p.gold = 1000;
   eq(upgradeTo(p, frigate), 'battleship', 'it would be a battleship');
   ok(!apply(game, 0, { t: 'upgrade', unit: frigate.id }).ok, 'needs oil');
@@ -1369,6 +1369,61 @@ test('a frigate upgrades to a battleship (Electricity, Oil), not to Combustion�
   ok(apply(game, 0, { t: 'upgrade', unit: frigate.id }).ok, 'upgraded');
   eq(frigate.type, 'battleship', 'a battleship');
   for (const u of Object.values(UNITS)) if (u.domain === 'sea' && u.upgrade) eq(UNITS[u.upgrade].class, u.class, `${u.name} upgrades to a ship of its kind`);
+});
+
+test('units upgrade along Civ V’s lines (Brave New World’s), and none goes out of production before the unit it upgrades to can be built', () => {
+  const lines = [
+    ['warrior', 'swordsman', 'longswordsman', 'musketman', 'rifleman', 'great_war_infantry', 'infantry', 'mechanized_infantry'],
+    ['spearman', 'pikeman', 'lancer', 'anti_tank_gun', 'helicopter_gunship'],
+    ['horseman', 'knight', 'cavalry', 'landship', 'tank', 'modern_armor', 'giant_death_robot'],
+    ['chariot_archer', 'knight'],
+    ['archer', 'composite_bowman', 'crossbowman', 'gatling_gun', 'machine_gun', 'bazooka'],
+    ['catapult', 'trebuchet', 'cannon', 'artillery', 'rocket_artillery'],
+    ['anti_aircraft_gun', 'mobile_sam'],
+    ['paratrooper', 'xcom_squad'],
+    ['trireme', 'caravel', 'ironclad', 'destroyer'],
+    ['privateer', 'destroyer'],
+    ['galleass', 'frigate', 'battleship'],
+    ['submarine', 'nuclear_submarine'],
+    ['triplane', 'fighter', 'jet_fighter'],
+    ['great_war_bomber', 'bomber', 'stealth_bomber'],
+  ];
+  for (const line of lines) {
+    for (let i = 1; i < line.length; i++) eq(UNITS[line[i - 1]].upgrade, line[i], `${UNITS[line[i - 1]].name} upgrades to`);
+    if (line[line.length - 1] !== 'knight') eq(UNITS[line[line.length - 1]].upgrade, undefined, `${UNITS[line[line.length - 1]].name} is the last of its line`);
+  }
+  // A unique unit upgrades as the one it replaces does.
+  for (const u of Object.values(UNITS)) if (u.replaces && UNITS[u.replaces].upgrade) eq(u.upgrade, UNITS[u.replaces].upgrade, `${u.name} upgrades as a ${UNITS[u.replaces].name}`);
+  // (A tech and every tech before it.)
+  const memo = new Map<string, Set<string>>();
+  const before = (t: string): Set<string> => {
+    if (!memo.has(t)) memo.set(t, new Set([t, ...TECHS[t].needs.flatMap((n) => [...before(n)])]));
+    return memo.get(t)!;
+  };
+  for (const u of Object.values(UNITS)) {
+    if (!u.obsolete) continue;
+    ok(!u.tech || !before(u.tech).has(u.obsolete), `${u.name} isn’t obsolete before it’s available`);
+    const to = u.upgrade && UNITS[u.upgrade];
+    ok(!!to, `${u.name} goes out of production with something to upgrade to`);
+    ok(!to || !to.tech || before(u.obsolete).has(to.tech), `${u.name} is still built until there are ${to ? to.name : ''}s`);
+  }
+});
+
+test('a pikeman upgrades to a lancer (Metallurgy, Horses), a knight to cavalry', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(5, 5));
+  const pikeman = unit(game, 'pikeman', 0, at(6, 5));
+  const knight = unit(game, 'knight', 0, at(4, 5));
+  p.techs.push('animal_husbandry', 'metallurgy', 'military_science');
+  p.gold = 2000;
+  eq(upgradeTo(p, pikeman), 'lancer', 'a lancer');
+  eq(upgradeTo(p, knight), 'cavalry', 'cavalry');
+  ok(!apply(game, 0, { t: 'upgrade', unit: pikeman.id }).ok, 'needs horses');
+  Object.assign(game.tiles[at(5, 6)], { resource: 'horses', amount: 2, improvement: 'pasture', owner: 0 });
+  ok(apply(game, 0, { t: 'upgrade', unit: pikeman.id }).ok, 'upgraded');
+  eq(pikeman.type, 'lancer', 'a lancer now');
+  ok(apply(game, 0, { t: 'upgrade', unit: knight.id }).ok && knight.type === 'cavalry', 'and the knight is cavalry');
 });
 
 test('moving: the Great Wall, the Iroquois’ forest paths, zones of control by domain', () => {
