@@ -283,7 +283,8 @@ export function productionToward(game: Game, c: City, item: Production, effects 
     if (b?.kind === 'world') pct += effects.reduce((s, e) => s + (e.wonderProduction ?? 0), 0);
     pct += effects.reduce((s, e) => s + (e.buildingProduction ?? 0), 0);
     for (const e of effects) for (const boost of e.buildingBoost ?? []) if (boost.buildings.some((id) => isBuilding(item.id, id))) pct += boost.percent;
-    if (b && game.tiles.some((t, i) => t.resource === 'marble' && t.improvement === 'quarry' && !t.pillaged && t.owner === c.owner && i >= 0) && b.kind === 'world') pct += 15;
+    // (Marble quarried in its land: a world wonder goes up faster. The map looked at only for a wonder.)
+    if (b?.kind === 'world' && game.tiles.some((t) => t.resource === 'marble' && t.improvement === 'quarry' && !t.pillaged && t.owner === c.owner)) pct += 15;
     // Rome: a building the capital has goes up faster in the other cities.
     if (b?.kind === 'building' && has(effects, 'capital_buildings_faster')) {
       const capital = capitalOf(game, c.owner);

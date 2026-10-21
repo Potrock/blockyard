@@ -1,7 +1,7 @@
 import { BUILDINGS, SPACESHIP_PARTS } from '../buildings';
 import { cityStrength } from '../combat';
 import { knows, random, speed } from '../core';
-import { isBuilding, purchaseCost, strategic, workable } from '../economy';
+import { cityEffects, cityYields, isBuilding, purchaseCost, strategic, workable } from '../economy';
 import { canBuyReligious, cityReligion, faithBuildings, faithCost } from '../faith';
 import { canConstruct, canProduce, constructible, defaultBuild, faithPurchases, itemCost, placeFor, productionToward, seaWork, trainable } from '../game';
 import { within } from '../hex';
@@ -189,10 +189,13 @@ function wonder(ctx: Ctx, c: City): Production | null {
   if (random(game) >= appetite) return null;
   let best: string | null = null;
   let bestScore = 0;
+  // (The city's effects and production, worked out once for every wonder weighed.)
+  const effects = cityEffects(game, c);
+  const prod = cityYields(game, c, 0).prod;
   for (const id of constructible(game, p, c)) {
     const b = BUILDINGS[id];
     if (b.kind !== 'world' || id === 'united_nations') continue;
-    const turns = itemCost(game, { kind: 'building', id }) / Math.max(1, productionToward(game, c, { kind: 'building', id }));
+    const turns = itemCost(game, { kind: 'building', id }) / Math.max(1, productionToward(game, c, { kind: 'building', id }, effects, prod));
     if (turns > 18 + pers.wonder * 1.2) continue;
     const v = effectsValue(ctx, b.effects, c) + 2 + pers.wonder * 0.3 + (mem.aim === 'culture' ? 2 : 0);
     const score = v / Math.sqrt(turns);
@@ -381,11 +384,14 @@ function bestBuilding(ctx: Ctx, c: City, caravans: number): Production | null {
   // less, and builds one at a time.)
   const built = Object.values(game.wonders).filter((x) => x === ctx.me).length;
   const restraint = (outgunned(ctx) ? 0.6 : 1) * (built >= 3 + pers.wonder / 2 ? 0.6 : 1);
+  // (The city's effects and production, worked out once for every building weighed.)
+  const effects = cityEffects(game, c);
+  const prod = cityYields(game, c, 0).prod;
   for (const id of constructible(game, p, c)) {
     const b = BUILDINGS[id];
     if (id === 'apollo_program' || id === 'manhattan_project') continue;
     const cost = itemCost(game, { kind: 'building', id });
-    const turns = cost / Math.max(1, productionToward(game, c, { kind: 'building', id }));
+    const turns = cost / Math.max(1, productionToward(game, c, { kind: 'building', id }, effects, prod));
     let v = effectsValue(ctx, b.effects, c) - b.upkeep * w.gold;
     if (b.kind === 'world') {
       // Wonders: in the empire's best cities, one at a time (two for a wonder lover), if they'd be done
