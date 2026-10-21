@@ -7,6 +7,7 @@ import type { DealItem } from './rules/diplomacy';
 import type { Replay } from './rules/replay';
 import type { City, Game, MapPin, MapSize, MapType, Note, Production, Settings, Speed, WorldEvent } from './rules/state';
 import { YIELD_KEYS, type Yields } from './rules/terrain';
+import type { SavedGame } from './saves';
 
 /**
  * What the server and each screen say to each other (`game.clients.send`, `client.send`): the lobby
@@ -48,6 +49,8 @@ export interface LobbyView {
   settings: Settings;
   /** A saved game this room can carry on: its turn and who was in it. */
   save: { turn: number; seats: string[] } | null;
+  /** This person's saved games in other rooms (the public game's, or rooms of players' own), to go back to: in the lobby only. */
+  saves: SavedGame[];
   /** While the world's being built: how far along (0..1). */
   progress?: number;
   /** The map's seed: before a game, the one the host set (null: a new world each game); after it, the game's own; never during one. */

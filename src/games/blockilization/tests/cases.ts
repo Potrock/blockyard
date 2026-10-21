@@ -44,7 +44,7 @@ import { dealGold, dealProblem, dealTurns, denounce, diplomacyTurn, endWar, hasM
 import { bindTeams } from '../rules/teams';
 import { cityInfo, mapWire, viewFor } from '../views';
 import { packStatic, unpackKnown, unpackStatic, type KnownTile } from '../protocol';
-import { SaveThrottle } from '../saves';
+import { forgetSave, noteOldSaves, noteSave, savedGames, SaveThrottle } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
@@ -3437,6 +3437,40 @@ test('the replay after a load carries on where it was (nothing twice); a turn co
   endTurn(loaded);
   const moved = loaded.tiles.filter((tile, t) => tile.owner !== before[t]).length;
   eq(JSON.stringify(loaded.replay).length - size, 3 + 3 * moved, `a turn's record: three characters, and three for each of the ${moved} tiles that changed hands`);
+});
+
+test('a person’s saved games in other rooms are listed, from notes kept beside the saves, older saves noted once', () => {
+  // A store as `game.store` is: every room's keys together.
+  const data = new Map<string, unknown>();
+  let reads = 0;
+  const store = {
+    get: <T,>(k: string) => (k.startsWith('save:') && reads++, structuredClone(data.get(k)) as T | undefined),
+    set: (k: string, v: unknown) => void data.set(k, structuredClone(v)),
+    delete: (k: string) => void data.delete(k),
+    keys: (prefix = '') => [...data.keys()].filter((k) => k.startsWith(prefix)),
+  };
+  const seat = (key: string, name: string, civ: string | null, bot = false) => ({ key, name, civ, bot });
+  const ann = 'acct:ann';
+  // Saved before there were notes: Ann's game in room k3x9f2 with Bob, one of hers in the public game, and one without her.
+  data.set('save:k3x9f2', { game: { turn: 142, over: null }, seats: [seat(ann, 'Ann', 'rome'), seat('name:Bob', 'Bob', 'egypt'), seat('bot:1', 'Bot', 'china', true)] });
+  data.set('save:public', { game: { turn: 30, over: null }, seats: [seat(ann, 'Ann', 'greece'), seat('bot:1', 'Bot', 'zulu', true)] });
+  data.set('save:zz', { game: { turn: 99, over: null }, seats: [seat('name:Cy', 'Cy', 'inca')] });
+  data.set('savenote:gone', { turn: 5, seats: [seat(ann, 'Ann', 'rome')] });
+  noteOldSaves(store);
+  eq(reads, 3, 'each old save read once, to note it');
+  ok(!data.has('savenote:gone'), 'a note whose save is gone goes too');
+  const fresh = savedGames(store, ann, 'abc');
+  eq(JSON.stringify(fresh), JSON.stringify([{ room: 'k3x9f2', turn: 142, civ: 'rome', with: ['Bob'] }, { room: 'public', turn: 30, civ: 'greece', with: [] }]), 'Ann’s two, the latest turn first, no bots among who’s with her');
+  eq(reads, 3, 'listing them reads no save');
+  noteOldSaves(store);
+  eq(reads, 3, 'noted saves are not read again');
+  eq(savedGames(store, ann, 'public').length, 1, 'not the room she’s in (its lobby offers it already)');
+  // The game in k3x9f2 goes on, then is won; the public one is discarded.
+  noteSave(store, 'k3x9f2', { game: { turn: 143, over: null }, seats: [seat(ann, 'Ann', 'rome'), seat('name:Bob', 'Bob', 'egypt')] });
+  eq(savedGames(store, ann, 'abc')[0].turn, 143, 'a later save, a later turn');
+  noteSave(store, 'k3x9f2', { game: { turn: 150, over: { winner: 0 } }, seats: [seat(ann, 'Ann', 'rome')] });
+  forgetSave(store, 'public');
+  eq(savedGames(store, ann, 'abc').length, 0, 'a game won, or discarded, is no longer listed');
 });
 
 test('the game’s save is throttled: an order’s at once, the rest at most every few seconds, none left waiting', () => {

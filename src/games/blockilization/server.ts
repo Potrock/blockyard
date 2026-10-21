@@ -32,7 +32,7 @@ import { terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
 import { reshapeEdits, seasonal, seasonalSpots } from './seasons';
 import { seasonAt, type Season } from './rules/disasters';
 import { cityInfo, mapWire, statsFor, viewFor, yieldsWire } from './views';
-import { SaveThrottle } from './saves';
+import { forgetSave, noteOldSaves, noteSave, savedGames, SaveThrottle } from './saves';
 
 /**
  * Blockilization's server: the lobby (each person picks a civilization, the host sets the map and how
@@ -118,6 +118,8 @@ const humans = (game: GameContext) => game.players.filter((p) => !p.bot);
 const seatOf = (p: Player) => seats.find((s) => s.key === keyOf(p));
 const indexOf = (p: Player) => (civGame ? civGame.players.findIndex((x) => x.user === keyOf(p)) : -1);
 const saveKey = (game: GameContext) => `save:${game.room}`;
+/** The saves from before their notes (`saves.ts`) noted, once a room starts. */
+let notedOld = false;
 
 function lobbyView(game: GameContext, p: Player): LobbyView {
   const save = game.store.get<{ game: Game; seats: LobbySeat[] }>(saveKey(game));
@@ -128,6 +130,8 @@ function lobbyView(game: GameContext, p: Player): LobbyView {
     seats,
     settings,
     save: save && !save.game.over ? { turn: save.game.turn, seats: save.seats.filter((s) => !s.bot).map((s) => s.name) } : null,
+    // (Before a game: theirs in other rooms, to go back to.)
+    saves: phase === 'lobby' ? savedGames(game.store, keyOf(p), game.room) : [],
     progress: phase === 'building' && editsTotal ? 1 - edits.length / editsTotal : undefined,
     // (Not while a game's on: with it, anyone could work out the whole map.)
     seed: phase === 'lobby' ? chosenSeed : phase === 'over' ? (civGame?.seed ?? null) : null,
@@ -549,6 +553,7 @@ const saves = new SaveThrottle(SAVE_EVERY);
 function save(game: GameContext) {
   if (!civGame) return;
   game.store.set(saveKey(game), { game: civGame, seats });
+  noteSave(game.store, game.room, { game: civGame, seats });
   saves.saved(game.clock.now);
 }
 
@@ -620,6 +625,7 @@ function finish(game: GameContext) {
     }
   phase = 'over';
   game.store.delete(saveKey(game));
+  forgetSave(game.store, game.room);
   clearAutosaves(game);
   markAll(game);
   sendLobby(game);
@@ -788,6 +794,7 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
     case 'discard':
       if (!isHost) return;
       game.store.delete(saveKey(game));
+      forgetSave(game.store, game.room);
       clearAutosaves(game);
       break;
   }
@@ -1290,6 +1297,8 @@ export default defineServer(shared, {
     phase = 'lobby';
     civGame = null;
     leftAt.clear();
+    if (!notedOld) noteOldSaves(game.store);
+    notedOld = true;
     seatPeople(game);
     setBots(seats.filter((s) => s.bot).length);
     for (const p of humans(game)) host ??= keyOf(p);
