@@ -50,7 +50,7 @@ import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, 
 import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
 import { riverLinks, terrainEdits } from '../terrain';
-import { reshapeEdits } from '../seasons';
+import { reshapeEdits, seasonalSpots } from '../seasons';
 import { batter, disasterTurn, erupt, flood, seasonAt, seasonOf, seasonTurns, SOIL_MAX } from '../rules/disasters';
 import { climateTurn, emissions, MAX_RISES, riseAt, submerge } from '../rules/climate';
 import { corners, GROWN, KINDS, PEN_SCALE, spotsFor } from '../client/spots';
@@ -5442,12 +5442,57 @@ test('the world’s changes reach the screens: the map sent marks them, the view
   const t = at(1, 5);
   submerge(game, t);
   eq(unpackStatic(mapWire(game).tiles[t]).terrain, 'coast', 'the map sent has the sea over it');
-  const after = terrainEdits(game.grid, game.tiles);
-  const built = reshapeEdits(game.grid, game.tiles, [t], after);
+  const built = reshapeEdits(game.grid, game.tiles, [t]);
   ok(built.tiles.includes(t), 'the tile is built again');
   ok(built.edits.every((e) => tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5) === t || built.tiles.includes(tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5))), 'only its own columns');
   ok(built.edits.some((e) => e[1] === SEA_Y && e[3] === 'water') && !built.edits.some((e) => e[1] > SEA_Y && e[3] !== 'air'), 'as open sea');
   ok(before.some((e) => tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5) === t && e[1] > SEA_Y), 'where there was land');
+});
+
+test('tiles built again from the land round them alone come out as the whole map’s blocks have them, and the ground and the seasons’ blocks with them', () => {
+  const settings = { size: 'small', speed: 'quick', timer: 0, cityStates: 4, barbarians: false, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330, disasters: true } as const;
+  const seats = ['egypt', 'babylon', 'china', 'india'].map((civ) => ({ user: null, name: civ, civ, bot: true }));
+  for (const [type, wrap, seed] of [['continents', true, 3], ['highlands', false, 8], ['archipelago', true, 21], ['earth', true, 5]] as const) {
+    const game = createGame({ ...settings, victories: { ...settings.victories }, type, wrap }, seats, seed);
+    const g = game.grid;
+    // Rivers, woods, jungle, hills, mountains and a natural wonder's neighbours among them, flooded by the sea, rich with ash or silted.
+    const land = game.tiles.flatMap((tile, t) => (TERRAINS[tile.terrain].water ? [] : [t]));
+    const picks = [
+      land.find((t) => game.tiles[t].river),
+      land.find((t) => game.tiles[t].feature === 'forest'),
+      land.find((t) => game.tiles[t].feature === 'jungle'),
+      land.find((t) => game.tiles[t].elevation === 'mountain'),
+      land.find((t) => neighbours(g, t).some((n) => game.tiles[n].wonder)),
+      land.find((t) => colOf(g, t) === 0),
+      ...land.filter((_, i) => i % 37 === 5),
+    ].filter((t): t is number => t !== undefined);
+    picks.forEach((t, i) => {
+      const tile = game.tiles[t];
+      if (i % 3 === 0 && tile.elevation === 'flat' && !tile.wonder) submerge(game, t);
+      else if (i % 3 === 1) tile.soil = { food: 1 };
+      else if (tile.elevation === 'flat' && !tile.wonder) tile.flooded = true;
+    });
+    const all = terrainEdits(g, game.tiles);
+    const size = extent(g);
+    const whole = new Ground(Math.ceil(size.w), Math.ceil(size.d), all, period(g));
+    for (const t of picks) {
+      const built = reshapeEdits(g, game.tiles, [t]);
+      const want = all.filter((e) => built.columns.has(`${e[0]},${e[2]}`));
+      eq(JSON.stringify(built.built), JSON.stringify(want), `${type} tile ${t} (${tile(game, t)}): its columns' blocks`);
+      const ground = new Ground(Math.ceil(size.w), Math.ceil(size.d), [], period(g));
+      ground.rebuild(built.columns, built.built);
+      for (const key of built.columns) {
+        const [x, z] = key.split(',').map(Number);
+        eq(JSON.stringify(ground.at(x, z)), JSON.stringify(whole.at(x, z)), `${type} tile ${t}: the ground at ${key}`);
+      }
+      const spots = (s: [number, number, number, string][]) => s.map((e) => e.join()).sort().join(' ');
+      eq(spots(seasonalSpots(g, game.tiles, built.built, ground, built.columns)), spots(seasonalSpots(g, game.tiles, all, whole).filter((e) => built.columns.has(`${e[0]},${e[2]}`))), `${type} tile ${t}: the seasons' blocks`);
+    }
+  }
+  function tile(game: Game, t: number) {
+    const x = game.tiles[t];
+    return [x.terrain, x.elevation, x.feature, x.river && 'river'].filter(Boolean).join(' ');
+  }
 });
 
 // -------------------------------------------------------------------------------------------------

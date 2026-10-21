@@ -1029,7 +1029,8 @@ export class Runtime {
 
   /** A batch from the host: what happened, in order, then the frame to draw. */
   private receive(b: HostBatch) {
-    for (const e of b.events) {
+    for (let i = 0; i < b.events.length; i++) {
+      const e = b.events[i];
       switch (e.t) {
         case 'content':
           this.content.apply(e.def);
@@ -1039,9 +1040,18 @@ export class Runtime {
           if (this.replays.hides(e.call)) break;
           this.presenter.apply(e.call);
           break;
-        case 'edits':
-          this.chunks.mirrorEdits(e.cells);
+        case 'edits': {
+          // A run of them with nothing between (a server that sends each block as an event of its own)
+          // is mirrored together: each column they touch meshed once, not once for every block.
+          let cells = e.cells;
+          for (let next = b.events[i + 1]; next?.t === 'edits'; next = b.events[i + 1]) {
+            if (cells === e.cells) cells = [...cells];
+            for (const c of next.cells) cells.push(c);
+            i++;
+          }
+          this.chunks.mirrorEdits(cells);
           break;
+        }
         case 'damage':
           this.chunks.applyDamage(e.data);
           if (this.worldReady && !this.replays.playing) this.debris.seen(e.data);

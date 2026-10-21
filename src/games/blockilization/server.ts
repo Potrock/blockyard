@@ -379,7 +379,11 @@ const landKey = (t: Game['tiles'][number]) => packStatic({ ...t, feature: undefi
 /** The season the world shows at a game's turn (`rules/disasters.ts`). */
 const seasonNow = (g: Game) => seasonAt(g.turn, SPEEDS[g.settings.speed] ?? 1);
 
-/** The season turned since the world last showed it: its blocks queued to swap (each only where it still stands as it was). */
+/**
+ * The season turned since the world last showed it: its blocks queued to swap (each only where it
+ * still stands as it was), a chunk at a time (a band of them a tick: each screen draws each chunk
+ * again once, not once for every block in it).
+ */
 function turnSeason(g: Game) {
   const now = seasonNow(g);
   if (now === shownSeason || seasonQueue.length || reshapeQueue.length) return;
@@ -388,6 +392,7 @@ function turnSeason(g: Game) {
     const to = seasonal(base, now);
     if (from !== to) seasonQueue.push([x, y, z, from, to]);
   }
+  seasonQueue.sort((a, b) => (a[2] >> 4) - (b[2] >> 4) || (a[0] >> 4) - (b[0] >> 4));
   shownSeason = now;
 }
 
@@ -424,12 +429,13 @@ function reshape(game: GameContext, g: Game) {
   const now = g.tiles.map(landKey);
   const changed = now.flatMap((s, t) => (s !== shaped[t] ? [t] : []));
   if (!changed.length) return;
-  const all = terrainEdits(g.grid, g.tiles);
-  const land = extent(g.grid);
-  ground = new Ground(Math.ceil(land.w), Math.ceil(land.d), all, period(g.grid));
-  seasonSpots = seasonalSpots(g.grid, g.tiles, all, ground);
-  const look = new Map(seasonSpots.map(([x, y, z, base]) => [`${x},${y},${z}`, seasonal(base, shownSeason)]));
-  const built = reshapeEdits(g.grid, g.tiles, changed, all);
+  // (Worked out from the land round them alone: the whole map's blocks take a large map a fifth of a
+  // second, the room standing still meanwhile. The rest of the ground and the season's blocks are as they were.)
+  const built = reshapeEdits(g.grid, g.tiles, changed);
+  ground.rebuild(built.columns, built.built);
+  const spots = seasonalSpots(g.grid, g.tiles, built.built, ground, built.columns);
+  seasonSpots = [...seasonSpots.filter(([x, , z]) => !built.columns.has(`${x},${z}`)), ...spots];
+  const look = new Map(spots.map(([x, y, z, base]) => [`${x},${y},${z}`, seasonal(base, shownSeason)]));
   reshapeQueue = built.edits.map((e) => [e[0], e[1], e[2], look.get(`${e[0]},${e[1]},${e[2]}`) ?? e[3]]);
   // (Their improvements' blocks went with the old columns: set again once the new ones stand.)
   for (const t of built.tiles) decor.delete(t);

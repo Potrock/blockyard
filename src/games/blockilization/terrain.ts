@@ -230,17 +230,37 @@ interface Column {
   cap: string;
 }
 
-export function terrainEdits(g: Grid, tiles: Tile[]): Edit[] {
+/**
+ * The map's blocks. With `only`, those of its tiles alone (their land, rivers, trees and natural
+ * wonders): enough to build some tiles again (`seasons.ts`, `reshapeEdits`) without the whole map,
+ * as long as `only` reaches far enough round them for what's beside them to be worked out as it is.
+ */
+export function terrainEdits(g: Grid, tiles: Tile[], only?: Set<number>): Edit[] {
   const out: Edit[] = [];
   const size = extent(g);
   // (A column's key: on a world that wraps, its x in the world as built, whichever copy it's asked at.)
   const key = (x: number, z: number) => `${baseX(g, x)},${z}`;
+  // (With `only`, the columns round those tiles alone looked at, not the whole map's.)
+  const depth = Math.ceil(size.d);
+  let near: Uint8Array | null = null;
+  if (only) {
+    near = new Uint8Array(Math.ceil(size.w) * depth);
+    for (const t of only) {
+      const c = centre(g, t);
+      for (let x = Math.floor(c.x - HEX - 1); x <= c.x + HEX + 1; x++)
+        for (let z = Math.max(0, Math.floor(c.z - HEX - 1)); z <= c.z + HEX + 1 && z < depth; z++) {
+          const bx = baseX(g, x);
+          if (bx >= 0 && bx * depth + z < near.length) near[bx * depth + z] = 1;
+        }
+    }
+  }
   // Each land column, worked out first so rivers, trees and the land's details know them.
   const land = new Map<string, Column>();
   for (let x = g.wrap ? 0 : Math.floor(ORIGIN.x); x < Math.ceil(size.w); x++)
-    for (let z = Math.floor(ORIGIN.z); z < Math.ceil(size.d); z++) {
+    for (let z = Math.floor(ORIGIN.z); z < depth; z++) {
+      if (near && !near[x * depth + z]) continue;
       const t = tileAt(g, x + 0.5, z + 0.5);
-      if (t < 0 || tiles[t].wonder) continue;
+      if (t < 0 || tiles[t].wonder || (only && !only.has(t))) continue;
       const tile = tiles[t];
       const c = centreNear(g, t, x + 0.5);
       const d = Math.min(1, Math.hypot(x + 0.5 - c.x, z + 0.5 - c.z) / HEX);
@@ -282,7 +302,7 @@ export function terrainEdits(g: Grid, tiles: Tile[]): Edit[] {
     const col = land.get(key(x, z));
     return col && col.cap !== 'civ_rock' && col.cap !== 'civ_snow' ? col : undefined;
   };
-  for (const [t, links] of riverLinks(g, tiles)) for (const col of riverCourse(g, tiles, t, links, riverbed)) channel.add(col);
+  for (const [t, links] of riverLinks(g, tiles)) if (!only || only.has(t)) for (const col of riverCourse(g, tiles, t, links, riverbed)) channel.add(col);
   for (const col of channel)
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const bank = land.get(key(col.x + dx, col.z + dz));
@@ -329,7 +349,7 @@ export function terrainEdits(g: Grid, tiles: Tile[]): Edit[] {
   for (let t = 0; t < tiles.length; t++) {
     const tile = tiles[t];
     const f = tile.feature;
-    if (f !== 'forest' && f !== 'jungle' && f !== 'oasis') continue;
+    if ((f !== 'forest' && f !== 'jungle' && f !== 'oasis') || (only && !only.has(t))) continue;
     const c = centre(g, t);
     if (f === 'oasis') {
       const cx = Math.floor(c.x);
@@ -364,6 +384,7 @@ export function terrainEdits(g: Grid, tiles: Tile[]): Edit[] {
     built.add(id);
     const water = (n: number) => (TERRAINS[tiles[n].terrain].water ? 1 : 0);
     const [first, second] = tiles.flatMap((tile, n) => (tile.wonder === id ? [n] : [])).sort((a, b) => water(a) - water(b) || a - b);
+    if (only && !only.has(first) && (second === undefined || !only.has(second))) continue;
     const c = centre(g, first);
     const p = second === undefined ? undefined : centreNear(g, second, c.x);
     const own = (x: number, z: number) => tiles[tileAt(g, x + 0.5, z + 0.5)]?.wonder === id;

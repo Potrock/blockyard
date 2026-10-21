@@ -49,15 +49,31 @@ export class Ground {
   ) {
     this.ys = new Int16Array(width * depth).fill(SEA_Y);
     this.blocks = new Array<string>(width * depth).fill('water');
-    for (const [x, y, z, block] of edits) {
-      if (y < SEA_Y || x < 0 || z < 0 || x >= width || z >= depth) continue;
-      const i = x * depth + z;
-      // (A jungle's ferns go with its trees when it's cut: an improvement waits for them as for a tree.)
-      if (PLANT_BLOCKS.has(block) && !TREE_BLOCKS.has(block)) this.plants.set(i, block);
-      if (TREE_BLOCKS.has(block) || PLANT_BLOCKS.has(block) || y < this.ys[i]) continue;
-      this.ys[i] = y;
-      this.blocks[i] = block;
+    for (const e of edits) this.add(e);
+  }
+
+  /** A block of the land as built: the column's top, if it's over what's there (not a tree's, nor a plant's). */
+  private add([x, y, z, block]: Edit) {
+    if (y < SEA_Y || x < 0 || z < 0 || x >= this.width || z >= this.depth) return;
+    const i = x * this.depth + z;
+    // (A jungle's ferns go with its trees when it's cut: an improvement waits for them as for a tree.)
+    if (PLANT_BLOCKS.has(block) && !TREE_BLOCKS.has(block)) this.plants.set(i, block);
+    if (TREE_BLOCKS.has(block) || PLANT_BLOCKS.has(block) || y < this.ys[i]) return;
+    this.ys[i] = y;
+    this.blocks[i] = block;
+  }
+
+  /** Some columns built again (keyed `x,z`, as built: `seasons.ts`, `reshapeEdits`): measured again from their blocks now. */
+  rebuild(columns: Set<string>, edits: Edit[]) {
+    for (const key of columns) {
+      const [x, z] = key.split(',').map(Number);
+      if (x < 0 || z < 0 || x >= this.width || z >= this.depth) continue;
+      const i = x * this.depth + z;
+      this.ys[i] = SEA_Y;
+      this.blocks[i] = 'water';
+      this.plants.delete(i);
     }
+    for (const e of edits) if (columns.has(`${e[0]},${e[2]}`)) this.add(e);
   }
 
   /** A column's top block: its height and what it is, and the plant standing on it (null off the map). */
