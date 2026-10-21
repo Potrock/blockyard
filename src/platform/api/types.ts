@@ -1084,6 +1084,13 @@ export interface BlockDefinition {
    * grass colour of where it stands (`'grass'`, like grass and leaves).
    */
   tint?: string;
+  /**
+   * Other looks it takes while a screen shows them (`ClientWorld.looks`): textures, as `texture` gives
+   * them (faces not given keep their own), on every one of it in the world at once, nothing in the
+   * world changed or drawn again (`{ autumn: { color: ['#c4541e', '#e0a832'] } }`: woods that turn
+   * with the seasons without a block set, or a block id spent on each look).
+   */
+  looks?: Record<string, BlockTexture | BlockFaces>;
   /** In the creative block picker (games with `player.build`). Default true. */
   picker?: boolean;
   /** Players and explosions can break it (`world.breakBlock`, `world.explode`, building). Default true. */

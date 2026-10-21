@@ -68,9 +68,9 @@ export function stepCost(game: Game, u: Unit, a: number, b: number): number {
   if (!type) return Infinity;
   if (to.elevation === 'mountain' || to.feature === 'ice') return Infinity;
   const water = TERRAINS[to.terrain].water;
-  const city = cityAt(game, b);
   if (type.domain === 'sea') {
-    if (!water && !(city && city.owner === u.owner)) return Infinity;
+    // (A ship may put in at its own city's harbour.)
+    if (!water && cityAt(game, b)?.owner !== u.owner) return Infinity;
     if (to.terrain === 'ocean' && type.abilities?.includes('coast_only') && !canOcean(game, u.owner)) return Infinity;
     return 1;
   }

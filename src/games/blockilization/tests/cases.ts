@@ -13,7 +13,7 @@ import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unit
 import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
 import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, upgradeTo, wellFormed, type Order } from '../rules/game';
-import { colOf, distance, line, neighbour, neighbours, tileAt, within } from '../rules/hex';
+import { colOf, distance, line, neighbour, neighbours, rowOf, tileAt, within } from '../rules/hex';
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
 import { IMPROVEMENTS, TERRAINS, type ImprovementId } from '../rules/terrain';
@@ -47,10 +47,10 @@ import { cityInfo, mapWire, viewFor } from '../views';
 import { packStatic, unpackKnown, unpackStatic, type KnownTile } from '../protocol';
 import { autoKey, autosaveTurns, backupsKept, discardGame, forgetGame, gameId, gameKey, inGame, keepGame, moveRoomSaves, playedElsewhere, playedNow, renameGame, restoreTurn, roomCode, saveGame, savedGames, SaveThrottle, stillPlayed, tidyGames } from '../saves';
 import { baseX, centre as middleOf, extent, period, SEA_Y, tileAt as tileUnder, UNIT_SPOTS } from '../geometry';
-import { decorKey, decorOf, Ground, wallEdges } from '../improvements';
+import { decorKey, decorOf, Ground, SURFACE_BLOCKS, wallEdges } from '../improvements';
 import { activeSide, advanceSequence, sequenceDone, startSequence, waitingOn } from '../rules/turns';
-import { riverLinks, terrainEdits } from '../terrain';
-import { reshapeEdits, seasonalSpots } from '../seasons';
+import { EVERGREEN, riverLinks, SNOWY, terrainEdits } from '../terrain';
+import { reshapeEdits, seasonalBlocks } from '../seasons';
 import { batter, disasterTurn, erupt, flood, seasonAt, seasonOf, seasonTurns, SOIL_MAX } from '../rules/disasters';
 import { climateTurn, emissions, MAX_RISES, riseAt, submerge } from '../rules/climate';
 import { corners, GROWN, KINDS, PEN_SCALE, spotsFor } from '../client/spots';
@@ -5352,6 +5352,43 @@ test('seasons: spring, summer, autumn, winter and round again, a season five tur
   eq(seasonOf(game), 'winter', 'a game’s season from its turn and speed (blank worlds are quick: winter by turn 10)');
 });
 
+test('the seasons turn on the screens alone: the woods in the tropics and on a wonder are built as twins that never turn, the snowy tiles’ ground as twins that snow lies on', () => {
+  const settings = { size: 'small', speed: 'quick', timer: 0, cityStates: 4, barbarians: false, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330, disasters: true } as const;
+  const seats = ['egypt', 'babylon', 'china', 'india'].map((civ) => ({ user: null, name: civ, civ, bot: true }));
+  const game = createGame({ ...settings, victories: { ...settings.victories }, type: 'continents', wrap: true }, seats, 4);
+  const g = game.grid;
+  const raw = terrainEdits(g, game.tiles);
+  const edits = seasonalBlocks(g, game.tiles, raw.map((e) => [...e]));
+  const latitude = (t: number) => Math.abs(((rowOf(g, t) + 0.5) / g.height) * 2 - 1);
+  const under = (e: [number, number, number, string]) => tileUnder(g, e[0] + 0.5, e[2] + 0.5);
+  const counts = { woods: 0, tropics: 0, ground: 0 };
+  raw.forEach((e, i) => {
+    const t = under(e);
+    const now = edits[i][3];
+    if (e[3] === 'civ_leaves') {
+      const turns = t >= 0 && !game.tiles[t].wonder && latitude(t) > 0.3;
+      eq(now, turns ? e[3] : EVERGREEN, `the leaves at ${e.slice(0, 3).join(',')}`);
+      counts[turns ? 'woods' : 'tropics']++;
+    } else if (now !== e[3]) {
+      eq(now, SNOWY[e[3]], 'only the season’s twins are changed');
+      counts.ground++;
+    }
+  });
+  ok(counts.woods > 0 && counts.tropics > 0 && counts.ground > 0, `woods that turn and woods that don't, and ground under snow in winter: ${JSON.stringify(counts)}`);
+  // The ground's twins are each snowy tile's column tops, and no other block of theirs.
+  const size = extent(g);
+  const ground = new Ground(Math.ceil(size.w), Math.ceil(size.d), edits, period(g));
+  const twins = new Set(Object.values(SNOWY));
+  for (const e of edits) {
+    if (!twins.has(e[3])) continue;
+    const top = ground.at(e[0], e[2]);
+    eq(`${top?.y} ${top?.block}`, `${e[1]} ${e[3]}`, `a twin at ${e.slice(0, 3).join(',')} is its column's top`);
+    const tile = game.tiles[under(e)];
+    ok(latitude(under(e)) > 0.3 && !tile.wonder && (tile.elevation !== 'flat' || tile.terrain === 'tundra'), 'on a snowy tile');
+    ok(SURFACE_BLOCKS.has(e[3]), `${e[3]} is the land's surface (units stand on it, improvements go on it)`);
+  }
+});
+
 test('a volcano erupting hurts what’s beside it, buries improvements, and leaves the land round it rich for good', () => {
   const { game, at } = blank();
   const v = at(8, 8);
@@ -5541,7 +5578,7 @@ test('the world’s changes reach the screens: the map sent marks them, the view
   ok(before.some((e) => tileUnder(game.grid, e[0] + 0.5, e[2] + 0.5) === t && e[1] > SEA_Y), 'where there was land');
 });
 
-test('tiles built again from the land round them alone come out as the whole map’s blocks have them, and the ground and the seasons’ blocks with them', () => {
+test('tiles built again from the land round them alone come out as the whole map’s blocks have them (the seasons’ twins among them), and the ground with them', () => {
   const settings = { size: 'small', speed: 'quick', timer: 0, cityStates: 4, barbarians: false, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330, disasters: true } as const;
   const seats = ['egypt', 'babylon', 'china', 'india'].map((civ) => ({ user: null, name: civ, civ, bot: true }));
   for (const [type, wrap, seed] of [['continents', true, 3], ['highlands', false, 8], ['archipelago', true, 21], ['earth', true, 5]] as const) {
@@ -5564,7 +5601,7 @@ test('tiles built again from the land round them alone come out as the whole map
       else if (i % 3 === 1) tile.soil = { food: 1 };
       else if (tile.elevation === 'flat' && !tile.wonder) tile.flooded = true;
     });
-    const all = terrainEdits(g, game.tiles);
+    const all = seasonalBlocks(g, game.tiles, terrainEdits(g, game.tiles));
     const size = extent(g);
     const whole = new Ground(Math.ceil(size.w), Math.ceil(size.d), all, period(g));
     for (const t of picks) {
@@ -5577,8 +5614,6 @@ test('tiles built again from the land round them alone come out as the whole map
         const [x, z] = key.split(',').map(Number);
         eq(JSON.stringify(ground.at(x, z)), JSON.stringify(whole.at(x, z)), `${type} tile ${t}: the ground at ${key}`);
       }
-      const spots = (s: [number, number, number, string][]) => s.map((e) => e.join()).sort().join(' ');
-      eq(spots(seasonalSpots(g, game.tiles, built.built, ground, built.columns)), spots(seasonalSpots(g, game.tiles, all, whole).filter((e) => built.columns.has(`${e[0]},${e[2]}`))), `${type} tile ${t}: the seasons' blocks`);
     }
   }
   function tile(game: Game, t: number) {

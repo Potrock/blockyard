@@ -395,8 +395,19 @@ export function terrainEdits(g: Grid, tiles: Tile[], only?: Set<number>): Edit[]
   return out;
 }
 
-/** Trees' blocks (with their seasons' looks, `seasons.ts`), and the ferns under a jungle's (a city's founding, or the woods cut down, clears them from a tile). */
-export const TREE_BLOCKS = new Set(['civ_trunk', 'civ_leaves', 'civ_pine', 'civ_jungle', 'civ_fern', 'civ_leaves_autumn', 'civ_leaves_snow', 'civ_pine_snow']);
+/**
+ * The seasons in the world's blocks: the woods turn red and gold in autumn and snowy in winter, pines
+ * and the tundra snowy too, as each screen shows the season's looks (`shared.ts`' blocks' `looks`,
+ * `client.world.looks`), with nothing in the world changed. Where they don't (the tropics' woods and
+ * a natural wonder's), the world is built with leaves that never turn; and where snow lies in winter
+ * on the ground (the hills and mountains away from the tropics), with the ground's twins that take
+ * it (`seasons.ts` puts them there).
+ */
+export const EVERGREEN = 'civ_leaves_evergreen';
+export const SNOWY: Record<string, string> = { civ_grass: 'civ_grass_snowy', civ_plains: 'civ_plains_snowy', civ_rock: 'civ_rock_snowy' };
+
+/** Trees' blocks (with the leaves that never turn, `EVERGREEN`), and the ferns under a jungle's (a city's founding, or the woods cut down, clears them from a tile). */
+export const TREE_BLOCKS = new Set(['civ_trunk', 'civ_leaves', 'civ_pine', 'civ_jungle', 'civ_fern', EVERGREEN]);
 
 /** The ground a tree can stand on at a column (its top), or undefined (none: off the land, in a river). */
 type Ground = (x: number, z: number) => number | undefined;

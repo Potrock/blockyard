@@ -8,11 +8,11 @@ import { tileY } from './overlay';
 import { store } from './store';
 
 /**
- * The living world on this screen (`rules/disasters.ts`, `rules/climate.ts`; the blocks themselves
- * change on the server, `seasons.ts`): storm clouds over the sea with rain and lightning under them,
- * a thread of smoke over each volcano known, snow falling in winter and leaves drifting in autumn;
- * and, as a turn begins, what the world did at its end where this player knows the land: an
- * eruption's fire and ash, a river's flood, the sea rising over the coast.
+ * The living world on this screen (`rules/disasters.ts`, `rules/climate.ts`; the land itself changes
+ * on the server, `seasons.ts`): the season's looks on the blocks that turn with it, storm clouds over
+ * the sea with rain and lightning under them, a thread of smoke over each volcano known, snow falling
+ * in winter and leaves drifting in autumn; and, as a turn begins, what the world did at its end where
+ * this player knows the land: an eruption's fire and ash, a river's flood, the sea rising over the coast.
  */
 
 type Rgb = [number, number, number];
@@ -22,6 +22,9 @@ type At = { x: number; y: number; z: number };
 export function seasonHere(v: View | null): Season {
   return seasonAt(v?.turn ?? 1, SPEEDS[store.lobby?.settings.speed ?? 'standard'] ?? 1);
 }
+
+/** The season each screen's world shows (`client.world.looks`). */
+const looking = new WeakMap<Client, Season>();
 
 /** The season, as the top bar says it. */
 export const seasonName = (v: View | null) => SEASON_NAMES[seasonHere(v)];
@@ -81,6 +84,12 @@ export function drawWeather(client: Client, dt: number) {
   if (!v || !g) return;
   const fx = client.fx;
   const now = client.time;
+  // The season's looks on the world's blocks that turn with it (`shared.ts`): all at once, nothing in the world changed.
+  const season = seasonHere(v);
+  if (looking.get(client) !== season) {
+    looking.set(client, season);
+    client.world.looks?.(season);
+  }
   lasting = lasting.filter((l) => {
     while (l.next <= now && l.next < l.until) {
       l.run();
@@ -122,7 +131,6 @@ export function drawWeather(client: Client, dt: number) {
     fx.particles({ ...crater, y: crater.y - 0.6 }, [1, 0.3, 0.05], { count: 1, speed: 0, size: 1.6 + Math.sin(now * 2) * 0.4, gravity: 0, glow: 2.5, life: 0.05, spread: 0, up: 0, collide: false });
   }
   // The season: snow falling round where the camera looks in winter (none over the tropics), leaves drifting off the woods in autumn.
-  const season = seasonHere(v);
   const middle = { x: cam.x, y: SEA_Y, z: cam.z };
   const lat = Math.abs((cam.z / extent(g).d) * 2 - 1);
   if (season === 'winter' && lat > 0.25) steady('snow', 40, () => fx.particles(near(middle, cam.dist * 0.7, SEA_Y + 14 + Math.random() * 6), [0.95, 0.97, 1], { count: 1, speed: 0.2, size: 0.14, gravity: 0.6, life: 6, spread: 0.3, up: 0, drag: 1.4, velocity: { x: 0.6, y: -1.2, z: 0.2 } }));

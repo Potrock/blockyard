@@ -78,6 +78,14 @@ const basalt = (x: number, y: number) => (x === 0 || x === 15 ? '#18171c' : spec
 /** Stone that was wood: grey-brown, the grain running up it. */
 const petrified = (x: number, y: number) => (x % 4 === 0 ? '#7a6656' : speck(x, y >> 2) < 0.5 ? '#a8927c' : '#9a8470');
 
+/** Snow lying on a block's top in winter (`looks`). */
+const SNOW = { top: mottled(['#eef3f6', '#e2e9ee', '#f8fbfc']) };
+/** Blocks with twins (`terrain.ts`' `EVERGREEN`, `SNOWY`): one texture for both. */
+const LEAVES = mottled(['#2a6a2c', '#317434', '#245e28']);
+const GRASS = sides(['#4c9a30', '#56a438', '#468e2c']);
+const PLAINS = sides(['#c4aa4e', '#ba9e46', '#ccb458']);
+const ROCK = mottled(['#7e7e80', '#8a8a8c', '#727274']);
+
 export const shared = defineShared({
   ...meta,
   world: {
@@ -94,10 +102,10 @@ export const shared = defineShared({
     // Each terrain its own colour, far enough apart to tell them under the veil over land out of
     // sight (darker, cooler and paler: fog.ts): grassland green, plains gold, desert pale sand in
     // ripples, tundra grey-green with frost, snow white; and their plants (terrain.ts).
-    civ_grass: { texture: sides(['#4c9a30', '#56a438', '#468e2c']), label: 'Grassland' },
-    civ_plains: { texture: sides(['#c4aa4e', '#ba9e46', '#ccb458']), label: 'Plains' },
+    civ_grass: { texture: GRASS, label: 'Grassland' },
+    civ_plains: { texture: PLAINS, label: 'Plains' },
     civ_desert: { texture: { top: { paint: ripples }, side: mottled(['#e8d49a', '#e0cc90', '#d8c286']), bottom: mottled(['#e0cc90']) }, label: 'Desert' },
-    civ_tundra: { texture: { top: { paint: rime }, side: mottled(['#6e5434', '#77593a', '#684f30']), bottom: mottled(['#6e5434']) }, label: 'Tundra' },
+    civ_tundra: { texture: { top: { paint: rime }, side: mottled(['#6e5434', '#77593a', '#684f30']), bottom: mottled(['#6e5434']) }, looks: { winter: SNOW }, label: 'Tundra' },
     civ_snow: { texture: mottled(['#f4f8fa', '#e8eef2', '#ffffff']), label: 'Snow' },
     civ_floodplain: { texture: sides(['#9ab84a', '#a4c04e', '#90ae44']), label: 'Flood Plains' },
     civ_marsh: { texture: sides(['#52683c', '#4a5f36', '#5a7042']), label: 'Marsh' },
@@ -108,18 +116,19 @@ export const shared = defineShared({
     civ_reeds: { texture: { paint: reeds }, boxes: blades([[3, 4, 14], [6, 2, 16], [11, 4, 15], [12, 9, 12], [4, 11, 15], [9, 12, 16]]), solid: false, label: 'Reeds' },
     civ_fern: { texture: { paint: stem(['#2e7a28', '#3a8a2e', '#4a9e36', '#6ac04a']) }, boxes: FERN, solid: false, label: 'Ferns' },
     civ_dirt: { texture: mottled(['#6e5434', '#77593a', '#684f30']), label: 'Earth' },
-    civ_rock: { texture: mottled(['#7e7e80', '#8a8a8c', '#727274']), label: 'Rock' },
+    civ_rock: { texture: ROCK, label: 'Rock' },
     civ_coast_floor: { texture: mottled(['#d8c890', '#e0d098', '#ccbc84']), label: 'Sandbank' },
     civ_ocean_floor: { texture: mottled(['#1e3a5a', '#22405f', '#1a3452']), label: 'Sea Floor' },
-    civ_leaves: { texture: mottled(['#2a6a2c', '#317434', '#245e28']), label: 'Forest' },
+    // (The woods turn with the seasons, `terrain.ts`: red and gold in autumn, snowy in winter.)
+    civ_leaves: { texture: LEAVES, looks: { autumn: mottled(['#c4541e', '#d8802a', '#b8381c', '#e0a832'], 2), winter: mottled(['#e8eef2', '#2a5a30', '#f4f8fa', '#d8e2e8']) }, label: 'Forest' },
     civ_jungle: { texture: mottled(['#2e9a32', '#38a83a', '#26882c', '#56bc48'], 2), label: 'Jungle' },
-    civ_pine: { texture: mottled(['#2a4a3a', '#30523f', '#244234']), label: 'Pines' },
+    civ_pine: { texture: mottled(['#2a4a3a', '#30523f', '#244234']), looks: { winter: mottled(['#2a4a3a', '#e8eef2', '#30523f', '#f4f8fa']) }, label: 'Pines' },
     civ_trunk: { texture: mottled(['#5a4028', '#644830', '#523a24']), label: 'Trunk' },
-    // The seasons' looks (`seasons.ts`): the woods red and gold in autumn, snow on the trees and the high ground in winter.
-    civ_leaves_autumn: { texture: mottled(['#c4541e', '#d8802a', '#b8381c', '#e0a832'], 2), label: 'Autumn Woods' },
-    civ_leaves_snow: { texture: mottled(['#e8eef2', '#2a5a30', '#f4f8fa', '#d8e2e8']), label: 'Snowy Woods' },
-    civ_pine_snow: { texture: mottled(['#2a4a3a', '#e8eef2', '#30523f', '#f4f8fa']), label: 'Snowy Pines' },
-    civ_frost: { texture: sides(['#eef3f6', '#e2e9ee', '#f8fbfc']), label: 'Snow' },
+    // The seasons' twins (`terrain.ts`): woods that never turn (the tropics', a natural wonder's), and the ground of the hills and mountains away from the tropics, under snow in winter.
+    civ_leaves_evergreen: { texture: LEAVES, label: 'Forest' },
+    civ_grass_snowy: { texture: GRASS, looks: { winter: SNOW }, label: 'Grassland' },
+    civ_plains_snowy: { texture: PLAINS, looks: { winter: SNOW }, label: 'Plains' },
+    civ_rock_snowy: { texture: ROCK, looks: { winter: SNOW }, label: 'Rock' },
     // What the world does to the land (`rules/disasters.ts`, `rules/climate.ts`): ash and silt's rich soil, the sea's mud on flooded land.
     civ_loam: { texture: sides(['#3e3424', '#4a4028', '#56682e', '#3a3020']), label: 'Rich Soil' },
     civ_silt: { texture: sides(['#7a7458', '#6c664c', '#857e60']), label: 'Flooded Land' },

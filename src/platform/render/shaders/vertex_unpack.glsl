@@ -11,6 +11,9 @@ in uvec2 aData;
 
 uniform float uTime;
 uniform vec4 uWind; // xy: direction, z: strength, w: gust phase
+// A texel per texture layer: the layer drawn in its place, red + green * 256 (a game's blocks'
+// other looks, `Renderer.setLooks`; each its own otherwise).
+uniform sampler2D uLooks;
 
 struct Vtx {
   vec3 pos;      // chunk-local (animated)
@@ -64,7 +67,8 @@ Vtx unpackVertex(vec3 chunkOrigin) {
   v.ao = float((w0 >> 22u) & 3u) / 3.0;
   v.tint = float((w0 >> 26u) & 1u);
   v.cutout = float((w0 >> 29u) & 1u);
-  v.layer = w1 & 1023u;
+  vec2 look = texelFetch(uLooks, ivec2(int(w1 & 1023u), 0), 0).rg * 255.0 + 0.5;
+  v.layer = uint(look.x) + (uint(look.y) << 8u);
   v.sky = float((w1 >> 12u) & 63u) / 60.0;
   v.blk = float((w1 >> 18u) & 63u) / 60.0;
   v.plantV = -1.0;

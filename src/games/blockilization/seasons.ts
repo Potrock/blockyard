@@ -1,41 +1,17 @@
 import { baseX, centre, HEX, SEA_Y, tileAt } from './geometry';
-import type { Ground } from './improvements';
 import { neighbours, rowOf, within, type Grid } from './rules/hex';
-import type { Season } from './rules/disasters';
 import type { Tile } from './rules/state';
-import { terrainEdits, type Edit } from './terrain';
+import { EVERGREEN, PLANT_BLOCKS, SNOWY, terrainEdits, TREE_BLOCKS, type Edit } from './terrain';
 
 /**
- * The seasons and the world's changes in blocks, for the server (`server.ts`): in autumn the woods
+ * The seasons and the world's changes in blocks, for the server (`server.ts`). In autumn the woods
  * turn red and gold; in winter snow lies on the hills, the mountains and the tundra, and on the trees
- * (none in the tropics). The blocks that change are found once from the map as it's built (each
- * column's top, and the trees' leaves) and swapped as the seasons turn, a few thousand a tick. And
- * where the world itself changes a tile (the sea over it, an eruption's ash, a flood's silt), its
- * columns are built again from the map as it is now (`reshapeEdits`).
+ * (none in the tropics): each screen shows the season's looks of the blocks that have them
+ * (`shared.ts`), and the world is built with twins where they shouldn't turn or should (`terrain.ts`'
+ * `EVERGREEN`, `SNOWY`), so nothing in the world changes as the seasons turn. Where the world itself changes a tile (the sea over it, an
+ * eruption's ash, a flood's silt), its columns are built again from the map as it is now
+ * (`reshapeEdits`).
  */
-
-/** What each block becomes in a season (the rest stay as they are). */
-const SEASONAL: Partial<Record<Season, Record<string, string>>> = {
-  autumn: { civ_leaves: 'civ_leaves_autumn' },
-  winter: {
-    civ_leaves: 'civ_leaves_snow',
-    civ_pine: 'civ_pine_snow',
-    civ_grass: 'civ_frost',
-    civ_plains: 'civ_frost',
-    civ_tundra: 'civ_frost',
-    civ_rock: 'civ_frost',
-    civ_bank: 'civ_frost',
-    civ_loam: 'civ_frost',
-  },
-};
-
-/** Every block's look in a season (a block of the year's own: what it is the rest of the year). */
-export function seasonal(block: string, season: Season | null): string {
-  return (season && SEASONAL[season]?.[block]) ?? block;
-}
-
-/** The blocks that can change with the seasons. */
-const CHANGING = new Set(Object.values(SEASONAL).flatMap((m) => Object.keys(m!)));
 
 /** How far a tile is toward a pole (0 at the equator, 1 at a pole). */
 const latitude = (g: Grid, t: number) => Math.abs(((rowOf(g, t) + 0.5) / g.height) * 2 - 1);
@@ -44,30 +20,32 @@ const latitude = (g: Grid, t: number) => Math.abs(((rowOf(g, t) + 0.5) / g.heigh
 const snowy = (g: Grid, tile: Tile, t: number) => !tile.wonder && latitude(g, t) > 0.3 && (tile.elevation !== 'flat' || tile.terrain === 'tundra');
 
 /**
- * The blocks the seasons change, from the world's blocks as built (before any season's look):
- * the tops of the snowy tiles' columns (`ground`'s), and the leaves of the trees out of the tropics.
- * With `columns` (keyed `x,z`), those columns' alone (`edits` theirs at least: some built again).
+ * The world's blocks as built (`terrainEdits`', whole columns) made to turn with the seasons only
+ * where they do, in place: the woods' leaves in the tropics and on a natural wonder's tile as those
+ * that never turn (`EVERGREEN`), and the top of each snowy tile's column (its last block set at its
+ * highest, trees and plants aside: what `Ground` has as its top) as its twin that snow lies on (`SNOWY`).
  */
-export function seasonalSpots(g: Grid, tiles: Tile[], edits: Edit[], ground: Ground, columns?: Set<string>): Edit[] {
-  const out: Edit[] = [];
-  for (const [x, y, z, block] of edits) {
-    if ((block !== 'civ_leaves' && block !== 'civ_pine') || (columns && !columns.has(`${x},${z}`))) continue;
-    const t = tileAt(g, x + 0.5, z + 0.5);
-    if (t >= 0 && !tiles[t].wonder && latitude(g, t) > 0.3) out.push([x, y, z, block]);
-  }
-  const top = (x: number, z: number) => {
-    const at = ground.at(x, z);
-    if (!at || !CHANGING.has(at.block)) return;
-    const t = tileAt(g, x + 0.5, z + 0.5);
-    if (t >= 0 && snowy(g, tiles[t], t)) out.push([x, at.y, z, at.block]);
-  };
-  if (columns)
-    for (const key of columns) {
-      const [x, z] = key.split(',').map(Number);
-      top(x, z);
+export function seasonalBlocks(g: Grid, tiles: Tile[], edits: Edit[]): Edit[] {
+  const tops = new Map<string, number>();
+  for (let i = 0; i < edits.length; i++) {
+    const [x, y, z, block] = edits[i];
+    if (block === 'civ_leaves') {
+      const t = tileAt(g, x + 0.5, z + 0.5);
+      if (t < 0 || tiles[t].wonder || latitude(g, t) <= 0.3) edits[i][3] = EVERGREEN;
+      continue;
     }
-  else for (let x = 0; x < ground.width; x++) for (let z = 0; z < ground.depth; z++) top(x, z);
-  return out;
+    if (y < SEA_Y || TREE_BLOCKS.has(block) || PLANT_BLOCKS.has(block)) continue;
+    const key = `${x},${z}`;
+    const top = tops.get(key);
+    if (top === undefined || y >= edits[top][1]) tops.set(key, i);
+  }
+  for (const i of tops.values()) {
+    const [x, , z, block] = edits[i];
+    if (!SNOWY[block]) continue;
+    const t = tileAt(g, x + 0.5, z + 0.5);
+    if (t >= 0 && snowy(g, tiles[t], t)) edits[i][3] = SNOWY[block];
+  }
+  return edits;
 }
 
 /** The columns (as built: `baseX`) of a set of tiles, keyed `x,z`. */
@@ -107,7 +85,7 @@ export function reshapeEdits(g: Grid, tiles: Tile[], changed: number[]): { edits
     for (let y = SEA_Y + 1; y <= SEA_Y + 16; y++) out.push([x, y, z, 'air']);
   }
   const near = new Set([...ts].flatMap((t) => within(g, t, RESHAPE_REACH)));
-  const built = terrainEdits(g, tiles, near).filter((e) => cols.has(`${e[0]},${e[2]}`));
+  const built = seasonalBlocks(g, tiles, terrainEdits(g, tiles, near).filter((e) => cols.has(`${e[0]},${e[2]}`)));
   for (const e of built) out.push(e);
   return { edits: out, built, tiles: [...ts], columns: cols };
 }
