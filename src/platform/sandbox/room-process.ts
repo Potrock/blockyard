@@ -45,6 +45,7 @@ export function runRoomProcess(wasmPath: string) {
       else if (msg.t === 'command') core.command(msg.client, msg.cmd);
       else if (msg.t === 'identify') core.identify(msg.client, msg.who);
       else if (msg.t === 'disconnect') core.disconnect(msg.client);
+      else if (msg.t === 'data') store?.heard(msg.key, msg.value);
       else if (msg.t === 'stop') {
         core.stop();
         store?.close();

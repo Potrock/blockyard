@@ -67,6 +67,9 @@ export type LobbyAction =
   | { a: 'team'; seat: string; team: number | null }
   | { a: 'teamPreset'; preset: TeamPreset }
   | { a: 'start' }
+  /** Go to one of your games, at its own address (the server answers `goto`). */
+  | { a: 'open'; id: string }
+  /** Carry one on here (a platform whose screens can't go to another room). */
   | { a: 'resume'; id: string }
   | { a: 'discard'; id: string }
   | { a: 'newGame' };

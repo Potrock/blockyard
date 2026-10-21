@@ -614,18 +614,33 @@ export class TitleScreen implements HomeScreen {
   }
 }
 
-/** Copy the link to this game (and room) for a friend: `said` gets what to show on the button. */
 /** The page's address for an invite link (an uploaded game's sandboxed frame asks the page around it). */
 export const invite = { address: async (): Promise<string> => location.href };
 
-export async function copyInvite(said: (text: string) => void) {
+/**
+ * Copy the link to the game on show for a friend: to this room (and copy of the public game), or
+ * to another of its rooms (`room`: a code, or null for the public game). The link, and whether it
+ * reached the clipboard.
+ */
+export async function copyRoomLink(room?: string | null): Promise<{ link: string; copied: boolean }> {
   const link = new URL(await invite.address());
   for (const p of ['server', 'name', 'seed']) link.searchParams.delete(p);
-  const done = navigator.clipboard?.writeText(link.href).then(
-    () => said('Link copied'),
-    () => said(link.href),
-  );
-  if (!done) said(link.href);
+  if (room !== undefined) {
+    link.searchParams.delete('shard');
+    if (room) link.searchParams.set('room', room);
+    else link.searchParams.delete('room');
+  }
+  const copied = (await navigator.clipboard?.writeText(link.href).then(
+    () => true,
+    () => false,
+  )) ?? false;
+  return { link: link.href, copied };
+}
+
+/** Copy the link to this game (and room) for a friend: `said` gets what to show on the button. */
+export async function copyInvite(said: (text: string) => void) {
+  const { link, copied } = await copyRoomLink();
+  said(copied ? 'Link copied' : link);
 }
 
 /** A guest's look, as this browser keeps it (their first: one of the ready-made people, kept). */

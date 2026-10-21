@@ -31,7 +31,17 @@ export interface SmokeWorkerResult {
 }
 
 /** The server to a room's worker. */
-export type ToRoom = { t: 'connect'; client: string; who?: Who } | { t: 'identify'; client: string; who: Who } | { t: 'command'; client: string; cmd: ClientCommand } | { t: 'disconnect'; client: string } | { t: 'stop' };
+export type ToRoom =
+  | { t: 'connect'; client: string; who?: Who }
+  | { t: 'identify'; client: string; who: Who }
+  | { t: 'command'; client: string; cmd: ClientCommand }
+  | { t: 'disconnect'; client: string }
+  | { t: 'stop' }
+  /**
+   * Another room of the game changed `game.store` (a sandboxed room's: it reads from a copy of its
+   * own). A room in a worker thread reads the database itself, which has it already.
+   */
+  | { t: 'data'; key: string; value: unknown };
 
 /** A room's worker to the server. */
 export type FromRoom =

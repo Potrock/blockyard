@@ -48,9 +48,19 @@ export class SaveThrottle {
  * is kept under it (`game:<id>`) in the game's store: the server's database on its disk, which
  * outlives every room (rooms stop, restart and come and go; the save stays). Beside it a note
  * (`gamenote:<id>`) says what it is in a few dozen bytes: its turn, who's in it (by account), and
- * where and when it was last played. A lobby reads only the notes to list a person's games, any of
- * which can be carried on in whatever room they're in; a new game never touches another's save.
+ * where and when it was last played. A lobby reads only the notes to list a person's games; a new
+ * game never touches another's save.
+ *
+ * A game is played at an address of its own: the room named for its id (`?room=<id>`), which
+ * opens it as it starts, so its link is the way back to it and the invitation to it. A game begun
+ * in a room of one's own takes that room's code for its id; one from before (kept under an id
+ * that's no room's code) is given a new id the first time it's opened (`renameGame`).
  */
+
+/** A room's code, as the platform takes it (`?room=`): 4 to 24 lower-case letters and digits. */
+const ROOM_CODE = /^[a-z0-9]{4,24}$/;
+/** Whether a game's id can be its room's code (every new game's is; some from before aren't). */
+export const roomCode = (id: string) => ROOM_CODE.test(id);
 
 /** A saved game, in brief. */
 export interface GameNote {
@@ -73,8 +83,8 @@ export interface SavedGame {
   with: string[];
   /** When it was last played (an ISO time). */
   at: string;
-  /** Being played right now in another room (it can't be carried on in two at once). */
-  elsewhere: boolean;
+  /** Being played right now (by whoever's in its room: join them there). */
+  live: boolean;
 }
 
 /** The part of `game.store` the saves need. */
@@ -125,23 +135,40 @@ export function forgetGame(store: Kept, id: string) {
 /** Whether a person (their seat's key) has a seat in a saved game. */
 export const inGame = (store: Kept, id: string, who: string) => !!store.get<GameNote>(noteKey(id))?.seats.some((s) => s.key === who);
 
+/** Whether a game's note says it's being played right now (saved a moment ago, with people still there). */
+const live = (note: GameNote, now: Date) => note.open !== false && now.getTime() - Date.parse(note.at) < LIVE_MS;
+
 /** Whether a saved game is being played right now in a room other than `here`. */
 export function playedElsewhere(store: Kept, id: string, here: string, now = new Date()): boolean {
   const note = store.get<GameNote>(noteKey(id));
-  return !!note && note.room !== here && note.open !== false && now.getTime() - Date.parse(note.at) < LIVE_MS;
+  return !!note && note.room !== here && live(note, now);
 }
 
 /** The saved games a person (their seat's key) has a seat in, the latest played first. */
-export function savedGames(store: Kept, who: string, here: string, now = new Date()): SavedGame[] {
+export function savedGames(store: Kept, who: string, now = new Date()): SavedGame[] {
   const out: SavedGame[] = [];
   for (const key of store.keys('gamenote:')) {
     const id = key.slice('gamenote:'.length);
     const note = store.get<GameNote>(key);
     const mine = note?.seats.find((s) => s.key === who);
     if (!note || !mine) continue;
-    out.push({ id, turn: note.turn, civ: mine.civ, with: note.seats.filter((s) => s !== mine).map((s) => s.name), at: note.at, elsewhere: playedElsewhere(store, id, here, now) });
+    out.push({ id, turn: note.turn, civ: mine.civ, with: note.seats.filter((s) => s !== mine).map((s) => s.name), at: note.at, live: live(note, now) });
   }
   return out.sort((a, b) => b.at.localeCompare(a.at) || b.turn - a.turn);
+}
+
+/**
+ * A game from before games had addresses, kept under an id that's no room's code (`room-public`):
+ * moved to a new id (`to`), its save, note and autosaves with it, the old keys gone.
+ */
+export function renameGame(store: Kept, from: string, to: string) {
+  const save = store.get(gameKey(from));
+  if (save === undefined) return;
+  store.set(gameKey(to), save);
+  const note = store.get<GameNote>(noteKey(from));
+  if (note) store.set(noteKey(to), { ...note, room: to });
+  for (const t of autosaveTurns(store, from)) store.set(autoKey(to, t), store.get(autoKey(from, t)));
+  forgetGame(store, from);
 }
 
 /**
