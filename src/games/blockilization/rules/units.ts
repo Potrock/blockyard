@@ -143,7 +143,7 @@ export const UNIT_LIST: UnitType[] = [
   U({ id: 'musketman', name: 'Musketman', class: 'gun', cost: 150, strength: 24, moves: 2, tech: 'gunpowder', obsolete: 'rifling', upgrade: 'rifleman' }),
   U({ id: 'lancer', name: 'Lancer', class: 'mounted', cost: 185, strength: 25, moves: 4, tech: 'metallurgy', obsolete: 'combustion', upgrade: 'anti_tank_gun', resource: 'horses', abilities: ['no_terrain_defense', 'penalty_vs_cities', 'bonus_vs_mounted'] }),
   U({ id: 'cannon', name: 'Cannon', class: 'siege', cost: 185, strength: 14, ranged: 20, range: 2, moves: 2, tech: 'chemistry', obsolete: 'dynamite', upgrade: 'artillery', abilities: ['bonus_vs_cities', 'must_setup'] }),
-  U({ id: 'frigate', name: 'Frigate', class: 'naval_ranged', domain: 'sea', cost: 185, strength: 25, ranged: 28, range: 2, moves: 5, tech: 'navigation', obsolete: 'electricity', upgrade: 'destroyer', resource: 'iron' }),
+  U({ id: 'frigate', name: 'Frigate', class: 'naval_ranged', domain: 'sea', cost: 185, strength: 25, ranged: 28, range: 2, moves: 5, tech: 'navigation', obsolete: 'electricity', upgrade: 'battleship', resource: 'iron' }),
   U({ id: 'privateer', name: 'Privateer', class: 'naval_melee', domain: 'sea', cost: 150, strength: 25, moves: 5, tech: 'navigation', obsolete: 'electricity', upgrade: 'destroyer' }),
   // ----- Industrial
   U({ id: 'explorer', name: 'Explorer', class: 'recon', cost: 65, strength: 10, moves: 3, tech: 'scientific_theory', obsolete: 'combined_arms', upgrade: 'paratrooper', abilities: ['ignore_terrain'] }),
