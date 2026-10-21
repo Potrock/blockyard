@@ -65,6 +65,12 @@ import { expectedTier, leavesProject, projectPlan, worldProject } from '../rules
 import { bestNukeStrike, nukeProduction, nukes as fireNukes, nukesWanted, strikeWorth } from '../rules/ai/nukes';
 import { NUKE_INFLUENCE } from '../rules/diplomacy';
 import { bombInterceptChance } from '../rules/combat';
+import { bestUnit, ERA_STARTS, SCENARIOS, startEraOf, startWords, techsBefore, turnLimitFor, withScenario } from '../rules/starts';
+import { TECH_LIST } from '../rules/techs';
+import { TURN_CHOICES } from '../rules/state';
+import { eraOf, foundCity } from '../rules/game';
+import { isMilitary } from '../rules/units';
+import { civEffects, has } from '../rules/core';
 
 /**
  * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
@@ -5750,4 +5756,145 @@ test('an embargo declared by a civ: no trade routes, resource or research deals;
   ok(!embargoed(game, a.index, b.index), 'trade is open again');
   war(game, 0, 1);
   ok(declareEmbargo(game, a, b) !== null, 'not while at war');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Later eras and scenarios (`rules/starts.ts`)
+// -------------------------------------------------------------------------------------------------
+
+/** A new game of bots (and a person, the first seat, if asked) on a small map, with settings over the usual. */
+function newGame(over: Partial<Settings>, civs = ['egypt', 'babylon', 'china', 'india'], person = false): Game {
+  const settings: Settings = { size: 'small', type: 'continents', speed: 'standard', timer: 0, cityStates: 2, barbarians: false, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 500, disasters: false, ...over };
+  return createGame(settings, civs.map((id, i) => ({ user: person && i === 0 ? 'name:you' : null, name: id, civ: id, bot: !(person && i === 0) })), 11);
+}
+
+test('an Ancient start is as it was: a Settler and a Warrior, no techs, no gold', () => {
+  const game = newGame({});
+  const p = game.players[0];
+  eq(game.units.filter((u) => u.owner === 0).map((u) => u.type).join(','), 'settler,warrior', 'its units');
+  eq(p.techs.length, 0, 'no techs');
+  eq(p.gold, 0, 'no gold');
+  const capital = foundCity(game, 0, game.units.find((u) => u.owner === 0 && u.type === 'settler')!.tile);
+  eq(capital.pop, 1, 'its capital of one');
+  eq(capital.buildings.join(','), 'palace', 'with only its palace');
+  ok(!capital.free, 'nothing free');
+});
+
+test('a game begun in a later era: the techs before it, the age’s settlers, workers, army and gold', () => {
+  const game = newGame({ startEra: 4 });
+  const p = game.players[0];
+  const start = ERA_STARTS[4];
+  ok(p.techs.length > 0 && p.techs.every((t) => TECHS[t].col < 9), 'only techs before the Industrial Era');
+  ok(TECH_LIST.filter((t) => t.col < 9).every((t) => p.techs.includes(t.id)), 'and all of them');
+  eq(eraOf(p), 4, 'so it stands in the Industrial Era from the first turn, its techs still to learn');
+  const mine = game.units.filter((u) => u.owner === 0);
+  eq(mine.filter((u) => u.type === 'settler').length, start.settlers, 'its settlers');
+  eq(mine.filter((u) => u.type === 'worker').length, start.workers, 'its workers');
+  eq(mine.filter((u) => isMilitary(UNITS[u.type])).length, start.army.reduce((n, [, k]) => n + k, 0), 'its army');
+  ok(mine.some((u) => u.type === 'musketman'), 'the age’s foot soldiers (Musketmen, not Warriors)');
+  ok(!mine.some((u) => u.type === 'warrior'), 'no Warrior');
+  eq(p.gold, start.gold, 'its gold (at Standard speed)');
+  eq(mine.find((u) => u.type === 'settler')!.tile, mine[0].tile, 'a settler on the start');
+  for (const u of mine) ok(game.units.filter((x) => x.tile === u.tile && (UNITS[x.type].strength > 0) === (UNITS[u.type].strength > 0)).length === 1, `${u.type}: one soldier and one civilian to a tile`);
+  // City-states know the age too, and have two of its soldiers to guard them.
+  const cs = game.players.find((x) => x.cityState)!;
+  ok(cs.techs.length === p.techs.length, 'a city-state knows the age’s techs');
+  eq(game.units.filter((u) => u.owner === cs.index && isMilitary(UNITS[u.type])).length, 2, 'and has two soldiers');
+  // Egypt's own unit stands in for the age's where it has one; a civ with none fields the usual.
+  eq(bestUnit('egypt', p.techs, 'mounted'), 'lancer', 'the strongest of its kind: a Lancer, not a Knight');
+  const renaissance = techsBefore(3);
+  eq(bestUnit('egypt', renaissance, 'mounted'), 'knight', 'a Knight before Metallurgy');
+  eq(bestUnit('arabia', renaissance, 'mounted'), 'camel_archer', 'Arabia’s Camel Archer in its place');
+  eq(bestUnit('egypt', [], 'warship'), null, 'no warship before Sailing');
+});
+
+test('a city founded in a later era: bigger, with the age’s buildings free of upkeep; the capital banks culture for its policies', () => {
+  const game = newGame({ startEra: 4 });
+  const p = game.players[0];
+  const settlers = game.units.filter((u) => u.owner === 0 && u.type === 'settler');
+  const before = goldUpkeep(game, p).buildings;
+  const capital = foundCity(game, 0, settlers[0].tile);
+  eq(capital.pop, 1 + ERA_STARTS[4].pop, 'founded with the age’s citizens');
+  for (const b of ['monument', 'shrine', 'granary', 'library', 'walls', 'market', 'temple']) ok(capital.buildings.some((x) => x === b || BUILDINGS[x]?.replaces === b), `with a ${b}`);
+  ok(capital.buildings.includes('burial_tomb'), 'Egypt’s own Burial Tomb in place of a Temple');
+  eq(goldUpkeep(game, p).buildings, before, 'they cost no upkeep');
+  ok(capital.buildings.includes('palace') && !capital.free!.includes('palace'), 'the palace is the capital’s as ever');
+  let banked = 0;
+  for (let n = 0; n < ERA_STARTS[4].policies; n++) banked += policyCost(game, p, n);
+  eq(p.culture, banked, 'culture for the age’s first policies');
+  const second = foundCity(game, 0, game.tiles.findIndex((t, i) => canFound(game, i) && !TERRAINS[t.terrain].water && distance(game.grid, i, capital.tile) > 4));
+  eq(second.pop, 1 + ERA_STARTS[4].pop, 'every city is founded so');
+  eq(p.culture, banked, 'but only the capital banks culture');
+  // A city taken: its captor pays for what it took.
+  war(game, 0, 1);
+  cityHooks.captured(game, second, 1);
+  eq(second.owner, 1, 'the second city taken');
+  ok(!second.free, 'what it was founded with free, its captor pays for');
+});
+
+test('the Cold War: Nuclear Fission known, the Manhattan Project and two Atomic Bombs in the capital as it’s founded', () => {
+  const game = newGame(withScenario({ size: 'small', type: 'continents', speed: 'quick', timer: 0, cityStates: 2, barbarians: true, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330 }, SCENARIOS.cold_war), undefined, true);
+  const p = game.players[0];
+  eq(startEraOf(game.settings), 6, 'an Atomic Era start');
+  ok(p.techs.includes('nuclear_fission') && p.techs.includes('atomic_theory'), 'Nuclear Fission known, and what it needs');
+  ok(!game.settings.barbarians && !game.settings.victories.culture, 'no barbarians, no culture victory');
+  eq(game.settings.turnLimit, 150, 'its turns at Quick speed');
+  ok(p.notes.some((n) => n.text.startsWith('Cold War.') && n.text.includes('Atomic Era')), 'the person is told how it begins');
+  const settler = game.units.find((u) => u.owner === 0 && u.type === 'settler')!;
+  ok(apply(game, 0, { t: 'found', unit: settler.id }).ok, 'the capital founded');
+  const capital = game.cities.find((c) => c.owner === 0)!;
+  ok(capital.buildings.includes('manhattan_project'), 'the Manhattan Project standing there');
+  eq(game.units.filter((u) => u.owner === 0 && u.type === 'atomic_bomb' && u.tile === capital.tile).length, 2, 'two Atomic Bombs in it');
+  ok(has(civEffects(game, p), 'enables_nukes'), 'nuclear weapons can be built');
+  ok(trainOptions(game, p, capital).some((o) => o.id === 'atomic_bomb'), 'an Atomic Bomb is on the list (wanting Uranium)');
+  const second = game.units.find((u) => u.owner === 0 && u.type === 'settler')!;
+  const far = game.tiles.findIndex((t, i) => canFound(game, i) && !TERRAINS[t.terrain].water && distance(game.grid, i, capital.tile) > 4);
+  second.tile = far;
+  ok(apply(game, 0, { t: 'found', unit: second.id }).ok, 'a second city founded');
+  eq(game.units.filter((u) => u.owner === 0 && u.type === 'atomic_bomb').length, 2, 'no more bombs with it');
+});
+
+test('World War: every civ at war with every other from the first turn, but its teammates; the city-states at peace', () => {
+  const base: Settings = { size: 'small', type: 'continents', speed: 'quick', timer: 0, cityStates: 2, barbarians: true, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330 };
+  const settings = withScenario(base, SCENARIOS.world_war);
+  eq(startEraOf(settings), 5, 'a Modern Era start');
+  ok(settings.victories.domination && !settings.victories.science && !settings.victories.culture && !settings.victories.diplomatic, 'only conquest (or the score) wins');
+  const game = createGame(settings, ['egypt', 'babylon', 'china', 'india'].map((id, i) => ({ user: null, name: id, civ: id, bot: true, team: i < 2 ? 0 : undefined })), 3);
+  const [a, b, c, d] = game.players;
+  ok(!a.diplomacy.war[b.index] && !b.diplomacy.war[a.index], 'teammates at peace');
+  ok(a.diplomacy.war[c.index] && c.diplomacy.war[a.index] && c.diplomacy.war[d.index] && b.diplomacy.war[d.index], 'everyone else at war');
+  const cs = game.players.find((x) => x.cityState)!;
+  ok(!a.diplomacy.war[cs.index] && !cs.diplomacy.war[c.index], 'the city-states out of it');
+  const army = game.units.filter((u) => u.owner === c.index && isMilitary(UNITS[u.type])).length;
+  eq(army, [...ERA_STARTS[5].army, ...SCENARIOS.world_war.army!].reduce((n, [, k]) => n + k, 0), 'twice the age’s army, near enough');
+});
+
+test('scenarios and later starts set their turns at each speed; picking an era sets its own', () => {
+  const base: Settings = { size: 'small', type: 'continents', speed: 'quick', timer: 0, cityStates: 4, barbarians: true, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330 };
+  eq(turnLimitFor(base), 330, 'an Ancient start: the usual');
+  eq(turnLimitFor({ ...base, speed: 'marathon' }), 1500, 'at every speed');
+  ok(turnLimitFor({ ...base, startEra: 6 }) < 330, 'an Atomic start: fewer');
+  ok(TURN_CHOICES.includes(turnLimitFor({ ...base, startEra: 3, speed: 'epic' })), 'always one the lobby offers');
+  const rivals = withScenario(base, SCENARIOS.ancient_rivals, 1);
+  eq(rivals.size, 'duel', 'Ancient Rivals on a duel map');
+  eq(rivals.turnLimit, 150, 'for 150 turns at Quick speed');
+  eq(withScenario({ ...base, speed: 'standard' }, SCENARIOS.ancient_rivals).turnLimit, 150, 'a scenario of its own speed at that speed');
+  eq(withScenario({ ...base, speed: 'standard' }, SCENARIOS.island_kings).turnLimit, 330, 'one without, more at Standard (the nearest offered)');
+  eq(withScenario(base, SCENARIOS.ancient_rivals, 3).size, 'small', 'but not a map too small for the people playing');
+  eq(withScenario(base, SCENARIOS.island_kings).type, 'archipelago', 'Island Kings among the islands');
+  eq(startWords({ startEra: 4 }), 'Industrial Era start', 'a later start in words');
+  eq(startWords({ startEra: 6, scenario: 'cold_war' }), 'Cold War', 'a scenario by its name');
+  eq(startWords({}), '', 'an Ancient start unsaid');
+});
+
+test('Island Kings: Astronomy known, a Caravel and a Galleass at sea by each start', () => {
+  const base: Settings = { size: 'small', type: 'continents', speed: 'quick', timer: 0, cityStates: 2, barbarians: true, victories: { domination: true, science: true, culture: true, diplomatic: true, score: true }, turnLimit: 330 };
+  const game = createGame(withScenario(base, SCENARIOS.island_kings), ['egypt', 'babylon', 'china', 'india'].map((id) => ({ user: null, name: id, civ: id, bot: true })), 5);
+  for (const p of game.players.filter((x) => !x.cityState && x.civ !== 'barbarian')) {
+    ok(p.techs.includes('astronomy'), `${p.civ} knows Astronomy`);
+    const ships = game.units.filter((u) => u.owner === p.index && UNITS[u.type].domain === 'sea');
+    ok(ships.every((u) => TERRAINS[game.tiles[u.tile].terrain].water), `${p.civ}'s ships at sea`);
+    ok(ships.length <= 2, `${p.civ}: no more than its two`);
+  }
+  ok(game.units.some((u) => u.type === 'caravel') && game.units.some((u) => u.type === 'galleass'), 'Caravels and Galleasses out on the water');
 });

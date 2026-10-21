@@ -67,6 +67,7 @@ function cityWire(game: Game, c: City, own: boolean, mood: number): CityWire {
     if (project) w.building = { kind: item.kind, id: item.id, progress: projectTotal(project) / project.cost, turns: Math.max(1, Math.ceil(cost / Math.max(1, projectPace(game, item.id)))) };
   }
   w.buildings = c.buildings;
+  if (c.free?.length) w.free = c.free;
   w.queue = c.queue;
   w.repeat = c.repeat;
   w.worked = c.worked;

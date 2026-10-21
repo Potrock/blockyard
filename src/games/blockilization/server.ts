@@ -18,7 +18,8 @@ import { cityHooks, type CombatResult } from './rules/combat';
 import { dealVerdict, type DealItem } from './rules/diplomacy';
 import { previewAttack, previewCityFire } from './rules/preview';
 import { DIFFICULTIES } from './rules/difficulty';
-import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, TURN_CHOICES, TURN_LIMITS, type Game, type Settings } from './rules/state';
+import { MAP_SIZES, MAP_TYPES, NOTE_TOPICS, SPEED_LIST, TURN_CHOICES, type Game, type Settings } from './rules/state';
+import { LAST_START, SCENARIOS, startEraOf, turnLimitFor, withScenario } from './rules/starts';
 import { IDEOLOGIES } from './rules/policies';
 import { dissent } from './rules/economy';
 import { TECHS } from './rules/techs';
@@ -717,10 +718,16 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
       if (a.size && a.size in MAP_SIZES && MAP_SIZES[a.size].players >= seats.filter((s) => !s.bot).length) settings.size = a.size;
       if (a.type && MAP_TYPES.includes(a.type)) settings.type = a.type;
       if (typeof a.trueStarts === 'boolean') settings.trueStarts = a.trueStarts;
+      // A later era to begin in: a game of its own, not its scenario any more (`rules/starts.ts`).
+      if (Number.isInteger(a.startEra) && a.startEra! >= 0 && a.startEra! <= LAST_START && a.startEra !== startEraOf(settings)) {
+        settings.startEra = a.startEra;
+        settings.scenario = undefined;
+        if (a.turnLimit === undefined) settings.turnLimit = turnLimitFor(settings);
+      }
       if (a.speed && SPEED_LIST.includes(a.speed)) {
         settings.speed = a.speed;
-        // (The turn limit goes with the speed, unless it's set in the same breath.)
-        if (a.turnLimit === undefined) settings.turnLimit = TURN_LIMITS[a.speed];
+        // (The turn limit goes with the speed (and the era, or the scenario), unless it's set in the same breath.)
+        if (a.turnLimit === undefined) settings.turnLimit = turnLimitFor(settings);
       }
       if (a.timer !== undefined && [0, 60, 90, 120, 180, 300].includes(a.timer)) settings.timer = a.timer;
       if (typeof a.dynamicTimer === 'boolean') settings.dynamicTimer = a.dynamicTimer;
@@ -734,6 +741,19 @@ function lobbyAction(game: GameContext, p: Player, a: LobbyAction) {
       seatPeople(game);
       setBots(seats.filter((s) => s.bot).length);
       break;
+    case 'scenario': {
+      if (!isHost) return;
+      // (None: the settings stay as they are, without the scenario's twist.)
+      if (a.id === null) settings = { ...settings, scenario: undefined };
+      else if (typeof a.id === 'string' && Object.hasOwn(SCENARIOS, a.id)) {
+        settings = withScenario(settings, SCENARIOS[a.id], seats.filter((s) => !s.bot).length);
+        // (Its table full: bots in every free seat, as many as its map has, or as it's for.)
+        autoBots = true;
+      } else return;
+      seatPeople(game);
+      setBots(seats.filter((s) => s.bot).length);
+      break;
+    }
     case 'victories':
       if (!isHost || !a.victories || typeof a.victories !== 'object') return;
       // (A new object: the defaults' own isn't changed.)

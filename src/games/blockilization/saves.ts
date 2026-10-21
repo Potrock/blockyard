@@ -87,11 +87,13 @@ export interface GameNote {
   map?: GameMap;
 }
 
-/** A game's map and speed, as its settings name them (`rules/state.ts`). */
+/** A game's map and speed, as its settings name them (`rules/state.ts`), and its later era or scenario (`rules/starts.ts`), if it began in one. */
 export interface GameMap {
   size: string;
   type: string;
   speed: string;
+  startEra?: number;
+  scenario?: string;
 }
 
 /** One of a person's saved games, as their lobby lists it. */
@@ -157,7 +159,7 @@ export function saveGame(store: Kept, id: string, room: string, save: Saved, now
   if (Object.keys(left).length) note.left = left;
   if (open && here.length) note.here = [...here];
   const map = save.game.settings;
-  if (map) note.map = { size: map.size, type: map.type, speed: map.speed };
+  if (map) note.map = { size: map.size, type: map.type, speed: map.speed, ...(map.startEra ? { startEra: map.startEra } : {}), ...(map.scenario ? { scenario: map.scenario } : {}) };
   store.set(noteKey(id), note);
   return note;
 }

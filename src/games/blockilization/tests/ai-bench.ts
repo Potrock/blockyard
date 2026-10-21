@@ -9,6 +9,7 @@ import { MAP_SIZES, MAP_TYPES, SPEED_LIST, TURN_LIMITS, type Game, type MapSize,
 import { spiesOf, stolen } from '../rules/trade';
 import { UNITS } from '../rules/units';
 import { ERAS } from '../rules/techs';
+import { eraTurnLimit, SCENARIOS, withScenario } from '../rules/starts';
 
 /**
  * The bots' benchmark: bot-only games on several seeds and map sizes, played to the end, with what
@@ -28,6 +29,9 @@ import { ERAS } from '../rules/techs';
  * games wrap round). `huge` is a size too.
  * `calm`: no disasters (volcanoes, floods, storms, the rising sea: `rules/disasters.ts`), as games
  * were before them; else each game's line says how many it had.
+ * `era=4`: begun in a later era (by `ERAS`: 4 is the Industrial), its turn limit shorter
+ * (`rules/starts.ts`); a scenario's id (`cold_war`, `ancient_rivals`, `island_kings`, `world_war`)
+ * sets the game up as that scenario does (its map's size too, unless one's given).
  */
 
 const size = (process.argv[2] ?? 'small') as MapSize;
@@ -39,7 +43,9 @@ const flat = process.argv.slice(4).includes('flat');
 const calm = process.argv.slice(4).includes('calm');
 const trueStarts = process.argv.slice(4).includes('true');
 const mapType = (process.argv.slice(4).find((x) => MAP_TYPES.includes(x as MapType)) as MapType | undefined) ?? 'continents';
-if (process.argv.slice(4).some((x) => !(x in DIFFICULTIES) && x !== 'teams' && x !== 'flat' && x !== 'true' && x !== 'calm' && !SPEED_LIST.includes(x as Speed) && !MAP_TYPES.includes(x as MapType))) throw new Error(`Unknown option in ${process.argv.slice(4).join(' ')}`);
+const startEra = Number(process.argv.slice(4).find((x) => /^era=\d$/.test(x))?.slice(4) ?? 0);
+const scenario = SCENARIOS[process.argv.slice(4).find((x) => x in SCENARIOS) ?? ''];
+if (process.argv.slice(4).some((x) => !(x in DIFFICULTIES) && !(x in SCENARIOS) && !/^era=\d$/.test(x) && x !== 'teams' && x !== 'flat' && x !== 'true' && x !== 'calm' && !SPEED_LIST.includes(x as Speed) && !MAP_TYPES.includes(x as MapType))) throw new Error(`Unknown option in ${process.argv.slice(4).join(' ')}`);
 
 /** The processor time this process has used, in milliseconds (unlike the clock, not slowed by other work). */
 function cpuNow(): number {
@@ -129,10 +135,12 @@ function play(seed: number): Result {
     disasters: !calm,
   };
   if (difficulty) settings.difficulty = difficulty;
+  if (startEra) Object.assign(settings, { startEra, turnLimit: eraTurnLimit(speed, startEra) });
+  if (scenario) Object.assign(settings, withScenario(settings, scenario));
   // A different set of civs each seed, so every leader gets played.
   const rng = new Rng(seed * 7919);
   const civs = CIV_LIST.map((c) => ({ c, k: rng.next() })).sort((a, b) => a.k - b.k).map((x) => x.c);
-  const n = MAP_SIZES[size].players;
+  const n = Math.min(scenario?.players ?? Infinity, MAP_SIZES[settings.size].players);
   const seats = civs.slice(0, n).map((c, i) => ({ user: null, name: c.leader, civ: c.id, bot: true, team: teams ? (i < n / 2 ? 0 : 1) : undefined }));
   const g: Game = createGame(settings, seats, seed);
   const majors = g.players.filter((p) => !p.cityState && p.civ !== 'barbarian');

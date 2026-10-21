@@ -9,9 +9,10 @@ import { policyEffects } from './policies';
 import { fromPromotions } from './promotions';
 import { beliefEffects } from './religion';
 import { earthSize, MAP_SIZES, SPEEDS, type City, type Game, type Note, type Player, type Settings, type Unit } from './state';
+import { bestUnit, eraStartOf, scenarioOf, startEraOf, startTechs } from './starts';
 import { RESOURCES, TERRAINS } from './terrain';
-import { bindTeams, teamOf } from './teams';
-import { baseTechCost, TECHS } from './techs';
+import { bindTeams, teammates, teamOf } from './teams';
+import { baseTechCost, ERA_NAMES, ERAS, TECHS } from './techs';
 import { UNITS } from './units';
 
 /**
@@ -74,7 +75,7 @@ export function newPlayer(index: number, seat: Seat, tiles: number, players: num
   };
 }
 
-/** A new game: the map made, each seat given a civ's start (a Settler and a Warrior, Civ V's), the fog drawn. */
+/** A new game: the map made, each seat given a civ's start (a Settler and a Warrior, Civ V's; more begun in a later era, `beginInEra`), the fog drawn. */
 export function createGame(settings: Settings, seats: Seat[], seed: number): Game {
   // (The Earth in its own proportions, `earthSize`; a new world wraps round east to west unless the lobby said not.)
   const size = settings.type === 'earth' ? earthSize(settings.size) : MAP_SIZES[settings.size];
@@ -103,6 +104,8 @@ export function createGame(settings: Settings, seats: Seat[], seed: number): Gam
     worksMade: 0,
     turnStarted: 0,
   };
+  // (Begun in a later era, or with a scenario's army: each civ's start is the age's, `beginInEra`.)
+  const later = startEraOf(settings) > 0 || !!scenarioOf(settings)?.army;
   // Everyone at the table: the civs, then the city-states, then the barbarians.
   const all: (Seat & { cityState?: (typeof cityStates)[number] })[] = [
     ...seats,
@@ -120,12 +123,20 @@ export function createGame(settings: Settings, seats: Seat[], seed: number): Gam
       p.alive = false;
       return;
     }
-    spawnUnit(game, 'settler', i, at);
-    const beside = within(grid, at, 1).find((t) => t !== at && canStand(game, 'warrior', t)) ?? at;
-    spawnUnit(game, 'warrior', i, beside);
-    // The difficulty's head start: more units by the first.
+    // A game begun in a later era: the techs of the eras before (`starts.ts`), city-states' too.
+    if (later) p.techs = startTechs(settings);
+    if (startEraOf(settings) > 0) p.startEra = startEraOf(settings);
+    if (!later) {
+      spawnUnit(game, 'settler', i, at);
+      const beside = within(grid, at, 1).find((t) => t !== at && canStand(game, 'warrior', t)) ?? at;
+      spawnUnit(game, 'warrior', i, beside);
+    } else beginInEra(game, p, at);
+    // (A person told, on the first turn, how a later era's start or a scenario begins.)
+    if (later || scenarioOf(settings)) note(game, i, { text: startNote(settings), kind: 'info' });
+    // The difficulty's head start: more units by the first (in a later era, its soldiers the age's).
     for (const type of handicapOf(settings, p).start) {
-      const id = unitFor(p.civ, type, UNITS);
+      const role = type === 'warrior' ? 'foot' : type === 'archer' ? 'ranged' : null;
+      const id = (later && role && bestUnit(p.civ, p.techs, role)) || unitFor(p.civ, type, UNITS);
       const free = within(grid, at, 2).find((t) => canStand(game, id, t) && !game.units.some((u) => u.tile === t && (UNITS[u.type].strength > 0) === (UNITS[id].strength > 0)));
       if (free !== undefined) spawnUnit(game, id, i, free);
     }
@@ -137,9 +148,50 @@ export function createGame(settings: Settings, seats: Seat[], seed: number): Gam
       p.diplomacy.war[b] = p.index !== b;
       game.players[b].diplomacy.war[p.index] = p.index !== b;
     }
+  // A scenario of total war (World War): every civ at war with every other from the first turn, but its teammates (the city-states stay out of it).
+  if (scenarioOf(settings)?.war) {
+    const majors = game.players.filter((p) => !p.cityState && p.civ !== 'barbarian');
+    for (const p of majors) for (const o of majors) if (p !== o && !teammates(game, p.index, o.index)) p.diplomacy.war[o.index] = true;
+  }
   bindTeams(game);
   updateAllVisibility(game);
   return game;
+}
+
+/** The first turn's word on a game begun in a later era, or a scenario: where to begin, and its twist. */
+function startNote(s: Settings): string {
+  const sc = scenarioOf(s);
+  const start = eraStartOf(s);
+  const era = ERA_NAMES[ERAS[startEraOf(s)]];
+  const begin = startEraOf(s) ? ` You begin in ${era.startsWith('Ren') ? 'the Renaissance' : `the ${era}`}: found your cities with your ${start.settlers === 1 ? 'Settler' : `${start.settlers} Settlers`}${start.pop ? `, each begun with ${start.pop + 1} citizens and the buildings of the age` : ''}.` : '';
+  return `${sc ? `${sc.name}.` : ''}${begin}${sc ? ` ${sc.brief}` : ''}`.trim();
+}
+
+/**
+ * A civ's start in a game begun in a later era (`starts.ts`): its era's Settlers (the first on the
+ * start), Workers and army (its scenario's too), each the best of its kind the civ can field, round
+ * the start, and its gold. A city-state has its Settler and two of the age's soldiers to guard it.
+ * (The rest comes as its cities are founded: `foundCity`.)
+ */
+function beginInEra(game: Game, p: Player, at: number) {
+  const start = eraStartOf(game.settings);
+  const units = ['settler'];
+  if (p.cityState) units.push(...Array<string>(2).fill(bestUnit(p.civ, p.techs, 'foot') ?? 'warrior'));
+  else {
+    units.push(...Array<string>(start.settlers - 1).fill('settler'), ...Array<string>(start.workers).fill('worker'));
+    for (const [role, n] of [...start.army, ...(scenarioOf(game.settings)?.army ?? [])]) {
+      const id = bestUnit(p.civ, p.techs, role);
+      if (id) units.push(...Array<string>(n).fill(id));
+    }
+    p.gold = Math.round(start.gold * speed(game));
+  }
+  // Each on the nearest tile free for it (one soldier and one civilian to a tile; ships on the water), the first Settler on the start.
+  const near = within(game.grid, at, 3).sort((a, b) => distance(game.grid, at, a) - distance(game.grid, at, b));
+  for (const id of units) {
+    const soldier = UNITS[id].strength > 0;
+    const t = id === 'settler' && !game.units.some((u) => u.owner === p.index) ? at : near.find((x) => canStand(game, id, x) && !cityAt(game, x) && !game.units.some((u) => u.tile === x && (UNITS[u.type].strength > 0) === soldier));
+    if (t !== undefined) spawnUnit(game, id, p.index, t);
+  }
 }
 
 // -------------------------------------------------------------------------------------------------
