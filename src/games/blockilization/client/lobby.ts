@@ -157,6 +157,39 @@ export function seatTeam(seat: LobbySeat, canPick: boolean, send: (a: LobbyActio
   return h('span.lb-teams', {}, pick(null), ...Array.from({ length: TEAMS }, (_, t) => pick(t)));
 }
 
+/** The address of a room of this game (blank: the public game), to open again. */
+const roomAddress = (room: string) => `blockyard.gg/?game=blockilization${room === 'public' ? '' : `&room=${room}`}`;
+
+/**
+ * This person's saved games in other rooms: each one's turn, their civ and who else is in it, and
+ * the room's address to open (a game's screen can't take you there itself), selected at a click
+ * to copy. Saves are kept by room: the lobby otherwise offers only this room's.
+ */
+export function savedGamesBox(L: LobbyView): El | null {
+  if (!L.saves?.length) return null;
+  return h(
+    'div.lb-saves',
+    {},
+    h('div.cv-label.sect', {}, L.saves.length === 1 ? 'Your saved game' : 'Your saved games'),
+    h('small.cv-muted', {}, 'Saved in other rooms: open its address to carry on there.'),
+    ...L.saves.map((g) => {
+      const civ = g.civ ? CIVS[g.civ] : null;
+      return h(
+        'div.lb-save',
+        {},
+        civ ? emblemEl(civ.id, 26) : h('span.lb-nociv.small', {}, '?'),
+        h(
+          'div.cv-grow',
+          {},
+          h('b', {}, `Turn ${g.turn}${civ ? ` · ${civ.name}` : ''}`),
+          h('small.cv-muted', {}, `${g.room === 'public' ? 'The public game' : `Room ${g.room}`} · ${g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots'}`),
+        ),
+        h('input.cv-input.lb-address', { value: roomAddress(g.room), readonly: 'readonly', onclick: (e: Event) => (e.target as HTMLInputElement).select(), title: 'Copy this address and open it' }),
+      );
+    }),
+  );
+}
+
 export const LOBBY_CSS = `
 .lb-desc { margin: -2px 0 6px 114px; color: var(--muted); font-size: 12px; }
 .lb-wins { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
@@ -179,6 +212,11 @@ export const LOBBY_CSS = `
 .lb-team.none { background: #3a4450; color: var(--muted); }
 button.lb-team { opacity: .45; cursor: pointer; } button.lb-team.on { opacity: 1; outline: 2px solid #f2c14e; } button.lb-team:hover { opacity: .85; }
 .lb-seed:disabled { opacity: .7; }
+.lb-saves { margin-bottom: 4px; }
+.lb-save { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(106,184,255,.06); border: 1px solid rgba(106,184,255,.25); }
+.lb-save b { display: block; font-size: 14px; }
+.lb-nociv.small { width: 26px; height: 26px; font-size: 16px; }
+.lb-address { width: 290px; max-width: 45%; font-size: 12px !important; }
 @media (max-width: 760px), (max-height: 520px) {
   .lb-foot { bottom: -14px; margin: 12px -14px -14px; padding: 8px 14px; }
   .lb-desc { margin-left: 90px; }

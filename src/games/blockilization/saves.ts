@@ -42,3 +42,76 @@ export class SaveThrottle {
     this.waiting = false;
   }
 }
+
+/** What a room's save is, in brief: the game's turn, and who's in it (people only), for the list of a person's saved games. */
+export interface SaveNote {
+  turn: number;
+  seats: { key: string; name: string; civ: string | null }[];
+}
+
+/** One of a person's saved games, in another room: where (`public`, or a room's code), the turn, their civ, and who else is in it. */
+export interface SavedGame {
+  room: string;
+  turn: number;
+  civ: string | null;
+  with: string[];
+}
+
+/** The part of `game.store` the notes need. */
+interface Kept {
+  get<T = unknown>(key: string): T | undefined;
+  set(key: string, value: unknown): void;
+  delete(key: string): void;
+  keys(prefix?: string): string[];
+}
+
+/** A save as `server.ts` writes it (`save:<room>`): the game, and its seats. */
+interface Saved {
+  game: { turn: number; over?: unknown };
+  seats: { key: string; name: string; civ: string | null; bot: boolean }[];
+}
+
+/**
+ * The notes of every room's save (`savenote:<room>`), kept beside the saves. A save is a few hundred
+ * kilobytes and the lobby would have to read every room's to find a person's; a note is a few
+ * dozen bytes. Saves are the game's, shared by all its rooms, so each lobby can list them all.
+ */
+const noteKey = (room: string) => `savenote:${room}`;
+
+/** A room's save was written: its note too (none for a game that's over). */
+export function noteSave(store: Kept, room: string, save: Saved) {
+  if (save.game.over) return store.delete(noteKey(room));
+  const note: SaveNote = { turn: save.game.turn, seats: save.seats.filter((s) => !s.bot).map((s) => ({ key: s.key, name: s.name, civ: s.civ })) };
+  store.set(noteKey(room), note);
+}
+
+/** A room's save is gone (the game won, or discarded): its note too. */
+export const forgetSave = (store: Kept, room: string) => store.delete(noteKey(room));
+
+/**
+ * Notes for the saves made before there were notes (read once each, then never again), and none
+ * kept for a save that's gone.
+ */
+export function noteOldSaves(store: Kept) {
+  const saved = store.keys('save:');
+  for (const key of saved) {
+    const room = key.slice('save:'.length);
+    if (store.get(noteKey(room))) continue;
+    const save = store.get<Saved>(key);
+    if (save?.game && Array.isArray(save.seats)) noteSave(store, room, save);
+  }
+  for (const key of store.keys('savenote:')) if (!saved.includes(`save:${key.slice('savenote:'.length)}`)) store.delete(key);
+}
+
+/** The saved games a person (`who`: their seat's key) has a seat in, but for this room's own: the latest turns first. */
+export function savedGames(store: Kept, who: string, here: string): SavedGame[] {
+  const out: SavedGame[] = [];
+  for (const key of store.keys('savenote:')) {
+    const room = key.slice('savenote:'.length);
+    const note = store.get<SaveNote>(key);
+    const mine = note?.seats.find((s) => s.key === who);
+    if (room === here || !note || !mine) continue;
+    out.push({ room, turn: note.turn, civ: mine.civ, with: note.seats.filter((s) => s !== mine).map((s) => s.name) });
+  }
+  return out.sort((a, b) => b.turn - a.turn || a.room.localeCompare(b.room));
+}

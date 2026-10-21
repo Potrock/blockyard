@@ -28,7 +28,7 @@ import { decisions, NOTES_CSS, renderNoteCentre, renderNotesPart } from './notes
 import { ABILITY_TEXT, VICTORIES } from './concepts';
 import { OVERVIEW_CSS, renderOverview } from './overview';
 import { HOTKEYS_CSS, renderHotkeys, renderMenu } from './hotkeys';
-import { LOBBY_CSS, lobbyFoot, mapTypeText, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards } from './lobby';
+import { LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards } from './lobby';
 import { ADVICE_CSS, adviceTag, researchHint } from './advice';
 import { POLITICS_CSS } from './politics';
 import { heldTile, tileMenuFree } from './input';
@@ -642,6 +642,7 @@ function renderLobby(): El | null {
         isHost && h('button.cv-btn.gold.small', { onclick: () => lobby({ a: 'resume' }) }, 'Carry on'),
         isHost && h('button.cv-btn.small', { onclick: () => lobby({ a: 'discard' }) }, 'Discard'),
       ),
+    savedGamesBox(L),
     renderFame(),
     h('div.cv-label.sect', {}, 'Choose your civilization'),
     h(
