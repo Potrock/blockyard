@@ -1,7 +1,7 @@
 import { lobbySides, TEAMS, type LobbyAction, type LobbySeat, type LobbyView } from '../protocol';
-import { KEEP_DISCARDED, roomCode, type SavedGame } from '../saves';
+import { KEEP_DISCARDED, roomCode, type GameMap, type SavedGame } from '../saves';
 import { CIVS } from '../rules/civs';
-import { MAP_SIZES, mapTypeWord, type MapType, type Settings, type Speed } from '../rules/state';
+import { MAP_SIZES, mapTypeWord, SPEED_NAMES, type MapSize, type MapType, type Settings, type Speed } from '../rules/state';
 import { VICTORIES } from './concepts';
 import { emblemEl, icon } from './icons';
 import { openPedia } from './pedia';
@@ -167,6 +167,22 @@ function playedWhen(at: string): string {
   return `played ${new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 }
 
+/** A game's map in a few words, to tell one's games apart: "Small continents, quick" (Standard speed unsaid). */
+function mapWords(m: GameMap | undefined): string {
+  const size = MAP_SIZES[m?.size as MapSize]?.name;
+  const type = m && m.type in MAP_TYPE_TEXT ? mapTypeWord(m.type as MapType) : null;
+  if (!size || !type) return '';
+  const speed = m!.speed !== 'standard' ? SPEED_NAMES[m!.speed as Speed]?.toLowerCase() : null;
+  return `${size} ${type}${speed ? `, ${speed}` : ''}`;
+}
+
+/** Who else is in a game and whether they're playing it now: "Bob is playing now", "with Bob and Cat", "you and the bots". */
+function whoWords(g: SavedGame): string {
+  const and = (names: string[]) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]);
+  if (g.live && g.playing.length) return `${and(g.playing)} ${g.playing.length > 1 ? 'are' : 'is'} playing now`;
+  return g.with.length ? `with ${and(g.with)}` : 'you and the bots';
+}
+
 /** Going to a game at its own address, and copying its link (none on a platform whose screens can't go to another room). */
 export interface GameLinks {
   open(g: SavedGame): void;
@@ -217,7 +233,7 @@ export function savedGamesBox(L: LobbyView, isHost: boolean, send: (a: LobbyActi
           'div.cv-grow',
           {},
           h('b', {}, `Turn ${g.turn}${civ ? ` · ${civ.name}` : ''}`),
-          h('small.cv-muted', {}, [g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots', g.live ? 'being played now' : playedWhen(g.at)].filter(Boolean).join(' · ')),
+          h('small.cv-muted', {}, [whoWords(g), mapWords(g.map), g.live ? (g.playing.length ? '' : 'being played now') : playedWhen(g.at)].filter(Boolean).join(' · ')),
         ),
         links && h('button.cv-btn.gold.small', { onclick: () => links.open(g), title: g.live ? 'Join the others playing it' : 'Go to this game' }, g.live ? 'Join' : 'Play'),
         // (A game from before games had addresses has none until it's opened.)
@@ -259,7 +275,7 @@ export function discardedBox(L: LobbyView, send: (a: LobbyAction) => void): El |
         'div.lb-save.gone',
         {},
         civ ? emblemEl(civ.id, 26) : h('span.lb-nociv.small', {}, '?'),
-        h('div.cv-grow', {}, h('b', {}, `Turn ${g.turn}${civ ? ` · ${civ.name}` : ''}`), h('small.cv-muted', {}, [g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots', `bring it back by ${until(g.discarded!)}`].join(' · '))),
+        h('div.cv-grow', {}, h('b', {}, `Turn ${g.turn}${civ ? ` · ${civ.name}` : ''}`), h('small.cv-muted', {}, [g.with.length ? `with ${g.with.join(', ')}` : 'you and the bots', mapWords(g.map), `bring it back by ${until(g.discarded!)}`].filter(Boolean).join(' · '))),
         h('button.cv-btn.small', { onclick: () => send({ a: 'keep', id: g.id }), title: 'Back on your list of games' }, 'Bring back'),
       );
     }),

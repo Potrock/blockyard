@@ -578,8 +578,10 @@ function renderWatching(): El {
     'div.cv-top.cv-panel',
     {},
     h('div.civ', {}, icon('globe', 22), h('b', {}, v.fallen !== undefined ? 'Fallen' : 'Watching')),
-    h('span.cv-muted', {}, v.fallen !== undefined ? 'Your civilization has fallen: you watch the rest of the game, every civilization’s land shown.' : bots.length ? 'Every civilization’s land is shown. Take a bot’s place to play.' : 'Every civilization’s land is shown. Join a new game from the lobby to play.'),
+    h('span.cv-muted', {}, v.fallen !== undefined ? 'Your civilization has fallen: you watch the rest of the game, every civilization’s land shown.' : bots.length ? 'Every civilization’s land is shown. Take a bot’s place to play.' : 'Every civilization’s land is shown. To play, begin a game of your own.'),
     bots.length > 0 && h(`button.cv-btn.small${store.takeOverOpen ? '.on' : ''}`, { onclick: toggle, title: 'Lead one of the bots’ civilizations from here on' }, icon('people', 14), 'Take a bot’s place'),
+    // (Nothing to take here: one's own games, and a new one, are in the public lobby.)
+    !bots.length && rooms() && h('button.cv-btn.small', { onclick: () => rooms()!.go(null), title: 'Your games, and a new one' }, 'Your games'),
     bots.length > 0 &&
       store.takeOverOpen &&
       h(
@@ -648,7 +650,7 @@ function renderHub(L: NonNullable<typeof store.lobby>, brand: (sub: string) => E
     hubTop(() => rooms()?.go(gameId())),
     savedGamesBox(L, false, lobby, gameLinks()) ?? h('div.cv-muted.lb-none', {}, 'Your games will be here: each one you begin, saved every turn for as long as it lasts, to go back to whenever you like.'),
     discardedBox(L, lobby),
-    guest && h('div.cv-muted.lb-none', {}, 'You’re playing as a guest: your games are kept under your name, for whoever plays by it. Sign in on the home page to keep them yours.'),
+    guest && h('div.cv-muted.lb-none', {}, 'You’re playing as a guest: your games are kept under your guest name, for whoever plays by it, and stay with it. Sign in on the home page so the games you begin are your account’s, wherever you play.'),
     renderFame(),
   );
 }

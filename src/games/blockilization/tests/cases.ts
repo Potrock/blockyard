@@ -3538,8 +3538,8 @@ test('saved games are each person’s, by account: listed in any room, carried o
   reads = 0;
   const now = at('2026-10-21T00:30:00Z');
   eq(JSON.stringify(savedGames(store, ann, now)), JSON.stringify([
-    { id: 'room-k3x9f2', turn: 31, civ: 'greece', with: [], at: '2026-10-21T00:10:00.000Z', live: false, backups: [] },
-    { id: 'room-public', turn: 79, civ: 'korea', with: ['Bob'], at: '2026-10-21T00:00:00.000Z', live: false, backups: [78] },
+    { id: 'room-k3x9f2', turn: 31, civ: 'greece', with: [], at: '2026-10-21T00:10:00.000Z', live: false, backups: [], playing: [] },
+    { id: 'room-public', turn: 79, civ: 'korea', with: ['Bob'], at: '2026-10-21T00:00:00.000Z', live: false, backups: [78], playing: [] },
   ]), 'Ann’s two games, wherever they were played, latest first');
   eq(reads, 0, 'listing them reads no save, only notes');
   eq(savedGames(store, 'acct:bob', now).length, 2, 'Bob sees theirs too (the one with Ann, and his own)');
@@ -3600,11 +3600,19 @@ test('no game is lost: backups of its last turns to take it back to, and discard
   for (const t of [41, 40, 37]) store.set(autoKey('k3x9f2', t), save(t));
   eq(JSON.stringify(savedGames(store, ann, at('2026-10-21T00:01:00Z'))[0].backups), '[41,40,37]', 'listed with its backups, the latest first');
   // Played quietly (no order for minutes), its room says so every half a minute: not to be taken back meanwhile.
-  saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), true);
+  saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), true, [ann]);
   ok(!playedNow(store, 'k3x9f2', at('2026-10-21T00:03:00Z')), 'three minutes without a save or a word: taken as not played');
-  stillPlayed(store, 'k3x9f2', at('2026-10-21T00:02:40Z'));
+  stillPlayed(store, 'k3x9f2', at('2026-10-21T00:02:40Z'), [ann, bob]);
   ok(playedNow(store, 'k3x9f2', at('2026-10-21T00:03:00Z')), 'its room’s word a moment ago: being played');
-  saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), false);
+  // Who's playing it now, on each one's list: the others in it who are in its room.
+  eq(JSON.stringify(savedGames(store, ann, at('2026-10-21T00:03:00Z'))[0].playing), '["Bob"]', 'Ann’s list: Bob is playing it now');
+  eq(JSON.stringify(savedGames(store, ann, at('2026-10-21T00:09:00Z'))[0].playing), '[]', 'some minutes on, no word: nobody');
+  saveGame(store, 'k3x9f2', 'k3x9f2', save(41), at('2026-10-21T00:00:00Z'), false, [ann]);
+  ok(!store.get<{ here?: string[] }>('gamenote:k3x9f2')?.here, 'saved as its last person left: nobody in it');
+  // Its map and speed, to tell it from one's other games.
+  saveGame(store, 'maps', 'maps', { game: { turn: 3, settings: { size: 'small', type: 'pangaea', speed: 'quick' } }, seats }, at('2026-10-21T00:00:00Z'), false);
+  eq(JSON.stringify(savedGames(store, ann, at('2026-10-21T00:01:00Z')).find((g) => g.id === 'maps')?.map), '{"size":"small","type":"pangaea","speed":"quick"}', 'listed with its map');
+  forgetGame(store, 'maps');
   // Taken back to the start of turn 37: the later backups go, and what it's given (a word to its people) is saved with it.
   ok(!playedNow(store, 'k3x9f2', at('2026-10-21T00:01:00Z')), 'nobody playing it: free to take back');
   ok(restoreTurn(store, 'k3x9f2', 37, at('2026-10-21T00:02:00Z'), (s) => (s.game as ReturnType<typeof save>['game']).players[0].notes.push({ text: 'Ann took it back' })), 'taken back');
