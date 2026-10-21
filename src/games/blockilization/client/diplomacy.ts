@@ -11,6 +11,7 @@ import { renderCongress, unvoted } from './congress';
 import { play } from './sound';
 import { ask, store, TEAM_COLORS, teammate, tone } from './store';
 import { checkDeal, h, portrait, send, tell, tile, togglePanel, type El } from './ui';
+import { FACES, lastWords, talkTo } from './chat';
 
 /**
  * Diplomacy, on this screen: the civs met down the left, each with how its leader feels about you;
@@ -206,6 +207,7 @@ function civPane(p: PlayerSummary): El {
     : [h('div.cv-muted', {}, 'A person leads them: they speak for themselves.')];
   const waiting = v.waiting.includes(p.index);
   const offered = v.offers.find((o) => o.from === p.index);
+  const said = lastWords(p.index);
   return h(
     'div.cv-dip-pane.cv-scroll',
     {},
@@ -219,6 +221,8 @@ function civPane(p: PlayerSummary): El {
         h('div.cv-h.big', {}, p.name),
         h('small.cv-muted', {}, `${civ?.name ?? ''} · ${ERA_NAMES[ERAS[p.era]] ?? ''} · score ${p.score} · ${p.cities} cit${p.cities === 1 ? 'y' : 'ies'}`),
         h('div.cv-row', { style: 'gap:6px;margin-top:6px;flex-wrap:wrap' }, stanceChip(p), civ ? h('span.cv-chip', { title: civ.ability.text }, civ.ability.name) : null),
+        // (What they've just said, to you or to everyone: `chat.ts`.)
+        said && h('div.cv-dip-said', {}, said.emote && h('span.ch-face', {}, FACES[said.emote as keyof typeof FACES] ?? ''), h('span', {}, `“${said.text}”`)),
       ),
     ),
     h('div.cv-label', {}, r.opinion ? `What ${p.name} thinks of you` : 'Their leader'),
@@ -265,6 +269,9 @@ function civPane(p: PlayerSummary): El {
     ),
     waiting ? h('small.cv-muted', {}, 'Your deal awaits their answer.') : null,
     h('small.cv-dim', {}, `Deals, friendships and pacts last ${turns} turns.`),
+    // Speaking to them: a face, or words (a bot's leader answers as it feels about you).
+    h('div.cv-label', {}, p.bot ? `Say something to ${p.name}` : `Message ${p.name}`),
+    talkTo(p.index),
   );
 }
 
@@ -506,6 +513,7 @@ export function renderOffer(): El | null {
 }
 
 export const DIPLO_CSS = `
+.cv-dip-said { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding: 5px 9px; background: rgba(13,19,27,0.75); border: 2px solid #07090c; font-style: italic; color: #f1e6c8; animation: cvIn .25s; }
 /* Diplomacy: on a wide screen, centred in the room left of the notes column (and the leaders, when they're shown), so no
    banner is cut in half; narrower, the width of the screen (over the notes whole). */
 .cv-dip { left: 8px !important; right: 8px !important; width: auto !important; transform: none !important; }

@@ -51,6 +51,7 @@ export const HOTKEYS: [group: string, keys: [string[], string][]][] = [
       [['L'], 'The next lens (yields, city sites, resources, religion, borders)'],
       [['Right-click'], 'A tile, with no unit selected: pin it with an icon and a label (on a touch screen, hold a finger on it, then Pin on its card)'],
       [['H'], 'Hide the interface (to look at your empire, or take a picture of it); again to bring it back'],
+      [['Alt', 'Click'], 'Ping a tile: point at it for the others a few seconds (the chat sets who sees it)'],
     ],
   ],
   [
@@ -66,6 +67,7 @@ export const HOTKEYS: [group: string, keys: [string[], string][]][] = [
       [['N', 'F7'], 'Notifications'],
       [['V', 'F8'], 'Victory progress'],
       [['F1'], 'Civilopedia (over the map: what’s under the mouse)'],
+      [['M'], 'Chat: talk to everyone, your team or one leader, make a face (Enter sends, Esc closes)'],
       [['?'], 'These shortcuts'],
       [['Esc'], 'Close a panel (with nothing open: the menu)'],
     ],

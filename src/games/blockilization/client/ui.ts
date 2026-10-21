@@ -38,6 +38,7 @@ import { workQuiet, workTip, workTipLines } from './workadvice';
 import { FAME_CSS, renderFame } from './fame';
 import { defenceAdvice } from './defend';
 import { closePinMenu, pinButtons, pinColor, pinMenuOpen, pinsButton, PINS_CSS, pinTip, renderPinList, renderPinMenu } from './pins';
+import { CHAT_CSS, chatOpen, chatSaid, lobbyChat, minimapPings, renderChat, toggleChat } from './chat';
 import { faithColor, LENS_CSS, lensBar, lensKey, lensTip, setLens } from './lenses';
 import { GUIDE_CSS, guideTips, renderHowToWin, wantsHowToWin, type Tip } from './guide';
 import { CSS } from './style';
@@ -320,7 +321,7 @@ export function mountUI(c: Client, layer: El) {
   style(CSS);
   style(PEDIA_CSS);
   style(TECH_CSS);
-  for (const css of [NOTES_CSS, OVERVIEW_CSS, HOTKEYS_CSS, LOBBY_CSS, DIPLO_CSS, LENS_CSS, GUIDE_CSS, RIBBON_CSS, REPLAY_CSS, ADVICE_CSS, POLITICS_CSS, PINS_CSS, SPLASH_CSS, FAME_CSS, CITYSTATES_CSS, CONGRESS_CSS]) style(css);
+  for (const css of [NOTES_CSS, OVERVIEW_CSS, HOTKEYS_CSS, LOBBY_CSS, DIPLO_CSS, LENS_CSS, GUIDE_CSS, RIBBON_CSS, REPLAY_CSS, ADVICE_CSS, POLITICS_CSS, PINS_CSS, CHAT_CSS, SPLASH_CSS, FAME_CSS, CITYSTATES_CSS, CONGRESS_CSS]) style(css);
   // The pixel look over all of it (last, so it wins), its glyphs redrawn as they're made.
   style(PIXEL_CSS);
   // Phones and touch screens over that (fingers, small screens).
@@ -344,7 +345,7 @@ export function mountUI(c: Client, layer: El) {
       h('button.cv-btn', { onclick: () => root.classList.add('upright-ok') }, 'Play upright anyway'),
     ),
   );
-  for (const name of ['top', 'research', 'notes', 'ribbon', 'corner', 'unit', 'city', 'advisor', 'preview', 'pin', 'big', 'lobby', 'over', 'splash', 'offer', 'confirm', 'tip', 'toast']) {
+  for (const name of ['top', 'research', 'chat', 'notes', 'ribbon', 'corner', 'unit', 'city', 'advisor', 'preview', 'pin', 'big', 'lobby', 'over', 'splash', 'offer', 'confirm', 'tip', 'toast']) {
     parts[name] = h('div');
     root.append(parts[name]);
   }
@@ -381,8 +382,9 @@ let pressing = false;
 let carrying = false;
 
 export function closePanels() {
-  // (A tile's menu first: it's over the rest.)
+  // (A tile's menu first: it's over the rest; then the chat.)
   if (closePinMenu()) return;
+  if (chatOpen()) return toggleChat(false);
   const shown = front();
   if (shown === 'confirm') store.confirm = null;
   else if (shown === 'splash') store.splashes.shift(), (store.splashAt = 0);
@@ -452,6 +454,8 @@ export function renderUI(now: number) {
   fill(parts.top, playing ? (watching ? renderWatching() : renderTop()) : null);
   if (playing) layOutSoon();
   fill(parts.research, playing && !over && !watching ? renderResearch() : null);
+  // The chat (`chat.ts`): watching too, but not over the game's end, nor over a panel (diplomacy has its own word with a leader).
+  fill(parts.chat, playing && !over && !store.panel ? renderChat() : null);
   const shown = playing ? front() : null;
   // (A big moment put aside behind a panel has its full time on show again when it's back.)
   if (shown !== 'splash') store.splashAt = 0;
@@ -476,6 +480,9 @@ export function renderUI(now: number) {
   // ribbon's room above the corner, whether a panel covers the map.
   fitTop();
   fitRibbon(parts.ribbon.firstElementChild, parts.corner.firstElementChild);
+  // (Where the research card ends, however tall it is here: the chat hangs under it.)
+  const card = parts.research.firstElementChild ?? parts.top.firstElementChild;
+  root.style.setProperty('--research-bottom', `${Math.round((card?.getBoundingClientRect().bottom ?? 0) / store.uiScale)}px`);
   // (Where the bottom-right corner starts, a list of map pins in it or not: the notes stop above it.)
   root.style.setProperty('--corner-top', `${Math.round((parts.corner.firstElementChild?.getBoundingClientRect().top ?? window.innerHeight) / store.uiScale)}px`);
   coverCheck();
@@ -524,11 +531,16 @@ function fill(el: El, content: El | null) {
   const at = before && active instanceof HTMLInputElement && active.type === 'number' ? numbers(before).indexOf(active) : -1;
   const carried = content && at >= 0 ? numbers(content)[at] : undefined;
   const settled = !!carried && carried.value === (active as HTMLInputElement).value;
-  if (content && before && active && el.contains(active) && active.matches('input, textarea, select') && !settled) return;
+  // A line of chat being typed (`chat.ts`) isn't held up: the field goes on in the new content, focus and all.
+  const typing = content && active instanceof HTMLInputElement && active.matches('.ch-field') && el.contains(active) ? active : null;
+  const slot = typing ? content!.querySelector<HTMLInputElement>(`.ch-field[data-key="${typing.dataset.key}"]`) : null;
+  if (content && before && active && el.contains(active) && active.matches('input, textarea, select') && !settled && !slot) return;
   const same = !!(content && before && before.className === content.className);
   const scrolled = same ? scrollers(before!).map((x) => ({ cls: x.className, top: x.scrollTop, left: x.scrollLeft })) : [];
   if (same) content!.style.animation = 'none';
-  carrying = settled;
+  carrying = settled || !!slot;
+  const caret = typing ? [typing.selectionStart, typing.selectionEnd] : null;
+  if (slot) slot.replaceWith(typing!);
   el.replaceChildren();
   carrying = false;
   if (!content) return;
@@ -542,6 +554,10 @@ function fill(el: El, content: El | null) {
   if (settled) {
     carried!.focus();
     carried!.select();
+  }
+  if (slot && caret) {
+    typing!.focus({ preventScroll: true });
+    typing!.setSelectionRange(caret[0], caret[1]);
   }
 }
 
@@ -719,6 +735,9 @@ function renderLobby(): El | null {
     ),
     teamsRow(L, isHost, lobby),
     !mine && h('small.cv-muted', {}, 'Every place on this map is taken: you’ll watch the game. A place comes free if the host picks a larger map, or someone leaves.'),
+    // (A chat once there's someone to talk to.)
+    (L.seats.filter((x) => !x.bot).length > 1 || chatSaid()) && h('div.cv-label.sect', {}, 'Chat'),
+    (L.seats.filter((x) => !x.bot).length > 1 || chatSaid()) && lobbyChat(),
     h('div.cv-label.sect', {}, 'Scenarios'),
     scenarioCards(L, isHost, lobby),
     h('div.cv-label.sect', {}, 'The world'),
@@ -1138,6 +1157,19 @@ function drawMinimap(cv: HTMLCanvasElement) {
     ctx.fillStyle = '#fff';
     ctx.fillRect(col * cw + (row & 1 ? cw / 2 : 0) - 1, row * ch - 1, 4, 4);
   }
+  // Pings (`chat.ts`): a ring each in its kind's colour.
+  minimapPings((tile, color) => {
+    const col = colOf(tile % g.width);
+    const row = Math.floor(tile / g.width);
+    const x = Math.round(col * cw + (row & 1 ? cw / 2 : 0));
+    const y = Math.round(row * ch);
+    ctx.strokeStyle = '#07090c';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x - 5, y - 5, 11, 11);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - 5, y - 5, 11, 11);
+  });
   // Map pins: a dot each in its icon's colour.
   for (const p of store.view!.pins) {
     const col = colOf(p.tile % g.width);

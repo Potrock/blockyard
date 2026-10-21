@@ -3,6 +3,7 @@ import { CIVS } from '../rules/civs';
 import { emblemEl, svg } from './icons';
 import { PICTURES, type PictureId } from './picturefiles';
 import { openQuests } from './citystates';
+import { faceEl } from './chat';
 import { store, tone } from './store';
 import { h, togglePanel, type El } from './ui';
 
@@ -75,6 +76,8 @@ function leader(p: PlayerSummary): El {
     person ? badge('br', done ? 'check' : 'turn', done ? 'good' : 'wait') : null,
     stance && h('span.lr-mood', { style: `--mood:${tone(stance.color)}` }, ...[1, 2, 3, 4, 5].map((i) => h(`i${i <= stance.blocks ? '.on' : ''}`))),
     h('b.lr-score', {}, String(p.score)),
+    // (A face their leader's just made, `chat.ts`.)
+    faceEl(p.index),
   );
   el.addEventListener('click', () => talkTo(p.index));
   return el;

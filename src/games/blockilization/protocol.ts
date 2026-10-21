@@ -5,7 +5,7 @@ import type { CombatPreview } from './rules/preview';
 import type { Difficulty } from './rules/difficulty';
 import type { DealItem } from './rules/diplomacy';
 import type { Replay } from './rules/replay';
-import type { City, Game, MapPin, MapSize, MapType, Note, Production, Settings, Speed, WorldEvent } from './rules/state';
+import type { ChatTo, City, Game, MapPin, MapSize, MapType, Note, Production, Settings, Speed, WorldEvent } from './rules/state';
 import { YIELD_KEYS, type Yields } from './rules/terrain';
 import type { SavedGame } from './saves';
 
@@ -557,6 +557,7 @@ export type ClientToServer =
   | { name: 'dealCheck'; data: { target: number; items: DealItem[]; key: string } }
   | { name: 'prefs'; data: { muted?: boolean; tips?: boolean; seen?: string[] } }
   | { name: 'pin'; data: { tile: number; icon?: string; label?: string; remove?: boolean } }
+  | { name: 'chat'; data: { to?: ChatTo; text?: string; emote?: string; ping?: { tile: number; kind?: string } } }
   | { name: 'workAdvice'; data: { unit: number } }
   | { name: 'dealHelp'; data: { target: number; items: DealItem[]; ask: 'balance' | 'counter'; key: string } }
   | { name: 'exit'; data: null };

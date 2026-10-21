@@ -308,8 +308,8 @@ export function dealProblem(game: Game, deal: Deal): string | null {
   return null;
 }
 
-/** A civ's era: its furthest tech's (as `game.eraOf`, which this module can't import). */
-const eraIndex = (p: Player) => ERAS.indexOf(eraOfCol(Math.max(0, ...p.techs.map((t) => TECHS[t]?.col ?? 0))));
+/** A civ's era: its furthest tech's, or the one a later start put it in (as `game.eraOf`, which this module can't import). */
+const eraIndex = (p: Player) => Math.max(p.startEra ?? 0, ERAS.indexOf(eraOfCol(Math.max(0, ...p.techs.map((t) => TECHS[t]?.col ?? 0)))));
 
 /** Make a deal (it's been agreed): gold changes hands, the rest starts. */
 export function makeDeal(game: Game, deal: Deal) {

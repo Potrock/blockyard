@@ -11,6 +11,7 @@ import { chargeFrom } from './path';
 import { marchTo } from './march';
 import { play } from './sound';
 import { closePinMenu, openPinMenu } from './pins';
+import { chatOpen, pingTile, toggleChat } from './chat';
 import { workAt, workTip } from './workadvice';
 
 /**
@@ -339,6 +340,8 @@ export function bindInput() {
     }
     if (!d || d.moved || !onMap(e)) return;
     const hit = hitAt(e.clientX, e.clientY);
+    // Alt+click: the tile pointed at for the others, a ping (`chat.ts`).
+    if (d.button === 0 && e.altKey && !store.view?.spectator) return pingTile(hit?.tile ?? pick(e.clientX, e.clientY));
     // A right-click with nothing selected to move: the tile's menu (to pin it).
     if (d.button === 2 && tileMenuFree(false)) return openPinMenu(hit?.tile ?? pick(e.clientX, e.clientY), e.clientX, e.clientY);
     act(pick(e.clientX, e.clientY), d.button === 2, hit, e.pointerType === 'touch', e.shiftKey);
@@ -362,8 +365,9 @@ export function bindInput() {
         // function keys (F1 closing the Civilopedia...) are still the game's; the rest is typing.
         if (e.code === 'Escape') {
           e.target.blur();
-          // (A pin's label: the tile's menu goes with it.)
+          // (A pin's label: the tile's menu goes with it; the chat's line, the chat.)
           closePinMenu();
+          if (e.target.closest('.ch-dock')) toggleChat(false);
           e.preventDefault();
           e.stopImmediatePropagation();
         }
@@ -417,8 +421,14 @@ function key(e: KeyboardEvent): boolean {
     store.changed++;
     return true;
   }
+  // The chat (`chat.ts`), playing or watching.
+  if (code === 'KeyM' && store.view) {
+    toggleChat();
+    return true;
+  }
   if (!store.view || store.view.spectator) {
-    // The lobby, or watching: only the Civilopedia (F1, and Escape to close it).
+    // The lobby, or watching: only the Civilopedia (F1, and Escape to close it), and the chat.
+    if (code === 'Escape' && chatOpen()) return toggleChat(false), true;
     if (code === 'F1' || (code === 'Escape' && store.panel)) {
       store.panel = code === 'F1' && store.panel !== 'pedia' ? 'pedia' : null;
       store.changed++;
