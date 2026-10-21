@@ -1603,8 +1603,9 @@ function renderCity(): El | null {
   );
   const content = store.cityTab === 'people' ? cityPeople(city, info, refresh) : store.cityTab === 'buildings' ? cityBuildings(city, info) : cityBuild(city, info, refresh);
   return h(
-    // (A cv-scroll too: on a short screen the whole panel scrolls, kept where it was across redraws.)
-    'div.cv-city.cv-panel.cv-in.cv-scroll',
+    // (A cv-scroll too: on a short screen the whole panel scrolls, kept where it was across redraws. A
+    // pd-beside, as what's hovered in it has its card beside the panel, not over the rows below.)
+    'div.cv-city.cv-panel.cv-in.cv-scroll.pd-beside',
     {},
     h('button.cv-x', { onclick: () => ((store.selectedCity = null), store.changed++), html: svg('close', 15) }),
     head,
