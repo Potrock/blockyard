@@ -963,6 +963,14 @@ export default defineServer(shared, {
   setup(game) {
     // (For the headless tests, in development: the game as it stands, and its phase.)
     if (import.meta.env.DEV) (globalThis as unknown as { __civ: unknown }).__civ = { game: () => civGame, phase: () => phase };
+    // (A room of its own: nothing of another room's left over, where rooms share this code, as the headless tests' do.)
+    phase = 'lobby';
+    civGame = null;
+    playing = null;
+    pending = null;
+    seats = [];
+    host = null;
+    saves.reset();
     fightHooks.fought = (g, by, combat) => {
       if (g === civGame) showFights(game, by, combat);
     };
