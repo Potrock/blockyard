@@ -236,7 +236,16 @@ export class GameHost {
     const w = gw.world;
     const destructible = def.world?.destructible;
     if (destructible) w.set_destructible(destructible.above ?? -1, destructibleIds(registry, destructible));
-    const edited = (cells: [number, number, number, number][]) => this.events.push({ t: 'edits', cells });
+    /**
+     * Blocks set, as an `edits` event: a run of them with nothing between (a game setting blocks one
+     * at a time, a few thousand a tick) goes as one, so each screen meshes the columns they touch once
+     * rather than once for every block.
+     */
+    const edited = (cells: [number, number, number, number][]) => {
+      const last = this.events[this.events.length - 1];
+      if (last?.t === 'edits') for (const c of cells) last.cells.push(c);
+      else this.events.push({ t: 'edits', cells });
+    };
     const host: WorldHost = {
       world: w,
       edit: (x, y, z, id) => {
