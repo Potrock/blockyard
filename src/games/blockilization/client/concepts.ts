@@ -226,6 +226,7 @@ export const CONCEPTS: Article[] = [
     sub: 'Danger and reward in the wilds',
     sections: [
       { text: 'Barbarians come out of camps in the unclaimed lands and raid whoever is near. Clearing a camp brings gold, and city-states close by are grateful for it.' },
+      { title: 'Clans', text: 'Every camp is a clan’s, and a civilization that has found a camp can deal with its clan in the Diplomacy screen (or by clicking the camp): bribe it, and its raiders leave you and your team alone for a while; hire one of its warriors, now and then; or pay it to raid a civilization you have met, which will hear of it, and may find out who paid. Left alone, a clan grows, faster when paid and as its raiders pillage, and slower as they die. Grown, it settles down where its camp is as a new city-state, if the camp is in no one’s land and no city is close by.' },
       { text: 'Ancient ruins are scattered over the world. The first land unit to step on one gets its reward: gold, a technology, a citizen, a map of the land round it, or a unit.' },
     ],
   },

@@ -13,6 +13,7 @@ import { play } from './sound';
 import { closePinMenu, openPinMenu } from './pins';
 import { chatOpen, pingTile, toggleChat } from './chat';
 import { workAt, workTip } from './workadvice';
+import { openClans } from './clans';
 
 /**
  * The mouse, a finger and the keyboard on the map: a click (or tap) selects a unit or opens a city, a
@@ -141,6 +142,8 @@ function act(t: number, right: boolean, hit: Hit | null = null, touch = false, s
         return;
       }
       if (city?.owner === me()) return openCity(city.id);
+      // (A camp found: its clan, to deal with.)
+      if (!sel && v.clans.some((c) => c.tile === t)) return openClans();
       if (!sel) {
         store.selectedCity = null;
         store.changed++;

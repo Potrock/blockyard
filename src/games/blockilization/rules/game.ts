@@ -25,6 +25,7 @@ import { GOLDEN_SPEEDS, type City, type Game, type Player, type Production, type
 import { masterOf, sameSide, sideName, sides, teamOf, teammates } from './teams';
 import { breakFree, release, vassalsTurn } from './vassals';
 import { checkEurekas, killDeeds } from './eurekas';
+import { clanById, clanHarmed, clanHooks, clanProblem, dealWithClan, type ClanAct } from './clans';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { eraStartOf, scenarioOf, startEraOf } from './starts';
 import { startSequence, waitsFor, warBegun } from './turns';
@@ -99,6 +100,8 @@ export type Order =
   /** A vassal's declaration of independence; a master setting a vassal free (`vassals.ts`). */
   | { t: 'independence' }
   | { t: 'release'; target: number }
+  /** Dealing with a barbarian clan (`clans.ts`): a bribe, a warrior hired, or a raid paid for on `target`. */
+  | { t: 'clan'; clan: number; act: ClanAct; target: number | null }
   | { t: 'automate'; unit: number; mode: 'work' | 'explore' | null }
   | { t: 'ready'; ready: boolean };
 
@@ -480,8 +483,11 @@ function eliminate(game: Game, p: number) {
 }
 
 cityHooks.captured = captureCity;
+clanHooks.found = foundCity;
 cityHooks.nuked = nuclearStrike;
 cityHooks.killed = (game, u, by) => {
+  // (A clan's raider killed: the clan loses heart, `clans.ts`.)
+  clanHarmed(game, u);
   // A battlefield: a land unit falling outside a city now and then leaves an antiquity site.
   const tile = game.tiles[u.tile];
   if (UNITS[u.type].domain === 'land' && !TERRAINS[tile.terrain].water && !cityAt(game, u.tile) && random(game) < 0.1) tile.antiquity = true;
@@ -905,6 +911,7 @@ const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }
   embargo: { target: 'int', lift: 'bool?' },
   independence: {},
   release: { target: 'int' },
+  clan: { clan: 'int', act: ['bribe', 'hire', 'incite'], target: 'int|null' },
   automate: { unit: 'int', mode: ['work', 'explore', null] },
   ready: { ready: 'bool' },
 };
@@ -1624,6 +1631,14 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
     case 'release': {
       const why = release(game, p, game.players[o.target]);
       return why ? fail(why) : OK;
+    }
+    case 'clan': {
+      const clan = clanById(game, o.clan);
+      if (!clan) return fail('That clan is no more');
+      const why = clanProblem(game, p, clan, o.act, o.target);
+      if (why) return fail(why);
+      note(game, p.index, { text: dealWithClan(game, p, clan, o.act, o.target), at: clan.tile, kind: 'good' });
+      return OK;
     }
     case 'automate': {
       const type = UNITS[u.type];

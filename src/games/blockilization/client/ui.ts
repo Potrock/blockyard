@@ -52,6 +52,7 @@ import { seasonName } from './weatherfx';
 import { chargeFrom, previewPath, routeOf, swapsWith, whyNot, type Route } from './path';
 import { leaveMarch, marchOf, marching } from './march';
 import { CITYSTATES_CSS } from './citystates';
+import { CLANS_CSS } from './clans';
 import { CONGRESS_CSS, openCongress, PROJECT_LOOK, sessionWhen, unvoted } from './congress';
 import { isProject, PROJECTS } from '../rules/projects';
 import { DIPLO_CSS, putOffOffer, renderDiplomacy, renderOffer, waitingOffer } from './diplomacy';
@@ -321,7 +322,7 @@ export function mountUI(c: Client, layer: El) {
   style(CSS);
   style(PEDIA_CSS);
   style(TECH_CSS);
-  for (const css of [NOTES_CSS, OVERVIEW_CSS, HOTKEYS_CSS, LOBBY_CSS, DIPLO_CSS, LENS_CSS, GUIDE_CSS, RIBBON_CSS, REPLAY_CSS, ADVICE_CSS, POLITICS_CSS, PINS_CSS, CHAT_CSS, SPLASH_CSS, FAME_CSS, CITYSTATES_CSS, CONGRESS_CSS]) style(css);
+  for (const css of [NOTES_CSS, OVERVIEW_CSS, HOTKEYS_CSS, LOBBY_CSS, DIPLO_CSS, LENS_CSS, GUIDE_CSS, RIBBON_CSS, REPLAY_CSS, ADVICE_CSS, POLITICS_CSS, PINS_CSS, CHAT_CSS, SPLASH_CSS, FAME_CSS, CITYSTATES_CSS, CLANS_CSS, CONGRESS_CSS]) style(css);
   // The pixel look over all of it (last, so it wins), its glyphs redrawn as they're made.
   style(PIXEL_CSS);
   // Phones and touch screens over that (fingers, small screens).
@@ -2517,7 +2518,9 @@ function renderTip() {
       }
     if (s.feature === 'fallout') bits.push(line('mushroom', '#b8d84a', `Fallout: yields next to nothing, ${FEATURES.fallout.hurts} damage a turn to units here; a worker scrubs it away`));
     if (k.ruin) bits.push(line('urn', '#f2c14e', 'Ancient ruins'));
-    if (k.camp) bits.push(line('skull', '#ff8a7a', 'Barbarian camp (clear it for gold)'));
+    const clan = k.camp ? store.view.clans.find((c) => c.tile === t) : undefined;
+    if (k.camp) bits.push(line('skull', '#ff8a7a', clan ? `The ${clan.name} clan’s camp · ${clan.growth}% to a city-state` : 'Barbarian camp (clear it for gold)'));
+    if (clan && !myUnit(store.selectedUnit)) bits.push(h('div.ln.way', {}, icon('gold', 13), `${click(true)} to bribe it, hire its warriors or pay it to raid`));
     const y = store.yields[t];
     if (y) bits.splice(1, 0, h('div.ln.yl', {}, ...YIELD_KEYS.filter((x) => (y[x] ?? 0) > 0).map((x) => h('span', {}, icon(x, 13, YIELD_COLOR[x]), String(y[x])))));
     // The open city's land: what a click on it does.

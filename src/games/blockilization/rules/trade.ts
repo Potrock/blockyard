@@ -431,7 +431,7 @@ export function unVote(game: Game, allyOf: (game: Game, cs: number) => number): 
       votes.set(lead, (votes.get(lead) ?? 0) + n);
     }
   }
-  const total = majors(game).length * 2 + (un !== undefined && un >= 0 ? 2 : 0) + game.players.filter((x) => x.cityState).length;
+  const total = majors(game).length * 2 + (un !== undefined && un >= 0 ? 2 : 0) + game.players.filter((x) => x.cityState && !x.unsettled).length;
   const teams = living.some((p) => p.team !== undefined);
   return { votes, needed: teams ? Math.floor((total * 2) / 3) + 1 : Math.floor(total / 2) + 1 };
 }

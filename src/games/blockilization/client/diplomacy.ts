@@ -7,6 +7,7 @@ import { icon, resourceGlyph, svg } from './icons';
 import { leaderScene, SCENE_CSS } from './leaderscene';
 import { renderPolitics } from './politics';
 import { renderCityStates } from './citystates';
+import { renderClans } from './clans';
 import { renderCongress, unvoted } from './congress';
 import { play } from './sound';
 import { ask, store, TEAM_COLORS, teammate, tone } from './store';
@@ -145,7 +146,8 @@ export function renderDiplomacy(): El {
           h('div.cv-grow', {}, h('b', {}, 'World Congress'), h('small', {}, unvoted(v.congress).length ? `${unvoted(v.congress).length} to vote on` : 'Resolutions and delegates')),
         )
       : null,
-    !civs.length && !cityStates ? h('div.cv-muted', { style: 'padding:10px' }, "You haven't met anyone yet. Explore!") : null,
+    v.clans.length ? h(`button.cv-dip-civ.cs${chosen === -4 ? '.on' : ''}`, { onclick: () => pick(-4) }, tile('skull', '#7a3a32', 42), h('div.cv-grow', {}, h('b', {}, 'Barbarian clans'), h('small', {}, `${v.clans.length} camp${v.clans.length === 1 ? '' : 's'} found: bribes, warriors, raids`))) : null,
+    !civs.length && !cityStates && !v.clans.length ? h('div.cv-muted', { style: 'padding:10px' }, "You haven't met anyone yet. Explore!") : null,
   );
   const p = chosen !== null && chosen >= 0 ? v.players[chosen] : null;
   const pane = p
@@ -156,7 +158,9 @@ export function renderDiplomacy(): El {
       ? h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'World politics'), h('small.cv-muted', {}, 'How the civilizations you know stand with one another, and with you.'), ...renderPolitics())
       : chosen === -3
         ? h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'World Congress'), ...renderCongress())
-        : h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'City-states'), ...renderCityStates());
+        : chosen === -4
+          ? h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'Barbarian clans'), ...renderClans())
+          : h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'City-states'), ...renderCityStates());
   return h(
     'div.cv-big.cv-panel.cv-dip',
     {},

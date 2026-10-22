@@ -75,12 +75,17 @@ export function newPlayer(index: number, seat: Seat, tiles: number, players: num
   };
 }
 
+/** How many of the world's city-states a game with barbarians keeps out of it, for barbarian clans to become (`clans.ts`). */
+export const CLAN_STATES = 2;
+
 /** A new game: the map made, each seat given a civ's start (a Settler and a Warrior, Civ V's; more begun in a later era, `beginInEra`), the fog drawn. */
 export function createGame(settings: Settings, seats: Seat[], seed: number): Game {
   // (The Earth in its own proportions, `earthSize`; a new world wraps round east to west unless the lobby said not.)
   const size = settings.type === 'earth' ? earthSize(settings.size) : MAP_SIZES[settings.size];
   const grid: Grid = { width: size.width, height: size.height, ...(settings.wrap === false ? {} : { wrap: true }) };
   const cityStates = CITY_STATES.slice(0, Math.max(0, Math.min(CITY_STATES.length, settings.cityStates)));
+  // (And those kept for the clans: not on the map until one settles, `clans.ts`.)
+  const unsettled = settings.barbarians ? CITY_STATES.slice(cityStates.length, cityStates.length + CLAN_STATES) : [];
   // (On the Earth, with true starts, each seat's civ and each city-state's own, to start where it began.)
   // (True starts unless the lobby chose fair ones: the Earth's point.)
   const trueStarts = settings.type === 'earth' && settings.trueStarts !== false ? [...seats.map((s) => s.civ), ...cityStates.map((cs) => cs.civ.id)] : undefined;
@@ -106,10 +111,11 @@ export function createGame(settings: Settings, seats: Seat[], seed: number): Gam
   };
   // (Begun in a later era, or with a scenario's army: each civ's start is the age's, `beginInEra`.)
   const later = startEraOf(settings) > 0 || !!scenarioOf(settings)?.army;
-  // Everyone at the table: the civs, then the city-states, then the barbarians.
-  const all: (Seat & { cityState?: (typeof cityStates)[number] })[] = [
+  // Everyone at the table: the civs, then the city-states (those kept for the clans last), then the barbarians.
+  const all: (Seat & { cityState?: (typeof cityStates)[number]; unsettled?: true })[] = [
     ...seats,
     ...cityStates.map((cs) => ({ user: null, name: cs.civ.name, civ: cs.civ.id, bot: true, cityState: cs })),
+    ...unsettled.map((cs) => ({ user: null, name: cs.civ.name, civ: cs.civ.id, bot: true, cityState: cs, unsettled: true as const })),
     ...(settings.barbarians ? [{ user: null, name: 'Barbarians', civ: 'barbarian', bot: true }] : []),
   ];
   all.forEach((seat, i) => {
@@ -118,7 +124,8 @@ export function createGame(settings: Settings, seats: Seat[], seed: number): Gam
     else if (seat.team !== undefined && seat.civ !== 'barbarian') p.team = seat.team;
     game.players.push(p);
     if (seat.civ === 'barbarian') return;
-    const at = starts[i];
+    const at = seat.unsettled ? undefined : starts[i];
+    if (seat.unsettled) p.unsettled = true;
     if (at === undefined) {
       p.alive = false;
       return;
