@@ -52,10 +52,10 @@ export interface Running {
   turns: number;
 }
 
-/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`; 'embargo': an embargo declared on them, `declareEmbargo`; 'nuke': a nuclear weapon used on them; 'nukeSeen': a nuclear weapon used by a civ they knew, on anyone, `nuclearStrike`; 'vassal': `by` capitulated to `to`, `kneel`; 'freed': `by` set `to`, its vassal, free; 'independence': `by` broke free of `to`, its master, `vassals.ts`). */
+/** Something one civ did to another, remembered (for opinions): when, what, by whom, to whom ('spy': a spy of theirs caught, or a theft traced to them; 'land': tiles taken by a citadel; 'liberate': a city of theirs given back, `liberation.ts`; 'pledge': a city-state under their protection bullied or attacked, `pledges.ts`; 'embargo': an embargo declared on them, `declareEmbargo`; 'nuke': a nuclear weapon used on them; 'nukeSeen': a nuclear weapon used by a civ they knew, on anyone, `nuclearStrike`; 'vassal': `by` capitulated to `to`, `kneel`; 'freed': `by` set `to`, its vassal, free; 'independence': `by` broke free of `to`, its master, `vassals.ts`; 'incited': `by` paid a barbarian clan to raid `to`, and `to` found out, `clans.ts`). */
 export interface DiploEvent {
   turn: number;
-  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge' | 'embargo' | 'nuke' | 'nukeSeen' | 'vassal' | 'freed' | 'independence';
+  kind: 'war' | 'backstab' | 'denounce' | 'friendship' | 'peace' | 'deal' | 'capture' | 'brokeDeal' | 'spy' | 'land' | 'liberate' | 'pledge' | 'embargo' | 'nuke' | 'nukeSeen' | 'vassal' | 'freed' | 'independence' | 'incited';
   by: number;
   to: number;
 }

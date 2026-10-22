@@ -1,5 +1,5 @@
 import { adviseBuild } from './advisor';
-import { packKnown, packStatic, packYields, type CityInfo, type CityWire, type DemographicId, type MapWire, type Relation, type SelfWire, type StatsInfo, type UnitWire, type View } from './protocol';
+import { packKnown, packStatic, packYields, type CityInfo, type CityWire, type ClanWire, type DemographicId, type MapWire, type Relation, type SelfWire, type StatsInfo, type UnitWire, type View } from './protocol';
 import { BUILDINGS } from './rules/buildings';
 import { canPillage, cityMaxHp, cityStrength, strength, type Modifier } from './rules/combat';
 import { atWar, citiesOf, civEffects, has, knows, seesResource, seesUnit, techCost } from './rules/core';
@@ -25,6 +25,7 @@ import type { GreatKind } from './rules/effects';
 import { dissent, greatCost } from './rules/economy';
 import { ALL_POLICIES } from './rules/policies';
 import { masterOf, teammates, teamOf } from './rules/teams';
+import { canSettle, clanCost, clanProblem, clanUnit, preyProblem, raidTarget, SETTLE, type Clan } from './rules/clans';
 import { independence, tributeFrom, tributeOf } from './rules/vassals';
 import { addYields, RESOURCES, YIELD_KEYS, type Yields } from './rules/terrain';
 import { isMilitary, UNITS } from './rules/units';
@@ -455,6 +456,27 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
     waiting: p ? (game.relations?.offers ?? []).filter((o) => o.from === p.index).map((o) => o.to) : [],
     // (Their teammates' too, each its owner's to change or take up.)
     pins: p ? (game.pins ?? []).filter((x) => x.owner === p.index || teammates(game, x.owner, p.index)) : [],
+    clans: p ? (game.clans ?? []).filter((c) => p.explored[c.tile] && game.tiles[c.tile]?.camp).map((c) => clanWire(game, p, c)) : [],
+  };
+}
+
+/** A clan as a civ that has found its camp sees it (`ClanWire`). */
+function clanWire(game: Game, p: Player, c: Clan): ClanWire {
+  const raiding = raidTarget(game, c);
+  const mine = c.incited?.by === p.index || (c.incited !== undefined && teammates(game, c.incited.by, p.index));
+  const targets = game.players.filter((o) => !preyProblem(game, p, o.index)).map((o) => o.index);
+  return {
+    id: c.id,
+    name: c.name,
+    tile: c.tile,
+    growth: Math.floor((c.growth / SETTLE) * 100),
+    settles: !!canSettle(game, c),
+    bribed: Math.max(0, (c.bribes?.[p.index] ?? 0) - game.turn),
+    raid: raiding !== null && (mine || raiding === p.index) ? { target: raiding, mine, turns: c.incited!.until - game.turn } : null,
+    unit: clanUnit(game),
+    cost: { bribe: clanCost(game, p, 'bribe'), hire: clanCost(game, p, 'hire'), incite: clanCost(game, p, 'incite') },
+    why: { bribe: clanProblem(game, p, c, 'bribe', null), hire: clanProblem(game, p, c, 'hire', null), incite: targets.length ? clanProblem(game, p, c, 'incite', targets[0]) : clanProblem(game, p, c, 'incite', null) },
+    targets,
   };
 }
 

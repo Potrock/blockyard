@@ -1,6 +1,7 @@
 import type { BotMemory } from './ai/memory';
 import type { Difficulty } from './difficulty';
 import type { Congress } from './congress';
+import type { Clan } from './clans';
 import type { Relations } from './diplomacy';
 import type { Quest } from './quests';
 import type { Replay } from './replay';
@@ -90,6 +91,8 @@ export interface Unit {
   /** An aircraft aboard a carrier: the carrier's id (`air.ts`); and the turn it last intercepted. */
   carrier?: number;
   intercepted?: number;
+  /** A barbarian's: the clan whose camp sent it out (`clans.ts`). */
+  clan?: number;
 }
 
 export type ProductionKind = 'unit' | 'building' | 'project' | 'process';
@@ -203,6 +206,8 @@ export interface Player {
    */
   vassal?: { master: number; since: number; tribute: number };
   alive: boolean;
+  /** A city-state kept out of the game for a barbarian clan to become (`clans.ts`): not yet in it. */
+  unsettled?: true;
   /** Has said they're done this turn. */
   ready: boolean;
   gold: number;
@@ -351,6 +356,8 @@ export interface Game {
   relations?: Relations;
   /** The World Congress, once founded (`congress.ts`). */
   congress?: Congress;
+  /** The barbarian clans, one to each camp (`clans.ts`). */
+  clans?: Clan[];
   /** Great works made (to name new ones). */
   worksMade: number;
   /** Each team's research as last shared among them, by team (`shareResearch`): progress toward each tech. */

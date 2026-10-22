@@ -454,6 +454,29 @@ export interface View {
   waiting: number[];
   /** The map pins of the viewer and their team. */
   pins: MapPin[];
+  /** The barbarian clans whose camps the viewer has found (`rules/clans.ts`). */
+  clans: ClanWire[];
+}
+
+/**
+ * A barbarian clan as a civ that has found its camp sees it: its camp, how near it is to settling
+ * as a city-state (0 to 100) and whether it could where it is, the turns its bribe from the viewer
+ * has left (0: none), the raid it's been paid for if the viewer paid or is its target, the warrior it
+ * would sell, and what each dealing costs the viewer and why it can't be had now (null: it can; to
+ * raid, the civs it could be paid to raid).
+ */
+export interface ClanWire {
+  id: number;
+  name: string;
+  tile: number;
+  growth: number;
+  settles: boolean;
+  bribed: number;
+  raid: { target: number; mine: boolean; turns: number } | null;
+  unit: string;
+  cost: { bribe: number; hire: number; incite: number };
+  why: { bribe: string | null; hire: string | null; incite: string | null };
+  targets: number[];
 }
 
 /**

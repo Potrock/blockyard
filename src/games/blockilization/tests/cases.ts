@@ -77,6 +77,12 @@ import { eraOf, foundCity } from '../rules/game';
 import { botAnswer, EMOTES, isEmote, isPing, moodOf, toneOf } from '../rules/chat';
 import { isMilitary } from '../rules/units';
 import { civEffects, has } from '../rules/core';
+import { bribeTurns, clanCost, clansOf, clansTurn, clanUnit, hireRest, inciteTurns, newClan, raidTarget, SETTLE, spares } from '../rules/clans';
+import { CLAN_STATES, speed } from '../rules/core';
+import { barbarianTurn } from '../rules/barbarians';
+import { clans as botClans } from '../rules/ai/clans';
+import { die } from '../rules/combat';
+import { campHooks } from '../rules/movement';
 
 /**
  * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
@@ -6193,4 +6199,167 @@ test('eurekas: a bot has its boosts as its turn ends, and goes for the tech they
   ctx.mem.techGoal = undefined;
   research(ctx);
   eq(p.researching, 'masonry', 'Masonry, a turn from done');
+});
+
+test('clans: a camp is a clan’s; one bribed leaves its briber (and its team) alone for a while; only a civ that has found its camp deals with it', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { barbarians: true });
+  const [egypt, babylon] = game.players;
+  const b = game.players.findIndex((x) => x.civ === 'barbarian');
+  eq(game.players.filter((x) => x.unsettled && x.cityState && !x.alive).length, CLAN_STATES, 'city-states kept out of the game for the clans');
+  const camp = at(12, 8);
+  game.tiles[camp].camp = true;
+  const clan = newClan(game, camp);
+  ok(clan.name.length > 0 && clansOf(game).includes(clan), 'a clan, named');
+  egypt.gold = babylon.gold = 500;
+  const bribe: Order = { t: 'clan', clan: clan.id, act: 'bribe', target: null };
+  ok(!apply(game, 0, bribe).ok, 'not before its camp is found');
+  egypt.explored[camp] = 1;
+  ok(apply(game, 0, bribe).ok, 'bribed');
+  eq(egypt.gold, 500 - clanCost(game, egypt, 'bribe'), 'paid for');
+  ok(!apply(game, 0, bribe).ok, 'not again while it holds');
+  // Its raiders: one beside an Egyptian warrior, one beside a Babylonian.
+  const mine = unit(game, 'warrior', 0, at(14, 3));
+  const theirs = unit(game, 'warrior', 1, at(14, 13));
+  unit(game, 'warrior', b, at(15, 3), { clan: clan.id });
+  unit(game, 'warrior', b, at(15, 13), { clan: clan.id });
+  barbarianTurn(game);
+  ok(game.units.includes(mine) && mine.hp === 100, 'the Egyptian left alone');
+  ok(!game.units.includes(theirs) || theirs.hp < 100, 'the Babylonian attacked');
+  egypt.team = babylon.team = 0;
+  ok(spares(game, clan, 1), 'a teammate of its briber spared too');
+  egypt.team = babylon.team = undefined;
+  ok(!spares(game, clan, 1), 'not otherwise');
+  // Seen by the civ that found it (and that bribed it), not by another.
+  const seen = viewFor(game, egypt, null).clans;
+  eq(seen.length, 1, 'Egypt sees the clan');
+  eq(seen[0].bribed, bribeTurns(game), 'its bribe’s turns');
+  eq(viewFor(game, babylon, null).clans.length, 0, 'Babylon, which hasn’t found it, doesn’t');
+  // The bribe lapses.
+  game.turn += bribeTurns(game);
+  clansTurn(game);
+  ok(!spares(game, clan, 0), 'the bribe has lapsed');
+  ok(apply(game, 0, bribe).ok, 'and can be paid again');
+});
+
+test('clans: a warrior hired now and then; a clan paid to raid a civ goes after it, and it learns of it (who paid, sometimes)', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { barbarians: true });
+  const [egypt, babylon] = game.players;
+  babylon.bot = false;
+  const b = game.players.findIndex((x) => x.civ === 'barbarian');
+  const camp = at(12, 8);
+  game.tiles[camp].camp = true;
+  const clan = newClan(game, camp);
+  egypt.explored[camp] = 1;
+  egypt.gold = 2000;
+  const hire: Order = { t: 'clan', clan: clan.id, act: 'hire', target: null };
+  ok(apply(game, 0, hire).ok, 'a warrior hired');
+  const hired = game.units[game.units.length - 1];
+  eq(hired.owner, 0, 'Egypt’s');
+  eq(hired.type, clanUnit(game), 'the clan’s warrior');
+  eq(distance(game.grid, hired.tile, camp), 1, 'by the camp');
+  eq(egypt.gold, 2000 - clanCost(game, egypt, 'hire'), 'paid for');
+  ok(!apply(game, 0, hire).ok, 'not another so soon');
+  game.turn += hireRest(game);
+  ok(apply(game, 0, hire).ok, 'another, later');
+  // Paid to raid Babylon.
+  const home = city(game, 1, at(20, 8));
+  const incite = (target: number): Order => ({ t: 'clan', clan: clan.id, act: 'incite', target });
+  ok(!apply(game, 0, incite(1)).ok, 'not on a civ Egypt hasn’t met');
+  egypt.met = [1];
+  babylon.met = [0];
+  ok(!apply(game, 0, incite(0)).ok, 'not on Egypt itself');
+  ok(apply(game, 0, incite(1)).ok, 'paid to raid Babylon');
+  eq(raidTarget(game, clan), 1, 'it raids Babylon');
+  eq(game.units.filter((u) => u.clan === clan.id).length, 2, 'two raiders out at once');
+  ok(spares(game, clan, 0), 'and spares Egypt');
+  ok(!apply(game, 0, incite(1)).ok, 'not twice at once');
+  const told = babylon.notes.find((n) => n.text.startsWith(`The ${clan.name} clan has been paid to raid your lands`));
+  ok(!!told, 'Babylon is told');
+  const named = told!.text.includes(egypt.name);
+  eq(opinionOf(game, babylon, egypt).reasons.some((r) => r.text === 'You paid barbarians to raid us'), named, 'remembered against Egypt if it found out who paid');
+  // A raider of the clan twelve tiles off heads for Babylon; one of another clan doesn't.
+  const raider = unit(game, 'warrior', b, at(8, 8), { clan: clan.id });
+  const other = unit(game, 'warrior', b, at(8, 14));
+  barbarianTurn(game);
+  ok(!!raider.path?.length && distance(game.grid, raider.path[raider.path.length - 1], home.tile) <= 1, `the paid raider makes for Babylon (${raider.path})`);
+  ok(!other.path?.length || distance(game.grid, other.path[other.path.length - 1], home.tile) > 1, 'the other wanders');
+  game.turn += inciteTurns(game);
+  clansTurn(game);
+  eq(raidTarget(game, clan), null, 'the raid paid for is over');
+});
+
+test('clans: one left alone grows into a city-state where its camp was, its raiders by it its soldiers; a raider killed sets it back; a camp cleared ends it', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'greece'], { barbarians: true });
+  const [egypt, babylon, greece] = game.players;
+  egypt.bot = false;
+  const b = game.players.findIndex((x) => x.civ === 'barbarian');
+  egypt.techs = ['agriculture', 'pottery', 'mining'];
+  babylon.techs = ['agriculture', 'pottery', 'archery'];
+  greece.techs = ['agriculture'];
+  const camp = at(12, 8);
+  game.tiles[camp].camp = true;
+  const clan = newClan(game, camp);
+  egypt.explored[camp] = 1;
+  const guard = unit(game, 'spearman', b, at(13, 8), { clan: clan.id });
+  const far = unit(game, 'warrior', b, at(22, 8), { clan: clan.id });
+  clansTurn(game);
+  near(clan.growth, 1 / speed(game), 'it grows each turn');
+  // A raider killed: it loses heart.
+  clan.growth = 50;
+  die(game, unit(game, 'warrior', b, at(12, 13), { clan: clan.id }), null);
+  eq(clan.growth, 40, 'a raider killed');
+  // Grown, but in Egypt's land: it stays a camp.
+  clan.growth = SETTLE;
+  game.tiles[camp].owner = 0;
+  clansTurn(game);
+  ok(game.tiles[camp].camp && clansOf(game).includes(clan), 'not in Egypt’s land');
+  game.tiles[camp].owner = -1;
+  clansTurn(game);
+  const c = cityAt(game, camp);
+  ok(!!c, 'a city where the camp was');
+  const cs = game.players[c!.owner];
+  ok(!!cs.cityState && cs.alive && !cs.unsettled, `${cs.name}, a city-state, in the game now`);
+  ok(!game.tiles[camp].camp && !clansOf(game).includes(clan), 'the camp and the clan gone');
+  eq(guard.owner, cs.index, 'its raider by it its soldier');
+  ok(far.owner === b && far.clan === undefined, 'one far off a lone barbarian');
+  eq([...cs.techs].sort().join(), 'agriculture,pottery', 'the techs most civs know');
+  ok(egypt.notes.some((n) => n.text === `The ${clan.name} clan has settled down: its camp is now ${c!.name}, a city-state.`), 'Egypt, which found the camp, is told');
+  eq(game.players.filter((x) => x.unsettled).length, CLAN_STATES - 1, 'one city-state left for the clans');
+  // Another camp, cleared: its clan is no more, and its raiders lone barbarians; the one clearing it told whose it was.
+  const camp2 = at(6, 14);
+  game.tiles[camp2].camp = true;
+  const clan2 = newClan(game, camp2);
+  const lone = unit(game, 'warrior', b, at(3, 3), { clan: clan2.id });
+  const w = unit(game, 'warrior', 0, camp2);
+  campHooks.onCamp(game, w);
+  ok(!clansOf(game).includes(clan2) && lone.clan === undefined, 'the clan ended');
+  ok(egypt.notes.some((n) => n.text === `You have cleared the camp of the ${clan2.name} clan: 25 gold.`), 'named when cleared');
+  // A camp from before there were clans has one by the next turn.
+  const camp3 = at(4, 4);
+  game.tiles[camp3].camp = true;
+  clansTurn(game);
+  ok(clansOf(game).some((x) => x.tile === camp3), 'an old camp given a clan');
+});
+
+test('clans: a bot bribes a clan by its cities, pays one near its enemy to raid it, and hires a warrior at war', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { barbarians: true });
+  const [egypt] = game.players;
+  city(game, 0, at(8, 8));
+  city(game, 1, at(20, 8));
+  const camp = at(12, 8);
+  game.tiles[camp].camp = true;
+  const clan = newClan(game, camp);
+  egypt.explored[camp] = 1;
+  egypt.gold = 3000;
+  const tries = (done: () => boolean) => {
+    for (let i = 0; i < 60 && !done(); i++) botClans(makeCtx(game, egypt));
+    return done();
+  };
+  ok(tries(() => !!clan.bribes?.[0]), 'bribed');
+  ok(raidTarget(game, clan) === null && clan.hired === undefined, 'nothing more at peace');
+  egypt.met = [1];
+  game.players[1].met = [0];
+  war(game, 0, 1);
+  ok(tries(() => raidTarget(game, clan) === 1), 'paid to raid Babylon');
+  ok(tries(() => clan.hired !== undefined), 'a warrior hired');
 });

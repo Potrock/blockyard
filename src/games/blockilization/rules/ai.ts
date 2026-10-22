@@ -10,6 +10,7 @@ import { congressProposal, congressVote } from './ai/congress';
 import { greatChoice, pantheon, policies, research } from './ai/civics';
 import { act, cityOn, makeCtx, type Ctx } from './ai/context';
 import { pledges, turnsOn } from './ai/liberation';
+import { clans } from './ai/clans';
 import { attacks, cityFire, exploreAbroad, exploreStep, moveUnits, pillageAll } from './ai/military';
 import { exploreSea, seaport } from './ai/navy';
 import { manageCities, pickProduction, spend, spendFaith } from './ai/production';
@@ -43,6 +44,7 @@ export function botTurn(game: Game, p: Player) {
     conquests(ctx);
     diplomacy(ctx);
     pledges(ctx);
+    clans(ctx);
     turnsOn(ctx);
     negotiate(ctx);
     research(ctx);

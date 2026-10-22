@@ -79,6 +79,7 @@ export function opinionOf(game: Game, a: Player, b: Player): Opinion {
   add('You betrayed a friend', sum((e) => e.kind === 'backstab' && e.by === bi && e.to !== ai, 120, -6, 10));
   add('You broke a deal with us', sum((e) => e.kind === 'brokeDeal' && e.by === bi && e.to === ai, 80, -8, 12));
   add('Your spies have worked against us', sum((e) => e.kind === 'spy' && e.by === bi && e.to === ai, 80, -6, 12));
+  add('You paid barbarians to raid us', sum((e) => e.kind === 'incited' && e.by === bi && e.to === ai, 60, -12, 24));
   add('You took our land', sum((e) => e.kind === 'land' && e.by === bi && e.to === ai, 100, -8, 16));
   add('You took our cities', sum((e) => e.kind === 'capture' && e.by === bi && e.to === ai, 150, -6, 24, 0.4));
   // (A city given back is remembered for good, Civ V's liberation: more than any deal.)

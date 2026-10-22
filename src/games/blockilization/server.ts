@@ -14,6 +14,7 @@ import { NATURAL_WONDERS } from './rules/nature';
 import { isMilitary, UNITS } from './rules/units';
 import { apply, endTurn, eraOf, fightHooks, learn, score, shareResearch, type Order } from './rules/game';
 import { boost, boosted, EUREKAS } from './rules/eurekas';
+import { canSettle, clansOf, newClan, settle, SETTLE } from './rules/clans';
 import { advanceSequence, sequenceDone, warBegun } from './rules/turns';
 import { cityHooks, type CombatResult } from './rules/combat';
 import { botAnswer, CHAT_LENGTH, isEmote, isPing } from './rules/chat';
@@ -1474,7 +1475,36 @@ export default defineServer(shared, {
         markAll(game);
         return 'Eureka';
       }
-      throw new Error('Try: turn, turns [n], gold [n], tech [id], eureka [id], spawn <unit> [player], reveal, wonders [fog], improve [pillaged], grow [n], decor, unit <type> [foe] [hp] [embarked], take, vassal [master] [player]');
+      if (cmd === 'camp' || cmd === 'settle') {
+        // A barbarian clan's camp a few tiles from the first person's first unit, found by them, with a raider;
+        // or (`settle`) the clan nearest it settling as a city-state now: to try the clans' screens.
+        const you = civGame.players.find((p) => !p.bot && p.alive);
+        const u = you && (civGame.cities.find((c) => c.owner === you.index) ?? civGame.units.find((x) => x.owner === you.index));
+        const b = barbarianIndex(civGame);
+        if (!you || !u || b < 0) throw new Error('A person with a unit or a city, in a game with barbarians, is needed');
+        if (cmd === 'settle') {
+          const clan = [...clansOf(civGame)].sort((x, y) => distance(civGame!.grid, x.tile, u.tile) - distance(civGame!.grid, y.tile, u.tile))[0];
+          if (!clan) throw new Error('No clan in the game: try camp');
+          if (!canSettle(civGame, clan)) throw new Error(`The ${clan.name} clan can't settle where it is (someone's land, a city close by, or no city-state left)`);
+          clan.growth = SETTLE;
+          const c = settle(civGame, clan);
+          markAll(game);
+          return `The ${clan.name} clan is ${c?.name}`;
+        }
+        const t = within(civGame.grid, u.tile, 5).find((x) => {
+          const tile = civGame!.tiles[x];
+          return distance(civGame!.grid, x, u.tile) >= 4 && !TERRAINS[tile.terrain].water && tile.elevation !== 'mountain' && tile.owner < 0 && !tile.camp && !tile.wonder && !civGame!.units.some((o) => o.tile === x) && !civGame!.cities.some((c) => distance(civGame!.grid, c.tile, x) < 4);
+        });
+        if (t === undefined) throw new Error('No room for a camp');
+        civGame.tiles[t].camp = true;
+        const clan = newClan(civGame, t);
+        spawnUnit(civGame, 'warrior', b, t, { clan: clan.id });
+        you.explored[t] = 1;
+        updateAllVisibility(civGame);
+        markAll(game);
+        return `The ${clan.name} clan's camp at tile ${t}`;
+      }
+      throw new Error('Try: turn, turns [n], gold [n], tech [id], eureka [id], spawn <unit> [player], reveal, wonders [fog], improve [pillaged], grow [n], decor, unit <type> [foe] [hp] [embarked], take, vassal [master] [player], camp, settle');
     }
   },
 
