@@ -1,3 +1,4 @@
+import { sizeOf } from '../armies';
 import { allyOf, cityStates } from '../citystates';
 import { atWar, canStand, citiesOf, knows, seesUnit, unitsOf } from '../core';
 import { dangerCost, dangerZones, type Danger } from '../danger';
@@ -127,11 +128,11 @@ export function cityOn(ctx: Ctx, t: number): City | undefined {
   return ctx.cache.cityTiles.get(t);
 }
 
-/** A unit's fighting worth: its strength (ranged or melee, the better), less for its wounds. */
+/** A unit's fighting worth: its strength (ranged or melee, the better), less for its wounds; a corps's or an army's, as its units'. */
 export function unitMight(u: Unit): number {
   const t = UNITS[u.type];
   if (!t || !isMilitary(t) || isGreatPerson(u.type)) return 0;
-  return Math.max(t.strength, t.ranged ?? 0) * (0.4 + (0.6 * u.hp) / 100);
+  return Math.max(t.strength, t.ranged ?? 0) * (0.4 + (0.6 * u.hp) / 100) * sizeOf(u);
 }
 
 /** A player's military strength (all their units: Civ V's bots know the demographics). */

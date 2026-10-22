@@ -1,6 +1,6 @@
 import { centre } from '../geometry';
 import { IDEOLOGIES } from '../rules/policies';
-import { UNITS } from '../rules/units';
+import { unitName } from '../rules/armies';
 import { lookAt } from './camera';
 import { icon, svg } from './icons';
 import { openCongress, sessionWhen, unvoted } from './congress';
@@ -119,7 +119,7 @@ export function decisions(): Decision[] {
   if (s.freeTenets > 0) out.push({ key: 'tenets', text: `${s.freeTenets} free tenet${s.freeTenets === 1 ? '' : 's'} to take`, glyph: 'crown', color: '#b8892a', needed: false, act: open('policies') });
   for (const u of v.units)
     if (u.owner === v.you && (u.promotionsDue ?? 0) > 0 && u.promotionOptions?.length)
-      out.push({ key: `promote${u.id}`, text: `${UNITS[u.type]?.name ?? 'A unit'} can be promoted`, glyph: 'xp', color: '#b8892a', needed: false, act: () => goTo(u.tile, u.id) });
+      out.push({ key: `promote${u.id}`, text: `${unitName(u)} can be promoted`, glyph: 'xp', color: '#b8892a', needed: false, act: () => goTo(u.tile, u.id) });
   const prophet = !s.religion && s.religionsLeft > 0 ? v.units.find((u) => u.owner === v.you && u.type === 'great_prophet') : undefined;
   if (prophet) out.push({ key: 'religion', text: 'A Great Prophet can found a religion', glyph: 'faith', color: '#7a6a9a', needed: false, act: () => goTo(prophet.tile, prophet.id) });
   if (s.spies.some((x) => x.city === null)) out.push({ key: 'spy', text: 'A spy awaits orders', glyph: 'spy', color: '#3a4a5a', needed: false, act: open('espionage') });

@@ -245,6 +245,10 @@ export interface UnitWire {
   defence?: { strength: number; mods: Modifier[] };
   /** Own units: what they can be upgraded to now, and for how much gold. */
   upgrade?: { to: string; cost: number };
+  /** A corps (2) or an army (3), its units joined as one (`rules/armies.ts`). */
+  size?: number;
+  /** Own units, once corps can be formed: the unit of its kind beside it it would take in (the best), the formation's size, and why not now (null: it can). */
+  merge?: { other: number; size: number; why: string | null };
 }
 
 /** A city as anyone who sees it does: its banner. */

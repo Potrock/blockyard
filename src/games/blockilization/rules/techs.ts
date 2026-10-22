@@ -100,7 +100,7 @@ export const TECH_LIST: Tech[] = [
   T('scientific_theory', 'Scientific Theory', 9, ['acoustics', 'economics']),
   T('industrialization', 'Industrialization', 9, ['economics', 'metallurgy'], 'Shows Coal'),
   T('rifling', 'Rifling', 9, ['metallurgy']),
-  T('military_science', 'Military Science', 9, ['economics', 'chemistry']),
+  T('military_science', 'Military Science', 9, ['economics', 'chemistry'], 'Two units of a kind side by side join as a corps (a fleet)'),
   T('fertilizer', 'Fertilizer', 9, ['chemistry'], 'Farms without fresh water as good as with'),
   T('biology', 'Biology', 10, ['archaeology', 'scientific_theory'], 'Shows Oil'),
   T('electricity', 'Electricity', 10, ['scientific_theory', 'metallurgy'], 'Shows Aluminum'),
@@ -109,7 +109,7 @@ export const TECH_LIST: Tech[] = [
   // Modern
   T('refrigeration', 'Refrigeration', 11, ['biology', 'electricity'], 'Offshore Platforms'),
   T('radio', 'Radio', 11, ['electricity']),
-  T('replaceable_parts', 'Replaceable Parts', 11, ['steam_power']),
+  T('replaceable_parts', 'Replaceable Parts', 11, ['steam_power'], 'A corps and a third unit join as an army (an armada)'),
   T('flight', 'Flight', 11, ['steam_power', 'electricity']),
   T('railroad', 'Railroad', 11, ['steam_power', 'dynamite'], 'Railroads'),
   T('plastics', 'Plastics', 12, ['refrigeration']),

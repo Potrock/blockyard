@@ -3,6 +3,7 @@ import { LIBERATE_INFLUENCE } from '../rules/liberation';
 import { PLEDGE_BROKEN, PLEDGE_REST, PLEDGE_TURNS } from '../rules/pledges';
 import { MAX_RISES } from '../rules/climate';
 import { SEASON_TURNS } from '../rules/disasters';
+import { ARMY_BONUS, CORPS_BONUS } from '../rules/armies';
 
 /**
  * The Civilopedia's own words: the game's core ideas (how cities grow, what happiness does, how a
@@ -124,6 +125,18 @@ export const CONCEPTS: Article[] = [
       { title: 'Zones of control', text: 'Stepping from one tile next to an enemy unit or city to another next to it ends a unit’s move. Crossing a river without a bridge ([[tech:construction|Construction]]) or embarking takes all its moves.' },
       { title: 'Experience', text: 'Fighting earns experience, and at each step a unit takes a [[cat:promotion|promotion]]. Barracks and the like start new units with experience.' },
       { title: 'Cities', text: 'Siege units hit cities twice as hard; mounted and armoured units are weaker against them. A city fires once a turn at a unit within two tiles.' },
+      { title: 'Corps and armies', text: 'From the Industrial Era, units of a kind side by side can join as one, far stronger: see [[concept:formations|Corps and armies]].' },
+    ],
+  },
+  {
+    id: 'formations',
+    name: 'Corps and armies',
+    glyph: 'strength',
+    color: '#8a5a2a',
+    sub: 'Units of a kind, joined as one',
+    sections: [
+      { text: `With [[tech:military_science|Military Science]], two units of the same kind side by side can join as a corps (a fleet, at sea): select one, and Form a corps takes the other into it. With [[tech:replaceable_parts|Replaceable Parts]], a corps and a third unit of its kind join as an army (an armada). A corps fights with ${CORPS_BONUS}% more strength and an army with ${ARMY_BONUS}% more, in attack and defence, as one unit on one tile; its flag is marked II or III.` },
+      { title: 'What it costs', text: 'A formation still costs what its units did: their upkeep, their strategic resources, and an upgrade for each of them. Joining spends the unit’s turn. The joined unit has the hit points of both shared out, and the experience and promotions of the more experienced. A formation never splits again; one that can’t be paid for loses a unit at a time. Aircraft, missiles, carriers and civilians don’t form corps.' },
     ],
   },
   {

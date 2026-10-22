@@ -690,6 +690,22 @@ export function drawOverlay(now: number) {
       ctx.fillStyle = hp.hp > 50 ? tone('#6fd27a') : hp.hp > 25 ? '#f2c14e' : tone('#ff6b5e');
       ctx.fillRect(x - fw / 2, y + fw / 2 + 2, fw * (hp.hp / 100), bh);
     }
+    // A corps or an army (`rules/armies.ts`): its size, II or III, on a tab at its top left corner.
+    if ((u.size ?? 1) > 1) {
+      const label = (u.size ?? 1) >= 3 ? 'III' : 'II';
+      ctx.font = mapFont(Math.round(size * 0.5));
+      const tw = Math.round(ctx.measureText(label).width + 6 * ui);
+      const th = Math.round(size * 0.82);
+      const tx = Math.round(x - fw / 2 - tw / 2);
+      const ty = Math.round(y - fw / 2 - th / 2);
+      ctx.fillStyle = '#07090c';
+      ctx.fillRect(tx - 1, ty - 1, tw + 2, th + 2);
+      ctx.fillStyle = 'rgba(13,19,27,0.95)';
+      ctx.fillRect(tx, ty, tw, th);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      shadowText(label, tx + tw / 2, ty + th / 2 + 1, '#f2c14e');
+    }
     // Fortified, asleep, working: a small sign at its corner.
     const sign = u.stance === 'fortify' ? 'shield' : u.stance === 'sleep' ? 'turn' : u.work ? 'hammer' : '';
     if (sign && own) {

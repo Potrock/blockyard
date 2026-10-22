@@ -1,3 +1,4 @@
+import { unitName } from '../rules/armies';
 import type { UnitWire, View } from '../protocol';
 import { dangerCost, dangerZones, type Danger } from '../rules/danger';
 import { ALL, findWay, neighbours, type Walker } from '../rules/hex';
@@ -262,11 +263,11 @@ export function whyNot(u: UnitWire, to: number): string {
   if (!view || !type) return "Can't get there";
   const military = soldier(u);
   const there = ownThere(u, to);
-  if (there) return `Your ${UNITS[there.type]?.name ?? 'unit'} is there (one ${military ? 'soldier' : 'civilian'} to a tile)`;
+  if (there) return `Your ${unitName(there)} is there (one ${military ? 'soldier' : 'civilian'} to a tile)`;
   const foe = view.units.find((x) => x.tile === to && x.owner !== me());
   if (foe && view.players[foe.owner]?.war) return military ? (type.ranged ? `${outOfReach(u, to)}: move to fire` : 'Move next to it to attack') : 'An enemy is there';
   const neutral = neutralThere(to);
-  if (neutral) return `${view.players[neutral.owner]?.name ?? 'Another civ'}'s ${UNITS[neutral.type]?.name ?? 'unit'} is there`;
+  if (neutral) return `${view.players[neutral.owner]?.name ?? 'Another civ'}'s ${unitName(neutral)} is there`;
   if (closedTo(u, to)) return `${view.players[store.known[to]!.owner].name}'s borders are closed to you`;
   const city = cityAt(to);
   if (city && city.owner !== me()) return !view.players[city.owner]?.war ? 'A foreign city' : military ? 'Attack it from next to it' : 'An enemy city';

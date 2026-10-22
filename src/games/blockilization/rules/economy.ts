@@ -1,3 +1,4 @@
+import { sizeOf } from './armies';
 import { BUILDINGS } from './buildings';
 import { atWar, capitalOf, civEffects, civOf, citiesOf, empireEffects, has, knows, seesResource, speed, unitsOf } from './core';
 import type { CityFilter, Effects, GreatKind, SpecialistKind } from './effects';
@@ -530,7 +531,7 @@ export function strategic(game: Game, p: Player): Record<string, { have: number;
   for (const [res, n] of Object.entries(alliedStrategics(game, p))) if (seesResource(p, res)) (out[res] ??= { have: 0, used: 0 }).have += n * shared;
   for (const u of unitsOf(game, p.index)) {
     const res = UNITS[u.type]?.resource;
-    if (res) (out[res] ??= { have: 0, used: 0 }).used++;
+    if (res) (out[res] ??= { have: 0, used: 0 }).used += sizeOf(u);
   }
   // (A building that needs one takes one for good, as a unit does: one Coal, one Factory.)
   for (const c of citiesOf(game, p.index))
@@ -697,7 +698,7 @@ export function goldUpkeep(game: Game, p: Player): { buildings: number; units: n
   };
   const military = unitsOf(game, p.index)
     .filter((u) => !['settler', 'worker', 'work_boat'].includes(u.type) && !isGreatPerson(u.type) && !(garrisonsFree && isMilitary(UNITS[u.type]) && game.cities.some((c) => c.tile === u.tile && c.owner === p.index)))
-    .reduce((s, u) => s + share(u.type), 0);
+    .reduce((s, u) => s + share(u.type) * sizeOf(u), 0);
   // Civ V's unit upkeep grows with the game: a few are free, the rest cost more as the game goes on
   // (by its turns at quick speed: 1 more each 120, each 180 at standard).
   const free = 3 + citiesOf(game, p.index).length;
