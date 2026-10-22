@@ -147,6 +147,7 @@ export const CONCEPTS: Article[] = [
     sections: [
       { text: 'Science goes toward one technology at a time. Each needs the ones before it; click any later one in the tree and the way there is queued. Technologies unlock units, buildings, wonders and improvements, and the eras follow from them.' },
       { text: 'Each city you have makes technologies cost a little more, so a wide empire needs more science. Libraries, universities and scientists are the way to it; [[unit:great_scientist|Great Scientists]] jump ahead.' },
+      { title: 'Eurekas', text: 'Nearly every technology has a deed that brings it a third of the way: build a Mine and The Wheel is a third researched, kill a unit and Archery is, found a religion and Theology is. The lightning bolt on each technology in the tree says its deed (point at it), and lights up once you have done it. A deed counts whenever it is done, even long before you can research the technology (its third waits for you there), and on a team, once for all of you.' },
     ],
   },
   {

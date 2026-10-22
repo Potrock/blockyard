@@ -58,6 +58,8 @@ import { blank, city, techsTo, unit, war } from './world';
 import { liberation, LIBERATE_INFLUENCE } from '../rules/liberation';
 import { cannotPledge, pledged, PLEDGE_BROKEN, PLEDGE_REST } from '../rules/pledges';
 import { restingInfluence } from '../rules/citystates';
+import { checkEurekas, EUREKA_SHARE, EUREKAS, eurekaDone, killDeeds } from '../rules/eurekas';
+import { research } from '../rules/ai/civics';
 import { conquests, kneels, makePeace, trackWars, wantsPeace } from '../rules/ai/strategy';
 import { kneel } from '../rules/diplomacy';
 import { masterOf, sameSide, vassalsOf } from '../rules/teams';
@@ -1101,6 +1103,8 @@ test('news names only civs the reader has met, and speaks to who it’s about', 
   me.met = [friend.index];
   friend.met = [me.index, stranger.index];
   stranger.faith = friend.faith = 999;
+  // (Their eurekas had: Writing's, for having met someone, isn't the news here.)
+  for (const p of game.players) p.eurekas = Object.keys(EUREKAS);
   const said = (p: typeof me) => p.notes.splice(0).map((n) => n.text);
   ok(apply(game, stranger.index, { t: 'pantheon', belief: 'god_of_war' }).ok, 'a pantheon');
   eq(said(me).length, 0, 'no news of a pantheon from a civ never met');
@@ -3458,7 +3462,8 @@ test('team research: what each puts in is pooled; finished between them, it’s 
   teamUp(game, [0, 1]);
   [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
   const [a, b] = game.players;
-  for (const p of game.players) p.techs.push('agriculture');
+  // (Eurekas aside: Writing's, for having met each other, would be science too.)
+  for (const p of game.players) (p.techs.push('agriculture'), (p.eurekas = Object.keys(EUREKAS)));
   apply(game, 0, { t: 'research', tech: 'pottery' });
   const cost = techCost(game, a, 'pottery');
   a.research.pottery = Math.ceil(cost * 0.3);
@@ -6083,4 +6088,109 @@ test('vassals: a beaten bot kneels (to the winner, not before it’s beaten); th
   const offer = relationsOf(game).offers.find((o) => o.from === 0 && o.to === 1);
   ok(!!offer && offer.items.some((x) => x.kind === 'vassal' && x.from === 1), `Egypt demands Babylon kneel (${JSON.stringify(offer?.items)})`);
   ok(atWar(game, 0, 1), 'the war goes on till it answers');
+});
+
+// -------------------------------------------------------------------------------------------------
+// Eurekas
+// -------------------------------------------------------------------------------------------------
+
+test('eurekas: a deed brings its tech a third of the way, once, even before it can be researched', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const p = game.players[0];
+  p.bot = false;
+  p.techs = ['agriculture'];
+  const c = city(game, 0, at(5, 5));
+  const mine = neighbours(game.grid, c.tile)[0];
+  checkEurekas(game, p);
+  ok(!p.eurekas?.includes('the_wheel'), 'no Mine, no boost');
+  game.tiles[mine].improvement = 'mine';
+  checkEurekas(game, p);
+  ok(!!p.eurekas?.includes('the_wheel'), 'a Mine built: The Wheel’s eureka');
+  eq(p.research.the_wheel, Math.round(techCost(game, p, 'the_wheel') * EUREKA_SHARE), 'a third of it researched, though Animal Husbandry isn’t known yet');
+  ok(p.notes.some((n) => n.text === 'Eureka! You built a Mine: The Wheel is a third of the way researched.'), `told (${p.notes.map((n) => n.text).join(' / ')})`);
+  checkEurekas(game, p);
+  eq(p.research.the_wheel, Math.round(techCost(game, p, 'the_wheel') * EUREKA_SHARE), 'had once only');
+  eq(viewFor(game, p, null).self.eurekas.join(), p.eurekas!.join(), 'in their view, for the tree');
+  // A pillaged Mine is no Mine; a tech known has no boost to give.
+  const q = game.players[1];
+  q.techs = ['agriculture', 'animal_husbandry', 'the_wheel'];
+  const d = city(game, 1, at(16, 12));
+  const theirs = neighbours(game.grid, d.tile)[0];
+  Object.assign(game.tiles[theirs], { improvement: 'mine', pillaged: true });
+  checkEurekas(game, q);
+  ok(!q.eurekas?.length, `nothing for a known tech or a pillaged Mine (${q.eurekas})`);
+  // The boost waiting in it counts once it's researched: the rest is less.
+  p.techs.push('animal_husbandry');
+  p.researching = 'the_wheel';
+  p.research.the_wheel = techCost(game, p, 'the_wheel') - 1;
+  endTurn(game);
+  ok(p.techs.includes('the_wheel'), 'learned with the science that was left');
+});
+
+test('eurekas: kills count by what killed (a civ’s own unit as the one it replaces), and barbarians apart', () => {
+  const { game, at, a, d } = duel('swordsman', 'warrior');
+  const p = game.players[0];
+  p.bot = false;
+  city(game, 0, at(2, 2));
+  d.hp = 1;
+  ok(apply(game, 0, { t: 'attack', unit: a.id, target: d.tile }).ok, 'attack');
+  ok(!game.units.includes(d), 'the warrior is killed');
+  eq(p.deeds?.kill, 1, 'a kill');
+  eq(p.deeds?.['kill:swordsman'], 1, 'by a Swordsman');
+  ok(!!p.eurekas?.includes('archery') && !!p.eurekas?.includes('steel'), `Archery and Steel boosted (${p.eurekas})`);
+  ok(!p.eurekas?.includes('bronze_working'), 'not Bronze Working: no barbarians yet');
+  // Three barbarians killed: Bronze Working.
+  const barb = blank(['egypt', 'babylon'], { barbarians: true });
+  const b = barb.game.players.findIndex((x) => x.civ === 'barbarian');
+  const me = barb.game.players[0];
+  for (let i = 0; i < 3; i++) killDeeds(barb.game, me, 'warrior', b);
+  checkEurekas(barb.game, me);
+  eq(me.deeds?.barbarian, 3, 'three barbarians');
+  ok(!!me.eurekas?.includes('bronze_working'), 'Bronze Working boosted');
+  // Babylon's Bowmen are Archers: three of them for Machinery.
+  const bab = blank(['babylon', 'egypt']);
+  const babylon = bab.game.players[0];
+  for (let i = 0; i < 3; i++) unit(bab.game, 'bowman', 0, bab.at(4 + i, 4));
+  checkEurekas(bab.game, babylon);
+  ok(!!babylon.eurekas?.includes('machinery'), `three Bowmen are three Archers (${babylon.eurekas})`);
+});
+
+test('eurekas: a team has each boost once, pooled into its research, and all of them are told', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  const [a, b] = game.players;
+  for (const p of [a, b]) {
+    p.bot = false;
+    p.techs = ['agriculture'];
+  }
+  const ca = city(game, 0, at(3, 3));
+  const cb = city(game, 1, at(14, 3));
+  game.tiles[neighbours(game.grid, ca.tile)[0]].improvement = 'mine';
+  game.tiles[neighbours(game.grid, cb.tile)[0]].improvement = 'mine';
+  checkEurekas(game, a);
+  checkEurekas(game, b);
+  shareResearch(game);
+  const third = Math.round(techCost(game, a, 'the_wheel') * EUREKA_SHARE);
+  eq(a.research.the_wheel, third, 'once for the team');
+  eq(b.research.the_wheel, third, 'the same for both');
+  ok(!!b.eurekas?.includes('the_wheel'), 'had by both');
+  ok(b.notes.some((n) => n.text === `Eureka! ${a.name} built a Mine: The Wheel is a third of the way researched.`), `the teammate told who did it (${b.notes.map((n) => n.text).join(' / ')})`);
+});
+
+test('eurekas: a bot has its boosts as its turn ends, and goes for the tech they make cheap', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const p = game.players[0];
+  p.techs = ['agriculture', 'pottery', 'animal_husbandry', 'archery', 'mining'];
+  city(game, 0, at(5, 5));
+  p.pantheon = 'god_of_war';
+  endTurn(game);
+  ok(!!p.eurekas?.includes('calendar'), 'a pantheon: Calendar boosted');
+  ok(eurekaDone('Have Cattle or Sheep in your land', 'Ana') === 'Ana has Cattle or Sheep in their land', 'said of a teammate');
+  // Nearly done thanks to its boost (and what it's put in since), a tech goes to the top of a bot's list.
+  p.researching = null;
+  p.research.masonry = techCost(game, p, 'masonry') - 1;
+  const ctx = makeCtx(game, p);
+  ctx.mem.techGoal = undefined;
+  research(ctx);
+  eq(p.researching, 'masonry', 'Masonry, a turn from done');
 });

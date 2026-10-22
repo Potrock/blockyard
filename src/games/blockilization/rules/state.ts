@@ -215,6 +215,9 @@ export interface Player {
   spareScience?: number;
   /** Who chose what's being researched (on a team, which of them: `shareResearch`). */
   researchBy?: number;
+  /** The techs they've had their eureka for (a third of the research, for a deed: `eurekas.ts`), and the deeds counted for them (kills, by what killed). */
+  eurekas?: string[];
+  deeds?: Record<string, number>;
   /** The achievements their person has been given in this game (the server's), not given again when they come back. */
   awarded?: string[];
   /** Culture toward the next policy, and the policies (and ideology tenets) adopted, and on which turn. */

@@ -1,3 +1,4 @@
+import { EUREKAS } from '../rules/eurekas';
 import { ERA_NAMES, ERAS, eraOfCol, pathTo, TECH_LIST, TECHS } from '../rules/techs';
 import { ERA_COLOR, icon, svg, techEra, techGlyph } from './icons';
 import { entryArt, entryName, techUnlocks } from './pedia';
@@ -200,7 +201,12 @@ export function renderTechTree(): El {
         ? h('span.when', {}, `${turns.get(t.id)} turn${turns.get(t.id) === 1 ? '' : 's'}${queued > 0 ? ' from now' : ''}`)
         : h('span', {}, own === null ? `${cost} science` : `${own} turn${own === 1 ? '' : 's'} · ${cost}`);
     const unlocks = techUnlocks(t.id, s.civ);
-    const shownUnlocks = unlocks.slice(0, t.note ? 6 : 7);
+    // (Its eureka: the deed that brings it a third of the way, a dim bolt by what it unlocks; once had, a lit one by its turns.)
+    const eureka = known.has(t.id) ? undefined : EUREKAS[t.id];
+    const boosted = !!eureka && s.eurekas.includes(t.id);
+    // (As many as there's room for beside the note and the bolt, one fewer for the "+n" if they don't all fit.)
+    const room = 7 - (t.note ? 1 : 0) - (eureka && !boosted ? 1 : 0);
+    const shownUnlocks = unlocks.slice(0, unlocks.length > room ? room - 1 : room);
     const advised = known.has(t.id) ? undefined : techAdvice(t.id);
     return h(
       `button.tt-card.${state}${advised ? '.advised' : ''}`,
@@ -223,13 +229,14 @@ export function renderTechTree(): El {
         'div.tt-txt',
         {},
         h('div.n', {}, t.name),
-        h('div.meta', {}, meta, advised && adviceTag(advised)),
+        h('div.meta', {}, meta, boosted && h('span.eu-had', { title: `Eureka had: ${eureka!.goal}. A third of it is researched.`, html: svg('bolt', 13) }), advised && adviceTag(advised)),
         h(
           'div.un',
           {},
           ...shownUnlocks.map((k) => h('span', { 'data-pedia': k }, entryArt(k, 20))),
           unlocks.length > shownUnlocks.length && h('span.more', {}, `+${unlocks.length - shownUnlocks.length}`),
           t.note && h('span.note', { title: t.note, html: svg('info', 13) }),
+          eureka && !boosted && h('span.eu', { title: `Eureka: ${eureka.goal}, and a third of it is researched.`, html: svg('bolt', 14) }),
         ),
       ),
       queued >= 0 && h('span.tt-badge', {}, String(queued + 1)),
@@ -408,6 +415,8 @@ export const TECH_CSS = `
 .tt-card .un .cv-tile, .tt-card .un .cv-pic { border-radius: 5px; }
 .tt-card .un .more { font-size: 10.5px; font-weight: 700; color: var(--muted); padding: 0 2px; }
 .tt-card .un .note { color: #9fd0ff; }
+.tt-card .un .eu { color: #9a8a62; margin-left: auto; }
+.tt-card .meta .eu-had { margin-left: 5px; color: #ffd23a; filter: drop-shadow(0 0 3px rgba(255,210,58,.75)); }
 .tt-card.known { background: #15231c !important; border-color: rgba(111,210,122,.3) !important; }
 .tt-card.known .cv-tile { filter: saturate(.55) brightness(.85); }
 .tt-card.can { border-color: rgba(106,184,255,.6) !important; box-shadow: 0 3px 10px rgba(0,0,0,.35), 0 0 0 1px rgba(106,184,255,.2); }

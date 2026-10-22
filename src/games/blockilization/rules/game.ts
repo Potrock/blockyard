@@ -24,6 +24,7 @@ import { recordReplay } from './replay';
 import { GOLDEN_SPEEDS, type City, type Game, type Player, type Production, type Unit } from './state';
 import { masterOf, sameSide, sideName, sides, teamOf, teammates } from './teams';
 import { breakFree, release, vassalsTurn } from './vassals';
+import { checkEurekas, killDeeds } from './eurekas';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { eraStartOf, scenarioOf, startEraOf } from './starts';
 import { startSequence, waitsFor, warBegun } from './turns';
@@ -486,6 +487,9 @@ cityHooks.killed = (game, u, by) => {
   if (UNITS[u.type].domain === 'land' && !TERRAINS[tile.terrain].water && !cityAt(game, u.tile) && random(game) < 0.1) tile.antiquity = true;
   if (!by) return;
   const winner = game.players[by.owner];
+  // (A kill is a deed: Archery's eureka, Steel's for a Swordsman's.)
+  killDeeds(game, winner, by.type, u.owner);
+  if (!winner.bot) checkEurekas(game, winner);
   const civ = civEffects(game, winner);
   const strength = UNITS[u.type].strength;
   // The Aztecs (every kill) and Honor (barbarians): culture; Honor finished: gold; God of War: faith, near your cities.
@@ -1043,6 +1047,8 @@ export const fightHooks: { fought: (game: Game, by: number, combat: CombatResult
 export function apply(game: Game, by: number, o: Order): Outcome {
   const out = applyOrder(game, by, o);
   if (out.combat?.length) fightHooks.fought(game, by, out.combat);
+  // (A person's deeds are boosts at once; a bot's, as its turn ends.)
+  if (out.ok && game.players[by] && !game.players[by].bot) checkEurekas(game, game.players[by]);
   // (Whatever it did to their research is their team's: a choice, a great scientist's science, a tech from a ruin.)
   if (out.ok) shareResearch(game);
   return out;
@@ -1875,7 +1881,8 @@ function playerTurn(game: Game, p: Player) {
       note(game, p.index, { text: `Without gold to pay it, your ${UNITS[u.type].name} has disbanded.`, at: u.tile, kind: 'bad' });
     }
   }
-  // Science.
+  // Science (this turn's deeds boosting it first: what's been built, grown and trained).
+  checkEurekas(game, p);
   if (!p.researching) {
     const first = Object.keys(TECHS).filter((t) => canResearch(new Set(p.techs), t)).sort((a, b) => TECHS[a].col - TECHS[b].col);
     if (p.bot && first[0]) p.researching = first[Math.floor(random(game) * Math.min(3, first.length))];

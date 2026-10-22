@@ -35,9 +35,10 @@ const COL_COST = [20, 35, 55, 85, 175, 275, 485, 780, 1150, 1600, 2350, 3100, 41
 /**
  * How dear research is overall. No science is wasted (what's over when a tech is learned goes on to
  * the next, and with nothing chosen it's kept), which brought the eras 5 to 10 turns early: techs
- * cost 18% more for it.
+ * cost 18% more for it; and 5% more again for eurekas (`eurekas.ts`: a bot has a quarter of its
+ * techs' boosts, which brought its eras about 5% sooner).
  */
-export const RESEARCH_PACE = 1.18;
+export const RESEARCH_PACE = 1.24;
 
 /**
  * Science a tech costs at standard speed with one city (`techCost` adds the cost per city). Our maps
