@@ -1,3 +1,4 @@
+import { sizeOf } from '../armies';
 import { canFire, canPillage, cityFireStrength, cityMaxHp, cityStrength, rangeOf, strength } from '../combat';
 import { canStand, citiesOf, knows } from '../core';
 import { weighing } from '../economy';
@@ -672,10 +673,10 @@ export function pillageAll(ctx: Ctx) {
   }
 }
 
-/** How many of the bot's soldiers stand within `radius` of a tile, out in the field (the garrisons in its cities stay home). */
+/** How many of the bot's soldiers stand within `radius` of a tile, out in the field (the garrisons in its cities stay home; a corps counts as two, an army as three). */
 export function armyNear(ctx: Ctx, t: number, radius: number): number {
   let n = 0;
-  for (const u of ctx.game.units) if (u.owner === ctx.me && isSoldier(u) && dist(ctx, u.tile, t) <= radius && cityOn(ctx, u.tile)?.owner !== ctx.me) n++;
+  for (const u of ctx.game.units) if (u.owner === ctx.me && isSoldier(u) && dist(ctx, u.tile, t) <= radius && cityOn(ctx, u.tile)?.owner !== ctx.me) n += sizeOf(u);
   return n;
 }
 

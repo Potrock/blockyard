@@ -1,3 +1,4 @@
+import { sizeOf } from '../armies';
 import { BUILDINGS, SPACESHIP_PARTS } from '../buildings';
 import { cityStrength } from '../combat';
 import { knows, random, speed } from '../core';
@@ -104,10 +105,10 @@ export function wants(ctx: Ctx): Wants {
 const UNITS_BY_ROLE: Record<Role, UnitType[]> = { melee: [], mounted: [], ranged: [], siege: [], recon: [], naval: [], air: [], civilian: [] };
 for (const t of Object.values(UNITS)) if (!t.unbuildable && !t.civ) UNITS_BY_ROLE[roleOf(t)].push(t);
 
-/** The bot's units and what its cities are training now, counted. */
+/** The bot's units and what its cities are training now, counted (a corps as two, an army as three). */
 function counts(ctx: Ctx, except: City | null) {
   const out = { settlers: 0, workers: 0, military: 0, boats: 0, caravans: 0, ships: 0, roles: {} as Partial<Record<Role, number>> };
-  const add = (type: string) => {
+  const add = (type: string, n = 1) => {
     if (type === 'settler') out.settlers++;
     else if (type === 'worker') out.workers++;
     else if (type === 'work_boat') out.boats++;
@@ -115,11 +116,11 @@ function counts(ctx: Ctx, except: City | null) {
     const r = roleOf(UNITS[type]);
     if (r === 'naval') out.ships++;
     if (r === 'melee' || r === 'mounted' || r === 'ranged' || r === 'siege') {
-      out.military++;
-      out.roles[r] = (out.roles[r] ?? 0) + 1;
+      out.military += n;
+      out.roles[r] = (out.roles[r] ?? 0) + n;
     }
   };
-  for (const u of ctx.game.units) if (u.owner === ctx.me) add(u.type);
+  for (const u of ctx.game.units) if (u.owner === ctx.me) add(u.type, sizeOf(u));
   for (const c of ctx.cities) if (c !== except && c.queue[0]?.kind === 'unit') add(c.queue[0].id);
   return out;
 }
@@ -525,8 +526,8 @@ function upgrades(ctx: Ctx, reserve: number) {
     const next = Object.values(UNITS).find((x) => x.civ === p.civ && x.replaces === to)?.id ?? to;
     const nt = UNITS[next];
     if (!nt?.tech || !knows(p, nt.tech)) continue;
-    if (nt.resource && (res[nt.resource]?.have ?? 0) - (res[nt.resource]?.used ?? 0) <= 0) continue;
-    const cost = Math.max(10, Math.floor((nt.cost - UNITS[u.type].cost) * 2 * speed(game)));
+    if (nt.resource && (res[nt.resource]?.have ?? 0) - (res[nt.resource]?.used ?? 0) < sizeOf(u)) continue;
+    const cost = Math.max(10, Math.floor((nt.cost - UNITS[u.type].cost) * 2 * speed(game))) * sizeOf(u);
     if (p.gold - cost < reserve) continue;
     act(ctx, { t: 'upgrade', unit: u.id });
   }
@@ -544,7 +545,7 @@ function upgrades(ctx: Ctx, reserve: number) {
     const ships = mine.filter((u) => isWarship(u)).sort((a, b) => +isObsolete(ctx, b) - +isObsolete(ctx, a) || unitMight(a) - unitMight(b));
     const soldiers = mine.filter((u) => isSoldier(u) && !cityOn(ctx, u.tile)).sort((a, b) => unitMight(a) - unitMight(b));
     const extraShips = Math.max(ships.filter((u) => isObsolete(ctx, u)).length, ships.length - navyWanted(ctx));
-    const extraSoldiers = mine.filter((u) => isSoldier(u)).length - wants(ctx).military;
+    const extraSoldiers = mine.filter((u) => isSoldier(u)).reduce((s, u) => s + sizeOf(u), 0) - wants(ctx).military;
     const spare = [...ships.slice(0, Math.max(0, extraShips)), ...soldiers.slice(0, Math.max(0, extraSoldiers))].find((u) => danger(ctx)[u.tile] === 0);
     if (spare) act(ctx, { t: 'disband', unit: spare.id });
   }

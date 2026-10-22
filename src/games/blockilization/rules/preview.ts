@@ -1,3 +1,4 @@
+import { unitName } from './armies';
 import { airTarget, isAircraft } from './air';
 import { canFire, cityFireStrength, cityMaxHp, cityStrength, damageFor, rangeOf, strength, type Modifier } from './combat';
 import { atWar, cityAt } from './core';
@@ -72,7 +73,7 @@ function citySide(game: Game, c: City, firing = false): PreviewSide {
   if (game.tiles[c.tile].elevation === 'hills') mods.push({ label: 'Hills', percent: 25 });
   const s = firing ? cityFireStrength(game, c) : cityStrength(game, c);
   // A garrison adds to a city's defence, and to its fire only under Oligarchy.
-  if (garrison && !firing) mods.push({ label: `Garrison (${UNITS[garrison.type].name})`, percent: 0 });
+  if (garrison && !firing) mods.push({ label: `Garrison (${unitName(garrison)})`, percent: 0 });
   else if (garrison && s > cityStrength(game, c, true)) mods.push({ label: 'Garrison (Oligarchy)', percent: 50 });
   return { city: c.id, owner: c.owner, strength: round(s), hp: c.hp, maxHp: cityMaxHp(game, c), mods, damage: [0, 0], dies: 0 };
 }

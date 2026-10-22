@@ -119,6 +119,8 @@ interface Shown {
   model: ModelId;
   /** In a boat (a land unit embarked). */
   boat: boolean;
+  /** Units it is (a corps 2, an army 3), each a model. */
+  size: number;
   x: number;
   y: number;
   z: number;
@@ -246,19 +248,20 @@ export function drawModels(client: Client, dt: number) {
       const tz = c.z + spot[1];
       const model = unitModel(u.type);
       const boat = !!u.embarked && UNITS[u.type]?.domain !== 'sea';
-      if (s && (s.model !== model || s.boat !== boat)) {
-        // A new look (upgraded, embarked, landed): the new model where the old one was, marching on.
-        const node = boat ? inBoat(client, model) : make(client, model, scaleFor(model, UNIT_SCALE, UNIT_FIT) * (two ? 0.75 : 1));
+      const size = u.size ?? 1;
+      if (s && (s.model !== model || s.boat !== boat || s.size !== size)) {
+        // A new look (upgraded, embarked, landed, joined as a corps): the new model where the old one was, marching on.
+        const node = boat ? inBoat(client, model) : formation(client, model, size, scaleFor(model, UNIT_SCALE, UNIT_FIT) * (two ? 0.75 : 1));
         if (!node) return;
         client.scene.remove(s.node);
         client.scene.add(node);
-        Object.assign(s, { node, model, boat });
+        Object.assign(s, { node, model, boat, size });
       }
       if (!s) {
-        const node = boat ? inBoat(client, model) : make(client, model, scaleFor(model, UNIT_SCALE, UNIT_FIT) * (two ? 0.75 : 1));
+        const node = boat ? inBoat(client, model) : formation(client, model, size, scaleFor(model, UNIT_SCALE, UNIT_FIT) * (two ? 0.75 : 1));
         if (!node) return;
         client.scene.add(node);
-        s = { node, model, boat, x: tx, y: 0, z: tz, yaw: owner_yaw(u.owner), seen: frame, tile: t, owner: u.owner };
+        s = { node, model, boat, size, x: tx, y: 0, z: tz, yaw: owner_yaw(u.owner), seen: frame, tile: t, owner: u.owner };
         s.y = unitY(client, u, t, tx, tz);
         units.set(u.id, s);
       }
@@ -518,6 +521,27 @@ function pointAlong(pts: { x: number; z: number }[], at: number): { x: number; z
     at -= l;
   }
   return pts[pts.length - 1];
+}
+
+/**
+ * A unit's model, or a corps's or an army's (`rules/armies.ts`): its 2 or 3 units side by side, each
+ * smaller (an army's third a step ahead of the other two), spaced by how wide the model is.
+ */
+function formation(client: Client, model: ModelId, size: number, scale: number): Node | null {
+  if (size < 2) return make(client, model, scale);
+  const holder = client.scene.node();
+  const k = size >= 3 ? 0.62 : 0.72;
+  const s = MODEL_SIZE[model];
+  const across = (Math.max(s.hi[0] - s.lo[0], s.hi[2] - s.lo[2]) / 16) * scale * k;
+  const gap = Math.max(0.8, Math.min(1.8, across * 0.6));
+  const spots = size >= 3 ? [[0, gap * 0.7], [-gap, -gap * 0.4], [gap, -gap * 0.4]] : [[-gap * 0.75, 0], [gap * 0.75, 0]];
+  for (const [x, z] of spots) {
+    const n = make(client, model, scale * k);
+    if (!n) return null;
+    n.position.set(x, 0, z);
+    holder.add(n);
+  }
+  return holder;
 }
 
 /** A land unit embarked: its squad (smaller) on the deck of a boat. */

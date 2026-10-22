@@ -1,3 +1,4 @@
+import { unitName } from '../rules/armies';
 import { canFortify, isMilitary, UNITS } from '../rules/units';
 import type { PreviewAsk, UnitWire } from '../protocol';
 import { cam, centreHere, pick, zoom } from './camera';
@@ -536,7 +537,7 @@ function key(e: KeyboardEvent): boolean {
       return true;
     case 'Delete':
     case 'Backspace':
-      if (sel) ask(`Disband this ${UNITS[sel.type]?.name ?? 'unit'}? It's gone for good.`, 'Disband', () => send({ t: 'disband', unit: sel.id }));
+      if (sel) ask(`Disband this ${unitName(sel)}? It's gone for good.`, 'Disband', () => send({ t: 'disband', unit: sel.id }));
       return true;
     case 'Equal':
     case 'NumpadAdd':

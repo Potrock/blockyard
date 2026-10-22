@@ -1,3 +1,4 @@
+import { sizeOf } from '../armies';
 import { allyOf, cityStates } from '../citystates';
 import { cityMaxHp, cityStrength } from '../combat';
 import { askOf, capitulationProblem, dealer, dealProblem, declinedLately, friends, pacted, warWords, type Deal, type WarWhy } from '../diplomacy';
@@ -120,7 +121,7 @@ export function wantsPeace(ctx: Ctx, them: number): boolean {
     // A conqueror at their capital's walls, its guns in place and the walls falling, sees it through.
     const city = game.cities.find((c) => c.id === plan.city);
     if (mem.aim === 'domination' && plan.stage === 'attack' && city?.capital && city.hp < cityMaxHp(game, city) * 0.75) {
-      const guns = game.units.filter((u) => u.owner === ctx.me && isSoldier(u) && dist(ctx, u.tile, city.tile) <= 2).length;
+      const guns = game.units.filter((u) => u.owner === ctx.me && isSoldier(u) && dist(ctx, u.tile, city.tile) <= 2).reduce((s, u) => s + sizeOf(u), 0);
       if (guns >= 3) return false;
     }
     // (A war across the water takes longer: the army sails, and lands in waves.)
@@ -233,7 +234,7 @@ function targetCity(ctx: Ctx, o: Player): { city: number; near: number; amphibio
     const across = !sameLand(game, home.tile, c.tile);
     if (across && !(knows(p, 'optics') && coastal(game, c.tile) && seaRoute(game, p, home.tile, c.tile))) continue;
     // (Across the water, a strong or well-guarded city is all the worse: the army lands under it.)
-    const guards = across ? game.units.filter((u) => u.owner === o.index && p.visible[u.tile] && isSoldier(u) && dist(ctx, u.tile, c.tile) <= 2).length : 0;
+    const guards = across ? game.units.filter((u) => u.owner === o.index && p.visible[u.tile] && isSoldier(u) && dist(ctx, u.tile, c.tile) <= 2).reduce((s, u) => s + sizeOf(u), 0) : 0;
     const d = dist(ctx, home.tile, c.tile) * (across ? 0.5 : 1) + (across ? 5 + guards : 0) + cityStrength(game, c) / 5 + (c.capital && mem.aim === 'domination' ? -1 : 0) + (c.capital && racing ? -8 : 0) + (c.founder === ctx.me ? -6 : freeable(ctx, c) ? -3 : 0) + (wanted(c) ? -10 : 0);
     // (Over land, a way there not through a third civ's closed borders; looked for only when it would do.)
     if (d < near && (across || landRoute(game, home.tile, c.tile, p, o.index))) (near = d), (city = c.id), (amphibious = across);
@@ -443,9 +444,9 @@ function teamWar(ctx: Ctx): number | undefined {
   return ctx.wars.find((w) => !game.players[w].cityState && mates.some((m) => game.players[m.index].diplomacy.war[w]));
 }
 
-/** The bot's soldiers out in the field (not standing in its own cities). */
+/** The bot's soldiers out in the field (not standing in its own cities; a corps as two, an army as three). */
 function fieldArmy(ctx: Ctx): number {
-  return ctx.game.units.filter((u) => u.owner === ctx.me && isSoldier(u) && cityOn(ctx, u.tile)?.owner !== ctx.me).length;
+  return ctx.game.units.filter((u) => u.owner === ctx.me && isSoldier(u) && cityOn(ctx, u.tile)?.owner !== ctx.me).reduce((s, u) => s + sizeOf(u), 0);
 }
 
 /** Whether the army at the rally point outweighs the target city and the soldiers seen around it (by a margin the bold need less of; less still after a long muster). */

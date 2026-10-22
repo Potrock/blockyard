@@ -93,6 +93,8 @@ export interface Unit {
   intercepted?: number;
   /** A barbarian's: the clan whose camp sent it out (`clans.ts`). */
   clan?: number;
+  /** A corps (2) or an army (3): units of its kind joined as one (`armies.ts`). */
+  size?: number;
 }
 
 export type ProductionKind = 'unit' | 'building' | 'project' | 'process';

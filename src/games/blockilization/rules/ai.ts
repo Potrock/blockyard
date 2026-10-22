@@ -11,6 +11,7 @@ import { greatChoice, pantheon, policies, research } from './ai/civics';
 import { act, cityOn, makeCtx, type Ctx } from './ai/context';
 import { pledges, turnsOn } from './ai/liberation';
 import { clans } from './ai/clans';
+import { formations } from './ai/armies';
 import { attacks, cityFire, exploreAbroad, exploreStep, moveUnits, pillageAll } from './ai/military';
 import { exploreSea, seaport } from './ai/navy';
 import { manageCities, pickProduction, spend, spendFaith } from './ai/production';
@@ -66,6 +67,7 @@ export function botTurn(game: Game, p: Player) {
   for (const u of mine) if (UNITS[u.type].abilities?.includes('found_city') && game.units.includes(u)) settle(ctx, u);
   workers(ctx, mine.filter((u) => UNITS[u.type].abilities?.includes('build') && game.units.includes(u)));
   workBoats(ctx, mine.filter((u) => u.type === 'work_boat' && game.units.includes(u)));
+  formations(ctx, garrisons);
   moveUnits(ctx, garrisons);
   attacks(ctx, garrisons);
   pillageAll(ctx);

@@ -1,3 +1,4 @@
+import { formationBonus, formationKind, sizeOf, unitName } from './armies';
 import { BUILDINGS } from './buildings';
 import { atWar, canStand, cityAt, cityById, note, random, removeUnit, seesUnit, speed, updateVisibility } from './core';
 import { assignCitizens, blockaded, cityEffects, civEffects, garrisoned, has, happiness } from './economy';
@@ -46,7 +47,7 @@ export function cityStrength(game: Game, c: City, firing = false): number {
   else {
     for (const e of effects) s += e.defense ?? 0;
     const garrison = occupants(game, c.tile).military;
-    if (garrison) s += UNITS[garrison.type].strength / 4;
+    if (garrison) s += (UNITS[garrison.type].strength / 4) * (1 + formationBonus(sizeOf(garrison)) / 100);
   }
   if (game.tiles[c.tile].elevation === 'hills') s *= 1.25;
   s *= 1 + effects.reduce((x, e) => x + (e.cityStrength ?? 0), 0) / 100;
@@ -126,6 +127,8 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
     why?.push({ label, percent: n });
   };
   const civ = civEffects(game, p);
+  // A corps or an army: its units as one.
+  add(formationKind(u.type, sizeOf(u)) ?? '', formationBonus(sizeOf(u)));
   // Wounds: up to half its strength gone at death's door (Civ V's); none for Japan's.
   if (!has(civ, 'no_wound_penalty')) add('Wounded', -(100 - u.hp) / 2);
   const tile = game.tiles[at];
@@ -443,7 +446,7 @@ export function die(game: Game, u: Unit, by: Unit | null, how?: string) {
     removeUnit(game, a);
     note(game, a.owner, { text: `Your ${UNITS[a.type].name} was lost with its base.`, at: a.tile, kind: 'bad' });
   }
-  note(game, u.owner, { text: `Your ${UNITS[u.type].name} was destroyed${by ? ` by ${game.players[by.owner].name}'s ${UNITS[by.type].name}` : how ? ` by ${how}` : ''}.`, at: u.tile, kind: 'bad' });
+  note(game, u.owner, { text: `Your ${unitName(u)} was destroyed${by ? ` by ${game.players[by.owner].name}'s ${unitName(by)}` : how ? ` by ${how}` : ''}.`, at: u.tile, kind: 'bad' });
   cityHooks.killed(game, u, by);
 }
 
@@ -497,7 +500,7 @@ export function pillage(game: Game, u: Unit, era: number): number {
   const gold = tile.improvement ? pillageGold(game, era) : 0;
   game.players[u.owner].gold += gold;
   const what = tile.improvement ? IMPROVEMENTS[tile.improvement].name : 'road';
-  note(game, u.owner, { text: `Your ${UNITS[u.type].name} has pillaged the ${what}${gold ? `: +${gold} gold` : ''}, and healed.`, at: u.tile, kind: 'good' });
+  note(game, u.owner, { text: `Your ${unitName(u)} has pillaged the ${what}${gold ? `: +${gold} gold` : ''}, and healed.`, at: u.tile, kind: 'good' });
   if (tile.owner >= 0) note(game, tile.owner, { text: `${game.players[u.owner].name} has pillaged your ${tile.improvement ? IMPROVEMENTS[tile.improvement].name : 'road'}.`, at: u.tile, kind: 'war' });
   return gold;
 }

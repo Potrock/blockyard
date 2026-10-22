@@ -1,3 +1,4 @@
+import { sizeOf } from './armies';
 import { aName, atWar, capitalOf, cityById, citiesOf, civOf, endWars, has, knowsOf, note, noteAll, random, speed, spawnUnit } from './core';
 import { cityStrength } from './combat';
 import type { Effects } from './effects';
@@ -195,7 +196,7 @@ export function cannotBully(game: Game, p: Player, cs: number): string | null {
   if (atWar(game, p.index, cs)) return "You're at war with them";
   const since = c.cityState.tributeAt;
   if (since !== undefined && game.turn - since < tributeTurns(game)) return `It paid tribute lately (again in ${tributeTurns(game) - (game.turn - since)} turns)`;
-  const near = (owner: number) => game.units.filter((u) => u.owner === owner && isMilitary(UNITS[u.type]) && !isGreatPerson(u.type) && distance(game.grid, u.tile, home.tile) <= 3).reduce((s, u) => s + UNITS[u.type].strength, 0);
+  const near = (owner: number) => game.units.filter((u) => u.owner === owner && isMilitary(UNITS[u.type]) && !isGreatPerson(u.type) && distance(game.grid, u.tile, home.tile) <= 3).reduce((s, u) => s + UNITS[u.type].strength * sizeOf(u), 0);
   const mine = near(p.index);
   const theirs = cityStrength(game, home) + near(cs);
   if (mine <= theirs) return `Your soldiers within three tiles of ${home.name} (strength ${mine}) must outmatch it (${Math.round(theirs)})`;

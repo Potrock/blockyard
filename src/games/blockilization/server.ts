@@ -1283,7 +1283,7 @@ export default defineServer(shared, {
     game.commands.register('civ', {
       help: 'Blockilization tools',
       cheat: true,
-      usage: 'turn | turns [n] | gold [n] | tech [id] | spawn <unit> [player] | reveal | wonders [fog] | improve [pillaged] | grow [n] | decor | unit <type> [foe] [hp] [embarked] | take | win [how] [player] | revolt | vassal [master] [player]',
+      usage: 'turn | turns [n] | gold [n] | tech [id] | spawn <unit> [player] | reveal | wonders [fog] | improve [pillaged] | grow [n] | decor | unit <type> [foe] [hp] [embarked] [corps|army] | take | win [how] [player] | revolt | vassal [master] [player] | camp | settle',
       run(args) {
         const out = civCommand(args);
         // What a command changed is kept as an order's is: a restart, or a game carried on, still has it.
@@ -1398,7 +1398,7 @@ export default defineServer(shared, {
         return `${showing} tiles improved, ${decorQueue.length} blocks waiting`;
       }
       if (cmd === 'unit') {
-        // A unit of yours (or the barbarians', `foe`) on a free tile by your first unit, as hurt as `hp` says, on the water if `embarked`: to try fights and looks.
+        // A unit of yours (or the barbarians', `foe`) on a free tile by your first unit, as hurt as `hp` says, on the water if `embarked`, a corps or an army if so: to try fights and looks.
         const u = civGame.units.find((x) => civGame!.players[x.owner]?.user && !civGame!.players[x.owner].bot);
         if (!u || !arg || !UNITS[arg]) throw new Error('Name a unit type, with a unit of yours on the map');
         const owner = args.includes('foe') ? barbarianIndex(civGame) : u.owner;
@@ -1408,7 +1408,8 @@ export default defineServer(shared, {
         const t = within(civGame.grid, u.tile, 2).find((x) => x !== u.tile && !!TERRAINS[civGame!.tiles[x].terrain].water === water && civGame!.tiles[x].elevation !== 'mountain' && !civGame!.units.some((o) => o.tile === x));
         if (t === undefined) throw new Error('No room');
         const hp = Number(args.find((a) => /^\d+$/.test(a)) ?? 100);
-        const made = spawnUnit(civGame, arg, owner, t, { hp: Math.max(1, Math.min(100, hp)), embarked });
+        const size = args.includes('army') ? 3 : args.includes('corps') ? 2 : undefined;
+        const made = spawnUnit(civGame, arg, owner, t, { hp: Math.max(1, Math.min(100, hp)), embarked, size });
         updateAllVisibility(civGame);
         markAll(game);
         return `A ${arg} (unit ${made.id}) at tile ${t}`;

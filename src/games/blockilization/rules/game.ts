@@ -26,6 +26,7 @@ import { masterOf, sameSide, sideName, sides, teamOf, teammates } from './teams'
 import { breakFree, release, vassalsTurn } from './vassals';
 import { checkEurekas, killDeeds } from './eurekas';
 import { clanById, clanHarmed, clanHooks, clanProblem, dealWithClan, type ClanAct } from './clans';
+import { merge, mergeProblem, shrink, sizeOf, unitName } from './armies';
 import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
 import { eraStartOf, scenarioOf, startEraOf } from './starts';
 import { startSequence, waitsFor, warBegun } from './turns';
@@ -57,6 +58,7 @@ export type Order =
   | { t: 'setup'; unit: number }
   | { t: 'disband'; unit: number }
   | { t: 'upgrade'; unit: number }
+  | { t: 'merge'; unit: number; other: number }
   | { t: 'promote'; unit: number; promotion: string }
   | { t: 'produce'; city: number; item: Production; queue?: boolean }
   | { t: 'unqueue'; city: number; index: number }
@@ -497,7 +499,7 @@ cityHooks.killed = (game, u, by) => {
   killDeeds(game, winner, by.type, u.owner);
   if (!winner.bot) checkEurekas(game, winner);
   const civ = civEffects(game, winner);
-  const strength = UNITS[u.type].strength;
+  const strength = UNITS[u.type].strength * sizeOf(u);
   // The Aztecs (every kill) and Honor (barbarians): culture; Honor finished: gold; God of War: faith, near your cities.
   if (has(civ, 'culture_from_kills')) winner.culture += strength;
   if (has(civ, 'culture_from_barbarian_kills') && game.players[u.owner].civ === 'barbarian') winner.culture += strength;
@@ -870,6 +872,7 @@ const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }
   setup: { unit: 'int' },
   disband: { unit: 'int' },
   upgrade: { unit: 'int' },
+  merge: { unit: 'int', other: 'int' },
   promote: { unit: 'int', promotion: 'string' },
   produce: { city: 'int', item: 'item', queue: 'bool?' },
   unqueue: { city: 'int', index: 'int' },
@@ -957,12 +960,12 @@ export function wellFormed(game: Game, o: unknown): o is Order {
 /** Whether a city's own buildings have a special (an airport's airlift). */
 const buildingsHave = (c: City, special: string) => has(c.buildings.map((b) => BUILDINGS[b]?.effects).filter((e): e is Effects => !!e), special);
 
-/** Gold to upgrade a unit: twice the difference in cost, at speed (at least 10; a third less with Professional Army or the Pentagon). */
+/** Gold to upgrade a unit: twice the difference in cost, at speed (at least 10; a third less with Professional Army or the Pentagon), for each unit of a corps or army. */
 export function upgradeCost(game: Game, p: Player, u: Unit): number {
   const to = upgradeTo(p, u);
   if (!to) return Infinity;
   const cheaper = has(civEffects(game, p), 'upgrades_cheaper_33') ? 2 / 3 : 1;
-  return Math.max(10, Math.floor((UNITS[to].cost - UNITS[u.type].cost) * 2 * speed(game) * cheaper));
+  return Math.max(10, Math.floor((UNITS[to].cost - UNITS[u.type].cost) * 2 * speed(game) * cheaper)) * sizeOf(u);
 }
 
 /** What a unit would upgrade to (its civ's own version), if the civ knows how. */
@@ -1239,13 +1242,21 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       const need = UNITS[to].resource;
       if (need && need !== UNITS[u.type].resource) {
         const r = strategic(game, p)[need];
-        if (!r || r.have - r.used <= 0) return fail(`Upgrading needs ${RESOURCES[need].name}`);
+        if (!r || r.have - r.used < sizeOf(u)) return fail(`Upgrading needs ${sizeOf(u) > 1 ? `${sizeOf(u)} ` : ''}${RESOURCES[need].name}`);
       }
       const cost = upgradeCost(game, p, u);
       if (p.gold < cost) return fail(`Upgrading costs ${cost} gold (you have ${Math.floor(p.gold)})`);
       p.gold -= cost;
       u.type = to;
       u.moves = 0;
+      return OK;
+    }
+    case 'merge': {
+      const other = unitById(game, o.other);
+      const why = mergeProblem(game, p, u, other);
+      if (why) return fail(why);
+      merge(game, u, other!);
+      updateVisibility(game, p);
       return OK;
     }
     case 'promote': {
@@ -1892,8 +1903,13 @@ function playerTurn(game: Game, p: Player) {
     const military = unitsOf(game, p.index).filter((u) => isMilitary(UNITS[u.type]));
     if (military.length) {
       const u = military[Math.floor(random(game) * military.length)];
-      removeUnit(game, u);
-      note(game, p.index, { text: `Without gold to pay it, your ${UNITS[u.type].name} has disbanded.`, at: u.tile, kind: 'bad' });
+      // (A corps or an army loses one of its units.)
+      const name = unitName(u);
+      if (shrink(u)) note(game, p.index, { text: `Without gold to pay it, a unit of your ${name} has disbanded.`, at: u.tile, kind: 'bad' });
+      else {
+        removeUnit(game, u);
+        note(game, p.index, { text: `Without gold to pay it, your ${name} has disbanded.`, at: u.tile, kind: 'bad' });
+      }
     }
   }
   // Science (this turn's deeds boosting it first: what's been built, grown and trained).

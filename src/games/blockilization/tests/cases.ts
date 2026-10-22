@@ -83,6 +83,8 @@ import { barbarianTurn } from '../rules/barbarians';
 import { clans as botClans } from '../rules/ai/clans';
 import { die } from '../rules/combat';
 import { campHooks } from '../rules/movement';
+import { ARMY_BONUS, CORPS_BONUS, CORPS_TECH, forms, mergeProblem, unitName } from '../rules/armies';
+import { formations } from '../rules/ai/armies';
 
 /**
  * The rules' behaviour tests: each sets up a small situation and checks that an effect (or a
@@ -6362,4 +6364,91 @@ test('clans: a bot bribes a clan by its cities, pays one near its enemy to raid 
   war(game, 0, 1);
   ok(tries(() => raidTarget(game, clan) === 1), 'paid to raid Babylon');
   ok(tries(() => clan.hired !== undefined), 'a warrior hired');
+});
+
+test('formations: two of a kind side by side join as a corps, and a third as an army: far stronger, costing what their units did', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const egypt = game.players[0];
+  egypt.bot = false;
+  const a = unit(game, 'rifleman', 0, at(8, 8));
+  const b = unit(game, 'rifleman', 0, at(9, 8));
+  // (Upkeep is paid past the first few units: a few more to be paid for.)
+  for (let i = 0; i < 4; i++) unit(game, 'warrior', 0, at(2 + i, 2));
+  const join: Order = { t: 'merge', unit: a.id, other: b.id };
+  ok(!apply(game, 0, join).ok, 'not before Military Science');
+  ok(!viewFor(game, egypt, null).units.find((w) => w.id === a.id)!.merge, 'nor offered');
+  egypt.techs.push(CORPS_TECH);
+  const offer = viewFor(game, egypt, null).units.find((w) => w.id === a.id)!.merge;
+  eq(JSON.stringify(offer), JSON.stringify({ other: b.id, size: 2, why: null }), 'offered, with the Rifleman beside it');
+  ok(!!mergeProblem(game, egypt, a, unit(game, 'warrior', 0, at(8, 9))), 'not with a unit of another kind');
+  ok(!!mergeProblem(game, egypt, a, unit(game, 'rifleman', 0, at(11, 8))), 'nor one not beside it');
+  const lone = strength(game, a, 'defend', null, a.tile);
+  const upkeep = goldUpkeep(game, egypt).units;
+  a.hp = 60;
+  b.xp = 30;
+  b.promotions = ['shock_1'];
+  ok(apply(game, 0, join).ok, 'joined');
+  ok(!game.units.includes(b) && a.size === 2, 'one unit, of two');
+  eq(unitName(a), 'Rifleman Corps', 'named');
+  eq(a.hp, 80, 'their hit points shared out');
+  ok(a.xp === 30 && a.promotions.includes('shock_1'), 'the more experienced one’s experience and promotions');
+  eq(a.moves, 0, 'its turn spent');
+  near(strength(game, { ...a, hp: 100, promotions: [] }, 'defend', null, a.tile) / lone, 1 + CORPS_BONUS / 100, 'a corps’s strength');
+  eq(goldUpkeep(game, egypt).units, upkeep, 'upkeep as two units');
+  ok(egypt.notes.some((n) => n.text.includes('A Rifleman Corps has formed')), 'said so');
+  // An army: with Replaceable Parts, a corps and a third.
+  const c = unit(game, 'rifleman', 0, at(7, 8));
+  a.moves = 2;
+  ok(!apply(game, 0, { t: 'merge', unit: a.id, other: c.id }).ok, 'not before Replaceable Parts');
+  techsTo(game, 0, 11);
+  const third = unit(game, 'rifleman', 0, at(20, 4));
+  const single = upgradeCost(game, egypt, third);
+  ok(apply(game, 0, { t: 'merge', unit: a.id, other: c.id }).ok, 'an army');
+  eq(unitName(a), 'Rifleman Army', 'named');
+  near(strength(game, { ...a, hp: 100, promotions: [] }, 'defend', null, a.tile) / lone, 1 + ARMY_BONUS / 100, 'an army’s strength');
+  eq(upgradeCost(game, egypt, a), single * 3, 'its upgrade as three units’');
+  a.moves = 2;
+  ok(!!mergeProblem(game, egypt, a, unit(game, 'rifleman', 0, at(8, 7))), 'no bigger than an army');
+  // At sea, a fleet; a strategic resource used for each of its units.
+  const f = unit(game, 'frigate', 0, at(1, 16));
+  const g = unit(game, 'frigate', 0, at(2, 16));
+  const iron = strategic(game, egypt).iron?.used ?? 0;
+  ok(apply(game, 0, { t: 'merge', unit: f.id, other: g.id }).ok, 'ships too');
+  eq(unitName(f), 'Frigate Fleet', 'a fleet');
+  eq(strategic(game, egypt).iron?.used ?? 0, iron, 'its iron as two ships’');
+  ok(!forms('great_general') && !forms('settler') && !forms('fighter') && !forms('carrier'), 'not great people, civilians, aircraft or carriers');
+  // Seen by others as one, its size known.
+  eq(viewFor(game, game.players[1], null).units.find((w) => w.id === a.id)?.size ?? 3, 3, 'others see an army');
+});
+
+test('formations: one that can’t be paid for loses a unit, not the lot', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const egypt = game.players[0];
+  egypt.bot = false;
+  city(game, 0, at(20, 4));
+  for (let i = 0; i < 4; i++) unit(game, 'rifleman', 0, at(3 + i * 2, 4), { size: 3 });
+  egypt.gold = 0;
+  endTurn(game);
+  eq(game.units.filter((u) => u.owner === 0).reduce((s, u) => s + (u.size ?? 1), 0), 11, 'a unit of one army gone');
+  eq(game.units.filter((u) => u.owner === 0).length, 4, 'every army still there');
+  ok(egypt.notes.some((n) => n.text.includes('a unit of your Rifleman Army has disbanded')), 'said so');
+});
+
+test('formations: a bot forms corps once it can, out of the enemy’s reach, never taking a garrison', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  const babylon = game.players[1];
+  techsTo(game, 1, 9);
+  const home = city(game, 1, at(5, 12));
+  const garrison = unit(game, 'rifleman', 1, home.tile);
+  const by = unit(game, 'rifleman', 1, neighbours(game.grid, home.tile)[0]);
+  const a = unit(game, 'rifleman', 1, at(14, 4));
+  const b = unit(game, 'rifleman', 1, at(15, 4));
+  const c = unit(game, 'rifleman', 1, at(20, 14));
+  const d = unit(game, 'rifleman', 1, at(21, 14));
+  war(game, 0, 1);
+  unit(game, 'rifleman', 0, at(23, 14));
+  formations(makeCtx(game, babylon), new Set([garrison.id]));
+  ok(a.size === 2 && !game.units.includes(b), 'two side by side, out of reach, joined');
+  ok(game.units.includes(garrison) && game.units.includes(by) && !garrison.size && !by.size, 'not the garrison');
+  ok(game.units.includes(c) && game.units.includes(d) && !c.size && !d.size, 'not those in the enemy’s reach');
 });

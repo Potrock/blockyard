@@ -7,7 +7,8 @@ import { assignCitizens, blockaded, cityEffects, cityYields, goldUpkeep, goldenC
 import { ANARCHY_TURNS, blockers, buyable, canChooseIdeology, ideologySwitch, constructible, eraOf, faithPurchases, heldBuildings, itemCost, productionToward, reformationDue, score, trainable, trainOptions, upgradeCost, upgradeTo, workTurns } from './rules/game';
 import { distance, neighbours, within } from './rules/hex';
 import { pantheonCost } from './rules/religion';
-import type { City, Game, Player, Production } from './rules/state';
+import type { City, Game, Player, Production, Unit } from './rules/state';
+import { besides, canFormCorps, forms, mergeProblem, partners, sizeOf } from './rules/armies';
 import { canResearch, TECHS } from './rules/techs';
 import { SPACESHIP_PARTS } from './rules/buildings';
 import { allyOf, cannotBully, cannotCoup, cityStateGives, coupChance, giftWorth, influenceFall, influenceOf, restingInfluence, standing, TRIBUTE_COST, tributeGold } from './rules/citystates';
@@ -339,6 +340,12 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
         })
       : null,
   );
+  // (Your units by tile, once corps can be formed: those beside each that it might join with.)
+  let yours: Map<number, Unit[]> | null = null;
+  if (p && canFormCorps(p)) {
+    yours = new Map();
+    for (const u of game.units) if (u.owner === p.index) yours.set(u.tile, [...(yours.get(u.tile) ?? []), u]);
+  }
   const units: UnitWire[] = game.units
     .filter((u) => all || seesUnit(game, p!, u))
     .map((u) => {
@@ -369,8 +376,10 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
         }
         const to = upgradeTo(p!, u);
         if (to) w.upgrade = { to, cost: upgradeCost(game, p!, u) };
+        if (yours) w.merge = mergeWire(game, p!, u, neighbours(game.grid, u.tile).flatMap((t) => yours!.get(t) ?? []));
       }
       w.embarked = u.embarked;
+      w.size = u.size;
       return w;
     });
   const mood = p ? happiness(game, p) : 0;
@@ -461,6 +470,13 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
 }
 
 /** A clan as a civ that has found its camp sees it (`ClanWire`). */
+/** A unit's corps or army to form: with the best of its kind beside it (`rules/armies.ts`), or why not now; none if there's none beside it. */
+function mergeWire(game: Game, p: Player, u: Unit, near: Unit[]): UnitWire['merge'] {
+  if (!forms(u.type) || sizeOf(u) >= 3) return undefined;
+  const best = partners(game, p, u, near)[0] ?? besides(game, u, near)[0];
+  return best && { other: best.id, size: sizeOf(u) + sizeOf(best), why: mergeProblem(game, p, u, best) };
+}
+
 function clanWire(game: Game, p: Player, c: Clan): ClanWire {
   const raiding = raidTarget(game, c);
   const mine = c.incited?.by === p.index || (c.incited !== undefined && teammates(game, c.incited.by, p.index));

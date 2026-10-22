@@ -2,6 +2,7 @@ import type { Client, ClientRooms } from '@platform/client';
 import { centre } from '../geometry';
 import type { CityInfo, CityWire, ClientToServer, LobbyAction, UnitWire, View } from '../protocol';
 import { takenAlive } from '../rules/combat';
+import { article, formationBonus, formationKind, unitName } from '../rules/armies';
 import type { CombatPreview, PreviewSide } from '../rules/preview';
 import { BUILDINGS, SPACESHIP_PARTS } from '../rules/buildings';
 import { CIV_LIST, CIVS } from '../rules/civs';
@@ -904,7 +905,8 @@ export function upgradeWhy(u: UnitWire): string | null {
   const need = UNITS[up.to]?.resource;
   if (need && need !== UNITS[u.type]?.resource) {
     const r = s.strategic[need];
-    if (!r || r.have - r.used <= 0) return `Upgrading needs ${RESOURCES[need]?.name ?? need}`;
+    const n = u.size ?? 1;
+    if (!r || r.have - r.used < n) return `Upgrading needs ${n > 1 ? `${n} ` : ''}${RESOURCES[need]?.name ?? need}`;
   }
   if (s.gold < up.cost) return `It costs ${up.cost} gold (you have ${s.gold})`;
   return null;
@@ -1337,11 +1339,25 @@ function renderUnit(): El | null {
   act('Sleep', { t: 'stance', unit: u.id, stance: 'sleep' }, 'Sleep (Z): skipped until woken', 'turn');
   act('Skip', { t: 'skip', unit: u.id }, 'Skip this turn', 'moves');
   if (u.path?.length) act('Stop', { t: 'stance', unit: u.id, stance: 'wake' }, 'Stop its journey', 'close');
+  // A corps or an army: with the best of its kind beside it, once corps can be formed (`rules/armies.ts`).
+  if (u.merge) {
+    const kind = formationKind(u.type, u.merge.size)!;
+    const partner = store.view!.units.find((x) => x.id === u.merge!.other);
+    act(
+      `Form ${article(kind).toLowerCase()}`,
+      { t: 'merge', unit: u.id, other: u.merge.other },
+      u.merge.why ?? `The ${partner ? unitName(partner) : UNITS[u.type].name} beside it joins it: one unit, +${formationBonus(u.merge.size)}% strength, costing what its units did. It spends its turn doing it, and can't be split again.`,
+      'strength',
+      u.merge.why ? '' : '.gold',
+      !!u.merge.why,
+      'concept:formations',
+    );
+  }
   if (u.upgrade) {
     const why = upgradeWhy(u);
     act(`Upgrade to ${UNITS[u.upgrade.to]?.name ?? u.upgrade.to} · ${u.upgrade.cost}`, { t: 'upgrade', unit: u.id }, why ?? `${u.upgrade.cost} gold: ${describe('unit', u.upgrade.to)}`, 'xp', '', !!why);
   }
-  act('Disband', () => ask(`Disband this ${type.name}? It's gone for good.`, 'Disband', () => send({ t: 'disband', unit: u.id })), undefined, 'close', '.danger');
+  act('Disband', () => ask(`Disband this ${unitName(u)}? It's gone for good.`, 'Disband', () => send({ t: 'disband', unit: u.id })), undefined, 'close', '.danger');
   const hint = store.group.length
     ? 'Shift-click more of your units to add them, or shift-drag a box round them (shift-click one in the group to take it out).'
     : store.unitAim?.unit === u.id
@@ -1364,6 +1380,8 @@ function renderUnit(): El | null {
           ? `Enemies next to it are ringed in red: ${touchScreen() ? 'tap one to see how the fight would go, tap it again to attack' : 'point at one to see how the fight would go, click to attack'}.`
           : '';
   const hpColour = u.hp > 50 ? 'green' : u.hp > 25 ? 'gold' : 'red';
+  // (A corps's or an army's strength: its kind's, and what being one adds.)
+  const formed = (u.size ?? 1) > 1 ? h('small.cv-muted', { title: `As ${article(formationKind(u.type, u.size!)!).toLowerCase()}` }, ` +${formationBonus(u.size!)}%`) : null;
   const role = ['civilian', 'great', 'trade', 'religious'].includes(type.class) ? '' : type.class.replace('_', ' ');
   arrival = h('div.arrive', {});
   return h(
@@ -1377,13 +1395,13 @@ function renderUnit(): El | null {
       h(
         'div.cv-grow',
         {},
-        h('div.cv-row', { style: 'gap:6px' }, h('span.cv-h', {}, type.name), emblemEl(store.view!.self.civ, 18)),
-        h('small.cv-muted', { style: 'text-transform:capitalize' }, `${civ?.adjective ?? ''} ${role}`),
+        h('div.cv-row', { style: 'gap:6px' }, h('span.cv-h', {}, unitName(u)), emblemEl(store.view!.self.civ, 18)),
+        h('small.cv-muted', {}, h('span', { style: 'text-transform:capitalize' }, `${civ?.adjective ?? ''} ${role}`), (u.size ?? 1) > 1 ? ` · ${u.size} units as one` : ''),
         h(
           'div.cv-ustats',
           {},
-          type.strength ? h('span', { title: 'Strength' }, icon('strength', 14, '#f0a24a'), h('b', {}, String(type.strength))) : null,
-          type.ranged ? h('span', { title: 'Ranged strength · range' }, icon('ranged', 14, '#6ab8ff'), h('b', {}, `${type.ranged}`), ` · ${reachOf(u)}`) : null,
+          type.strength ? h('span', { title: 'Strength' }, icon('strength', 14, '#f0a24a'), h('b', {}, String(type.strength)), formed) : null,
+          type.ranged ? h('span', { title: 'Ranged strength · range' }, icon('ranged', 14, '#6ab8ff'), h('b', {}, `${type.ranged}`), formed, ` · ${reachOf(u)}`) : null,
           h('span', { title: 'Moves' }, icon('moves', 14, '#7bd16a'), h('b', {}, `${Math.round((u.moves ?? 0) * 10) / 10}/${u.maxMoves ?? type.moves}`)),
           u.xp ? h('span', { title: 'Experience' }, icon('xp', 14, '#f2c14e'), h('b', {}, String(u.xp))) : null,
           u.work ? h('span', {}, icon('hammer', 14), h('b', {}, `${u.work.turns} turn${u.work.turns === 1 ? '' : 's'}`)) : null,
@@ -1457,12 +1475,12 @@ const wayThere = (route: Route, u?: UnitWire) => {
   const to = route.tiles[route.tiles.length - 1];
   // Next to one of its own of its kind: the two swap places.
   const other = u && swapsWith(u, to);
-  if (other) return `Swaps places with your ${UNITS[other.type]?.name ?? 'unit'}`;
+  if (other) return `Swaps places with your ${unitName(other)}`;
   // Onto an enemy's civilian alone: a soldier takes it as it steps there.
   const v = store.view!;
   const foes = unitsAt(to).filter((x) => x.owner !== me() && v.players[x.owner]?.war);
   if (u && foes.length && !cityAt(to) && foes.every((x) => !isMilitary(UNITS[x.type])) && isMilitary(UNITS[u.type])) {
-    const what = `${takenAlive(foes[0].type) ? 'captures' : 'kills'} the ${UNITS[foes[0].type]?.name ?? 'unit'}`;
+    const what = `${takenAlive(foes[0].type) ? 'captures' : 'kills'} the ${unitName(foes[0])}`;
     return `${turns === 1 ? 'Gets there this turn' : `${turns} turns to get there`} and ${what}`;
   }
   // Toward an enemy: whether it can attack it this turn (a ranged unit in reach is shown its preview instead).
@@ -2514,7 +2532,7 @@ function renderTip() {
     for (const u of unitsAt(t))
       if (k.visible || u.owner === me()) {
         const p = store.view.players[u.owner];
-        bits.push(line(unitGlyph(u.type), CIVS[p?.civ]?.color ?? '#fff', `${CIVS[p?.civ]?.adjective ?? p?.name ?? ''} ${UNITS[u.type]?.name} · ${u.hp} HP`));
+        bits.push(line(unitGlyph(u.type), CIVS[p?.civ]?.color ?? '#fff', `${CIVS[p?.civ]?.adjective ?? p?.name ?? ''} ${unitName(u)} · ${u.hp} HP`));
       }
     if (s.feature === 'fallout') bits.push(line('mushroom', '#b8d84a', `Fallout: yields next to nothing, ${FEATURES.fallout.hurts} damage a turn to units here; a worker scrubs it away`));
     if (k.ruin) bits.push(line('urn', '#f2c14e', 'Ancient ruins'));
