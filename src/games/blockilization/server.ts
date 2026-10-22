@@ -496,12 +496,19 @@ function begin(game: GameContext, g: Game, withSeats: LobbySeat[]) {
   sendLobby(game);
 }
 
-/** The map's ground is loaded on the server: a point every chunk across it (an unloaded one collides). */
-function mapLoaded(game: GameContext, g: Game): boolean {
+/**
+ * Where the map's ground isn't loaded on the server yet, if anywhere: a point every chunk across it
+ * (an unloaded one collides). Null: all of it is.
+ */
+function unloadedSpot(game: GameContext, g: Game): { x: number; z: number } | null {
   const size = extent(g.grid);
   // (Its last column is just inside: a world that wraps ends at a chunk's edge.)
-  for (let x = 0; x < size.w + 16; x += 16) for (let z = 0; z < size.d + 16; z += 16) if (game.world.collisionHeight(Math.min(x, size.w - 0.5), SEA_Y + 100, Math.min(z, size.d)) > 0) return false;
-  return true;
+  for (let x = 0; x < size.w + 16; x += 16)
+    for (let z = 0; z < size.d + 16; z += 16) {
+      const at = { x: Math.min(x, size.w - 0.5), z: Math.min(z, size.d) };
+      if (game.world.collisionHeight(at.x, SEA_Y + 100, at.z) > 0) return at;
+    }
+  return null;
 }
 
 /** Somewhere far off: screens looking there let the map's ground go. */
@@ -1555,7 +1562,15 @@ export default defineServer(shared, {
       const size = extent(civGame.grid);
       const middle = { x: size.w / 2, y: SEA_Y + 40, z: size.d / 2 };
       if (stage === 'gather') {
-        if (!mapLoaded(game, civGame)) return;
+        // The server loads the world round where people are, 12 chunks at most: a map wider than that
+        // (the large Earth's 14 from its middle) is loaded by taking them to its far parts in turn,
+        // which stay loaded once made. Then back to the middle.
+        const spot = unloadedSpot(game, civGame);
+        if (spot) {
+          for (const p of humans(game)) p.teleport({ x: spot.x, y: SEA_Y + 40, z: spot.z });
+          return;
+        }
+        for (const p of humans(game)) p.teleport(middle);
         stage = 'away';
         stageAt = game.clock.now;
         for (const p of humans(game)) lookAt(p, awayFrom(middle));
