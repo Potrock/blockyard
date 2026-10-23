@@ -3398,60 +3398,66 @@ test('teams: a team wins together (conquest: holding every capital between them;
   ok([0, 1].includes(late.over?.winner ?? -1), `the team wins on score (${JSON.stringify(late.over)})`);
 });
 
-test('team research: one research for the team, set by any of them; a bot doesn’t undo a person’s choice', () => {
-  const { game, at } = blank(['egypt', 'babylon', 'germany']);
-  teamUp(game, [0, 1]);
-  [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
-  const [a, b] = game.players;
-  for (const p of game.players) p.techs.push('agriculture');
-  a.bot = false;
-  ok(apply(game, 0, { t: 'research', tech: 'pottery' }).ok, 'a person chooses');
-  eq(b.researching, 'pottery', 'the teammate researches it too');
-  eq(b.researchBy, 0, 'and knows whose choice it is');
-  ok(!apply(game, 1, { t: 'research', tech: 'mining' }).ok, 'a bot on the team doesn’t undo it');
-  eq(a.researching, 'pottery', 'still pottery');
-  ok(apply(game, 0, { t: 'research', tech: 'writing' }).ok, 'a far tech');
-  eq(b.researching, 'pottery', 'its way there, for both');
-  ok(b.techQueue.includes('writing'), 'queued for both');
-  ok(apply(game, 2, { t: 'research', tech: 'mining' }).ok && game.players[2].researching === 'mining', 'a civ alone is its own master');
-});
-
-test('team research: two people choosing at once, the first keeps theirs (the second is told, and can choose again)', () => {
+test('team research: each of them chooses their own (Civ V’s): a teammate’s choice changes nobody else’s', () => {
   const { game, at } = blank(['egypt', 'babylon', 'germany']);
   teamUp(game, [0, 1]);
   [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
   const [a, b] = game.players;
   for (const p of game.players) p.techs.push('agriculture');
   a.bot = b.bot = false;
-  // Both see nothing chosen; the first's order lands first.
-  ok(apply(game, 0, { t: 'research', tech: 'pottery', was: null }).ok, 'the first chooses');
-  const late = apply(game, 1, { t: 'research', tech: 'mining', was: null });
-  ok(!late.ok && /just chose Pottery/.test(late.error ?? ''), `the second's, from what they saw before it, is turned back (${late.error})`);
-  eq(a.researching, 'pottery', 'still the first one’s');
-  eq(b.researchBy, 0, 'and theirs it says');
-  // Seeing it, the other may change it.
-  ok(apply(game, 1, { t: 'research', tech: 'mining', was: 'pottery' }).ok, 'seeing it, changed on purpose');
-  eq(a.researching, 'mining', 'for both');
-  eq(a.researchBy, 1, 'the choice now the second one’s');
-  ok(apply(game, 1, { t: 'research', tech: 'mining', was: 'pottery' }).ok, 'their own choice they may change as they like');
-  ok(!apply(game, 0, { t: 'research', tech: 'agriculture' }).ok && a.researchBy === 1, 'a choice turned back changes nobody’s');
+  ok(apply(game, 0, { t: 'research', tech: 'pottery' }).ok, 'one chooses');
+  eq(b.researching, null, 'the other’s isn’t chosen for them');
+  ok(apply(game, 1, { t: 'research', tech: 'mining' }).ok, 'the other chooses another');
+  eq(a.researching, 'pottery', 'the first one’s stands');
+  eq(b.researching, 'mining', 'and the second one’s');
+  ok(apply(game, 0, { t: 'research', tech: 'writing' }).ok, 'a far tech');
+  ok(a.researching === 'pottery' && a.techQueue.includes('writing'), 'its way there, queued');
+  ok(b.researching === 'mining' && !b.techQueue.length, 'for them alone');
+  b.bot = true;
+  ok(apply(game, 1, { t: 'research', tech: 'animal_husbandry' }).ok && a.researching === 'pottery', 'a bot teammate chooses its own too');
+  ok(apply(game, 2, { t: 'research', tech: 'mining' }).ok && game.players[2].researching === 'mining', 'a civ alone as ever');
 });
 
-test('team research: a turn with nothing chosen, the team’s science waits for the choice (as a civ alone’s does)', () => {
+test('team research: on different techs, a team researches both at once; on the same one, both put into it', () => {
   const { game, at } = blank(['egypt', 'babylon', 'germany']);
   teamUp(game, [0, 1]);
   [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
   const [a, b] = game.players;
-  for (const p of game.players) p.techs.push('agriculture');
+  // (Eurekas aside: they'd be science too.)
+  for (const p of game.players) (p.techs.push('agriculture'), (p.eurekas = Object.keys(EUREKAS)));
   a.bot = b.bot = false;
   const science = (i: number) => game.cities.filter((c) => c.owner === i).reduce((n, c) => n + cityYields(game, c).science, 0);
-  const both = science(0) + science(1);
-  ok(both > 0, 'they make science');
+  ok(science(0) > 0 && science(1) > 0, 'both make science');
+  apply(game, 0, { t: 'research', tech: 'pottery' });
+  apply(game, 1, { t: 'research', tech: 'mining' });
   endTurn(game);
-  eq(a.researching, null, 'nothing chosen');
+  eq(a.research.pottery, science(0), 'the one’s science into theirs');
+  eq(a.research.mining, science(1), 'the other’s into theirs');
+  eq(JSON.stringify(b.research), JSON.stringify(a.research), 'the progress the team’s: the same for both');
+  ok(a.researching === 'pottery' && b.researching === 'mining', 'each still on their own');
+  // The other joins in: both into one.
+  apply(game, 1, { t: 'research', tech: 'pottery' });
+  const before = a.research.pottery;
+  endTurn(game);
+  eq(a.research.pottery, before + science(0) + science(1), `a turn's science from both (${science(0)} + ${science(1)})`);
+  eq(a.research.mining, science(1), 'what went into the other is kept');
+});
+
+test('team research: a turn with nothing chosen, each one’s science waits for their own choice (as a civ alone’s does)', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'germany']);
+  teamUp(game, [0, 1]);
+  [at(3, 3), at(14, 3), at(22, 15)].forEach((t, i) => city(game, i, t));
+  const [a, b] = game.players;
+  for (const p of game.players) (p.techs.push('agriculture'), (p.eurekas = Object.keys(EUREKAS)));
+  a.bot = b.bot = false;
+  const science = (i: number) => game.cities.filter((c) => c.owner === i).reduce((n, c) => n + cityYields(game, c).science, 0);
+  endTurn(game);
+  ok(a.researching === null && b.researching === null, 'nothing chosen');
   ok(apply(game, 1, { t: 'research', tech: 'pottery' }).ok, 'then one chooses');
-  eq(a.research.pottery, both, `what both made meanwhile goes into it (${science(0)} + ${science(1)})`);
-  eq(b.research.pottery, both, 'for both');
+  eq(a.research.pottery, science(1), 'what they made meanwhile goes into it, the team’s');
+  eq(a.spareScience, science(0), 'the other’s waits for their own choice');
+  ok(apply(game, 0, { t: 'research', tech: 'mining' }).ok, 'which they make');
+  eq(b.research.mining, science(0), 'and theirs goes into it');
 });
 
 test('teams: a bot on a team with a person sells no peace for the team (its people make it)', () => {
@@ -3472,27 +3478,32 @@ test('team research: what each puts in is pooled; finished between them, it’s 
   const [a, b] = game.players;
   // (Eurekas aside: Writing's, for having met each other, would be science too.)
   for (const p of game.players) (p.techs.push('agriculture'), (p.eurekas = Object.keys(EUREKAS)));
+  a.bot = b.bot = false;
   apply(game, 0, { t: 'research', tech: 'pottery' });
+  apply(game, 1, { t: 'research', tech: 'pottery' });
   const cost = techCost(game, a, 'pottery');
   a.research.pottery = Math.ceil(cost * 0.3);
   b.research.pottery = Math.ceil(cost * 0.3);
   shareResearch(game);
   eq(a.research.pottery, b.research.pottery, 'the same for both');
   eq(a.research.pottery, Math.ceil(cost * 0.3) * 2, 'what each put in, together');
+  // Each with their own next.
   a.techQueue = ['writing'];
-  b.techQueue = ['writing'];
+  b.techQueue = ['mining'];
   a.research.pottery += Math.ceil(cost * 0.3);
   b.research.pottery += Math.ceil(cost * 0.3);
   shareResearch(game);
   ok(a.techs.includes('pottery') && b.techs.includes('pottery'), 'learned by both');
-  eq(a.researching, 'writing', 'on to the next');
-  eq(a.research.writing, Math.ceil(cost * 0.3) * 4 - cost, 'what was over goes on');
-  eq(b.research.writing, a.research.writing, 'for both');
-  // A turn: each one's science goes in, and the team's together is what counts.
-  const before = a.research.writing;
-  const science = (i: number) => game.cities.filter((c) => c.owner === i).reduce((n, c) => n + cityYields(game, c).science, 0);
-  endTurn(game);
-  eq(a.research.writing, before + science(0) + science(1), `a turn's science from both (${science(0)} + ${science(1)})`);
+  ok(a.researching === 'writing' && b.researching === 'mining', 'each on to their own next');
+  eq((a.research.writing ?? 0) + (a.research.mining ?? 0), Math.ceil(cost * 0.3) * 4 - cost, 'what was over goes on, shared between them');
+  eq(JSON.stringify(b.research), JSON.stringify(a.research), 'the same for both');
+  // One finishing theirs: the other's goes on as it was.
+  const mining = a.research.mining ?? 0;
+  a.research.writing = techCost(game, a, 'writing');
+  shareResearch(game);
+  ok(b.techs.includes('writing'), 'writing learned by both');
+  eq(b.researching, 'mining', 'the other still on theirs');
+  eq(b.research.mining, mining, 'with what was in it');
 });
 
 test('team research: a tech learned by one, any way, is learned by all; a team’s techs cost more', () => {

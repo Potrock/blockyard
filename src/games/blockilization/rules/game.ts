@@ -70,8 +70,7 @@ export type Order =
   | { t: 'work'; city: number; tile: number }
   | { t: 'specialist'; city: number; kind: SpecialistKind; add: boolean }
   | { t: 'cityFire'; city: number; target: number }
-  /** `was`: the research the one choosing saw (on a team, a teammate's choice made since stands, not undone unseen). */
-  | { t: 'research'; tech: string; was?: string | null }
+  | { t: 'research'; tech: string }
   | { t: 'policy'; id: string }
   | { t: 'ideology'; id: string }
   | { t: 'switchIdeology'; id: string }
@@ -600,10 +599,11 @@ export function learn(game: Game, p: Player, id: string) {
 }
 
 /**
- * A team researches together, Civilization V's way: one research for the team, chosen by any of them
- * (`research` order; the latest choice holds); the science each puts in, pooled toward it (a tech
- * costs a team more, `techCost`); a tech learned, by any of them or any way, learned by all. Each
- * keeps the team's research as their own: made the same again here, after every order and as the
+ * A team researches together, Civilization V's way: each of them chooses their own research
+ * (`research` order), and the science each puts into a tech is the team's progress toward it (a tech
+ * costs a team more, `techCost`): two of them on one tech finish it sooner, on two different ones
+ * they research both at once. A tech learned, by any of them or any way, is learned by all. Each
+ * keeps the team's progress as their own: made the same again here, after every order and as the
  * turn ends (what each has put in since the last time, added up).
  */
 export function shareResearch(game: Game) {
@@ -627,34 +627,25 @@ export function shareResearch(game: Game) {
       const sum = team.reduce((n, m) => n + (m.research[id] ?? 0) - was, was);
       if (sum > 0) pooled[id] = sum;
     }
-    // What they research: the choice of whoever made it last, else a person's, else anyone's.
-    const chooser = team.find((m) => m.index === p.researchBy && m.researching) ?? team.find((m) => !m.bot && m.researching) ?? team.find((m) => m.researching) ?? p;
-    let researching = chooser.researching;
-    let queue = [...chooser.techQueue];
-    // Finished between them: learned by all, what's over going on.
-    while (researching && (pooled[researching] ?? 0) >= techCost(game, p, researching)) {
-      const over = pooled[researching] - techCost(game, p, researching);
-      delete pooled[researching];
-      for (const m of team) {
-        m.researching = researching;
-        m.techQueue = [...queue];
-        learn(game, m, researching);
-      }
-      researching = p.researching;
-      queue = [...p.techQueue];
-      if (researching) pooled[researching] = (pooled[researching] ?? 0) + over;
-      else {
-        // (Nothing next: what's over waits for the next choice, as it does for a civ alone.)
-        p.spareScience = (p.spareScience ?? 0) + over;
-        for (const m of team) if (!m.bot) note(game, m.index, { text: 'Choose what to research next.', kind: 'tech', remind: true });
-      }
+    // Finished between them: learned by all; what's over goes on into the next research of those
+    // who were on it (shared out), or waits for their next choice, as it does for a civ alone.
+    const finished = () => Object.keys(pooled).find((id) => pooled[id] >= techCost(game, p, id));
+    for (let id = finished(); id; id = finished()) {
+      const over = pooled[id] - techCost(game, p, id);
+      delete pooled[id];
+      const on = team.filter((m) => m.researching === id);
+      for (const m of team) learn(game, m, id);
+      const to = on.length ? on : [p];
+      to.forEach((m, i) => {
+        const share = Math.floor(over / to.length) + (i === 0 ? over - Math.floor(over / to.length) * to.length : 0);
+        if (m.researching) pooled[m.researching] = (pooled[m.researching] ?? 0) + share;
+        else {
+          m.spareScience = (m.spareScience ?? 0) + share;
+          if (!m.bot && on.includes(m)) note(game, m.index, { text: 'Choose what to research next.', kind: 'tech', remind: true });
+        }
+      });
     }
-    for (const m of team) {
-      m.research = { ...pooled };
-      m.researching = researching;
-      m.techQueue = [...queue];
-      m.researchBy = chooser.index;
-    }
+    for (const m of team) m.research = { ...pooled };
     game.teamResearch[p.team] = { ...pooled };
   }
 }
@@ -847,7 +838,7 @@ export function workTurns(game: Game, what: string): number {
 }
 
 /** What an order's field must be: a whole number, a tile of the map, a whole number or nothing, a string, one of some strings (or nothing, null or left out, where null is one), a list of strings, a list (checked where it's used), a yes or no, a production item; `?` when it may be left out. */
-type Field = 'int' | 'tile' | 'int|null' | 'string' | 'string?' | 'strings' | 'list' | 'bool' | 'bool?' | 'item' | readonly (string | null)[];
+type Field = 'int' | 'tile' | 'int|null' | 'string' | 'strings' | 'list' | 'bool' | 'bool?' | 'item' | readonly (string | null)[];
 
 /** The luxuries' ids (a resolution banning one names it). */
 const LUXURY_IDS = Object.keys(RESOURCES).filter((r) => RESOURCES[r].kind === 'luxury');
@@ -884,7 +875,7 @@ const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }
   focus: { city: 'int', focus: FOCUSES },
   work: { city: 'int', tile: 'tile' },
   cityFire: { city: 'int', target: 'tile' },
-  research: { tech: 'string', was: 'string?' },
+  research: { tech: 'string' },
   policy: { id: 'string' },
   ideology: { id: 'string' },
   switchIdeology: { id: 'string' },
@@ -937,8 +928,6 @@ export function wellFormed(game: Game, o: unknown): o is Order {
         return v === null || Number.isSafeInteger(v);
       case 'string':
         return typeof v === 'string';
-      case 'string?':
-        return v === undefined || v === null || typeof v === 'string';
       case 'strings':
         return Array.isArray(v) && v.every((x) => typeof x === 'string');
       case 'list':
@@ -1404,16 +1393,11 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
     }
     case 'research': {
       if (!Object.hasOwn(TECHS, o.tech)) return fail('No such tech');
-      // On a team, the research is the team's (any of them may set it), but a bot doesn't undo a person's choice.
-      const chooser = p.researchBy !== undefined ? game.players[p.researchBy] : undefined;
-      if (p.bot && p.researching && chooser && !chooser.bot && chooser !== p) return fail("The team's people choose its research");
-      // Two of them choosing at once: whoever was first keeps theirs, and the other's told (and can choose again, seeing it).
-      if (o.was !== undefined && p.researching && o.was !== p.researching && chooser && !chooser.bot && chooser !== p) return fail(`${chooser.name} just chose ${TECHS[p.researching].name} for the team`);
+      // (On a team, each chooses their own: what they put in is the team's, `shareResearch`.)
       if (canResearch(new Set(p.techs), o.tech)) {
-        for (const m of teamOf(game, by)) m.researchBy = by;
         p.researching = o.tech;
         p.techQueue = [];
-        spendSpare(game, p);
+        spendSpare(p);
         return OK;
       }
       // A far tech: queue the way there.
@@ -1426,10 +1410,9 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       };
       visit(o.tech);
       if (!order.length) return fail('Already known');
-      for (const m of teamOf(game, by)) m.researchBy = by;
       p.researching = order[0];
       p.techQueue = order.slice(1);
-      spendSpare(game, p);
+      spendSpare(p);
       return OK;
     }
     case 'policy': {
@@ -1727,14 +1710,10 @@ function bought(c: City, item: Production) {
 }
 
 /** Science kept with nothing to research goes into what's chosen. */
-function spendSpare(game: Game, p: Player) {
-  if (!p.researching) return;
-  // (On a team, what any of them has spare: theirs is the team's research too, `shareResearch`.)
-  for (const m of teamOf(game, p.index)) {
-    if (!m.spareScience) continue;
-    p.research[p.researching] = (p.research[p.researching] ?? 0) + m.spareScience;
-    m.spareScience = undefined;
-  }
+function spendSpare(p: Player) {
+  if (!p.spareScience || !p.researching) return;
+  p.research[p.researching] = (p.research[p.researching] ?? 0) + p.spareScience;
+  p.spareScience = undefined;
 }
 
 /** Keep the production toward what's being built now (it's being put aside). */

@@ -332,10 +332,10 @@ export interface SelfWire {
   goldenTurns: number;
   techs: string[];
   researching: string | null;
-  /** Science toward research a turn: the viewer's, or (on a team) the whole team's. */
+  /** Science toward research a turn: the viewer's, and (on a team) that of each teammate researching the same tech. */
   researchScience: number;
-  /** On a team: which of them chose what's researched (null: alone, or nobody yet). */
-  researchBy: number | null;
+  /** On a team: what each teammate is researching (each chooses their own; what they put in is the team's). */
+  mates: { index: number; researching: string | null; science: number }[];
   research: Record<string, number>;
   techQueue: string[];
   /** The techs whose eureka the viewer (or their team) has had (`rules/eurekas.ts`). */

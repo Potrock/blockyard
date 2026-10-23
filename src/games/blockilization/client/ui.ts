@@ -874,17 +874,21 @@ function renderResearch(): El {
       h('div.cv-bar', {}, h('i', { style: `width:${t ? Math.round((have / cost) * 100) : 0}%` })),
       !t && h('small.cv-muted', {}, `${click(true)} to open the tech tree`),
       !t && researchHint() && h('div.adv-hint', {}, icon('lightbulb', 11, '#ffe48a'), researchHint()),
-      // (On a team: the team's research, and whose choice it is.)
-      t && s.researchBy !== null && h('small.cv-muted', {}, `Team research · ${researchChooser()}`),
+      // (On a team: what each teammate is researching.)
+      s.mates.length > 0 && h('small.cv-muted', {}, `Team · ${matesResearch()}`),
     ),
   );
 }
 
-/** Who chose a team's research, in words ('chosen by Bo', 'your choice'). */
-export function researchChooser(): string {
+/** On a team, what each teammate is researching, in words ('Bo on it too', 'Bo: Pottery'). */
+export function matesResearch(): string {
   const v = store.view!;
-  const by = v.self.researchBy;
-  return by === v.you ? 'your choice' : `chosen by ${v.players[by ?? -1]?.name ?? 'your team'}`;
+  return v.self.mates
+    .map((m) => {
+      const name = v.players[m.index]?.name ?? 'A teammate';
+      return !m.researching ? `${name}: nothing yet` : m.researching === v.self.researching ? `${name} on it too` : `${name}: ${TECHS[m.researching]?.name ?? m.researching}`;
+    })
+    .join(' · ');
 }
 
 /** '2 units need orders'. */

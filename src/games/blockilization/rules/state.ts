@@ -220,8 +220,6 @@ export interface Player {
   techQueue: string[];
   /** Science with no tech to go to (one just learned with none chosen next): it goes into the next one chosen. */
   spareScience?: number;
-  /** Who chose what's being researched (on a team, which of them: `shareResearch`). */
-  researchBy?: number;
   /** The techs they've had their eureka for (a third of the research, for a deed: `eurekas.ts`), and the deeds counted for them (kills, by what killed). */
   eurekas?: string[];
   deeds?: Record<string, number>;

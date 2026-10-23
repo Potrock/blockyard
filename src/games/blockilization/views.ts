@@ -111,9 +111,13 @@ function selfWire(game: Game, p: Player): SelfWire {
     gold += y.gold;
   }
   const up = goldUpkeep(game, p);
-  // On a team, research is the team's: the science of all of them goes into it (`shareResearch`).
-  const mates = p.team === undefined ? [] : teamOf(game, p.index).filter((m) => m !== p);
-  const teamScience = science + mates.reduce((n, m) => n + citiesOf(game, m.index).reduce((s, c) => s + cityYields(game, c, happiness(game, m)).science, 0), 0);
+  // On a team, each researches their own, the progress the team's (`shareResearch`): a teammate on the same tech adds theirs to it.
+  const mates = (p.team === undefined ? [] : teamOf(game, p.index).filter((m) => m !== p)).map((m) => ({
+    index: m.index,
+    researching: m.researching,
+    science: citiesOf(game, m.index).reduce((s, c) => s + cityYields(game, c, happiness(game, m)).science, 0),
+  }));
+  const teamScience = science + mates.reduce((n, m) => n + (p.researching && m.researching === p.researching ? m.science : 0), 0);
   const techCosts: Record<string, number> = {};
   for (const id of Object.keys(TECHS)) techCosts[id] = techCost(game, p, id);
   // (A vassal pays its master a share of what it makes; a master gets its vassals' tribute: `vassals.ts`.)
@@ -141,7 +145,7 @@ function selfWire(game: Game, p: Player): SelfWire {
     techs: p.techs,
     researching: p.researching,
     researchScience: teamScience,
-    researchBy: mates.length && p.researchBy !== undefined ? p.researchBy : null,
+    mates,
     research: p.research,
     techQueue: p.techQueue,
     eurekas: p.eurekas ?? [],
