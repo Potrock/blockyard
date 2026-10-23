@@ -5,7 +5,6 @@ import { dissent, policyCost } from '../economy';
 import { canChooseIdeology, eraOf, ideologySwitch, reformationDue, SWITCH_DISSENT } from '../game';
 import { adoptable, ALL_POLICIES, IDEOLOGIES, TREES, treeOpen, type Policy } from '../policies';
 import { BELIEF_LIST, pantheonCost, takenBeliefs, type BeliefKind } from '../religion';
-import { teamOf } from '../teams';
 import { canResearch, pathTo, TECH_LIST, TECHS } from '../techs';
 import { IMPROVEMENTS, RESOURCES } from '../terrain';
 import { isMilitary, UNIT_LIST, UNITS } from '../units';
@@ -65,9 +64,6 @@ function techValue(ctx: Ctx, id: string, resources: Set<string>): number {
 /** Research: toward the goal with the best worth for its cost; a new goal when that's reached. */
 export function research(ctx: Ctx) {
   const { game, p, mem } = ctx;
-  // A team researches together: a person's choice stands; on a team of bots, the first of them chooses.
-  const team = teamOf(game, ctx.me);
-  if (team.length > 1 && p.researching && (team.some((m) => !m.bot) || team.find((m) => m.bot) !== p)) return;
   const known = new Set(p.techs);
   if (p.researching && mem.techGoal && !known.has(mem.techGoal) && (p.techQueue.length || p.researching === mem.techGoal)) return;
   const resources = new Set<string>();

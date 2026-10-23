@@ -3,8 +3,8 @@ import { ERA_NAMES, ERAS, eraOfCol, pathTo, TECH_LIST, TECHS } from '../rules/te
 import { ERA_COLOR, icon, svg, techEra, techGlyph } from './icons';
 import { entryArt, entryName, techUnlocks } from './pedia';
 import { adviceChips, adviceTag, researchAdvice, techAdvice } from './advice';
-import { ask, store } from './store';
-import { h, researchChooser, send, tile, togglePanel, type El } from './ui';
+import { store } from './store';
+import { h, matesResearch, send, tile, togglePanel, type El } from './ui';
 
 /**
  * The technology tree, as Civilization V draws it: the eras across the top, each tech a card in its
@@ -194,7 +194,10 @@ export function renderTechTree(): El {
     const state = known.has(t.id) ? 'known' : s.researching === t.id ? 'now' : queued >= 0 ? 'queued' : can ? 'can' : 'later';
     const cost = s.techCosts[t.id] ?? 0;
     const have = s.research[t.id] ?? 0;
-    const own = s.researchScience > 0 ? Math.max(1, Math.ceil((cost - have) / s.researchScience)) : null;
+    // (Researched by teammates too: their science goes into it with what this player would put in.)
+    const onIt = s.mates.filter((m) => m.researching === t.id);
+    const rate = s.science + onIt.reduce((n, m) => n + m.science, 0);
+    const own = rate > 0 ? Math.max(1, Math.ceil((cost - have) / rate)) : null;
     const meta = known.has(t.id)
       ? h('span', {}, icon('check', 11, '#6fd27a'), 'Known')
       : turns.has(t.id)
@@ -240,6 +243,7 @@ export function renderTechTree(): El {
         ),
       ),
       queued >= 0 && h('span.tt-badge', {}, String(queued + 1)),
+      onIt.length > 0 && h('span.tt-mate', { title: `Your team: ${onIt.map((m) => v.players[m.index]?.name).join(' and ')} researching it` }, onIt.map((m) => v.players[m.index]?.name ?? 'Teammate').join(', ')),
       have > 0 && !known.has(t.id) && h('div.tt-bar', {}, h('i', { style: `width:${Math.min(100, Math.round((have / Math.max(1, cost)) * 100))}%` })),
     );
   });
@@ -273,7 +277,7 @@ export function renderTechTree(): El {
       'div.tt-top',
       {},
       tile('science', '#2f6fc0', 40),
-      h('div', {}, h('div.cv-h.big', {}, 'Technology'), h('small.cv-muted', {}, `${s.science > 0 ? `+${s.science} science a turn` : 'No science yet: found a city'}${s.researchScience !== s.science ? ` (your team’s together: +${s.researchScience}, researching as one${s.researchBy !== null ? `; ${researchChooser()}` : ''})` : ''} · ${s.techs.length} known`)),
+      h('div', {}, h('div.cv-h.big', {}, 'Technology'), h('small.cv-muted', {}, `${s.science > 0 ? `+${s.science} science a turn` : 'No science yet: found a city'}${s.researchScience !== s.science ? ` (+${s.researchScience} with your teammates on it)` : ''} · ${s.techs.length} known${s.mates.length ? ` · Team: ${matesResearch()}` : ''}`)),
       queue,
       h('div.tt-find', {}, icon('lens', 15, '#8fa1b3'), search, h('small.tt-found.cv-muted')),
     ),
@@ -310,21 +314,13 @@ export function renderTechTree(): El {
 
 /**
  * Research chosen: with nothing being researched before (what the turn was waiting on), the tree
- * closes and it's back to the map; choosing another later, it stays open. On a team, a teammate's
- * choice is the whole team's: it's replaced only on a yes, and the order says what was seen (one
- * a teammate made meanwhile isn't undone unseen, `research` in `rules/game.ts`).
+ * closes and it's back to the map; choosing another later, it stays open. (On a team, each chooses
+ * their own: a teammate's research isn't changed by it.)
  */
 function chooseResearch(tech: string) {
-  const v = store.view!;
-  const was = v.self.researching;
-  const go = () => {
-    send({ t: 'research', tech, was });
-    if (!was && store.panel === 'tech') togglePanel('tech');
-  };
-  const by = v.self.researchBy;
-  const mate = by !== null && by !== v.you ? v.players[by] : undefined;
-  if (was && was !== tech && mate && !mate.bot) ask(`${mate.name} chose ${TECHS[was].name} for the team. Research ${TECHS[tech].name} instead?`, 'Change research', go, false);
-  else go();
+  const first = !store.view?.self.researching;
+  send({ t: 'research', tech });
+  if (first && store.panel === 'tech') togglePanel('tech');
 }
 
 function scrollTo(scroller: El, id: string) {
@@ -424,6 +420,7 @@ export const TECH_CSS = `
 .tt-card.later .n { color: #c3ccd6; }
 .tt-card.now { background: #2a2416 !important; border-color: var(--gold) !important; box-shadow: 0 0 0 3px rgba(242,193,78,.2), 0 6px 18px rgba(0,0,0,.4); }
 .tt-card.queued { background: #221f17 !important; border-color: rgba(242,193,78,.55) !important; }
+.tt-mate { position: absolute; top: -8px; left: 10px; max-width: calc(100% - 40px); height: 16px; padding: 0 7px; border-radius: 99px; background: #2f6fc0; color: #fff; font-size: 10px; font-weight: 800; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
 .tt-badge { position: absolute; top: -7px; right: -7px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 99px; background: linear-gradient(180deg, #f6cf62, #dca23a); color: #1b1407; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
 .tt-bar { position: absolute; left: 10px; right: 10px; bottom: 4px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.08); overflow: hidden; }
 .tt-bar i { display: block; height: 100%; background: linear-gradient(90deg, #4a9ae8, #7fc4ff); }
