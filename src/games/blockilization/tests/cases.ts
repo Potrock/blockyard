@@ -10,7 +10,7 @@ import { PERSONALITIES } from '../rules/ai/personality';
 import { UNITS } from '../rules/units';
 import { CIV_SYMBOL, glyphPaths } from '../client/icons';
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
-import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
+import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileGoldCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
 import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, upgradeTo, wellFormed, type Order } from '../rules/game';
 import { colOf, distance, line, neighbour, neighbours, rowOf, tileAt, within } from '../rules/hex';
@@ -34,7 +34,7 @@ import { previewAttack, previewCityFire } from '../rules/preview';
 import { promotionsDue } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
-import { allyOf, cannotBully, cannotCoup, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
+import { allyOf, cannotBully, cannotCoup, cityStateBonus, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
 import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
 import { MAP_SIZES, SPEEDS, TURN_LIMITS, type Game, type MapSize, type Settings } from '../rules/state';
@@ -78,7 +78,7 @@ import { botAnswer, EMOTES, isEmote, isPing, moodOf, toneOf } from '../rules/cha
 import { isMilitary } from '../rules/units';
 import { civEffects, has } from '../rules/core';
 import { bribeTurns, clanCost, clansOf, clansTurn, clanUnit, hireRest, inciteTurns, newClan, raidTarget, SETTLE, spares } from '../rules/clans';
-import { CLAN_STATES, speed } from '../rules/core';
+import { CLAN_STATES, SEVEN_CITIES_GOLD, speed } from '../rules/core';
 import { barbarianTurn } from '../rules/barbarians';
 import { clans as botClans } from '../rules/ai/clans';
 import { die } from '../rules/combat';
@@ -5441,6 +5441,210 @@ test('the Inca: a hill is a single move; roads on hills cost no upkeep and half 
   eq(roads('egypt', false), 4, 'half a gold a road');
   eq(roads('inca', false), 2, 'a quarter for the Inca');
   eq(roads('inca', true), 0, 'none on hills');
+});
+
+test('America: +1 sight for land units; tiles cost half the gold to buy', () => {
+  const { game, at } = blank(['america', 'egypt']);
+  const mine = unit(game, 'warrior', 0, at(4, 4));
+  const theirs = unit(game, 'warrior', 1, at(16, 4));
+  eq(unitSight(game, mine) - unitSight(game, theirs), 1, 'a tile further');
+  const cost = (civ: string) => {
+    const w = blank([civ, 'egypt']);
+    const c = city(w.game, 0, w.at(6, 6));
+    return tileGoldCost(w.game, c, w.at(6, 9));
+  };
+  ok(Math.abs(cost('america') / cost('egypt') - 0.5) < 0.02, `half the gold (${cost('america')} against ${cost('egypt')})`);
+});
+
+test('Spain: natural wonders give twice the yields and happiness; gold for finding each, three times as much for the first', () => {
+  const { game, at } = blank(['spain', 'egypt']);
+  const [spain, egypt] = game.players;
+  city(game, 0, at(3, 8));
+  city(game, 1, at(21, 8));
+  const peak = at(12, 8);
+  naturalWonder(game, peak, 'gilded_peak');
+  const moods = [happiness(game, spain), happiness(game, egypt)];
+  unit(game, 'scout', 1, at(14, 8));
+  unit(game, 'scout', 0, at(10, 8));
+  eq(game.found?.gilded_peak?.by.join(), '1,0', 'found by Egypt, then Spain');
+  eq(happiness(game, spain) - moods[0], 2, 'twice as happy for it');
+  eq(happiness(game, egypt) - moods[1], 1, 'Egypt as usual');
+  eq(spain.gold, Math.floor(SEVEN_CITIES_GOLD * speed(game)), 'gold for finding it second');
+  const mine = tileYields(game, peak, spain);
+  const theirs = tileYields(game, peak, egypt);
+  for (const k of Object.keys(theirs) as (keyof typeof theirs)[]) eq(mine[k], 2 * (theirs[k] ?? 0), `twice the ${k}`);
+  const first = blank(['spain', 'egypt']);
+  naturalWonder(first.game, first.at(12, 8), 'gilded_peak');
+  unit(first.game, 'scout', 0, first.at(10, 8));
+  eq(first.game.players[0].gold, Math.floor(SEVEN_CITIES_GOLD * 3 * speed(first.game)) + Math.floor(100 * speed(first.game)), 'three times as much first (and the Gilded Peak’s own gold)');
+});
+
+test('Siam: half again as much food, culture and faith from city-state friends', () => {
+  const gifts = (civ: string) => {
+    const { game, at } = blank([civ, 'egypt'], { cityStates: 3 });
+    const css = game.players.filter((x) => x.cityState);
+    (['maritime', 'cultured', 'religious'] as const).forEach((k, i) => {
+      css[i].cityState!.kind = k;
+      city(game, css[i].index, at(6 + i * 6, 12));
+    });
+    const p = game.players[0];
+    city(game, 0, at(3, 3));
+    for (const cs of css) p.influence[cs.index] = 40;
+    const food = cityStateBonus(game, p).food;
+    [p.culture, p.faith] = [0, 0];
+    cityStateTurn(game);
+    return { food, culture: p.culture, faith: p.faith };
+  };
+  const siam = gifts('siam');
+  const egypt = gifts('egypt');
+  eq(egypt.food, 1, 'a maritime friend: +1 food');
+  eq(siam.food, 2, 'half again, rounded up, for Siam');
+  eq(siam.culture, Math.ceil(egypt.culture * 1.5), 'culture');
+  eq(siam.faith, Math.ceil(egypt.faith * 1.5), 'faith');
+  ok(egypt.culture > 0 && egypt.faith > 0, 'from cultured and religious friends');
+});
+
+test('Ethiopia: +20% against civs with more cities than its own', () => {
+  const { game, at } = blank(['ethiopia', 'egypt']);
+  war(game, 0, 1);
+  city(game, 0, at(3, 3));
+  city(game, 1, at(20, 3));
+  const mine = unit(game, 'warrior', 0, at(10, 9));
+  const foe = unit(game, 'warrior', 1, at(11, 9));
+  near(strength(game, mine, 'attack', foe, mine.tile), 8, 'as many cities: none');
+  city(game, 1, at(20, 14));
+  near(strength(game, mine, 'attack', foe, mine.tile), 8 * 1.2, 'they have more');
+  near(strength(game, foe, 'attack', mine, foe.tile), 8, 'not for them');
+});
+
+test('the Celts: +1 faith from each forest their cities work', () => {
+  const faith = (civ: string) => {
+    const { game, at } = blank([civ, 'egypt']);
+    const c = city(game, 0, at(6, 6));
+    const t = neighbours(game.grid, c.tile)[0];
+    game.tiles[t].feature = 'forest';
+    return workedYields(game, c, t).faith ?? 0;
+  };
+  eq(faith('celts') - faith('egypt'), 1, 'a faith more');
+});
+
+test('Carthage: a free Lighthouse (its Cothon), with no upkeep, in every coastal city it founds', () => {
+  const found = (civ: string, coast: boolean) => {
+    const { game, at } = blank([civ, 'egypt']);
+    if (coast) game.tiles[neighbours(game.grid, at(6, 6))[0]].terrain = 'coast';
+    const c = city(game, 0, at(6, 6));
+    return { buildings: c.buildings, upkeep: goldUpkeep(game, game.players[0]).buildings };
+  };
+  const carthage = found('carthage', true);
+  ok(carthage.buildings.includes('cothon'), 'a Cothon by the sea');
+  eq(carthage.upkeep, 0, 'that costs nothing');
+  ok(!found('carthage', false).buildings.includes('cothon'), 'none inland');
+  ok(!found('egypt', true).buildings.some((b) => b === 'lighthouse'), 'none for others');
+});
+
+test('Poland: a free social policy on entering each new era', () => {
+  const classical = TECH_LIST.find((t) => t.col > 2 && t.col <= 4)!.id;
+  const run = (civ: string) => {
+    const { game } = blank([civ, 'egypt']);
+    const p = game.players[0];
+    p.culture = 0;
+    learn(game, p, 'pottery');
+    const ancient = p.culture;
+    const cost = policyCost(game, p);
+    learn(game, p, classical);
+    return { ancient, classical: p.culture, cost };
+  };
+  const poland = run('poland');
+  eq(poland.ancient, 0, 'nothing within the Ancient Era');
+  eq(poland.classical, poland.cost, 'a policy’s culture on reaching the Classical');
+  eq(run('egypt').classical, 0, 'nothing for others');
+});
+
+test('the Netherlands: +2 gold from sea trade routes; a luxury traded away keeps half its happiness', () => {
+  const { game, at } = blank(['netherlands', 'egypt']);
+  const mine = city(game, 0, at(3, 3), { pop: 4 });
+  const theirs = city(game, 1, at(12, 3), { pop: 4 });
+  const gold = (p: number, sea: boolean) => routeYield(game, game.players[p], { from: p ? theirs.id : mine.id, to: p ? mine.id : theirs.id, turns: 10, sea }).gold;
+  eq(gold(0, true) - gold(0, false) - (gold(1, true) - gold(1, false)), 2, 'two more by sea');
+  const traded = (civ: string) => {
+    const w = blank([civ, 'babylon']);
+    const c = city(w.game, 0, w.at(3, 3));
+    city(w.game, 1, w.at(20, 3));
+    Object.assign(w.game.tiles[neighbours(w.game.grid, c.tile)[0]], { resource: 'silver', improvement: 'mine' });
+    const p = w.game.players[0];
+    const before = happiness(w.game, p);
+    makeDeal(w.game, { from: 0, to: 1, items: [{ kind: 'luxury', from: 0, resource: 'silver' }] });
+    return before - happiness(w.game, p);
+  };
+  eq(traded('egypt'), 4, 'others lose all of it');
+  eq(traded('netherlands'), 2, 'the Dutch half');
+  const polder = city(game, 0, at(6, 12));
+  game.tiles[polder.tile].river = true;
+  const [marsh, flood] = neighbours(game.grid, polder.tile);
+  game.tiles[marsh].feature = 'marsh';
+  Object.assign(game.tiles[flood], { terrain: 'desert', feature: 'floodplains' });
+  const before = [workedYields(game, polder, marsh).food ?? 0, workedYields(game, polder, flood).food ?? 0];
+  polder.buildings.push('polder');
+  eq((workedYields(game, polder, marsh).food ?? 0) - before[0], 2, 'the Polder: +2 food from a marsh');
+  eq((workedYields(game, polder, flood).food ?? 0) - before[1], 1, '+1 from flood plains');
+});
+
+test('Polynesia: land units take to the sea and cross the ocean from the start, and see further there', () => {
+  const step = (civ: string, terrain: 'coast' | 'ocean') => {
+    const { game, at } = blank([civ, 'egypt']);
+    game.tiles[at(6, 6)].terrain = terrain;
+    const u = unit(game, 'warrior', 0, at(5, 6));
+    return stepCost(game, u, at(5, 6), at(6, 6));
+  };
+  ok(Number.isFinite(step('polynesia', 'coast')) && Number.isFinite(step('polynesia', 'ocean')), 'onto the coast and the ocean');
+  eq(step('egypt', 'coast'), Infinity, 'not others before Optics');
+  const { game, at } = blank(['polynesia', 'egypt']);
+  for (const t of [at(6, 6), at(16, 6)]) game.tiles[t].terrain = 'ocean';
+  const mine = unit(game, 'warrior', 0, at(6, 6), { embarked: true });
+  const theirs = unit(game, 'warrior', 1, at(16, 6), { embarked: true });
+  eq(unitSight(game, mine) - unitSight(game, theirs), 1, 'a tile further at sea');
+});
+
+test('Denmark: taking to the sea and landing take a single move; a move more at sea', () => {
+  const steps = (civ: string) => {
+    const { game, at } = blank([civ, 'egypt']);
+    game.players[0].techs.push('optics');
+    game.tiles[at(6, 6)].terrain = 'coast';
+    const u = unit(game, 'warrior', 0, at(5, 6));
+    const out = [stepCost(game, u, at(5, 6), at(6, 6)), stepCost(game, u, at(6, 6), at(5, 6))];
+    u.embarked = true;
+    return { out, moves: maxMoves(game, u) };
+  };
+  eq(steps('denmark').out.join(), '1,1', 'a move each way');
+  ok(steps('egypt').out.every((c) => c >= 99), 'every move for others');
+  eq(steps('denmark').moves - steps('egypt').moves, 1, 'a move more at sea');
+});
+
+test('the new unique units: the Mehal Sefari at home, Pictish Warriors abroad, the Maori war dance, Berserkers from the sea', () => {
+  const { game, at } = blank(['ethiopia', 'celts']);
+  war(game, 0, 1);
+  const home = city(game, 0, at(3, 8));
+  city(game, 1, at(21, 8));
+  const inLand = neighbours(game.grid, home.tile)[0];
+  const sefari = unit(game, 'mehal_sefari', 0, inLand);
+  const foe = unit(game, 'rifleman', 1, neighbours(game.grid, inLand).find((t) => t !== home.tile && game.tiles[t].owner !== 1 && !game.units.some((u) => u.tile === t))!);
+  near(strength(game, sefari, 'attack', foe, sefari.tile), 34 * 1.25, 'Mehal Sefari: +25% in its own land');
+  const away = unit(game, 'mehal_sefari', 0, at(12, 14));
+  near(strength(game, away, 'attack', unit(game, 'rifleman', 1, at(13, 14)), away.tile), 34, 'none away');
+  const pict = unit(game, 'pictish_warrior', 1, at(12, 2));
+  near(strength(game, pict, 'attack', unit(game, 'warrior', 0, at(13, 2)), pict.tile), 11 * 1.2, 'Pictish Warrior: +20% outside its land');
+  const w = blank(['polynesia', 'denmark']);
+  war(w.game, 0, 1);
+  const maori = unit(w.game, 'maori_warrior', 0, w.at(10, 8));
+  const dane = unit(w.game, 'longswordsman', 1, w.at(11, 8));
+  const far = unit(w.game, 'longswordsman', 1, w.at(16, 8));
+  near(strength(w.game, dane, 'attack', maori, dane.tile), 21 * 0.9, 'beside a Maori Warrior: -10%');
+  near(strength(w.game, far, 'attack', unit(w.game, 'warrior', 0, w.at(17, 8)), far.tile), 21, 'none further off');
+  near(strength(w.game, maori, 'attack', dane, maori.tile), 8, 'not for the Maori');
+  const berserker = unit(w.game, 'berserker', 1, w.at(10, 14), { embarked: true });
+  const sword = unit(w.game, 'longswordsman', 1, w.at(14, 14), { embarked: true });
+  near(strength(w.game, berserker, 'attack', unit(w.game, 'warrior', 0, w.at(11, 14)), berserker.tile), 21, 'Berserker: no penalty from the sea');
+  near(strength(w.game, sword, 'attack', unit(w.game, 'warrior', 0, w.at(15, 14)), sword.tile), 21 * 0.5, 'half for others');
 });
 
 // -------------------------------------------------------------------------------------------------

@@ -1,11 +1,11 @@
 import { sizeOf } from '../armies';
 import { allyOf, cityStates } from '../citystates';
-import { atWar, canStand, citiesOf, knows, seesUnit, unitsOf } from '../core';
+import { atWar, canStand, citiesOf, seesUnit, unitsOf } from '../core';
 import { dangerCost, dangerZones, type Danger } from '../danger';
 import { happiness, type CityYields } from '../economy';
 import { apply, eraOf, type Order } from '../game';
 import { distance, neighbours, path, within } from '../hex';
-import { ALL, occupants, stepCost } from '../movement';
+import { ALL, canCrossOcean, canEmbark, occupants, stepCost } from '../movement';
 import { questsFor, type QuestKind } from '../quests';
 import type { City, Game, Player, Unit } from '../state';
 import { teammates } from '../teams';
@@ -205,7 +205,7 @@ export function regions(game: Game): Int32Array {
 export function passable(ctx: Ctx, u: Unit, t: number, passing = false): boolean {
   const { game } = ctx;
   const type = UNITS[u.type];
-  if (!canStand(game, u.type, t) && !(type.domain === 'land' && TERRAINS[game.tiles[t].terrain].water && knows(game.players[u.owner], 'optics'))) return false;
+  if (!canStand(game, u.type, t) && !(type.domain === 'land' && TERRAINS[game.tiles[t].terrain].water && canEmbark(game, u.owner))) return false;
   const city = cityOn(ctx, t);
   if (city && city.owner !== u.owner) return false;
   const m = militaryAt(ctx, t);
@@ -353,8 +353,8 @@ export function landRoute(game: Game, from: number, to: number, by?: Player, foe
  * over the ocean with Astronomy), by the lie of the land alone; null if there's none.
  */
 export function seaRoute(game: Game, p: Player, from: number, to: number): number[] | null {
-  const embark = knows(p, 'optics');
-  const ocean = knows(p, 'astronomy');
+  const embark = canEmbark(game, p.index);
+  const ocean = canCrossOcean(game, p.index);
   return path(game.grid, from, to, (_a, b) => {
     const tile = game.tiles[b];
     if (tile.elevation === 'mountain' || tile.feature === 'ice') return Infinity;

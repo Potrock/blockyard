@@ -347,6 +347,8 @@ export function unitSight(game: Game, u: Unit, civ = game.players[u.owner] ? civ
   const type = UNITS[u.type];
   let s = (type?.sight ?? 2) + fromPromotions(u, 'sight');
   if (type?.abilities?.includes('extra_sight')) s += 1;
+  // (Polynesia's Wayfinding: further at sea.)
+  if (u.embarked && game.players[u.owner] && civOf(game.players[u.owner]).ability.effects.special?.includes('wayfinding')) s += 1;
   if (type) for (const e of civ) for (const x of e.sight ?? []) if (x.domain === type.domain) s += x.sight;
   for (const w of wondersBeside(game, u.tile)) s += w.sight ?? 0;
   return s;
@@ -357,7 +359,8 @@ export function maxMoves(game: Game, u: Unit): number {
   const type = UNITS[u.type];
   const p = game.players[u.owner];
   if (!type || !p) return 0;
-  if (u.embarked) return knows(p, 'compass') ? 3 : 2;
+  // (Denmark's Viking Fury: a move more at sea.)
+  if (u.embarked) return (knows(p, 'compass') ? 3 : 2) + (civOf(p).ability.effects.special?.includes('viking_fury') ? 1 : 0);
   const civ = civEffects(game, p);
   let moves = type.moves + fromPromotions(u, 'moves');
   for (const e of civ) for (const m of e.moves ?? []) if (m.domain === type.domain && (!m.classes || m.classes.includes(type.class))) moves += m.moves;
@@ -430,6 +433,9 @@ function meetSeen(game: Game, p: Player) {
 /** A name for the middle of a sentence ("the Sky Pillar"). */
 export const inSentence = (name: string) => name.replace(/^The /, 'the ');
 
+/** Gold Spain has for finding a natural wonder (before the game's speed; three times as much for the first to find it). */
+export const SEVEN_CITIES_GOLD = 100;
+
 /**
  * Natural wonders a civilization has come to know of, however it did (its units' sight, a map from
  * ruins, satellites), found for good: happier for each (`natureHappiness`), and the first civ to find
@@ -443,15 +449,20 @@ function findWonders(game: Game, p: Player) {
     const found = ((game.found ??= {})[w.id] ??= { tile: t, by: [] });
     if (found.by.includes(p.index)) continue;
     found.by.push(p.index);
+    // (Spain's Seven Cities of Gold: gold for each, three times as much for the first; and twice the happiness.)
+    const spain = civOf(p).ability.effects.special ?? [];
+    const cheer = FOUND_HAPPINESS * (spain.includes('natural_wonders_double') ? 2 : 1);
+    const treasure = spain.includes('natural_wonder_gold') ? Math.floor(SEVEN_CITIES_GOLD * (found.by.length > 1 ? 1 : 3) * speed(game)) : 0;
+    p.gold += treasure;
     if (found.by.length > 1) {
-      note(game, p.index, { text: `You have found ${inSentence(w.name)}, a natural wonder: +${FOUND_HAPPINESS} happiness for good.`, at: t, kind: 'wonder' });
+      note(game, p.index, { text: `You have found ${inSentence(w.name)}, a natural wonder: +${cheer} happiness for good${treasure ? ` and ${treasure} gold` : ''}.`, at: t, kind: 'wonder' });
       continue;
     }
     const golden = Math.floor(FIRST_FINDER_GOLDEN * speed(game));
     const gold = Math.floor((w.finderGold ?? 0) * speed(game));
     p.goldenPoints += golden;
     p.gold += gold;
-    note(game, p.index, { text: `You are the first to find ${inSentence(w.name)}: +${FOUND_HAPPINESS} happiness for good, ${golden} golden age points${gold ? ` and ${gold} gold` : ''}.`, at: t, kind: 'wonder' });
+    note(game, p.index, { text: `You are the first to find ${inSentence(w.name)}: +${cheer} happiness for good, ${golden} golden age points${gold + treasure ? ` and ${gold + treasure} gold` : ''}.`, at: t, kind: 'wonder' });
   }
 }
 

@@ -46,6 +46,16 @@ export const PERSONALITIES: Record<string, Personality> = {
   ottomans: L(6, 6, 7, 6, 5, 6, 6, 7, 5, 6), // Suleiman: a lawgiver's cities and a conqueror's fleets
   zulu: L(5, 2, 10, 4, 3, 3, 4, 3, 2, 10), // Shaka: war, always
   inca: L(7, 6, 4, 7, 5, 5, 6, 6, 4, 4), // Pachacuti: towns in the hills, roads between them
+  america: L(9, 5, 5, 6, 7, 6, 4, 7, 5, 6), // George Washington: a continent settled, then made rich
+  spain: L(7, 6, 6, 5, 4, 5, 9, 7, 4, 7), // Isabella: faith, and the gold of new lands
+  siam: L(5, 6, 4, 6, 5, 7, 6, 5, 10, 4), // Ramkhamhaeng: a father to the city-states
+  ethiopia: L(5, 5, 4, 9, 5, 5, 9, 4, 5, 6), // Haile Selassie: faith, and a defence that never gives
+  celts: L(6, 4, 6, 5, 4, 6, 10, 4, 4, 6), // Boudicca: the old gods of the forest, and a fight for them
+  carthage: L(7, 5, 5, 5, 5, 4, 4, 9, 5, 6), // Dido: harbours and trade all round the sea
+  poland: L(6, 5, 7, 6, 5, 8, 5, 5, 5, 6), // Casimir III: policies, and winged horsemen
+  netherlands: L(5, 5, 3, 6, 6, 6, 4, 10, 6, 4), // William of Orange: merchants and the sea
+  polynesia: L(9, 6, 5, 4, 4, 7, 5, 5, 4, 6), // Kamehameha: island after island
+  denmark: L(6, 3, 9, 3, 4, 4, 5, 6, 3, 9), // Harald Bluetooth: raids from the sea
 };
 
 /** A city-state: keeps its one city and defends it. */

@@ -51,6 +51,9 @@ export function standing(game: Game, p: Player, cs: number): Standing {
   return influenceOf(p, cs) >= FRIEND ? 'friend' : 'neutral';
 }
 
+/** How much more food, culture and faith a civ has of its city-state friends and allies: half again for Siam (each gift rounded up). */
+const gifts = (p: Player, n: number) => (civOf(p).ability.effects.special?.includes('city_state_gifts_50') ? Math.ceil(n * 1.5) : n);
+
 /** What being a friend or ally of each city-state is worth this turn: food in every city, happiness. */
 export function cityStateBonus(game: Game, p: Player): { food: number; happiness: number } {
   let food = 0;
@@ -59,7 +62,7 @@ export function cityStateBonus(game: Game, p: Player): { food: number; happiness
     const s = standing(game, p, cs.index);
     if (s !== 'friend' && s !== 'ally') continue;
     const k = cs.cityState!.kind;
-    if (k === 'maritime') food += s === 'ally' ? 2 : 1;
+    if (k === 'maritime') food += gifts(p, s === 'ally' ? 2 : 1);
     if (k === 'mercantile') happiness += s === 'ally' ? 3 : 2;
   }
   return { food, happiness };
@@ -122,15 +125,15 @@ export function cityStateGives(game: Game, p: Player, cs: Player, as: 'friend' |
   const gives = (() => {
     switch (cs.cityState?.kind) {
       case 'maritime':
-        return `+${ally ? 2 : 1} food in every city`;
+        return `+${gifts(p, ally ? 2 : 1)} food in every city`;
       case 'cultured':
-        return `+${(ally ? 6 : 3) * era} culture a turn`;
+        return `+${gifts(p, (ally ? 6 : 3) * era)} culture a turn`;
       case 'militaristic':
         return `a unit about every ${Math.round((ally ? 14 : 20) / often)} turns`;
       case 'mercantile':
         return `+${ally ? 3 : 2} happiness`;
       case 'religious':
-        return `+${ally ? 4 : 2} faith a turn`;
+        return `+${gifts(p, ally ? 4 : 2)} faith a turn`;
       default:
         return '';
     }
@@ -299,8 +302,8 @@ export function cityStateTurn(game: Game) {
       if (s !== 'friend' && s !== 'ally') continue;
       const k = cs.cityState!.kind;
       const era = 1 + Math.floor(p.techs.length / 10);
-      if (k === 'cultured') p.culture += (s === 'ally' ? 6 : 3) * era;
-      if (k === 'religious') p.faith += s === 'ally' ? 4 : 2;
+      if (k === 'cultured') p.culture += gifts(p, (s === 'ally' ? 6 : 3) * era);
+      if (k === 'religious') p.faith += gifts(p, s === 'ally' ? 4 : 2);
       const often = has(effects, 'cs_units_often') ? 2 : 1;
       if (k === 'militaristic' && game.turn % Math.round((s === 'ally' ? 14 : 20) / often) === cs.index % 7) {
         const home = capitalOf(game, p.index);

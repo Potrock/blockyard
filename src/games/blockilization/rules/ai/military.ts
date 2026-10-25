@@ -1,9 +1,9 @@
 import { sizeOf } from '../armies';
 import { canFire, canPillage, cityFireStrength, cityMaxHp, cityStrength, rangeOf, strength } from '../combat';
-import { canStand, citiesOf, knows } from '../core';
+import { canStand, citiesOf } from '../core';
 import { weighing } from '../economy';
 import { neighbours, within } from '../hex';
-import { ALL, stepCost } from '../movement';
+import { ALL, canCrossOcean, canEmbark, stepCost } from '../movement';
 import type { City, Unit } from '../state';
 import { teamOf } from '../teams';
 import { TERRAINS } from '../terrain';
@@ -607,8 +607,8 @@ function explore(ctx: Ctx, u: Unit) {
  */
 export function exploreAbroad(ctx: Ctx, u: Unit): boolean {
   const { game, p } = ctx;
-  if (!knows(p, 'optics')) return false;
-  const ocean = knows(p, 'astronomy');
+  if (!canEmbark(game, p.index)) return false;
+  const ocean = canCrossOcean(game, p.index);
   const edge = unknownEdge(ctx);
   let best = -1;
   let bestScore = Infinity;

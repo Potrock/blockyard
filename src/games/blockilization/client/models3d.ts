@@ -53,6 +53,8 @@ const BY_TYPE: Partial<Record<string, ModelId>> = {
   landship: 'u_landship', tank: 'u_tank', modern_armor: 'u_armor', giant_death_robot: 'u_robot', helicopter_gunship: 'u_heli',
   triplane: 'u_triplane', great_war_bomber: 'u_oldbomber', fighter: 'u_fighter', jet_fighter: 'u_fighter', bomber: 'u_bomber', stealth_bomber: 'u_stealth', guided_missile: 'u_missile', nuclear_missile: 'u_nuke', atomic_bomb: 'u_nuke',
   legion: 'u_sword', hoplite: 'u_spear', samurai: 'u_longsword', longbowman: 'u_bow', keshik: 'u_horse', janissary: 'u_musket', impi: 'u_spear', slinger: 'u_bow',
+  minuteman: 'u_musket', conquistador: 'u_knight', naresuans_elephant: 'u_elephant', mehal_sefari: 'u_rifle', pictish_warrior: 'u_spear', winged_hussar: 'u_cavalry', maori_warrior: 'u_warrior', berserker: 'u_longsword',
+  quinquereme: 'u_galley', sea_beggar: 'u_sail',
   trireme: 'u_galley', galleass: 'u_galley', turtle_ship: 'u_turtle', caravel: 'u_sail', frigate: 'u_sail', privateer: 'u_sail', ironclad: 'u_ironclad',
   destroyer: 'u_warship', battleship: 'u_warship', missile_cruiser: 'u_warship', submarine: 'u_sub', nuclear_submarine: 'u_sub', carrier: 'u_carrier',
 };

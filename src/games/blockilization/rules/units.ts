@@ -63,6 +63,14 @@ export type Ability =
   | 'discover_tech'
   | 'kill_heal'
   | 'jungle_fighter'
+  /** Fighting in its own land (Ethiopia's Mehal Sefari). */
+  | 'homeland'
+  /** Fighting outside its own land (the Celts' Pictish Warrior). */
+  | 'foreign_lands'
+  /** Enemies next to it fight worse (Polynesia's Maori Warrior). */
+  | 'haka'
+  /** Attacks from the sea and across rivers as from the land (Denmark's Berserker). */
+  | 'amphibious'
   | 'political_treatise'
   | 'withdraw';
 
@@ -208,6 +216,16 @@ export const UNIT_LIST: UnitType[] = [
   U({ id: 'janissary', name: 'Janissary', class: 'gun', cost: 150, strength: 26, moves: 2, tech: 'gunpowder', obsolete: 'rifling', upgrade: 'rifleman', civ: 'ottomans', replaces: 'musketman', abilities: ['kill_heal'] }),
   U({ id: 'impi', name: 'Impi', class: 'melee', cost: 90, strength: 16, moves: 3, tech: 'civil_service', obsolete: 'metallurgy', upgrade: 'lancer', civ: 'zulu', replaces: 'pikeman', abilities: ['bonus_vs_mounted'] }),
   U({ id: 'slinger', name: 'Slinger', class: 'ranged', cost: 35, strength: 5, ranged: 7, range: 2, moves: 2, tech: 'archery', obsolete: 'machinery', upgrade: 'composite_bowman', civ: 'inca', replaces: 'archer' }),
+  U({ id: 'minuteman', name: 'Minuteman', class: 'gun', cost: 150, strength: 24, moves: 2, tech: 'gunpowder', obsolete: 'rifling', upgrade: 'rifleman', civ: 'america', replaces: 'musketman', abilities: ['ignore_terrain'] }),
+  U({ id: 'conquistador', name: 'Conquistador', class: 'mounted', cost: 120, strength: 20, moves: 4, tech: 'chivalry', obsolete: 'military_science', upgrade: 'cavalry', resource: 'horses', civ: 'spain', replaces: 'knight', abilities: ['no_terrain_defense', 'withdraw', 'extra_sight'] }),
+  U({ id: 'naresuans_elephant', name: "Naresuan's Elephant", class: 'mounted', cost: 120, strength: 25, moves: 3, tech: 'chivalry', obsolete: 'military_science', upgrade: 'cavalry', civ: 'siam', replaces: 'knight', abilities: ['no_terrain_defense'] }),
+  U({ id: 'mehal_sefari', name: 'Mehal Sefari', class: 'gun', cost: 225, strength: 34, moves: 2, tech: 'rifling', obsolete: 'replaceable_parts', upgrade: 'great_war_infantry', civ: 'ethiopia', replaces: 'rifleman', abilities: ['homeland'] }),
+  U({ id: 'pictish_warrior', name: 'Pictish Warrior', class: 'melee', cost: 56, strength: 11, moves: 2, tech: 'bronze_working', obsolete: 'civil_service', upgrade: 'pikeman', civ: 'celts', replaces: 'spearman', abilities: ['bonus_vs_mounted', 'foreign_lands'] }),
+  U({ id: 'quinquereme', name: 'Quinquereme', class: 'naval_melee', domain: 'sea', cost: 56, strength: 13, moves: 4, tech: 'sailing', obsolete: 'astronomy', upgrade: 'caravel', civ: 'carthage', replaces: 'trireme', abilities: ['coast_only'] }),
+  U({ id: 'winged_hussar', name: 'Winged Hussar', class: 'mounted', cost: 185, strength: 30, moves: 5, tech: 'metallurgy', obsolete: 'combined_arms', upgrade: 'anti_tank_gun', resource: 'horses', civ: 'poland', replaces: 'lancer', abilities: ['no_terrain_defense', 'penalty_vs_cities', 'bonus_vs_mounted'] }),
+  U({ id: 'sea_beggar', name: 'Sea Beggar', class: 'naval_melee', domain: 'sea', cost: 150, strength: 27, moves: 5, tech: 'navigation', obsolete: 'combustion', upgrade: 'destroyer', civ: 'netherlands', replaces: 'privateer', abilities: ['heal_adjacent'] }),
+  U({ id: 'maori_warrior', name: 'Maori Warrior', class: 'melee', cost: 40, strength: 8, moves: 2, obsolete: 'metal_casting', upgrade: 'swordsman', civ: 'polynesia', replaces: 'warrior', abilities: ['haka'] }),
+  U({ id: 'berserker', name: 'Berserker', class: 'melee', cost: 120, strength: 21, moves: 3, tech: 'steel', obsolete: 'gunpowder', upgrade: 'musketman', resource: 'iron', civ: 'denmark', replaces: 'longswordsman', abilities: ['amphibious'] }),
 ];
 
 export const UNITS: Record<string, UnitType> = Object.fromEntries(UNIT_LIST.map((u) => [u.id, u]));

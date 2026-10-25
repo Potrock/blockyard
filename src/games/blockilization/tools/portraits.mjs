@@ -362,6 +362,150 @@ const BUSTS = [
       for (let y = 0; y < 6; y += 2) for (let x = -8; x < 8; x += 2) m.box([x, y, 4], [x + 1, y + 1, 5], (x + y) % 4 ? 'gold' : 'redDark');
     },
   }),
+  bust('l_america', {
+    robe: 'blueDark',
+    skin: 'skin3',
+    hair: 'hairWhite',
+    extra: (m) => {
+      // Powdered hair rolled at the sides and tied back with a black ribbon; a blue coat with buff facings, a white stock and gold epaulettes.
+      m.box([-7, 12, -3], [-5, 14, 1], 'hairWhite').box([5, 12, -3], [7, 14, 1], 'hairWhite');
+      m.box([-1, 11, -7], [1, 17, -5], 'hairWhite').box([-2, 15, -8], [2, 17, -7], 'black');
+      m.box([-5, 0, 4], [-2, 7, 5], 'sand').box([2, 0, 4], [5, 7, 5], 'sand');
+      m.box([-2, 5, 4], [2, 9, 5], 'white');
+      m.box([-11, 6, -3], [-8, 8, 3], 'gold').box([8, 6, -3], [11, 8, 3], 'gold');
+      for (let y = 1; y < 5; y += 2) m.set(-2, y, 5, 'gold').set(1, y, 5, 'gold');
+    },
+  }),
+  bust('l_spain', {
+    robe: 'crimson',
+    skin: 'skin3',
+    hair: 'orange',
+    extra: (m) => {
+      // A white veil framing the face and falling to the shoulders, a gold crown on it; a gold cross on the gown.
+      m.box([-6, 16, -6], [6, 21, 4], 'white').box([-6, 19, 4], [6, 21, 5], 'white');
+      m.box([-6, 8, -6], [-5, 16, 4], 'white').box([5, 8, -6], [6, 16, 4], 'white').box([-6, 7, -7], [6, 19, -6], 'white');
+      m.box([-5, 21, -5], [5, 23, 5], 'gold');
+      for (const x of [-5, -1, 3]) m.box([x, 23, 3], [x + 2, 25, 5], 'gold');
+      m.box([-1, 21, 5], [1, 22, 6], 'redDark');
+      m.box([-9, 6, -4], [9, 7, 5], 'gold');
+      m.box([-1, 0, 4], [1, 5, 5], 'gold').box([-2, 3, 4], [2, 4, 5], 'gold');
+    },
+  }),
+  bust('l_siam', {
+    robe: 'white',
+    skin: 'skin2',
+    nose: 'skin4',
+    hair: 'black',
+    extra: (m) => {
+      // The chada: a gold crown rising in tiers to a spire, wings over the ears; a broad jewelled gold collar.
+      m.box([-6, 17, -6], [6, 19, 6], 'gold');
+      m.box([-5, 19, -5], [5, 21, 5], 'gold').box([-4, 21, -4], [4, 23, 4], 'sash').box([-3, 23, -3], [3, 25, 3], 'gold');
+      m.box([-2, 25, -2], [2, 27, 2], 'sash').box([-1, 27, -1], [1, 32, 1], 'gold');
+      for (const x of [-4, -1, 2]) m.set(x, 18, 6, 'jade');
+      m.box([-7, 13, -2], [-6, 18, 1], 'gold').box([6, 13, -2], [7, 18, 1], 'gold');
+      m.box([-9, 5, -4], [9, 8, 5], 'gold');
+      for (const x of [-7, -4, -1, 2, 5]) m.set(x, 6, 5, x % 2 ? 'redDark' : 'jade');
+    },
+  }),
+  bust('l_ethiopia', {
+    robe: 'khaki',
+    skin: 'skin4',
+    nose: 'horseDark',
+    hair: 'black',
+    beard: 'black',
+    extra: (m) => {
+      // A peaked officer's cap with a gold badge; a dress uniform with a sash and rows of medals.
+      m.box([-6, 18, -6], [6, 21, 5], 'khaki').box([-6, 17, -6], [6, 18, 5], 'black');
+      m.box([-5, 17, 5], [5, 18, 7], 'black').box([-1, 19, 5], [1, 21, 6], 'gold');
+      for (let y = 0; y < 6; y++) m.box([4 - y * 2, y, 4], [6 - y * 2, y + 1, 5], 'green');
+      for (const [x, c] of [[2, 'gold'], [3, 'red'], [4, 'green'], [5, 'gold']]) m.set(x, 5, 5, c).set(x, 4, 5, c);
+      m.box([-9, 6, -4], [-7, 8, 3], 'gold').box([7, 6, -4], [9, 8, 3], 'gold');
+    },
+  }),
+  bust('l_celts', {
+    robe: 'green',
+    skin: 'skin3',
+    hair: 'orange',
+    extra: (m) => {
+      // Long red hair falling past the shoulders; blue woad on the cheeks; a gold torc; a cloak in a check.
+      m.box([-7, 3, -6], [-5, 18, 2], 'orange').box([5, 3, -6], [7, 18, 2], 'orange').box([-6, 2, -7], [6, 19, -5], 'orange');
+      for (const [x, y] of [[-4, 10], [-4, 11], [3, 10], [3, 11]]) m.set(x, y, 4, 'blue');
+      m.box([-4, 8, 3], [4, 9, 6], 'gold').box([-4, 8, 5], [-3, 10, 6], 'gold').box([3, 8, 5], [4, 10, 6], 'gold');
+      for (let y = 0; y < 7; y++) for (let x = -9; x < 9; x++) if ((x + 9) % 4 === 0 || y % 4 === 0) m.set(x, y, 4, (x + y) % 2 ? 'redDark' : 'cypress');
+    },
+  }),
+  bust('l_carthage', {
+    robe: 'purple',
+    skin: 'skin2',
+    nose: 'skin4',
+    hair: 'black',
+    extra: (m) => {
+      // Curled black hair falling down her back under a gold diadem; gold earrings; a crescent of gold on a purple robe edged in gold.
+      m.box([-7, 6, -6], [-5, 17, 1], 'black').box([5, 6, -6], [7, 17, 1], 'black').box([-6, 5, -7], [6, 19, -5], 'black');
+      for (const [x, y] of [[-7, 8], [-7, 11], [-7, 14], [6, 9], [6, 12], [6, 15]]) m.set(x, y, 1, 'black');
+      m.box([-6, 17, -6], [6, 18, 5], 'gold').box([-1, 17, 5], [1, 19, 6], 'gold');
+      m.box([-7, 9, 0], [-6, 11, 1], 'gold').box([6, 9, 0], [7, 11, 1], 'gold');
+      m.box([-9, 6, -4], [9, 7, 5], 'gold');
+      m.box([-2, 3, 4], [2, 4, 5], 'gold').set(-2, 4, 4, 'gold').set(1, 4, 4, 'gold');
+    },
+  }),
+  bust('l_poland', {
+    robe: 'red',
+    skin: 'skin3',
+    hair: 'hair',
+    beard: 'hair',
+    extra: (m) => {
+      // Long hair and a full beard under a closed gold crown topped with a cross; an ermine collar on a red robe.
+      m.box([-7, 8, -6], [-5, 16, 2], 'hair').box([5, 8, -6], [7, 16, 2], 'hair').box([-6, 7, -7], [6, 18, -5], 'hair');
+      m.box([-5, 19, -5], [5, 21, 5], 'gold');
+      for (const [x, z] of [[-5, 3], [-1, 3], [3, 3], [-5, -5], [3, -5]]) m.box([x, 21, z], [x + 2, 23, z + 2], 'gold');
+      m.box([-1, 21, -4], [1, 25, 4], 'gold').box([-1, 25, -1], [1, 28, 1], 'gold').box([-2, 26, -1], [2, 27, 1], 'gold');
+      m.set(-4, 20, 5, 'red').set(0, 20, 5, 'jade').set(3, 20, 5, 'red');
+      m.box([-9, 5, -4], [9, 8, 5], 'ermine');
+      for (const x of [-7, -3, 2, 6]) m.set(x, 6, 4, 'black');
+    },
+  }),
+  bust('l_netherlands', {
+    robe: 'black',
+    skin: 'skin3',
+    hair: 'hair',
+    beard: 'hair',
+    extra: (m) => {
+      // A flat black cap; a white ruff; an orange sash across a black doublet.
+      m.box([-6, 18, -6], [6, 20, 6], 'black').box([-5, 20, -5], [5, 21, 5], 'black');
+      m.box([-7, 6, -4], [7, 8, 5], 'white').box([-6, 8, -3], [6, 9, 4], 'white');
+      for (let y = 0; y < 6; y++) m.box([-6 + y * 2, y, 4], [-3 + y * 2, y + 1, 5], 'orange');
+    },
+  }),
+  bust('l_polynesia', {
+    robe: 'gold',
+    skin: 'skin4',
+    nose: 'horseDark',
+    hair: 'black',
+    extra: (m) => {
+      // The feathered helmet with its crest; a cloak of yellow and red feathers.
+      m.box([-6, 17, -6], [6, 20, 5], 'gold').box([-5, 20, -5], [5, 21, 4], 'gold');
+      m.box([-1, 20, -6], [1, 25, 4], 'red').box([-1, 18, 5], [1, 20, 6], 'red');
+      m.box([-6, 17, 4], [6, 18, 5], 'red');
+      for (let y = 0; y < 8; y++) for (let x = -9; x < 9; x++) if (Math.abs(x + 0.5) < y - 1 && y < 7) m.set(x, y, 4, 'red');
+      m.box([-9, 7, -4], [9, 8, 5], 'red');
+    },
+  }),
+  bust('l_denmark', {
+    robe: 'leather',
+    skin: 'skin3',
+    hair: 'straw',
+    beard: 'straw',
+    extra: (m) => {
+      // An iron helmet with a ridge and a nose guard; a great fair beard, braided; a fur collar fastened with a blue stone.
+      m.box([-6, 17, -6], [6, 21, 5], 'iron').box([-5, 21, -5], [5, 22, 4], 'iron').box([-1, 21, -6], [1, 23, 5], 'steel');
+      m.box([-6, 16, 4], [6, 17, 5], 'steel').box([-1, 14, 5], [1, 17, 6], 'steel');
+      m.box([-7, 8, -5], [-5, 16, 1], 'straw').box([5, 8, -5], [7, 16, 1], 'straw');
+      m.box([-2, 4, 5], [-1, 7, 6], 'straw').box([1, 4, 5], [2, 7, 6], 'straw');
+      m.box([-9, 5, -4], [9, 8, 5], 'hairGrey');
+      m.box([-1, 5, 5], [1, 7, 6], 'nemes');
+    },
+  }),
 ];
 
 /** The leaders' pictures, each in three moods. */

@@ -27,7 +27,7 @@ import { breakFree, release, vassalsTurn } from './vassals';
 import { checkEurekas, killDeeds } from './eurekas';
 import { clanById, clanHarmed, clanHooks, clanProblem, dealWithClan, type ClanAct } from './clans';
 import { merge, mergeProblem, shrink, sizeOf, unitName } from './armies';
-import { canResearch, eraOfCol, ERAS, TECHS } from './techs';
+import { canResearch, eraOfCol, ERA_NAMES, ERAS, TECHS } from './techs';
 import { eraStartOf, scenarioOf, startEraOf } from './starts';
 import { startSequence, waitsFor, warBegun } from './turns';
 import { climateTurn } from './climate';
@@ -364,6 +364,12 @@ export function foundCity(game: Game, owner: number, t: number): City {
       p.freeBuildings![b] = left - 1;
       if (!c.buildings.some((x) => isBuilding(x, b))) c.buildings.push(unitFor(p.civ, b, BUILDINGS));
     }
+  // Carthage: a free Lighthouse (its Cothon) in a city by the sea, with no upkeep.
+  if (civOf(p).ability.effects.special?.includes('free_coastal_lighthouse') && coastal(game, c)) {
+    const id = unitFor(p.civ, 'lighthouse', BUILDINGS);
+    c.buildings.push(id);
+    (c.free ??= []).push(id);
+  }
   if (startEraOf(game.settings) > 0 || scenarioOf(game.settings)) foundedInEra(game, p, c, first);
   assignCitizens(game, c);
   // A bot's new city starts on a Warrior; a person's asks what to build (Civ V's way: a Warrior in the Middle Ages is no help).
@@ -585,6 +591,7 @@ ruinHooks.onRuin = (game, u) => {
 
 /** A tech learned: what it starts (Babylon's free scientist, a free tech's choice). */
 export function learn(game: Game, p: Player, id: string) {
+  const era = eraOf(p);
   if (id === 'future_tech') p.futureTechs++;
   else if (!p.techs.includes(id)) p.techs.push(id);
   delete p.research[id];
@@ -595,6 +602,12 @@ export function learn(game: Game, p: Player, id: string) {
   if (id === 'future_tech' && !p.researching && !Object.keys(TECHS).some((t) => t !== 'future_tech' && canResearch(new Set(p.techs), t))) p.researching = 'future_tech';
   note(game, p.index, { text: `You have discovered ${TECHS[id].name}.`, kind: 'tech' });
   if (id === 'writing' && has(civEffects(game, p), 'scientist_on_writing')) greatPersonBorn(game, p, 'scientist');
+  // Poland's Solidarity: a free social policy for each new era.
+  const eras = eraOf(p) - era;
+  if (eras > 0 && civOf(p).ability.effects.special?.includes('policy_each_era')) {
+    for (let n = 0; n < eras; n++) p.culture += policyCost(game, p, p.policies.length + n);
+    note(game, p.index, { text: `You have entered the ${ERA_NAMES[ERAS[eraOf(p)]]}: Solidarity gives you ${eras > 1 ? `${eras} free social policies` : 'a free social policy'}.`, kind: 'good' });
+  }
   updateVisibility(game, p);
 }
 
