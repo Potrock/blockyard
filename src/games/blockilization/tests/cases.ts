@@ -4,7 +4,7 @@ import { cityHeal } from '../rules/combat';
 import { routeBlockaded } from '../rules/trade';
 import { adviseResearch, adviseWork } from '../advisor';
 import { BUILDINGS } from '../rules/buildings';
-import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, gain, leadership, strength } from '../rules/combat';
+import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, gain, leadership, rangeOf, strength } from '../rules/combat';
 import { CITY_STATES, CIV_LIST } from '../rules/civs';
 import { PERSONALITIES } from '../rules/ai/personality';
 import { UNITS } from '../rules/units';
@@ -31,7 +31,7 @@ import { siteValue } from '../rules/ai/settle';
 import { canEnter, occupants, planPath, stepCost } from '../rules/movement';
 import { adoptable, ALL_POLICIES } from '../rules/policies';
 import { previewAttack, previewCityFire } from '../rules/preview';
-import { promotionsDue } from '../rules/promotions';
+import { promotionsDue, promotionsFor } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
 import { allyOf, cannotBully, cannotCoup, cityStateBonus, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
@@ -73,7 +73,7 @@ import { bombInterceptChance } from '../rules/combat';
 import { bestUnit, ERA_STARTS, SCENARIOS, startEraOf, startWords, techsBefore, turnLimitFor, withScenario } from '../rules/starts';
 import { TECH_LIST } from '../rules/techs';
 import { TURN_CHOICES } from '../rules/state';
-import { eraOf, foundCity } from '../rules/game';
+import { autoPromote, eraOf, foundCity } from '../rules/game';
 import { botAnswer, EMOTES, isEmote, isPing, moodOf, toneOf } from '../rules/chat';
 import { isMilitary } from '../rules/units';
 import { civEffects, has } from '../rules/core';
@@ -3035,6 +3035,30 @@ test('map generation: Horses and Iron within four tiles of every civ’s start, 
   ok(coal >= starts * 0.9 && oil >= starts * 0.9, `Coal (${coal}) and Oil (${oil}) within reach of nearly all ${starts} starts`);
 });
 
+test('map generation: Aluminum and Uranium across every map, as in Civ V (about as much Aluminum as Iron, Uranium about half), and most city-states with a little Coal, Oil or Aluminum beside them', () => {
+  const total = { iron: 0, aluminum: 0, uranium: 0 };
+  let cityStates = 0;
+  let supplied = 0;
+  for (const size of ['duel', 'small', 'standard'] as MapSize[])
+    for (const type of ['continents', 'pangaea', 'archipelago', 'fractal'] as const)
+      for (const seed of [1, 2, 3, 4]) {
+        const m = MAP_SIZES[size];
+        const g = { width: m.width, height: m.height, wrap: true };
+        const map = generate(g, seed, type, m.players, m.cityStates);
+        const count = (id: string) => map.tiles.filter((t) => t.resource === id).length;
+        // (Left to chance before, a small map often had no Aluminum at all.)
+        ok(count('aluminum') > 0 && count('uranium') > 0, `${size} ${type} ${seed}: Aluminum (${count('aluminum')}) and Uranium (${count('uranium')}) somewhere`);
+        for (const id of ['iron', 'aluminum', 'uranium'] as const) total[id] += count(id);
+        for (const cs of map.starts.slice(m.players, m.players + m.cityStates)) {
+          cityStates++;
+          if (within(g, cs, 3).some((t) => ['coal', 'oil', 'aluminum'].includes(map.tiles[t].resource ?? ''))) supplied++;
+        }
+      }
+  ok(total.aluminum >= total.iron * 0.75 && total.aluminum <= total.iron * 1.5, `about as much Aluminum (${total.aluminum}) as Iron (${total.iron})`);
+  ok(total.uranium >= total.aluminum * 0.35 && total.uranium <= total.aluminum * 0.8, `Uranium (${total.uranium}) about half as common as Aluminum`);
+  ok(supplied >= cityStates * 0.7, `most city-states (${supplied} of ${cityStates}) with Coal, Oil or Aluminum beside them`);
+});
+
 test('map generation: an archipelago is many islands, the civs mostly each on their own, each with room for three or four cities', () => {
   for (const wrap of [false, true])
     for (const size of ['small', 'standard', 'large'] as MapSize[]) {
@@ -4293,6 +4317,165 @@ test('a carrier sunk (by a city’s fire, or a strike) loses the aircraft aboard
   ok(apply(game, 1, { t: 'cityFire', city: enemy.id, target: carrier.tile }).ok, 'the city fires');
   ok(!game.units.includes(carrier), 'the carrier is sunk');
   ok(!game.units.includes(fighter), 'its fighter with it');
+});
+
+test('a Guided Missile is spent in its strike', () => {
+  const { game, at } = blank();
+  city(game, 0, at(5, 5));
+  city(game, 1, at(25, 5));
+  war(game, 0, 1);
+  const missile = unit(game, 'guided_missile', 0, at(5, 5));
+  const foe = unit(game, 'machine_gun', 1, at(8, 5));
+  unit(game, 'scout', 0, at(7, 5));
+  updateAllVisibility(game);
+  const r = apply(game, 0, { t: 'attack', unit: missile.id, target: foe.tile });
+  ok(r.ok && foe.hp < 100, 'it strikes');
+  ok(!game.units.includes(missile), 'and is gone');
+  ok(!!r.combat?.[0].died, 'the strike says so');
+});
+
+test('aircraft aboard ships: a Carrier takes three fighters or bombers (not the Stealth Bomber), a Missile Cruiser three missiles, a Nuclear Submarine two', () => {
+  const { game, at } = blank();
+  const home = city(game, 0, at(5, 5));
+  city(game, 1, at(25, 5));
+  for (const c of [6, 7, 8]) for (const r of [4, 5, 6]) if (at(c, r) !== home.tile) game.tiles[at(c, r)].terrain = 'coast';
+  const carrier = unit(game, 'carrier', 0, at(7, 5));
+  const cruiser = unit(game, 'missile_cruiser', 0, at(7, 6));
+  const sub = unit(game, 'nuclear_submarine', 0, at(8, 5));
+  const rebase = (type: string, to: number) => {
+    const a = unit(game, type, 0, home.tile);
+    const r = apply(game, 0, { t: 'rebase', unit: a.id, to });
+    return { a, r };
+  };
+  for (let i = 0; i < 3; i++) {
+    const { a, r } = rebase(i ? 'bomber' : 'fighter', carrier.tile);
+    ok(r.ok && a.carrier === carrier.id, `aircraft ${i + 1} aboard the Carrier`);
+  }
+  const full = rebase('fighter', carrier.tile).r;
+  ok(!full.ok, `a fourth has no room (${full.error})`);
+  const stealth = rebase('stealth_bomber', carrier.tile).r;
+  ok(!stealth.ok && /cities/.test(stealth.error ?? ''), `no Stealth Bomber on a Carrier (${stealth.error})`);
+  ok(!rebase('guided_missile', carrier.tile).r.ok, 'nor a missile');
+  ok(!rebase('fighter', cruiser.tile).r.ok, 'no fighter on a Missile Cruiser');
+  for (let i = 0; i < 3; i++) ok(rebase('guided_missile', cruiser.tile).r.ok, `missile ${i + 1} aboard the Missile Cruiser`);
+  ok(!rebase('guided_missile', cruiser.tile).r.ok, 'a fourth has no room');
+  for (let i = 0; i < 2; i++) ok(rebase(i ? 'nuclear_missile' : 'guided_missile', sub.tile).r.ok, `missile ${i + 1} aboard the Nuclear Submarine`);
+  ok(!rebase('guided_missile', sub.tile).r.ok, 'a third has no room');
+  // Where the ship sails, its missiles go.
+  const aboard = game.units.filter((a) => a.carrier === sub.id);
+  ok(apply(game, 0, { t: 'move', unit: sub.id, to: at(8, 4) }).ok, 'the submarine sails');
+  ok(aboard.every((a) => a.tile === sub.tile), 'its missiles with it');
+});
+
+test('an aircraft rebases between a city and a ship in its port; its view lists where it could rebase to', () => {
+  const { game, at } = blank();
+  const home = city(game, 0, at(5, 5));
+  const other = city(game, 0, at(5, 12));
+  city(game, 1, at(25, 5));
+  game.tiles[at(6, 5)].terrain = 'coast';
+  const fighter = unit(game, 'fighter', 0, home.tile);
+  const stay = apply(game, 0, { t: 'rebase', unit: fighter.id, to: home.tile });
+  ok(!stay.ok && /already/.test(stay.error ?? ''), `nowhere else to be in its own city (${stay.error})`);
+  const carrier = unit(game, 'carrier', 0, home.tile);
+  const bases = () => viewFor(game, game.players[0], null).units.find((u) => u.id === fighter.id)?.bases ?? [];
+  ok(bases().includes(home.tile) && bases().includes(other.tile), `the Carrier in port and the other city are open to it (${bases()})`);
+  ok(apply(game, 0, { t: 'rebase', unit: fighter.id, to: home.tile }).ok && fighter.carrier === carrier.id, 'aboard the Carrier in port');
+  eq(bases().length, 0, 'nothing more this turn');
+  fighter.moves = 1;
+  ok(bases().includes(home.tile), 'next turn, back to the city');
+  ok(apply(game, 0, { t: 'rebase', unit: fighter.id, to: home.tile }).ok && fighter.carrier === undefined, 'back in the city');
+  fighter.moves = 1;
+  const far = city(game, 0, at(24, 14));
+  ok(distance(game.grid, fighter.tile, far.tile) > 16 && !bases().includes(far.tile), 'not a city beyond twice its range');
+  const mine = viewFor(game, game.players[1], null).units.find((u) => u.id === fighter.id);
+  eq(mine?.bases, undefined, 'another’s screen isn’t told');
+});
+
+test('air promotions: open to fighters and bombers; Interception strengthens a fighter against aircraft, Evasion halves what an interception does, Air Range reaches further', () => {
+  const { game, at } = blank();
+  const fighter = unit(game, 'fighter', 0, at(5, 5));
+  const bomber = unit(game, 'bomber', 0, at(5, 5));
+  const sword = unit(game, 'swordsman', 0, at(6, 6));
+  const open = (u: typeof fighter) => promotionsFor(u).map((p) => p.id);
+  ok(open(fighter).includes('interception_1') && open(fighter).includes('air_siege_1'), `a fighter's (${open(fighter)})`);
+  ok(open(bomber).includes('air_siege_1') && !open(bomber).includes('interception_1') && !open(bomber).includes('evasion'), `a bomber's (${open(bomber)})`);
+  ok(!open(sword).some((id) => id.startsWith('air_') || id.startsWith('interception')), 'none for a swordsman');
+  bomber.promotions.push('air_siege_1');
+  ok(open(bomber).includes('evasion'), 'Evasion after Air Siege I');
+  // Taken as any other, by experience.
+  fighter.xp = 10;
+  ok(apply(game, 0, { t: 'promote', unit: fighter.id, promotion: 'interception_1' }).ok, 'a fighter takes Interception I');
+  const plain = unit(game, 'fighter', 0, at(5, 5));
+  const s = (u: typeof fighter) => strength(game, u, 'ranged', bomber, u.tile);
+  ok(Math.abs(s(fighter) / s(plain) - 1.33) < 0.02, `a third stronger against a bomber (${s(fighter)} to ${s(plain)})`);
+  const range = rangeOf(plain);
+  plain.promotions.push('air_range');
+  eq(rangeOf(plain), range + 2, 'Air Range: two further');
+  // A bot's aircraft promote as a fighter or a bomber would.
+  const auto = unit(game, 'fighter', 0, at(5, 5), { xp: 10 });
+  autoPromote(game, auto);
+  eq(auto.promotions[0], 'interception_1', 'a bot’s fighter to Interception');
+  const autoB = unit(game, 'bomber', 0, at(5, 5), { xp: 10 });
+  autoPromote(game, autoB);
+  eq(autoB.promotions[0], 'air_siege_1', 'a bot’s bomber to Air Siege');
+  // Evasion: the same strike, intercepted, with and without it.
+  const intercepted = (promotions: string[]) => {
+    const w = blank();
+    for (const p of w.game.players) p.bot = false;
+    city(w.game, 0, w.at(5, 5));
+    const theirs = city(w.game, 1, w.at(14, 5));
+    war(w.game, 0, 1);
+    unit(w.game, 'fighter', 1, theirs.tile, { stance: 'alert' });
+    const b = unit(w.game, 'bomber', 0, w.at(5, 5), { promotions });
+    unit(w.game, 'scout', 0, w.at(12, 5));
+    w.game.rng = 4242;
+    ok(apply(w.game, 0, { t: 'attack', unit: b.id, target: theirs.tile }).ok, 'the strike');
+    const n = w.game.players[0].notes.find((x) => /was intercepted/.test(x.text));
+    return Number(/\((\d+) damage\)/.exec(n?.text ?? '')?.[1] ?? NaN);
+  };
+  const without = intercepted(['air_siege_1']);
+  const evading = intercepted(['air_siege_1', 'evasion']);
+  ok(without > 0 && Math.abs(evading - without / 2) <= 1, `half the damage (${evading} to ${without})`);
+});
+
+test('a nuclear strike on a Carrier loses its aircraft once, with it', () => {
+  const { game, at } = blank();
+  for (const p of game.players) p.bot = false;
+  techsTo(game, 0, 15);
+  const home = city(game, 0, at(3, 5), { buildings: ['manhattan_project'] });
+  const theirs = city(game, 1, at(12, 5));
+  war(game, 0, 1);
+  game.tiles[at(13, 5)].terrain = 'coast';
+  const carrier = unit(game, 'carrier', 1, at(13, 5), { hp: 20 });
+  // (Wounded, so the blast would finish it off again.)
+  const fighter = unit(game, 'fighter', 1, carrier.tile, { carrier: carrier.id, hp: 20 });
+  const bystander = unit(game, 'worker', 1, at(20, 12));
+  const missile = unit(game, 'nuclear_missile', 0, home.tile);
+  updateAllVisibility(game);
+  ok(apply(game, 0, { t: 'attack', unit: missile.id, target: theirs.tile }).ok, 'the strike');
+  ok(!game.units.includes(carrier) && !game.units.includes(fighter), 'the Carrier and its fighter are lost');
+  ok(game.units.includes(bystander), 'and nothing else (a unit far off) with them');
+  eq(game.players[1].notes.filter((n) => /Fighter/.test(n.text)).length, 1, 'the fighter is lost once');
+});
+
+test('a city burnt to the ground loses the aircraft there; one liberated sends its liberator’s aircraft to another base', () => {
+  const { game, at } = blank(['egypt', 'babylon', 'china'], { size: 'small' });
+  city(game, 0, at(3, 3));
+  const near = city(game, 0, at(3, 9));
+  city(game, 1, at(28, 3));
+  city(game, 2, at(16, 18));
+  const burning = city(game, 0, at(10, 3), { pop: 1 });
+  Object.assign(burning, { founder: 1, takenFrom: 1, razing: 1 });
+  const lost = unit(game, 'fighter', 0, burning.tile);
+  endTurn(game);
+  ok(!game.cities.includes(burning), 'the city is gone');
+  ok(!game.units.includes(lost), 'its fighter with it');
+  // Liberated: it flies to the nearest of its civ's bases in reach.
+  const town = city(game, 0, at(8, 9), { pop: 4 });
+  Object.assign(town, { founder: 2, takenFrom: 1, puppet: true });
+  const flies = unit(game, 'bomber', 0, town.tile);
+  ok(apply(game, 0, { t: 'cityChoice', city: town.id, choice: 'liberate' }).ok, 'liberated');
+  ok(game.units.includes(flies) && flies.tile === near.tile, `the bomber flew to the nearest city (${flies.tile})`);
 });
 
 test('attacking breaks fortifying: a fortified unit that wins and moves in isn’t fortified there', () => {

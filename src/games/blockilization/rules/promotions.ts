@@ -6,7 +6,8 @@ import { UNITS, type UnitClass } from './units';
  * more) it can take one, each class of unit from its own list, some needing another first. Civ V's,
  * the common ones: Shock and Drill (open ground, rough ground), Cover, Accuracy and Barrage for archers
  * and siege, March and Medic, Blitz, Logistics and Range, Formation against horses, Siege against
- * cities, Sentry for sight, and a couple for ships. What each does is data (`combat`, `range`...),
+ * cities, Sentry for sight, a couple for ships, and aircraft's own (Interception, Air Siege, Bombardment,
+ * Air Targeting, Evasion, Air Repair, Air Range). What each does is data (`combat`, `range`...),
  * which the combat, movement and healing rules read; a few are only given (Morale, the Heroic Epic's;
  * Altitude Training, the Cloudcrown's).
  */
@@ -21,9 +22,11 @@ export type PromotionWhen =
   | 'ranged_rough'
   /** Defending against a ranged attack (a unit's or a city's). */
   | 'vs_ranged'
-  /** Fighting mounted units, or ships; attacking a city. */
+  /** Fighting mounted units, land units, ships or aircraft; attacking a city. */
   | 'vs_mounted'
+  | 'vs_land'
   | 'vs_ships'
+  | 'vs_aircraft'
   | 'vs_cities'
   | 'always';
 
@@ -36,11 +39,12 @@ export interface Promotion {
   needs?: string[];
   /** Combat strength percent, and when it counts. */
   combat?: { percent: number; when: PromotionWhen };
-  /** More range, sight and moves; attacks a turn. */
+  /** More range, sight and moves; attacks a turn; less damage from interception, in percent (an aircraft's Evasion). */
   range?: number;
   sight?: number;
   moves?: number;
   attacks?: number;
+  evasion?: number;
   /** Heals even after moving or fighting (March). */
   healsOnTheMove?: boolean;
   /** Units next to it heal this much more (Medic). */
@@ -50,6 +54,7 @@ export interface Promotion {
 const MELEE: UnitClass[] = ['melee', 'gun', 'mounted', 'armor', 'recon'];
 const RANGED: UnitClass[] = ['ranged', 'siege', 'naval_ranged'];
 const NAVAL: UnitClass[] = ['naval_melee', 'naval_ranged', 'submarine', 'carrier'];
+const AIR: UnitClass[] = ['fighter', 'bomber'];
 
 export const PROMOTION_LIST: Promotion[] = [
   { id: 'shock_1', name: 'Shock I', text: '+15% combat strength in open terrain.', classes: MELEE, combat: { percent: 15, when: 'open' } },
@@ -79,6 +84,21 @@ export const PROMOTION_LIST: Promotion[] = [
   { id: 'mobility', name: 'Mobility', text: '+1 move.', classes: ['mounted', 'armor', 'recon', ...NAVAL], needs: ['shock_2'], moves: 1 },
   { id: 'boarding_party', name: 'Boarding Party', text: '+15% against ships.', classes: NAVAL, combat: { percent: 15, when: 'vs_ships' } },
   { id: 'coastal_raider', name: 'Coastal Raider', text: '+20% against cities.', classes: NAVAL, combat: { percent: 20, when: 'vs_cities' } },
+  // Aircraft (Civ V's, the common ones): fighters first to Interception, bombers to Air Siege.
+  { id: 'interception_1', name: 'Interception I', text: '+33% strength against aircraft (intercepting them, or intercepted by them).', classes: ['fighter'], combat: { percent: 33, when: 'vs_aircraft' } },
+  { id: 'interception_2', name: 'Interception II', text: '+33% more against aircraft.', classes: ['fighter'], needs: ['interception_1'], combat: { percent: 33, when: 'vs_aircraft' } },
+  { id: 'interception_3', name: 'Interception III', text: '+33% more against aircraft.', classes: ['fighter'], needs: ['interception_2'], combat: { percent: 33, when: 'vs_aircraft' } },
+  { id: 'air_siege_1', name: 'Air Siege I', text: '+33% strength striking cities.', classes: AIR, combat: { percent: 33, when: 'vs_cities' } },
+  { id: 'air_siege_2', name: 'Air Siege II', text: '+33% more striking cities.', classes: AIR, needs: ['air_siege_1'], combat: { percent: 33, when: 'vs_cities' } },
+  { id: 'air_siege_3', name: 'Air Siege III', text: '+33% more striking cities.', classes: AIR, needs: ['air_siege_2'], combat: { percent: 33, when: 'vs_cities' } },
+  { id: 'bombardment_1', name: 'Bombardment I', text: '+33% strength striking land units.', classes: AIR, combat: { percent: 33, when: 'vs_land' } },
+  { id: 'bombardment_2', name: 'Bombardment II', text: '+33% more striking land units.', classes: AIR, needs: ['bombardment_1'], combat: { percent: 33, when: 'vs_land' } },
+  { id: 'bombardment_3', name: 'Bombardment III', text: '+33% more striking land units.', classes: AIR, needs: ['bombardment_2'], combat: { percent: 33, when: 'vs_land' } },
+  { id: 'air_targeting_1', name: 'Air Targeting I', text: '+33% strength striking ships.', classes: AIR, combat: { percent: 33, when: 'vs_ships' } },
+  { id: 'air_targeting_2', name: 'Air Targeting II', text: '+33% more striking ships.', classes: AIR, needs: ['air_targeting_1'], combat: { percent: 33, when: 'vs_ships' } },
+  { id: 'evasion', name: 'Evasion', text: 'Takes half the damage when intercepted.', classes: ['bomber'], needs: ['air_siege_1'], evasion: 50 },
+  { id: 'air_repair', name: 'Air Repair', text: 'Heals even after flying.', classes: AIR, needs: ['air_siege_1'], healsOnTheMove: true },
+  { id: 'air_range', name: 'Air Range', text: '+2 range (and so +4 to rebase).', classes: AIR, range: 2 },
   { id: 'morale', name: 'Morale', text: '+15% combat strength (from the Heroic Epic).', classes: [], combat: { percent: 15, when: 'always' } },
   { id: 'altitude_training', name: 'Altitude Training', text: '+15% combat strength in rough terrain; heals even after moving or fighting (from the Cloudcrown).', classes: [], combat: { percent: 15, when: 'rough' }, healsOnTheMove: true },
 ];
@@ -102,5 +122,5 @@ export function promotionsFor(u: Unit): Promotion[] {
   return PROMOTION_LIST.filter((p) => p.classes.includes(cls) && !u.promotions.includes(p.id) && (p.needs ?? []).every((n) => u.promotions.includes(n)));
 }
 
-/** The sum of a number its promotions add (range, sight, moves, attacks). */
-export const fromPromotions = (u: Unit, key: 'range' | 'sight' | 'moves' | 'attacks') => u.promotions.reduce((s, id) => s + (PROMOTIONS[id]?.[key] ?? 0), 0);
+/** The sum of a number its promotions add (range, sight, moves, attacks, evasion). */
+export const fromPromotions = (u: Unit, key: 'range' | 'sight' | 'moves' | 'attacks' | 'evasion') => u.promotions.reduce((s, id) => s + (PROMOTIONS[id]?.[key] ?? 0), 0);

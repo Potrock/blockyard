@@ -1,5 +1,6 @@
 import { adviseBuild } from './advisor';
 import { packKnown, packStatic, packYields, type CityInfo, type CityWire, type ClanWire, type DemographicId, type MapWire, type Relation, type SelfWire, type StatsInfo, type UnitWire, type View } from './protocol';
+import { rebaseSpots } from './rules/air';
 import { BUILDINGS } from './rules/buildings';
 import { canPillage, cityMaxHp, cityStrength, strength, type Modifier } from './rules/combat';
 import { atWar, citiesOf, civEffects, has, knows, seesResource, seesUnit, techCost } from './rules/core';
@@ -374,6 +375,7 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
         const home = UNITS[u.type]?.abilities?.includes('trade_route') ? routeHome(game, p!, u) : undefined;
         if (home) w.destinations = tradeDestinations(game, p!, home, UNITS[u.type].domain === 'sea');
         if (canPillage(game, u)) w.pillage = true;
+        if (UNITS[u.type]?.domain === 'air') w.bases = rebaseSpots(game, u);
         if (isMilitary(UNITS[u.type])) {
           const mods: Modifier[] = [];
           w.defence = { strength: Math.round(strength(game, u, 'defend', null, u.tile, mods) * 10) / 10, mods };

@@ -1364,14 +1364,18 @@ function renderUnit(): El | null {
   // (Why the advisor marks no work for it, when it marks none.)
   const quiet = workQuiet();
   if (u.pillage) act('Pillage', { t: 'pillage', unit: u.id }, 'Pillage what stands here: gold, and it heals; the land yields nothing until a worker repairs it', 'axe');
-  // By air: a paratrooper's drop, an airlift between airports; the next click on the map says where.
-  const aim = (order: 'paradrop' | 'airlift') => () => {
+  // By air: a paratrooper's drop, an airlift between airports, an aircraft's rebase; the next click on the map says where.
+  const aim = (order: 'paradrop' | 'airlift' | 'rebase') => () => {
     store.unitAim = store.unitAim?.unit === u.id && store.unitAim.order === order ? null : { unit: u.id, order };
     store.changed++;
   };
   const city = cityAt(u.tile);
   if (type.abilities?.includes('paradrop')) act('Paradrop', aim('paradrop'), `Drop it on empty land you know, within ${PARADROP_RANGE} tiles (from your own land, before it moves)`, 'plane', store.unitAim?.unit === u.id ? '.gold' : '');
   if (type.domain === 'land' && city?.owner === me() && city.buildings?.includes('airport')) act('Airlift', aim('airlift'), 'Fly it to another of your cities with an airport (before it moves)', 'jet', store.unitAim?.unit === u.id ? '.gold' : '');
+  if (type.domain === 'air') {
+    const why = (u.moves ?? 0) <= 0 ? 'It has flown this turn already' : !u.bases?.length ? `None of your cities or ships with room for it within ${reachOf(u) * 2} tiles` : undefined;
+    act('Rebase', aim('rebase'), why ?? `Fly it to one of your cities or ships with room for it, within ${reachOf(u) * 2} tiles (they're outlined in blue)`, 'plane', store.unitAim?.unit === u.id ? '.gold' : '', !!why);
+  }
   // A soldier in (or next to) a friendly city-state's land can be given to it, for influence.
   const cs = [u.tile, ...neighbours(store.grid!, u.tile)].map((t) => store.view!.players[store.known[t]?.owner ?? -1]).find((p) => p?.cityState && !p.war);
   // (Not with another unit on its tile, as the rules' `giftUnit` has it.)
@@ -1412,6 +1416,8 @@ function renderUnit(): El | null {
     ? 'Shift-click more of your units to add them, or shift-drag a box round them (shift-click one in the group to take it out).'
     : store.unitAim?.unit === u.id
     ? `${click(true)} where it should ${store.unitAim.order === 'paradrop' ? 'land' : 'fly to'}${touchScreen() ? '.' : ' (Esc to change your mind).'}`
+    : type.abilities?.includes('nuke')
+    ? `${click(true)} an enemy, or their land, within ${reachOf(u)} tiles to strike there (you'll be asked first), or one of your cities${u.type === 'atomic_bomb' ? ' or Carriers' : ', Missile Cruisers or Nuclear Submarines'} outlined in blue to rebase there. Everyone in the blast must be someone you're at war with.${u.type === 'atomic_bomb' ? ' Fighters and anti-aircraft guns near the target may shoot it down.' : ''}`
     : u.auto === 'work'
     ? 'Automated: it improves your land by itself each turn. Any order takes it back.'
     : u.auto === 'explore'
@@ -1425,7 +1431,7 @@ function renderUnit(): El | null {
       : type.abilities?.includes('combat_bonus_aura')
         ? `${ABILITY_TEXT.combat_bonus_aura} Keep it with your army (it can share a tile with a soldier), out of the enemy's reach.`
       : type.domain === 'air'
-        ? `${click(true)} an enemy within ${reachOf(u)} tiles to strike it (they're ringed in red), or one of your cities or carriers within ${reachOf(u) * 2} to rebase there. Fighters and anti-aircraft guns near a target may intercept.`
+        ? `${click(true)} an enemy within ${reachOf(u)} tiles to strike it (they're ringed in red), or one of your cities or ships outlined in blue to rebase there. Fighters and anti-aircraft guns near a target may intercept.${type.class === 'missile' ? ' The missile is spent in its strike.' : ''}`
       : type.ranged
         ? `Enemies in reach are ringed in red: ${touchScreen() ? 'tap one to see how a shot would go, tap it again to fire' : 'point at one to see how a shot would go, click to fire'}.`
         : type.strength
@@ -2620,7 +2626,11 @@ function renderTip() {
     if (store.unitAim) bits.push(h('div.ln.way', {}, icon('plane', 13), `${click(true)} to ${store.unitAim.order === 'paradrop' ? 'drop' : 'fly'} it here`));
     else {
       bits.push(...work);
-      if (sel && t !== sel.tile && !attackable(sel, t)) {
+      // (An aircraft rebases, rather than going by a way: where it could, or why not.)
+      if (sel && t !== sel.tile && !attackable(sel, t) && UNITS[sel.type]?.domain === 'air') {
+        const base = sel.bases?.includes(t);
+        bits.push(h(`div.ln.way${base ? '' : '.no'}`, {}, icon(base ? 'plane' : 'close', 13), base ? `${click(true)} to rebase it here` : `It rebases only to your cities and ships with room for it, within ${reachOf(sel) * 2} tiles`));
+      } else if (sel && t !== sel.tile && !attackable(sel, t)) {
         const route = previewPath(sel, t);
         bits.push(h(`div.ln.way${route ? '' : '.no'}`, {}, icon(route ? 'moves' : 'close', 13), route ? wayThere(route, sel) : whyNot(sel, t)));
         const walls = route && wallsOnWay(route, sel);

@@ -1,10 +1,11 @@
-import { atWar, citiesOf, knowsOf, nameTo, noteAll, spawnUnit, updateAllVisibility } from './core';
+import { airBase, isAircraft, rebaseRange } from './air';
+import { atWar, citiesOf, knowsOf, nameTo, note, noteAll, spawnUnit, updateAllVisibility } from './core';
 import { assignCitizens } from './economy';
 import { remember, relationsOf } from './diplomacy';
 import { within, distance } from './hex';
 import { canEnter } from './movement';
 import type { City, Game, Player } from './state';
-import { UNIT_LIST } from './units';
+import { UNIT_LIST, UNITS } from './units';
 
 /**
  * Liberating cities, Civ V's (Brave New World): a city taken from a civ that hadn't founded it (it
@@ -45,8 +46,19 @@ export function liberate(game: Game, c: City): string | null {
   c.locked = [];
   for (const tile of game.tiles) if (tile.city === c.id) tile.owner = to.index;
   for (const w of c.wonders ?? []) game.wonders[w] = to.index;
-  // (Its liberator's soldiers step out: it's another's city now, and no one stands in another's city in peace.)
+  // (Its liberator's soldiers step out: it's another's city now, and no one stands in another's city in
+  // peace. Its aircraft fly to the nearest of its bases in reach, or are lost.)
   for (const u of game.units.filter((x) => x.tile === c.tile && x.owner !== to.index)) {
+    if (isAircraft(u)) {
+      const base = within(game.grid, c.tile, rebaseRange(u))
+        .filter((t) => t !== c.tile && !!airBase(game, u.owner, t, u))
+        .sort((a, b) => distance(game.grid, c.tile, a) - distance(game.grid, c.tile, b))[0];
+      if (base === undefined) {
+        game.units.splice(game.units.indexOf(u), 1);
+        note(game, u.owner, { text: `Your ${UNITS[u.type].name} had nowhere to fly to from ${c.name}, and was lost.`, at: c.tile, kind: 'bad' });
+      } else Object.assign(u, { tile: base, carrier: airBase(game, u.owner, base, u)!.carrier?.id, stance: undefined });
+      continue;
+    }
     const out = within(game.grid, c.tile, 3)
       .filter((t) => t !== c.tile && canEnter(game, u, t))
       .sort((a, b) => distance(game.grid, c.tile, a) - distance(game.grid, c.tile, b))[0];

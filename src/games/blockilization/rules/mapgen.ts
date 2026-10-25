@@ -285,6 +285,7 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
   }
   placeNaturalWonders(g, tiles, rng, starts, players);
   strategicBalance(g, tiles, rng, starts.slice(0, players));
+  modernStrategics(g, tiles, rng, starts, starts.slice(players, players + cityStates).filter((t) => t >= 0));
   return { tiles, starts };
 }
 
@@ -344,6 +345,48 @@ function strategicBalance(g: Grid, tiles: Tile[], rng: Rng, starts: number[]) {
     ensure('oil', [...onLand, ...offshore], onLand);
   }
 }
+
+/**
+ * Civ V's modern strategics, the last of a new world's resources: Aluminum about as common across the
+ * land as Iron or Oil (commoner than Oil, in Civ V), Uranium about half as common, each scattered
+ * where it belongs and near no start in particular, so many to the tiles that suit it (as Civ V
+ * counts them, so a map is never without); and three city-states in four a small deposit of Coal,
+ * Oil or Aluminum beside them (Civ V's `AddModernMinorStrategicsToCityStates`). (Left to the roll in
+ * `placeResources` alone they were rare: a small map often had no Aluminum at all, and so no Jet
+ * Fighters, Stealth Bombers, Modern Armor, Hydro Plants or Spaceship Factories.)
+ */
+function modernStrategics(g: Grid, tiles: Tile[], rng: Rng, starts: number[], cityStates: number[]) {
+  const fits = (t: number, id: string) => {
+    const tile = tiles[t];
+    if (tile.resource || tile.ruin || tile.wonder || tile.antiquity || starts.includes(t) || tile.elevation === 'mountain' || tile.feature === 'ice' || tile.feature === 'oasis') return false;
+    return RESOURCES[id].on.some((on) => on === tile.terrain || on === tile.feature || on === tile.elevation);
+  };
+  const place = (t: number, id: string, small = false) => {
+    const [lo, hi] = RESOURCES[id].amount!;
+    tiles[t].resource = id;
+    tiles[t].amount = small ? lo : rng.int(lo, hi);
+  };
+  for (const [id, share] of Object.entries(MODERN_SHARE)) {
+    const spots = tiles.map((_, t) => t).filter((t) => fits(t, id));
+    // (Spread out: none beside another of its kind.)
+    for (let left = Math.ceil(spots.length * share); left > 0 && spots.length; ) {
+      const t = spots.splice(Math.floor(rng.next() * spots.length), 1)[0];
+      if (neighbours(g, t).some((n) => tiles[n].resource === id)) continue;
+      place(t, id);
+      left--;
+    }
+  }
+  for (const cs of cityStates) {
+    const roll = rng.int(0, 3);
+    if (!roll) continue;
+    const id = (['coal', 'oil', 'aluminum'] as const)[roll - 1];
+    const spots = within(g, cs, 3).filter((t) => t !== cs && fits(t, id));
+    if (spots.length) place(rng.pick(spots), id, true);
+  }
+}
+
+/** The share of the tiles free for it that get a deposit, in `modernStrategics`. */
+const MODERN_SHARE = { aluminum: 0.03, uranium: 0.02 };
 
 /** The land tiles joined to a tile by land (mountains included). */
 function landmass(g: Grid, tiles: Tile[], from: number): Set<number> {
