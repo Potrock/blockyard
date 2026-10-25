@@ -1,6 +1,6 @@
 import { unitName } from '../rules/armies';
 import { canFortify, isMilitary, UNITS } from '../rules/units';
-import type { PreviewAsk, UnitWire } from '../protocol';
+import type { CityWire, PreviewAsk, UnitWire } from '../protocol';
 import { cam, centreHere, pick, zoom } from './camera';
 import { flagsIn, hitAt, type Hit } from './overlay';
 import { ask, attackable, cityAt, enemyAt, me, myCity, myUnit, store, unitsAt } from './store';
@@ -15,9 +15,12 @@ import { closePinMenu, openPinMenu } from './pins';
 import { chatOpen, pingTile, toggleChat } from './chat';
 import { workAt, workTip } from './workadvice';
 import { openClans } from './clans';
+import { openCityState } from './citystates';
+import { openDiplomacy } from './diplomacy';
 
 /**
- * The mouse, a finger and the keyboard on the map: a click (or tap) selects a unit or opens a city, a
+ * The mouse, a finger and the keyboard on the map: a click (or tap) selects a unit or opens a city
+ * (another's, with nothing of yours selected: its city-state's card, or its leader, to talk to), a
  * click elsewhere with a unit selected sends it there (right-click too, and onto an enemy: an attack),
  * dragging (one finger) moves the view, the wheel (two fingers pinched, which move it too) zooms; a
  * finger held still on a tile shows what's there (as the mouse's hover does); the keys move the view,
@@ -73,6 +76,20 @@ export function tileMenuFree(touch: boolean): boolean {
   return !!v && !v.over && !v.spectator && store.selectedCity === null && store.cityTarget === null && !store.unitAim && (touch || !myUnit(store.selectedUnit));
 }
 
+/**
+ * Another's city clicked with nothing of yours selected: who to talk to there, Civ V's way (a
+ * city-state's card, or its civ's leader in Diplomacy). False if there's no one (a civ you have no
+ * dealings with).
+ */
+function talkAt(city: CityWire): boolean {
+  const p = store.view?.players[city.owner];
+  if (!p?.alive || !p.met || p.index === me()) return false;
+  if (p.cityState) openCityState(p.index);
+  else if (p.relation && p.civ !== 'barbarian') openDiplomacy(p.index);
+  else return false;
+  return true;
+}
+
 /** A click on the map (or a tap, `touch`): on a unit's flag or a city's banner (`hit`), else on the tile under it. */
 function act(t: number, right: boolean, hit: Hit | null = null, touch = false, shift = false) {
   const v = store.view;
@@ -114,6 +131,8 @@ function act(t: number, right: boolean, hit: Hit | null = null, touch = false, s
       return;
     }
     if (!right && city?.owner === me()) return openCity(city.id);
+    // (Another's banner: its city-state or its leader, unless a unit of yours is about to be sent there.)
+    if (!right && city && !myUnit(store.selectedUnit) && talkAt(city)) return;
   }
   if (t < 0) return;
   const sel = myUnit(store.selectedUnit);
@@ -143,6 +162,7 @@ function act(t: number, right: boolean, hit: Hit | null = null, touch = false, s
         return;
       }
       if (city?.owner === me()) return openCity(city.id);
+      if (!sel && city && talkAt(city)) return;
       // (A camp found: its clan, to deal with.)
       if (!sel && v.clans.some((c) => c.tile === t)) return openClans();
       if (!sel) {

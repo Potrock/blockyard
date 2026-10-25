@@ -5,7 +5,7 @@ import { lookAt } from './camera';
 import { CITY_STATE_KINDS } from './concepts';
 import { emblemEl, icon } from './icons';
 import { ask, store } from './store';
-import { h, send, tile, type El } from './ui';
+import { h, send, tile, togglePanel, type El } from './ui';
 
 /**
  * The city-states, as Civ V's city-state screen has them, one card each: its kind and what it gives
@@ -13,8 +13,26 @@ import { h, send, tile, type El } from './ui';
  * begin, who its ally is, what it asks of you (its quests: the influence each wins, the turns left,
  * a look at the place), who has pledged to protect it (and your pledge), tribute you could demand of it, and gifts of gold (with the influence each
  * buys), war and peace, and a look at where it stands on the map. Your allies first, then your
- * friends, then the rest.
+ * friends, then the rest. A click on a city-state's city (or its emblem on the leaders' ribbon)
+ * opens its card alone, as Civ V's city-state screen greets you: its envoy's words, and all that
+ * can be done with it.
  */
+
+/** Diplomacy, open at one city-state (a click on its city, or on its emblem on the leaders' ribbon). */
+export function openCityState(index: number) {
+  store.diplo.with = -1;
+  store.diplo.cityState = index;
+  store.diplo.deal = null;
+  store.diplo.check = null;
+  if (store.panel !== 'diplomacy') togglePanel('diplomacy');
+  else store.changed++;
+}
+
+/** Look at one city-state's card alone, or (null) at them all. */
+function speakTo(index: number | null) {
+  store.diplo.cityState = index;
+  store.changed++;
+}
 
 /** Each standing's word and colour. */
 const STANDING: Record<string, { word: string; cls: string }> = {
@@ -24,6 +42,8 @@ const STANDING: Record<string, { word: string; cls: string }> = {
   war: { word: 'At war', cls: 'bad' },
 };
 const ORDER = ['ally', 'friend', 'neutral', 'war'];
+/** A standing in words, as its chip has it ("Your ally"). */
+export const standingWord = (s: string) => (STANDING[s] ?? STANDING.neutral).word;
 
 /** The influence bar's top: a little past alliance, so the marks sit in it. */
 const BAR_TOP = 90;
@@ -156,12 +176,53 @@ function protection(p: PlayerSummary): El | null {
   );
 }
 
-/** One city-state's card. */
-function card(p: PlayerSummary): El {
-  const v = store.view!;
+/** What its envoy says to you, by how it stands with you (and, meeting you as a stranger, by its kind). */
+function greeting(p: PlayerSummary): string {
+  const cs = p.cityState!;
+  if (cs.standing === 'war') return `${p.name} has nothing to say to you while your armies march on its walls. Make peace, and we may speak again.`;
+  if (cs.standing === 'ally') return `Our great ally! ${p.name} stands with you, as you stand with us. Our riches are yours to share.`;
+  if (cs.standing === 'friend') return `Welcome back, friend. ${p.name} remembers your kindness, and repays it.`;
+  if (cs.influence < 0) return `${p.name} has not forgotten how you have treated us. Mend that, if you want our friendship.`;
+  switch (cs.kind) {
+    case 'maritime':
+      return `Greetings, traveller. Our harbours are full and our nets are heavy: a friend of ${p.name} never goes hungry.`;
+    case 'cultured':
+      return `Welcome to ${p.name}, where the artists never rest. Our friends share in all we make.`;
+    case 'militaristic':
+      return `${p.name} bows to no one. But we arm those who prove themselves our friends.`;
+    case 'mercantile':
+      return `A visitor! Everything in ${p.name} has its price, and our friends get the best of it.`;
+    case 'religious':
+      return `Peace be with you, pilgrim. Those who befriend ${p.name} are blessed.`;
+    default:
+      return `Greetings from ${p.name}, a free city.`;
+  }
+}
+
+/** A city-state's head on its card: its emblem, name, kind and how it stands with you (on the list, a click opens its card alone). */
+function head(p: PlayerSummary, alone: boolean): El {
   const cs = p.cityState!;
   const kind = CITY_STATE_KINDS.find((k) => k.id === cs.kind);
   const st = STANDING[cs.standing] ?? STANDING.neutral;
+  const name = alone ? h('b.cs-name', {}, p.name) : h('button.cs-name.cs-open', { onclick: () => speakTo(p.index), title: `Speak to ${p.name}` }, p.name);
+  return h(
+    'div.cs-head',
+    {},
+    h('span.cs-em', { 'data-pedia': `citystate:${cs.kind}` }, emblemEl(p.civ, alone ? 64 : 40, cs.kind)),
+    h(
+      'div.cv-grow',
+      {},
+      name,
+      h('div.cs-kind', { 'data-pedia': `citystate:${cs.kind}` }, kind ? tile(kind.glyph, kind.color, 20) : null, h('span', {}, kind ? `${kind.name} city-state: ${kind.sub.toLowerCase()}` : cs.kind)),
+    ),
+    h(`span.cv-chip${st.cls ? `.${st.cls}` : ''}`, {}, st.word),
+  );
+}
+
+/** One city-state's card: on the list, or alone (spoken to). */
+function card(p: PlayerSummary, alone = false): El {
+  const v = store.view!;
+  const cs = p.cityState!;
   const ally = cs.ally >= 0 ? v.players[cs.ally] : null;
   const allyName = !ally ? 'No ally' : ally.index === v.you ? 'Allied with you' : `Allied with ${ally.met ? ally.name : 'a civilization you haven’t met'}`;
   const gifts = cs.gifts.map(({ gold, influence }) =>
@@ -174,20 +235,11 @@ function card(p: PlayerSummary): El {
     ),
   );
   return h(
-    `div.cs-card.${cs.standing}`,
+    `div.cs-card.${cs.standing}${alone ? '.alone' : ''}`,
     {},
-    h(
-      'div.cs-head',
-      {},
-      h('span.cs-em', { 'data-pedia': `citystate:${cs.kind}` }, emblemEl(p.civ, 40, cs.kind)),
-      h(
-        'div.cv-grow',
-        {},
-        h('b.cs-name', {}, p.name),
-        h('div.cs-kind', { 'data-pedia': `citystate:${cs.kind}` }, kind ? tile(kind.glyph, kind.color, 20) : null, h('span', {}, kind ? `${kind.name}: ${kind.sub.toLowerCase()}` : cs.kind)),
-      ),
-      h(`span.cv-chip${st.cls ? `.${st.cls}` : ''}`, {}, st.word),
-    ),
+    head(p, alone),
+    // (Its envoy's words, on its card alone.)
+    alone && h('div.cs-said', {}, `“${greeting(p)}”`),
     h('div.cs-row', {}, influenceBar(cs), h('b.cs-num', {}, String(cs.influence))),
     h('div.cs-row.cs-facts', {}, h('span', {}, icon('crown', 13, ally ? '#f2c14e' : '#6c7688'), allyName), drift(cs) && h('span.cs-drift', { title: 'How your influence moves each turn, and where it stops' }, icon('turn', 13, '#9aa4b5'), drift(cs))),
     gives(p),
@@ -204,6 +256,8 @@ function card(p: PlayerSummary): El {
         ? h('button.cv-btn.small', { onclick: () => send({ t: 'peace', target: p.index }) }, icon('peace', 13), 'Peace')
         : h('button.cv-btn.small.icon.danger', { onclick: () => ask(`Declare war on ${p.name}? Its friendship (and any alliance) is lost.`, 'Declare war', () => send({ t: 'war', target: p.index })), title: 'Declare war on it' }, icon('war', 13)),
     ),
+    // (Its card alone: the gift that isn't a button here, a soldier given from beside its land.)
+    alone && !p.war && h('small.cv-muted.cs-hint', {}, `You can give it a soldier too: take a military unit into (or next to) its land, and choose “Gift to ${p.name}” from its orders.`),
   );
 }
 
@@ -215,6 +269,10 @@ export function renderCityStates(): El[] {
   const v = store.view!;
   const states = v.players.filter((p) => p.cityState && p.met && p.alive).sort((a, b) => ORDER.indexOf(a.cityState!.standing) - ORDER.indexOf(b.cityState!.standing) || b.cityState!.influence - a.cityState!.influence);
   if (!states.length) return [h('div.cv-muted', {}, 'You haven’t met a city-state yet. Explore!')];
+  // One spoken to: its card alone, and the way back to them all.
+  const one = states.find((p) => p.index === store.diplo.cityState);
+  if (one)
+    return [...(states.length > 1 ? [h('button.cv-btn.small.cs-back', { onclick: () => speakTo(null) }, icon('crown', 13), `All city-states (${states.length})`)] : []), card(one, true)];
   const count = (s: string) => states.filter((p) => p.cityState!.standing === s).length;
   const asks = openQuests(states);
   return [
@@ -227,7 +285,7 @@ export function renderCityStates(): El[] {
       asks > 0 && h('span', {}, h('b', {}, String(asks)), asks === 1 ? ' request for you' : ' requests for you'),
       h('small.cv-muted', {}, `Friends from ${FRIEND} influence; the civ with the most, from ${ALLY}, is the ally. Influence falls back a little each turn.`),
     ),
-    ...states.map(card),
+    ...states.map((p) => card(p)),
   ];
 }
 
@@ -241,6 +299,14 @@ export const CITYSTATES_CSS = `
 .cs-card.war { box-shadow: inset 0 0 0 2px #11141a, inset 4px 0 0 #ff6b5e; }
 .cs-head { display: flex; align-items: center; gap: 10px; }
 .cs-name { display: block; font: 400 24px/1 'Jersey 10', monospace; color: #fff; text-shadow: 2px 2px 0 #0b0d12; }
+/* (On the list a city-state's name is a button, to speak to it: in the name's look, not a button's.) */
+.cs-head .cs-open { padding: 0; font: 400 24px/1 'Jersey 10', monospace; color: #fff; text-align: left; }
+.cs-head .cs-open:hover { color: #ffe3a1; text-decoration: underline; text-underline-offset: 3px; }
+.cs-card.alone { gap: 10px; padding: 14px 16px; }
+.cs-card.alone .cs-name { font-size: 32px; }
+.cs-said { padding: 6px 10px; background: rgba(13,19,27,0.75); border: 2px solid #07090c; font-family: 'Chakra Petch', system-ui, sans-serif; font-style: italic; font-size: 14px; color: #f1e6c8; animation: cvIn .25s; }
+.cs-hint { font-family: 'Chakra Petch', system-ui, sans-serif; font-size: 13px; }
+.cs-back { align-self: flex-start; }
 .cs-kind { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--muted); font-size: 14px; }
 .cs-row { display: flex; align-items: center; gap: 10px; }
 .cs-inf { position: relative; flex: 1; padding-bottom: 12px; }
@@ -275,7 +341,10 @@ export const CITYSTATES_CSS = `
 .cv-root.cb .cs-quest.done { background: rgba(90,174,255,.07); }
 @media (max-width: 760px), (max-height: 520px) {
   .cs-card { padding: 8px; gap: 6px; }
-  .cs-name { font-size: 21px; }
+  .cs-name, .cs-head .cs-open { font-size: 21px; }
+  .cs-card.alone { padding: 10px; }
+  .cs-card.alone .cs-name { font-size: 26px; }
+  .cs-card.alone .cs-em .cv-emblem { width: 48px; height: 48px; }
   .cs-give b { width: 80px; }
 }
 `;

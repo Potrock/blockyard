@@ -127,9 +127,10 @@ export interface Store {
    * The diplomacy panel: the civ looked at (-1: the city-states, -2: world politics, -3: the World
    * Congress), the deal being drawn up with it (null:
    * none), the server's word on that deal, offers put off till later (by id), and a deal just put
-   * (its answer clears the deal once it's made or offered).
+   * (its answer clears the deal once it's made or offered); on the city-states' page, the one
+   * spoken to (null: all of them).
    */
-  diplo: { with: number | null; deal: DealItem[] | null; check: DealCheck | null; later: number[]; pending: boolean };
+  diplo: { with: number | null; deal: DealItem[] | null; check: DealCheck | null; later: number[]; pending: boolean; cityState: number | null };
   changed: number;
 }
 
@@ -176,7 +177,7 @@ export const store: Store = {
   uiScale: 1,
   uiFit: 1,
   colourBlind: false,
-  diplo: { with: null, deal: null, check: null, later: [], pending: false },
+  diplo: { with: null, deal: null, check: null, later: [], pending: false, cityState: null },
   changed: 0,
 };
 
@@ -271,7 +272,7 @@ export function resetGame() {
   store.overHidden = false;
   store.interfaceHidden = false;
   store.takeOverOpen = false;
-  store.diplo = { with: null, deal: null, check: null, later: [], pending: false };
+  store.diplo = { with: null, deal: null, check: null, later: [], pending: false, cityState: null };
   store.changed++;
 }
 

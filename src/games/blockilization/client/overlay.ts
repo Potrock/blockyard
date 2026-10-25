@@ -1,5 +1,6 @@
 import { centre, centreNear, corners, HEX, HEX_W, hexW, SEA_Y } from '../geometry';
 import type { CityInfo, CityWire } from '../protocol';
+import { ALLY, FRIEND } from '../rules/citystates';
 import { CIVS } from '../rules/civs';
 import { neighbour, within } from '../rules/hex';
 import { NATURAL_WONDERS } from '../rules/nature';
@@ -7,6 +8,7 @@ import { RESOURCES, TERRAINS, YIELD_KEYS, type Yields } from '../rules/terrain';
 import { PARADROP_RANGE, UNITS } from '../rules/units';
 import { centreHere, homeShift, landY, projectInto, toScreen } from './camera';
 import { bar, drawFigures, figuresShowing } from './combatfx';
+import { CITY_STATE_KINDS } from './concepts';
 import { cut } from './fog';
 import { iconBitmap, resourceGlyph, unitGlyph, YIELD_COLOR } from './icons';
 import { activeLens, drawLens } from './lenses';
@@ -88,6 +90,13 @@ export const tileY = landY;
 
 const colorOf = (owner: number) => CIVS[store.view?.players[owner]?.civ ?? '']?.color ?? '#888';
 const accentOf = (owner: number) => CIVS[store.view?.players[owner]?.civ ?? '']?.accent ?? '#fff';
+
+/** Each kind of city-state's glyph on its banner, in a light shade of its kind's colour (the banner's dark). */
+const CITY_STATE_TINT: Record<string, string> = { maritime: '#7cc4ff', cultured: '#e0a0f0', militaristic: '#ff8a7a', mercantile: '#f6cf4a', religious: '#efe6cc' };
+/** How a city-state stands with you, in the colour of the influence bar under its banner (the city-states' screen's). */
+const STANDING_TINT: Record<string, string> = { ally: '#f2c14e', friend: '#6fd27a', neutral: '#c9d1dc', war: '#ff6b5e' };
+/** The influence bar's top: a little past alliance, so both marks sit in it (`citystates.ts`'s). */
+const INFLUENCE_TOP = 90;
 
 /** Each improvement's glyph, by the side of its tile. */
 const IMPROVEMENT_GLYPH: Record<string, string> = {
@@ -725,12 +734,17 @@ export function drawOverlay(now: number) {
     if (!s) continue;
     const own = city.owner === me();
     const owner = store.view!.players[city.owner];
+    // A city-state's (Civ V's way): its kind's glyph where a capital's crown would be, "City-state" on
+    // a tab over the banner, a "!" at its end while it asks something of you, and your influence with
+    // it on a bar under it, marked where friendship and alliance begin, in your standing's colour.
+    const cs = owner?.cityState;
+    const asks = !!cs?.quests.some((q) => !q.done);
     const fs = Math.max(10, Math.min(14, zoomed * 0.52)) * ui;
     ctx.font = mapFont(fs);
     const label = city.name;
     const tw = ctx.measureText(label).width;
     const bh = Math.round(fs * 2);
-    const bw = Math.round(bh + tw + fs * 1.4 + (city.capital ? fs * 1.2 : 0) + (own && city.building ? bh : 0));
+    const bw = Math.round(bh + tw + fs * 1.4 + (city.capital || cs ? fs * 1.2 : 0) + (own && city.building ? bh : 0) + (asks ? bh - 4 : 0));
     const x0 = Math.round(s.x - bw / 2);
     const y0 = Math.round(s.y - bh / 2);
     const mid = y0 + bh / 2;
@@ -745,12 +759,49 @@ export function drawOverlay(now: number) {
     ctx.textBaseline = 'middle';
     shadowText(String(city.pop), x0 + bh / 2, mid + 1, accentOf(city.owner));
     let x = x0 + bh + fs * 0.5;
-    if (city.capital) {
+    if (cs) {
+      glyph(CITY_STATE_KINDS.find((k) => k.id === cs.kind)?.glyph ?? 'crown', x + fs * 0.5, mid, fs * 1.1, CITY_STATE_TINT[cs.kind] ?? '#ffffff');
+      x += fs * 1.2;
+    } else if (city.capital) {
       glyph('crown', x + fs * 0.5, mid, fs * 1.05, '#f2c14e');
       x += fs * 1.2;
     }
     ctx.textAlign = 'left';
-    shadowText(label, x, mid + 1, owner?.cityState ? '#e9eef3' : '#ffffff');
+    shadowText(label, x, mid + 1, '#ffffff');
+    if (cs) {
+      // The tab: "City-state", in its kind's shade, on the banner's top edge.
+      ctx.font = mapFont(fs * 0.7);
+      const word = 'City-state';
+      const ww = Math.round(ctx.measureText(word).width + fs * 0.9);
+      const wh = Math.round(fs * 1.25);
+      const wx = Math.round(x0 + bw / 2 - ww / 2);
+      const wy = y0 - 2 - wh;
+      ctx.fillStyle = '#07090c';
+      ctx.fillRect(wx - 2, wy - 2, ww + 4, wh + 2);
+      ctx.fillStyle = 'rgba(16,19,26,0.92)';
+      ctx.fillRect(wx, wy, ww, wh);
+      ctx.textAlign = 'center';
+      shadowText(word, wx + ww / 2, wy + wh / 2 + 1, CITY_STATE_TINT[cs.kind] ?? '#e9eef3');
+      ctx.font = mapFont(fs);
+      // Its request for you: a gold "!" at the banner's end.
+      if (asks) {
+        const side = bh - 8;
+        const bx = x0 + bw - side - 4;
+        block(bx, y0 + 4, side, side, '#f2c14e', 'rgba(0,0,0,0)');
+        shadowText('!', bx + side / 2, mid + 1, '#1b1407');
+      }
+      // Your influence: a bar the banner's width, under it.
+      const iy = y0 + bh + 2;
+      const ih = Math.max(3, Math.round(3 * ui));
+      ctx.fillStyle = '#07090c';
+      ctx.fillRect(x0 - 2, iy, bw + 4, ih + 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.14)';
+      ctx.fillRect(x0, iy, bw, ih);
+      ctx.fillStyle = tone(STANDING_TINT[cs.standing] ?? STANDING_TINT.neutral);
+      ctx.fillRect(x0, iy, Math.round(bw * Math.max(0, Math.min(1, cs.influence / INFLUENCE_TOP))), ih);
+      ctx.fillStyle = '#07090c';
+      for (const at of [FRIEND, ALLY]) ctx.fillRect(Math.round(x0 + (bw * at) / INFLUENCE_TOP) - 1, iy, 2, ih);
+    }
     // Its owner's team: a small numbered tab at the banner's left end.
     if (typeof owner?.team === 'number') {
       const side = Math.round(fs * 1.15);
@@ -782,17 +833,18 @@ export function drawOverlay(now: number) {
       ctx.font = mapFont(fs * 0.85);
       shadowText(String(city.building.turns), bx + side / 2, by + side / 2 + 1, '#ffe1b0');
     }
-    // Damaged: its health under the banner; growing (its own): food over it.
+    // Damaged: its health under the banner (a city-state's, under its influence); growing (its own): food over it.
     const barX = x0 + bh + 2;
     const barW = bw - bh - 2;
+    const hpY = y0 + bh + 2 + (cs ? Math.max(3, Math.round(3 * ui)) + 2 : 0);
     const hp = bar(-1 - city.id, city.hp, city.tile, -city.id, now);
     if (hp.ghost < city.maxHp) {
       ctx.fillStyle = '#07090c';
-      ctx.fillRect(barX - 2, y0 + bh + 2, barW + 2, 6);
+      ctx.fillRect(barX - 2, hpY, barW + 2, 6);
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(barX, y0 + bh + 4, Math.round((barW - 2) * (hp.ghost / city.maxHp)), 2);
+      ctx.fillRect(barX, hpY + 2, Math.round((barW - 2) * (hp.ghost / city.maxHp)), 2);
       ctx.fillStyle = tone('#6fd27a');
-      ctx.fillRect(barX, y0 + bh + 4, Math.round((barW - 2) * (hp.hp / city.maxHp)), 2);
+      ctx.fillRect(barX, hpY + 2, Math.round((barW - 2) * (hp.hp / city.maxHp)), 2);
     }
     if (own && city.foodNeed) {
       ctx.fillStyle = '#07090c';
