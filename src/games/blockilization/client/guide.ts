@@ -1,5 +1,6 @@
 import type { Settings } from '../rules/state';
 import { UNITS } from '../rules/units';
+import { openCityState } from './citystates';
 import { VICTORIES } from './concepts';
 import { icon, svg } from './icons';
 import { setLens } from './lenses';
@@ -67,7 +68,7 @@ export function guideTips(): Tip[] {
     { key: 'settler', title: 'Found another city', when: mine.length > 0 && !!settler, text: 'More cities are how an empire grows. With the Settler selected, the Settler lens shows the best sites you know, numbered: food, fresh water, the coast and resources, away from others’ land.', act: settler && { label: 'Select the Settler', run: () => selectUnitAt(settler.id, settler.tile) } },
     { key: 'lenses', evergreen: true, title: 'Lenses', when: v.turn >= 6 && mine.length > 0, text: 'The buttons over the minimap (or L) colour the map: every tile’s yields, the best city sites, resources, religion, and borders with the tile each city claims next.', act: { label: 'Show the yields', run: () => setLens('yields') } },
     { key: 'neighbour', title: neighbour ? `You’ve met ${neighbour.name}` : 'A neighbour', when: !!neighbour, text: 'Other civilizations race you for land, wonders and the win. See how you stand in Diplomacy (F4) and the Overview’s demographics (F9); a strong army keeps a neighbour friendly.', act: { label: 'Open Diplomacy', run: open('diplomacy') } },
-    { key: 'citystate', title: cityState ? `${cityState.name}, a city-state` : 'A city-state', when: !!cityState, text: 'City-states are small single-city nations. Gifts of gold, and doing what they ask (Diplomacy shows their requests), win their friendship, and with it food, culture, faith, happiness or units, by their kind.', act: { label: 'Open Diplomacy', run: open('diplomacy') } },
+    { key: 'citystate', title: cityState ? `${cityState.name}, a city-state` : 'A city-state', when: !!cityState, text: `City-states are small single-city nations, marked “City-state” over their banners. ${click(true)} one’s city to speak to it: gifts of gold, and doing what it asks, win its friendship, and with it food, culture, faith, happiness or units, by its kind.`, act: cityState && { label: `Speak to ${cityState.name}`, run: () => openCityState(cityState.index) } },
     { key: 'barbarians', title: 'Barbarians', when: barbarian, text: 'Barbarians come out of camps in the wilds and raid whoever is near. Keep a unit fortified in your city (F) and on hills; clearing a camp brings gold, and grateful city-states.' },
     { key: 'policy', title: 'Adopt a social policy', when: s.culture >= s.policyCost, text: 'You have the culture for a new policy. Tradition suits a few great cities, Liberty many small ones, Honor war.', act: { label: 'Open Social Policies', run: open('policies') } },
     { key: 'notes', evergreen: true, title: 'What needs deciding', when: v.turn >= 8, text: 'What the turn waits on, and what could be done (a promotion, a pantheon), stays at the top right; N opens every note of the game, and O your cities and units side by side.', act: { label: 'Open the notifications', run: open('notes') } },

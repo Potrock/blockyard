@@ -3,6 +3,7 @@ import { IDEOLOGIES } from '../rules/policies';
 import { unitName } from '../rules/armies';
 import { lookAt } from './camera';
 import { icon, svg } from './icons';
+import { openCityState } from './citystates';
 import { openCongress, sessionWhen, unvoted } from './congress';
 import { reviewOffer } from './diplomacy';
 import { defenceWarnings, lookAtDefence } from './defend';
@@ -44,10 +45,13 @@ export interface Decision {
   act: () => void;
 }
 
-/** Where a note leads: a city-state's request to the city-states' page, the city it's about opened (a choice to make there), else a look at its tile. */
+/** Where a note leads: a city-state's request to its card (or the city-states' page), the city it's about opened (a choice to make there), else a look at its tile. */
 function follow(n: { at?: number; openCity?: boolean; kind?: string }) {
   if (n.kind === 'citystate') {
+    const home = n.at === undefined ? undefined : cityAt(n.at);
+    if (home && store.view?.players[home.owner]?.cityState) return openCityState(home.owner);
     store.diplo.with = -1;
+    store.diplo.cityState = null;
     store.diplo.deal = null;
     return open('diplomacy')();
   }

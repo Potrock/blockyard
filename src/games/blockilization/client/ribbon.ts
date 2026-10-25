@@ -2,10 +2,11 @@ import type { PlayerSummary } from '../protocol';
 import { CIVS } from '../rules/civs';
 import { emblemEl, svg } from './icons';
 import { PICTURES, type PictureId } from './picturefiles';
-import { openQuests } from './citystates';
+import { openCityState, openQuests } from './citystates';
+import { openDiplomacy } from './diplomacy';
 import { faceEl } from './chat';
 import { store, tone } from './store';
-import { h, togglePanel, type El } from './ui';
+import { h, type El } from './ui';
 
 /**
  * The leaders down the right of the screen, Civilization's way: each civ met, its leader in a frame of
@@ -27,14 +28,6 @@ const STANDING: Record<string, string> = { ally: '#f2c14e', friend: '#6fd27a', n
 
 /** The city-states' group: open or shut. */
 let statesOpen = false;
-
-function talkTo(index: number) {
-  store.diplo.with = index;
-  store.diplo.deal = null;
-  store.diplo.check = null;
-  if (store.panel !== 'diplomacy') togglePanel('diplomacy');
-  else store.changed++;
-}
 
 const badge = (corner: string, glyph: string, cls: string) => h(`span.lr-badge.${corner}.${cls}`, { html: svg(glyph, 12) });
 
@@ -81,7 +74,7 @@ function leader(p: PlayerSummary): El {
     // (A face their leader's just made, `chat.ts`.)
     faceEl(p.index),
   );
-  el.addEventListener('click', () => talkTo(p.index));
+  el.addEventListener('click', () => openDiplomacy(p.index));
   return el;
 }
 
@@ -111,7 +104,7 @@ function cityStates(list: PlayerSummary[]): El | null {
             emblemEl(p.civ, 26, cs.kind),
             h('b', {}, String(Math.round(cs.influence))),
           );
-          el.addEventListener('click', () => talkTo(-1));
+          el.addEventListener('click', () => openCityState(p.index));
           return el;
         })
       : []),

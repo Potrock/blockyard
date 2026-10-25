@@ -150,6 +150,7 @@ export function renderDiplomacy(): El {
     !civs.length && !cityStates && !v.clans.length ? h('div.cv-muted', { style: 'padding:10px' }, "You haven't met anyone yet. Explore!") : null,
   );
   const p = chosen !== null && chosen >= 0 ? v.players[chosen] : null;
+  // (The city-states' page with one spoken to is marked apart from the list of them all, so neither keeps the other's scroll.)
   const pane = p
     ? store.diplo.deal
       ? tradePane(p)
@@ -160,7 +161,7 @@ export function renderDiplomacy(): El {
         ? h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'World Congress'), ...renderCongress())
         : chosen === -4
           ? h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'Barbarian clans'), ...renderClans())
-          : h('div.cv-dip-pane.cv-scroll', {}, h('div.cv-h', {}, 'City-states'), ...renderCityStates());
+          : h(`div.cv-dip-pane.cv-scroll${store.diplo.cityState !== null ? '.cs-one' : ''}`, {}, h('div.cv-h', {}, 'City-states'), ...renderCityStates());
   return h(
     'div.cv-big.cv-panel.cv-dip',
     {},
@@ -170,12 +171,19 @@ export function renderDiplomacy(): El {
   );
 }
 
-/** Look at another civ (any deal being drawn up is put away). */
+/** Look at another civ, or a page (any deal being drawn up is put away; the city-states' page shows them all). */
 function pick(i: number) {
   store.diplo.with = i;
+  store.diplo.cityState = null;
   store.diplo.deal = null;
   store.diplo.check = null;
   store.changed++;
+}
+
+/** Diplomacy, open at a civ (its leader) or a page (-1: the city-states, all of them; -2: world politics). */
+export function openDiplomacy(i: number) {
+  pick(i);
+  if (store.panel !== 'diplomacy') togglePanel('diplomacy');
 }
 
 /** A civ's page: its leader, what it thinks of you and why, what's between you, what can be done. */

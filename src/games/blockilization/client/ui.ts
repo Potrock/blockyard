@@ -27,7 +27,7 @@ import { bindPedia, natureEffects, PEDIA_CSS, pediaKey, renderPedia, yieldWords 
 import { NATURAL_WONDERS } from '../rules/nature';
 import { layOutSoon, renderTechTree, TECH_CSS } from './techtree';
 import { decisions, NOTES_CSS, renderNoteCentre, renderNotesPart } from './notes';
-import { ABILITY_TEXT, VICTORIES } from './concepts';
+import { ABILITY_TEXT, CITY_STATE_KINDS, VICTORIES } from './concepts';
 import { OVERVIEW_CSS, renderOverview } from './overview';
 import { HOTKEYS_CSS, renderHotkeys, renderMenu } from './hotkeys';
 import { discardedBox, eraRow, hubTop, inviteRow, LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, scenarioCards, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards, type GameLinks } from './lobby';
@@ -52,7 +52,7 @@ import { ask, attackable, cityAt, enemyAt, me, myCity, myUnit, outOfReach, reach
 import { seasonName } from './weatherfx';
 import { chargeFrom, previewPath, routeOf, swapsWith, whyNot, type Route } from './path';
 import { leaveMarch, marchOf, marching } from './march';
-import { CITYSTATES_CSS } from './citystates';
+import { CITYSTATES_CSS, standingWord } from './citystates';
 import { CLANS_CSS } from './clans';
 import { CONGRESS_CSS, openCongress, PROJECT_LOOK, sessionWhen, unvoted } from './congress';
 import { isProject, PROJECTS } from '../rules/projects';
@@ -2533,6 +2533,10 @@ function renderTip() {
     const here = cityAt(t);
     if (here) bits.push(line('city', CIVS[store.view.players[here.owner]?.civ]?.color ?? '#fff', `${here.name} · strength ${here.strength} · ${Math.round(here.hp)}/${here.maxHp} HP`));
     else if (owner) bits.push(h('div.ln', {}, emblemEl(owner.civ, 14, owner.cityState?.kind), `${owner.cityState ? owner.name : (CIVS[owner.civ]?.adjective ?? '')} land`));
+    // (A city-state's city: said so, with how it stands with you; another's city, nothing of yours selected: a click talks to them.)
+    const host = here && here.owner !== me() ? store.view.players[here.owner] : null;
+    if (host?.cityState) bits.push(h('div.ln', {}, emblemEl(host.civ, 14, host.cityState.kind), `${CITY_STATE_KINDS.find((x) => x.id === host.cityState!.kind)?.name ?? ''} city-state · ${standingWord(host.cityState.standing)} · influence ${host.cityState.influence}`));
+    if (host?.met && (host.cityState || host.relation) && !myUnit(store.selectedUnit)) bits.push(h('div.ln.way', {}, icon(host.cityState ? 'peace' : 'chat', 13), `${click(true)} to talk to ${host.name}`));
     for (const u of unitsAt(t))
       if (k.visible || u.owner === me()) {
         const p = store.view.players[u.owner];
