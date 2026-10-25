@@ -52,7 +52,7 @@ export function unitExtras(u: UnitWire, act: (label: string, o: Parameters<typeo
       act('Build Academy', { t: 'greatPerson', unit: u.id, action: 'improvement' }, '+3 science on this tile, for good.');
       break;
     case 'great_engineer':
-      act('Hurry production', { t: 'greatPerson', unit: u.id, action: 'hurry' }, 'In one of your cities: a great deal of production toward what it builds (wonders too).');
+      act('Hurry production', { t: 'greatPerson', unit: u.id, action: 'hurry' }, 'In one of your cities: a great deal of production toward what it builds now (wonders too), as much as it needs and no more.');
       act('Build Manufactory', { t: 'greatPerson', unit: u.id, action: 'improvement' }, '+3 production on this tile, for good.');
       break;
     case 'great_merchant':

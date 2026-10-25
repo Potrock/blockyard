@@ -2365,7 +2365,13 @@ function greatAction(game: Game, p: Player, u: Unit, action: Extract<Order, { t:
       if (!abilities.includes('hurry')) return fail('Only a Great Engineer');
       const city = cityAt(game, u.tile);
       if (!city || city.owner !== p.index) return fail('Stand it in one of your cities');
-      city.prod += 300 + 30 * city.pop;
+      // Toward what's being built now and no more than it still needs (Civ V's): none of it is left
+      // over to finish what comes after it in a turn each.
+      const item = city.queue[0];
+      if (!item) return fail(`${city.name} isn't building anything`);
+      const left = itemCost(game, item) - city.prod;
+      if (left <= 0) return fail(`${city.name} has already finished what it's building`);
+      city.prod += Math.min(left, 300 + 30 * city.pop);
       return used(`Your Great Engineer has hurried the work in ${city.name}.`);
     }
     case 'trade': {

@@ -12,7 +12,7 @@ import { CIV_SYMBOL, glyphPaths } from '../client/icons';
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
 import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
-import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, upgradeTo, wellFormed, type Order } from '../rules/game';
+import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, itemCost, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, upgradeTo, wellFormed, type Order } from '../rules/game';
 import { colOf, distance, line, neighbour, neighbours, rowOf, tileAt, within } from '../rules/hex';
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
@@ -1815,6 +1815,30 @@ test('great people used: the Mausoleum’s gold, Reliquary’s faith, Rationalis
   game.tiles[at(6, 5)].owner = 0;
   ok(apply(game, 0, { t: 'greatPerson', unit: a.id, action: 'improvement' }).ok, 'artists build landmarks');
   eq(game.tiles[at(6, 5)].improvement, 'landmark', 'a landmark');
+});
+
+test('a Great Engineer hurries what’s being built now and no more: nothing left over for what comes after', () => {
+  const { game, at } = blank();
+  const c = city(game, 0, at(10, 8), { pop: 10 });
+  const monument = { kind: 'building', id: 'monument' } as const;
+  c.queue = [monument, { kind: 'unit', id: 'warrior' }, { kind: 'unit', id: 'warrior' }, { kind: 'unit', id: 'warrior' }];
+  const g = unit(game, 'great_engineer', 0, c.tile);
+  ok(apply(game, 0, { t: 'greatPerson', unit: g.id, action: 'hurry' }).ok, 'hurried');
+  eq(c.prod, itemCost(game, monument), 'as much as the monument needs');
+  endTurn(game);
+  ok(c.buildings.includes('monument'), 'the monument built');
+  ok(c.prod < itemCost(game, { kind: 'unit', id: 'warrior' }), `only a turn's production carried to the warrior (${c.prod})`);
+  endTurn(game);
+  eq(game.units.filter((u) => u.type === 'warrior' && u.owner === 0).length, 0, 'which takes more than a turn');
+  // Nothing to hurry: the engineer kept.
+  c.queue = [];
+  c.prod = 0;
+  const g2 = unit(game, 'great_engineer', 0, c.tile);
+  ok(!apply(game, 0, { t: 'greatPerson', unit: g2.id, action: 'hurry' }).ok && game.units.includes(g2), 'not with nothing being built');
+  // A wonder far from done gets the whole of it.
+  c.queue = [{ kind: 'building', id: 'cn_tower' }];
+  ok(apply(game, 0, { t: 'greatPerson', unit: g2.id, action: 'hurry' }).ok, 'a wonder hurried');
+  eq(c.prod, 300 + 30 * c.pop, 'with all 300 and 30 a citizen');
 });
 
 // -------------------------------------------------------------------------------------------------
