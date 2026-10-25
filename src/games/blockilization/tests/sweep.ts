@@ -111,7 +111,7 @@ function sweepOf(civs: string[]) {
         claim(game, a, t);
       });
   });
-  for (const [i, other] of cs.entries()) city(game, other.index, at(4 + i * 12, 24), { pop: 5 });
+  for (const [i, other] of cs.entries()) city(game, other.index, at(4 + i * 8, 24), { pop: 5 });
   // Everyone's religion holds every belief (the founder's and its followers' beliefs, all at work).
   majors.forEach((p, i) => {
     const id = `r${i}`;

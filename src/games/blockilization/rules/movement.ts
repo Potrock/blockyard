@@ -55,10 +55,14 @@ export function civiliansAt(game: Game, t: number): Unit[] {
 
 export { ALL };
 
-/** Whether a land unit of this owner may step onto water here (embarking: Optics). */
-const canEmbark = (game: Game, owner: number) => knows(game.players[owner], 'optics');
-/** Whether ocean is open to embarked units and early ships (Astronomy). */
+/** Whether a civ has a special ability (its civilization's own, by name). */
+const civCan = (game: Game, owner: number, special: string) => civOf(game.players[owner]).ability.effects.special?.includes(special) ?? false;
+/** Whether a land unit of this owner may step onto water here (embarking: Optics; Polynesia's from the start). */
+export const canEmbark = (game: Game, owner: number) => knows(game.players[owner], 'optics') || civCan(game, owner, 'wayfinding');
+/** Whether ocean is open to early ships (Astronomy). */
 const canOcean = (game: Game, owner: number) => knows(game.players[owner], 'astronomy');
+/** Whether ocean is open to this owner's embarked units (Astronomy; Polynesia's from the start). */
+export const canCrossOcean = (game: Game, owner: number) => canOcean(game, owner) || civCan(game, owner, 'wayfinding');
 
 /** Movement points to step from `a` to its neighbour `b` (Infinity: can't). Ignores other units. */
 export function stepCost(game: Game, u: Unit, a: number, b: number): number {
@@ -76,13 +80,14 @@ export function stepCost(game: Game, u: Unit, a: number, b: number): number {
   }
   if (type.domain === 'air') return 1;
   // Land.
+  // Embarking or disembarking takes the rest of the turn (a single move for Denmark's); moving at sea, one a tile.
+  const landing = civCan(game, u.owner, 'viking_fury') ? 1 : ALL;
   if (water) {
     if (!canEmbark(game, u.owner)) return Infinity;
-    if (to.terrain === 'ocean' && !canOcean(game, u.owner)) return Infinity;
-    // Embarking or disembarking takes the rest of the turn; moving at sea, one a tile.
-    return TERRAINS[from.terrain].water ? 1 : ALL;
+    if (to.terrain === 'ocean' && !canCrossOcean(game, u.owner)) return Infinity;
+    return TERRAINS[from.terrain].water ? 1 : landing;
   }
-  if (TERRAINS[from.terrain].water) return ALL; // disembarking ends the move
+  if (TERRAINS[from.terrain].water) return landing; // disembarking ends the move
   // The Great Wall: an enemy's land costs every move (until its owner knows Dynamite).
   if (to.owner >= 0 && to.owner !== u.owner && atWar(game, u.owner, to.owner) && greatWall(game, to.owner)) return ALL;
   // Roads (both ends) and railroads; for the Iroquois, the forests and jungles of their own land.

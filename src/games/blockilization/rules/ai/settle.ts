@@ -1,8 +1,8 @@
-import { knows } from '../core';
 import { canFound } from '../game';
 import { freshWater, tileYields } from '../economy';
 import { neighbours, within } from '../hex';
 import type { Unit } from '../state';
+import { canEmbark } from '../movement';
 import { teamOf } from '../teams';
 import { RESOURCES, TERRAINS } from '../terrain';
 import { act, cityOn, civilianAt, coastal, danger, dist, goTo, militaryAt, sameLand, seaRoute, type Ctx } from './context';
@@ -74,7 +74,7 @@ export function bestSite(ctx: Ctx, from: number, settler?: Unit): { tile: number
     if (tile.owner >= 0 && tile.owner !== ctx.me) continue;
     // Over the water (with Optics, to embark): a site on the coast of other land, worth a little less for the voyage.
     const overseas = !sameLand(game, from, t) && !settler?.embarked;
-    if (overseas && !(knows(p, 'optics') && coastal(game, t))) continue;
+    if (overseas && !(canEmbark(game, p.index) && coastal(game, t))) continue;
     if (taken.has(t) || tile.camp || theirs.some((x) => dist(ctx, x, t) < 4)) continue;
     // Three tiles from its own cities (closer packed, as Civ V's bots do), four from anyone else's.
     let near = Infinity;

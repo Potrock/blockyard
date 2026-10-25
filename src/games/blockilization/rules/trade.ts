@@ -118,6 +118,8 @@ export function routeYield(game: Game, p: Player, r: Route): { gold: number; sci
   const civ = civEffects(game, p);
   let gold = 3 + Math.floor(to.pop / 2) + (r.sea ? 2 : 0) + (has(civ, 'trade_gold_2') ? 2 : 0);
   if (r.sea && has(civ, 'sea_trade_gold_2')) gold += 2;
+  // (The Netherlands' East India Company: two more, Treasure Fleets' or not.)
+  if (r.sea && has(civ, 'dutch_sea_trade')) gold += 2;
   if (them.cityState && has(civ, 'cs_trade_gold_3')) gold += 3;
   if (p.ideology && them.ideology === p.ideology && has(civ, 'ideology_trade_gold')) gold += 3;
   const science = Math.max(0, Math.floor((them.techs.length - p.techs.length) / 3));

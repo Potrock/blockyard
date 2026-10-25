@@ -1,6 +1,6 @@
 import { formationBonus, formationKind, sizeOf, unitName } from './armies';
 import { BUILDINGS } from './buildings';
-import { atWar, canStand, cityAt, cityById, note, random, removeUnit, seesUnit, speed, updateVisibility } from './core';
+import { atWar, canStand, cityAt, cityById, citiesOf, note, random, removeUnit, seesUnit, speed, updateVisibility } from './core';
 import { assignCitizens, blockaded, cityEffects, civEffects, garrisoned, has, happiness } from './economy';
 import type { CombatWhen } from './effects';
 import { cityReligion } from './faith';
@@ -162,8 +162,10 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
   // into a river from outside it, -50% from the sea (Civ V's).
   if (role === 'attack' && against) {
     if (vsUnit) add('Flanking', 10 * neighbours(game.grid, vsUnit.tile).filter((n) => n !== u.tile && occupants(game, n).military?.owner === u.owner).length);
-    if (game.tiles[target].river && !tile.river && !u.embarked) add('Across a river', -20);
-    if (u.embarked) add('From the sea', -50);
+    // (Denmark's Berserkers land and ford rivers fighting.)
+    const amphibious = type.abilities?.includes('amphibious');
+    if (game.tiles[target].river && !tile.river && !u.embarked && !amphibious) add('Across a river', -20);
+    if (u.embarked && !amphibious) add('From the sea', -50);
   }
   // Promotions.
   for (const id of u.promotions) {
@@ -182,6 +184,11 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
   if (p.goldenTurns > 0 && has(civ, 'golden_age_moves_combat')) add('Golden age', 10);
   add(type.domain === 'sea' ? 'Great Admiral' : 'Great General', leadership(game, u, at));
   if (type.abilities?.includes('jungle_fighter') && (game.tiles[target].feature === 'forest' || game.tiles[target].feature === 'jungle')) add('Jungle fighter', 33);
+  // Where it stands: Ethiopia's Mehal Sefari at home, the Celts' Pictish Warriors abroad.
+  if (type.abilities?.includes('homeland') && tile.owner === u.owner) add('Homeland', 25);
+  if (type.abilities?.includes('foreign_lands') && tile.owner !== u.owner) add('Foreign lands', 20);
+  // A Maori war dance next to it unnerves an enemy.
+  if (game.units.some((o) => UNITS[o.type]?.abilities?.includes('haka') && !o.embarked && atWar(game, u.owner, o.owner) && distance(game.grid, o.tile, at) === 1)) add('Haka', -10);
   // An unhappy empire fights worse (Civ V: -2% a point below zero, down to -90%).
   if (!p.cityState && p.civ !== 'barbarian') {
     const mood = happiness(game, p);
@@ -233,6 +240,10 @@ function combatCounts(when: CombatWhen, game: Game, u: Unit, role: 'attack' | 'd
       return !!vsUnit && game.players[vsUnit.owner]?.civ === 'barbarian';
     case 'vs_city_states':
       return !!game.players[(vsUnit ?? vsCity)?.owner ?? -1]?.cityState;
+    case 'vs_more_cities': {
+      const foe = (vsUnit ?? vsCity)?.owner;
+      return foe !== undefined && citiesOf(game, foe).length > citiesOf(game, u.owner).length;
+    }
     case 'beside_friend':
       return besideFriend(game, u, at);
     case 'faithful_land':

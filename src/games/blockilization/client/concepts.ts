@@ -359,6 +359,10 @@ export const ABILITY_TEXT: Record<string, string> = {
   discover_tech: 'Discovers science toward your research.',
   kill_heal: 'Heals 25 when it kills a unit.',
   jungle_fighter: '+33% strength fighting in forest and jungle.',
+  homeland: '+25% strength while it stands in your own land.',
+  foreign_lands: '+20% strength while it stands outside your own land.',
+  haka: 'Enemy units next to it fight at -10% strength.',
+  amphibious: 'No penalty for attacking from the sea or across a river.',
   political_treatise: 'Writes a political treatise: culture toward your next policy.',
   withdraw: 'May attack and still move.',
 };

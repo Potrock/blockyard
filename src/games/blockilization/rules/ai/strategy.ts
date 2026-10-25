@@ -2,11 +2,12 @@ import { sizeOf } from '../armies';
 import { allyOf, cityStates } from '../citystates';
 import { cityMaxHp, cityStrength } from '../combat';
 import { askOf, capitulationProblem, dealer, dealProblem, declinedLately, friends, pacted, warWords, type Deal, type WarWhy } from '../diplomacy';
-import { atWar, capitalOf, citiesOf, knows, note, random } from '../core';
+import { atWar, capitalOf, citiesOf, note, random } from '../core';
 import { score } from '../game';
 import { within } from '../hex';
 import type { City, Game, Player } from '../state';
 import { scenarioOf } from '../starts';
+import { canEmbark } from '../movement';
 import { masterOf, sameSide, sideOf, teamedWithPeople, teamOf } from '../teams';
 import { independence } from '../vassals';
 import { TERRAINS } from '../terrain';
@@ -232,7 +233,7 @@ function targetCity(ctx: Ctx, o: Player): { city: number; near: number; amphibio
     const home = nearestCity(ctx, c.tile);
     if (!home) continue;
     const across = !sameLand(game, home.tile, c.tile);
-    if (across && !(knows(p, 'optics') && coastal(game, c.tile) && seaRoute(game, p, home.tile, c.tile))) continue;
+    if (across && !(canEmbark(game, p.index) && coastal(game, c.tile) && seaRoute(game, p, home.tile, c.tile))) continue;
     // (Across the water, a strong or well-guarded city is all the worse: the army lands under it.)
     const guards = across ? game.units.filter((u) => u.owner === o.index && p.visible[u.tile] && isSoldier(u) && dist(ctx, u.tile, c.tile) <= 2).reduce((s, u) => s + sizeOf(u), 0) : 0;
     const d = dist(ctx, home.tile, c.tile) * (across ? 0.5 : 1) + (across ? 5 + guards : 0) + cityStrength(game, c) / 5 + (c.capital && mem.aim === 'domination' ? -1 : 0) + (c.capital && racing ? -8 : 0) + (c.founder === ctx.me ? -6 : freeable(ctx, c) ? -3 : 0) + (wanted(c) ? -10 : 0);
@@ -337,7 +338,7 @@ export function planWar(ctx: Ctx) {
     // The city's fallen (to us or anyone): on to their next.
     if (!city || city.owner !== plan.target) {
       if (city?.owner === ctx.me) plan.taken = game.turn;
-      const reach = (c: (typeof ctx.cities)[number]) => ctx.cities.some((m) => sameLand(game, m.tile, c.tile)) || (knows(p, 'optics') && coastal(game, c.tile));
+      const reach = (c: (typeof ctx.cities)[number]) => ctx.cities.some((m) => sameLand(game, m.tile, c.tile)) || (canEmbark(game, p.index) && coastal(game, c.tile));
       // (Pressing for the capitals: theirs next, if it can be reached.)
       const race = capitalsRace(ctx);
       const open = citiesOf(game, plan.target).filter((c) => p.explored[c.tile] && reach(c));

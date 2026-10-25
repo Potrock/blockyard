@@ -8,7 +8,7 @@ import { cityBeliefEffects, cityReligion, religionEffects } from './faith';
 import { alliedLuxuries, alliedStrategics, cityStateBonus } from './citystates';
 import { banned, fundedGreatPeople, inForce } from './congress';
 import { projectEffects } from './projects';
-import { tradeLuxuries, tradeStrategics } from './diplomacy';
+import { lentLuxuries, tradeLuxuries, tradeStrategics } from './diplomacy';
 import { aroundYields, naturalWonderOf, natureHappiness } from './nature';
 import { SPEEDS, type City, type Game, type Player, type Unit } from './state';
 import { teammates } from './teams';
@@ -188,11 +188,15 @@ export function freshWater(game: Game, t: number): boolean {
   return neighbours(game.grid, t).some((n) => game.tiles[n].terrain === 'lake' || game.tiles[n].feature === 'oasis' || game.tiles[n].river || !!naturalWonderOf(game.tiles[n])?.freshWater);
 }
 
+/** Whether a civ has twice the yields and happiness of natural wonders (Spain). */
+const seesWondersDouble = (p: Player) => civOf(p).ability.effects.special?.includes('natural_wonders_double') ?? false;
+
 /** What a tile yields to its owner (before a city's buildings): a natural wonder its own yields, nothing else; land by one that enriches it, more. */
 export function tileYields(game: Game, t: number, p: Player | null): Yields {
   const tile = game.tiles[t];
   const wonder = naturalWonderOf(tile);
-  if (wonder) return { ...wonder.yields };
+  // (Spain's Seven Cities of Gold: twice what each gives.)
+  if (wonder) return p && seesWondersDouble(p) ? Object.fromEntries(Object.entries(wonder.yields).map(([k, v]) => [k, (v ?? 0) * 2])) : { ...wonder.yields };
   if (tile.elevation === 'mountain' || tile.feature === 'ice') return {};
   let y: Yields = tile.elevation === 'hills' ? { ...HILLS.yields } : { ...TERRAINS[tile.terrain].yields };
   if (tile.feature) {
@@ -594,15 +598,19 @@ function moodOf(game: Game, p: Player, parts?: { label: string; value: number }[
   tell('Base', 9);
   tell('City-state friends', friends);
   const lux = luxuries(game, p);
-  const fromLuxuries = lux.size * (4 + civ.reduce((s, e) => s + (e.happinessPerLuxury ?? 0), 0));
+  const perLuxury = 4 + civ.reduce((s, e) => s + (e.happinessPerLuxury ?? 0), 0);
+  const fromLuxuries = lux.size * perLuxury;
   // Cultural Diplomacy: luxuries from city-state allies half again as cheering.
   const own = has(civ, 'cs_resources_double') ? ownLuxuries(game, p) : null;
   const allied = own ? new Set(alliedLuxuries(game, p).filter((r) => lux.has(r) && !own.has(r))).size * 2 : 0;
-  good += fromLuxuries + allied;
+  // The Netherlands: a luxury traded away (the last of it) still half as cheering.
+  const traded = has(civ, 'luxuries_traded_half') ? [...lentLuxuries(game, p).sent.keys()].filter((r) => !lux.has(r) && !banned(game, r)).length * (perLuxury / 2) : 0;
+  good += fromLuxuries + allied + traded;
   tell(`Luxuries (${lux.size} kind${lux.size === 1 ? '' : 's'})`, fromLuxuries + allied);
+  tell('Luxuries traded away', traded);
   const big = has(civ, 'happiness_per_10_pop') ? cities.reduce((s, c) => s + Math.floor(c.pop / 10), 0) : 0;
   const faith = religionHappiness(game, p);
-  const nature = natureHappiness(game, p.index);
+  const nature = natureHappiness(game, p.index) * (seesWondersDouble(p) ? 2 : 1);
   good += big + faith + nature;
   tell('Large cities', big);
   tell('Religion', faith);
