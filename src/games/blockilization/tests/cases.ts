@@ -6354,6 +6354,43 @@ test('clans: one left alone grows into a city-state where its camp was, its raid
   ok(clansOf(game).some((x) => x.tile === camp3), 'an old camp given a clan');
 });
 
+test('barbarians: a worker they take is led back to its captors’ camp (not into a fight), and taken back on the way or by clearing the camp', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { barbarians: true });
+  const [egypt] = game.players;
+  egypt.bot = false;
+  const b = game.players.findIndex((x) => x.civ === 'barbarian');
+  const camp = at(18, 10);
+  game.tiles[camp].camp = true;
+  const clan = newClan(game, camp);
+  city(game, 0, at(6, 10));
+  // (A soldier of Egypt's by its land: the worker, taken, once went for it as a raider would, and died.)
+  unit(game, 'warrior', 0, at(9, 12), { stance: 'fortify' });
+  const worker = unit(game, 'worker', 0, at(11, 10), { auto: 'work' });
+  unit(game, 'warrior', b, at(12, 10), { clan: clan.id });
+  barbarianTurn(game);
+  ok(game.units.includes(worker) && worker.owner === b, 'the worker is the barbarians’');
+  ok(worker.clan === clan.id && !worker.auto, 'its captors’ clan’s, and no longer at work for Egypt');
+  ok(egypt.notes.some((n) => n.text.startsWith('Your Worker was captured by barbarians, who are taking it back to their camp')), 'Egypt is told where it’s taken');
+  for (let i = 0; i < 10 && game.units.includes(worker) && worker.tile !== camp; i++) endTurn(game);
+  ok(game.units.includes(worker) && worker.owner === b, 'it’s still there, the barbarians’');
+  eq(worker.tile, camp, 'it has walked back to the camp');
+  endTurn(game);
+  eq(worker.tile, camp, 'and waits there');
+  // Caught on the way: Egypt's again.
+  const captive = unit(game, 'worker', b, at(10, 4), { clan: clan.id });
+  const rescuer = unit(game, 'warrior', 0, at(9, 4));
+  egypt.notes = [];
+  ok(apply(game, 0, { t: 'move', unit: rescuer.id, to: captive.tile }).ok, 'stepped on');
+  ok(captive.owner === 0 && captive.clan === undefined, 'taken back, no clan’s');
+  ok(egypt.notes.some((n) => n.text === 'You have freed a Worker from the barbarians.'), 'Egypt is told');
+  // The camp cleared: the worker in it Egypt's.
+  const defender = unit(game, 'warrior', b, camp, { clan: clan.id, hp: 1 });
+  const attacker = unit(game, 'swordsman', 0, neighbours(game.grid, camp)[0]);
+  ok(apply(game, 0, { t: 'attack', unit: attacker.id, target: camp }).ok, 'the camp attacked');
+  ok(!game.units.includes(defender) && attacker.tile === camp && !game.tiles[camp].camp, 'its defender killed, the camp cleared');
+  eq(worker.owner, 0, 'the worker in it taken back');
+});
+
 test('clans: a bot bribes a clan by its cities, pays one near its enemy to raid it, and hires a warrior at war', () => {
   const { game, at } = blank(['egypt', 'babylon'], { barbarians: true });
   const [egypt] = game.players;

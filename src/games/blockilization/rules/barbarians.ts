@@ -7,19 +7,23 @@ import { campCleared } from './quests';
 import { clanAt, clanById, clanPillaged, clansTurn, endClan, newClan, raidTarget, spares } from './clans';
 import type { Game, Unit } from './state';
 import { TERRAINS } from './terrain';
-import { UNITS } from './units';
+import { isMilitary, UNITS } from './units';
 
 /**
  * Barbarians, Civ V's way: camps appear in land nobody can see, each sends out a raider every so
  * often (stronger as the world's techs advance), raiders go for whatever's near (units, workers,
  * cities) and pillage what they stand on, and whoever clears a camp takes 25 gold (Germany, often a
- * raider who joins them too). They never take a city.
+ * raider who joins them too). They never take a city. A worker (or settler) they catch is theirs, a
+ * worker led back to the camp, where it waits for anyone to take it back (Civ V's).
  *
  * Each camp is a clan's (`clans.ts`): its raiders leave alone the civs that have bribed it, and go
  * after the one it's been paid to raid, more of them, and farther.
  */
 
 export const barbarianIndex = (game: Game) => game.players.findIndex((p) => p.civ === 'barbarian');
+
+/** The barbarians' fighting units (not the workers they've taken). */
+const raiders = (game: Game, b: number) => unitsOf(game, b).filter((u) => isMilitary(UNITS[u.type]));
 
 /** The unit a camp sends out: by the most advanced civ's era. */
 function raider(game: Game): string {
@@ -56,14 +60,31 @@ export function barbarianTurn(game: Game) {
     const paid = raidTarget(game, clan) !== null;
     if (random(game) > (paid ? 0.2 : 0.06)) return;
     const near = within(game.grid, t, 1).find((x) => canEnter(game, { id: -1, type: 'warrior', owner: b, tile: x, moves: 0, hp: 100, xp: 0, promotions: [] }, x));
-    const around = game.units.filter((x) => x.owner === b && distance(game.grid, x.tile, t) <= 4).length;
-    if (near !== undefined && around < (paid ? 4 : 2) && (paid || unitsOf(game, b).length < maxCamps * 2)) spawnUnit(game, raider(game), b, near, { clan: clan?.id });
+    const around = raiders(game, b).filter((x) => distance(game.grid, x.tile, t) <= 4).length;
+    if (near !== undefined && around < (paid ? 4 : 2) && (paid || raiders(game, b).length < maxCamps * 2)) spawnUnit(game, raider(game), b, near, { clan: clan?.id });
   });
-  // Raiders: attack what's next to them, else head for something within reach, else wander.
+  // Raiders: attack what's next to them, else head for something within reach, else wander. The
+  // workers they've taken: back to the camp.
   for (const u of unitsOf(game, b)) {
     if (!game.units.includes(u)) continue;
-    raid(game, u, b);
+    if (isMilitary(UNITS[u.type])) raid(game, u, b);
+    else homeward(game, u);
   }
+}
+
+/**
+ * A worker the barbarians have taken, led back to its captors' camp (or, theirs gone, the nearest),
+ * to wait there: beside it, if another waits in it already. With no camp left, it waits where it is.
+ */
+function homeward(game: Game, u: Unit) {
+  const clan = clanById(game, u.clan);
+  const camps = game.tiles.flatMap((tile, t) => (tile.camp ? [t] : [])).sort((a, c) => distance(game.grid, a, u.tile) - distance(game.grid, c, u.tile));
+  const camp = clan && game.tiles[clan.tile]?.camp ? clan.tile : camps[0];
+  u.path = undefined;
+  if (camp === undefined || u.tile === camp) return;
+  const to = [camp, ...neighbours(game.grid, camp).sort((a, c) => distance(game.grid, a, u.tile) - distance(game.grid, c, u.tile))].find((t) => t === u.tile || canEnter(game, u, t));
+  if (to === undefined || to === u.tile) return;
+  u.path = planPath(game, u, to) ?? undefined;
 }
 
 function raid(game: Game, u: Unit, b: number) {
