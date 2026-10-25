@@ -241,6 +241,13 @@ export const canFortify = (type: UnitType) => isMilitary(type) && type.domain ==
 export const isGreatPerson = (type: string) => UNITS[type]?.class === 'great';
 
 /**
+ * Whether a unit type is kept out of land closed to it (another civ's, at peace, without open
+ * borders): every unit, soldier or civilian, but those that carry a faith (missionaries,
+ * inquisitors and Great Prophets go into rival land without leave, Civ V's).
+ */
+export const heedsBorders = (type: string) => !UNITS[type]?.abilities?.some((a) => a === 'spread_religion' || a === 'remove_heresy');
+
+/**
  * The place a unit takes on a tile, one unit to each (Civ V's one soldier and one civilian to a
  * tile): a civilian's (great people too), a soldier's, or, at sea, a land soldier's in its boat
  * (embarked), so a ship and a soldier it sails with share the water (Civ VI's escort).

@@ -16,7 +16,7 @@ import { fromPromotions, promotionsDue, promotionsFor, PROMOTIONS } from './prom
 import { liberate, liberation } from './liberation';
 import { pledge, pledgeOffended } from './pledges';
 import { distance, neighbours, within } from './hex';
-import { advance, campHooks, canEnter, captureHooks, moveTo, occupants, planPath, ruinHooks, sightStops, swap, swapWith } from './movement';
+import { advance, campHooks, canEnter, captureHooks, closedLand, moveTo, occupants, planPath, ruinHooks, sightStops, swap, swapWith } from './movement';
 import { wondersBeside } from './nature';
 import { adoptable, ALL_POLICIES, IDEOLOGIES, policyMet, TREES, treeDone } from './policies';
 import { BELIEF_LIST, BELIEFS, pantheonCost, takenBeliefs } from './religion';
@@ -33,7 +33,7 @@ import { startSequence, waitsFor, warBegun } from './turns';
 import { climateTurn } from './climate';
 import { disasterTurn } from './disasters';
 import { FALLOUT, FEATURES, IMPROVEMENTS, RESOURCES, SEA_WORK, tapsWith, TERRAINS, type ImprovementId } from './terrain';
-import { canFortify, isGreatPerson, isMilitary, PARADROP_RANGE, UNIT_LIST, UNITS } from './units';
+import { canFortify, heedsBorders, isGreatPerson, isMilitary, PARADROP_RANGE, UNIT_LIST, UNITS } from './units';
 
 /**
  * The rules: every order a player can give (each checked: a player only commands their own, and only
@@ -1117,8 +1117,7 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
       // (A civilian sent at an enemy would only stop next to it.)
       const foe = cityAt(game, o.to) ?? occupants(game, o.to).military ?? occupants(game, o.to).civilian;
       if ((!isMilitary(UNITS[u.type]) || isGreatPerson(u.type)) && foe && atWar(game, by, foe.owner)) return fail(`${aUnit(u.type)} can't go where an enemy is`);
-      const owner = game.players[game.tiles[o.to].owner];
-      if (owner && owner !== p && !owner.cityState && !atWar(game, by, owner.index) && !owner.diplomacy.openBorders[by] && isMilitary(UNITS[u.type]) && !isGreatPerson(u.type)) return fail(`${owner.name}'s borders are closed to you (open borders come by a deal)`);
+      if (heedsBorders(u.type) && closedLand(game, by, o.to)) return fail(`${game.players[game.tiles[o.to].owner].name}'s borders are closed to you (open borders come by a deal)`);
       // (A settler sent to a city site: it's told if the site's lost on the way.)
       u.site = UNITS[u.type].abilities?.includes('found_city') && canFound(game, o.to) ? o.to : undefined;
       if (moveTo(game, u, o.to)) return OK;
@@ -1850,17 +1849,15 @@ export function endTurn(game: Game) {
 }
 
 /**
- * Soldiers standing in land that's closed to them (borders grown over them, open borders ended) are
- * moved out, Civ V's way, to the nearest tile they may stand on (dry land first): else, unable to
- * step anywhere in that land, they'd be stuck there for good.
+ * Units standing in land that's closed to them (borders grown over them, open borders ended), soldiers
+ * and civilians alike, are moved out, Civ V's way, to the nearest tile they may stand on (dry land
+ * first): else, unable to step anywhere in that land, they'd be stuck there for good. (Missionaries,
+ * inquisitors and prophets may stay: closed borders don't keep them out.)
  */
 function expel(game: Game) {
   for (const u of game.units) {
     const type = UNITS[u.type];
-    if (!type || !isMilitary(type) || isGreatPerson(u.type) || isAircraft(u)) continue;
-    const owner = game.tiles[u.tile].owner;
-    const them = game.players[owner];
-    if (!them || owner === u.owner || them.cityState || atWar(game, u.owner, owner) || them.diplomacy.openBorders[u.owner]) continue;
+    if (!type || !heedsBorders(u.type) || isAircraft(u) || !closedLand(game, u.owner, u.tile)) continue;
     const near = within(game.grid, u.tile, 8)
       .filter((t) => t !== u.tile && canEnter(game, u, t))
       .sort((a, b) => distance(game.grid, u.tile, a) - distance(game.grid, u.tile, b) || Number(!!TERRAINS[game.tiles[a].terrain].water) - Number(!!TERRAINS[game.tiles[b].terrain].water))[0];
@@ -1869,6 +1866,8 @@ function expel(game: Game) {
     u.path = undefined;
     u.stance = undefined;
     u.fortified = 0;
+    // (A worker's job there is left behind with the tile.)
+    u.work = undefined;
     u.embarked = type.domain === 'land' && TERRAINS[game.tiles[near].terrain].water ? true : undefined;
     // (A carrier's aircraft go with it.)
     carry(game, u);

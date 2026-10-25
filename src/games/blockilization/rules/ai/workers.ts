@@ -167,35 +167,44 @@ export function workers(ctx: Ctx, list: Unit[]) {
     if (u.work) continue;
     const mine = mem.orders[u.id];
     if (mine) busy.delete(mine.to);
-    let best: Job | null = null;
-    let bestScore = -Infinity;
-    for (const job of jobs) {
-      if (busy.has(job.tile) || (civilianAt(ctx, job.tile) && civilianAt(ctx, job.tile) !== u)) continue;
-      const far = dist(ctx, u.tile, job.tile);
-      if (far > (job.young ? 16 : 12)) continue;
-      const score = job.value - far * (job.young ? 0.35 : 0.7);
-      if (score > bestScore) (bestScore = score), (best = job);
-    }
-    if (!best && roads.length) {
-      const t = roads.filter((x) => !busy.has(x) && d[x] === 0 && canBuild(game, { ...u, tile: x }, 'road')).sort((a, b) => dist(ctx, a, u.tile) - dist(ctx, b, u.tile))[0];
-      if (t !== undefined) best = { tile: t, what: 'road', value: 1 };
-    }
-    if (!best) {
-      delete mem.orders[u.id];
-      // (Nothing to do: out of a city, where it would keep another civilian from it, to the land beside it, out of reach.)
-      if (cityOn(ctx, u.tile) && d[u.tile] === 0) {
-        const aside = neighbours(game.grid, u.tile).find((t) => game.tiles[t].owner === ctx.me && !d[t] && !cityOn(ctx, t) && !TERRAINS[game.tiles[t].terrain].water && passable(ctx, u, t));
-        if (aside !== undefined) act(ctx, { t: 'move', unit: u.id, to: aside });
+    // (A job it finds no way to, with another civ's land closed to it in the way, is passed over for the next best: a few at most.)
+    const noWay = new Set<number>();
+    for (let tries = 0; tries < 3; tries++) {
+      let best: Job | null = null;
+      let bestScore = -Infinity;
+      for (const job of jobs) {
+        if (busy.has(job.tile) || noWay.has(job.tile) || (civilianAt(ctx, job.tile) && civilianAt(ctx, job.tile) !== u)) continue;
+        const far = dist(ctx, u.tile, job.tile);
+        if (far > (job.young ? 16 : 12)) continue;
+        const score = job.value - far * (job.young ? 0.35 : 0.7);
+        if (score > bestScore) (bestScore = score), (best = job);
       }
-      continue;
+      if (!best && roads.length) {
+        const t = roads.filter((x) => !busy.has(x) && !noWay.has(x) && d[x] === 0 && canBuild(game, { ...u, tile: x }, 'road')).sort((a, b) => dist(ctx, a, u.tile) - dist(ctx, b, u.tile))[0];
+        if (t !== undefined) best = { tile: t, what: 'road', value: 1 };
+      }
+      if (!best) {
+        delete mem.orders[u.id];
+        // (Nothing to do: out of a city, where it would keep another civilian from it, to the land beside it, out of reach.)
+        if (cityOn(ctx, u.tile) && d[u.tile] === 0) {
+          const aside = neighbours(game.grid, u.tile).find((t) => game.tiles[t].owner === ctx.me && !d[t] && !cityOn(ctx, t) && !TERRAINS[game.tiles[t].terrain].water && passable(ctx, u, t));
+          if (aside !== undefined) act(ctx, { t: 'move', unit: u.id, to: aside });
+        }
+        break;
+      }
+      busy.add(best.tile);
+      if (best.tile === u.tile) {
+        delete mem.orders[u.id];
+        act(ctx, { t: 'build', unit: u.id, what: best.what });
+        break;
+      }
+      const there = goTo(ctx, u, best.tile, 'work', d);
+      if (there && u.moves > 0) act(ctx, { t: 'build', unit: u.id, what: best.what });
+      // (There, or on its way: else its orders are gone, as there's no way there.)
+      if (there || mem.orders[u.id]) break;
+      busy.delete(best.tile);
+      noWay.add(best.tile);
     }
-    busy.add(best.tile);
-    if (best.tile === u.tile) {
-      delete mem.orders[u.id];
-      act(ctx, { t: 'build', unit: u.id, what: best.what });
-      continue;
-    }
-    if (goTo(ctx, u, best.tile, 'work', d) && u.moves > 0) act(ctx, { t: 'build', unit: u.id, what: best.what });
   }
   mem.crew = Object.fromEntries(list.map((u) => [u.id, u.tile]));
 }

@@ -2,18 +2,18 @@ import { canFound } from '../game';
 import { freshWater, tileYields } from '../economy';
 import { neighbours, within } from '../hex';
 import type { Unit } from '../state';
-import { canEmbark } from '../movement';
+import { canEmbark, closedLand } from '../movement';
 import { teamOf } from '../teams';
 import { RESOURCES, TERRAINS } from '../terrain';
-import { act, cityOn, civilianAt, coastal, danger, dist, goTo, militaryAt, sameLand, seaRoute, type Ctx } from './context';
+import { act, cityOn, civilianAt, coastal, danger, dist, goTo, landRoute, militaryAt, route, sameLand, seaRoute, type Ctx } from './context';
 
 /**
  * Where to found cities: each land tile's worth as a city site (its land's food and production, fresh
  * water, the coast, a hill to stand on, luxuries, strategic resources and natural wonders); then, for
- * each bot, the sites still open to it (not too near another city, not in another's land, not where
- * enemies roam; on its own land or, with Optics, a coast over the water), nearer home better, new
- * luxuries better still. Settlers go to the best and found there, and wait in a city while barbarians
- * are about.
+ * each bot, the sites still open to it (not too near another city, not in another's land nor beyond
+ * land closed to it, not where enemies roam; on its own land or, with Optics, a coast over the
+ * water), nearer home better, new luxuries better still. Settlers go to the best and found there,
+ * and wait in a city while barbarians are about.
  */
 
 /** What a site's tile of two food or more counts beyond its yields, for each food past the first (`FOOD_BONUS`: tests and scripts may set it). */
@@ -68,6 +68,8 @@ export function bestSite(ctx: Ctx, from: number, settler?: Unit): { tile: number
   for (const tile of game.tiles) if (tile.owner === ctx.me && tile.resource && RESOURCES[tile.resource].kind === 'luxury') haveLux.add(tile.resource);
   let best: { tile: number; score: number } | null = null;
   const reach = ctx.cities.length ? 12 : 4;
+  // (Whether any land is closed to it: only then is a site on its own land maybe out of its settlers' reach.)
+  const fenced = game.tiles.some((_, x) => closedLand(game, ctx.me, x));
   for (const t of within(game.grid, from, reach)) {
     if (!p.explored[t] || !canFound(game, t) || !Number.isFinite(siteValue(ctx, t))) continue;
     const tile = game.tiles[t];
@@ -96,6 +98,9 @@ export function bestSite(ctx: Ctx, from: number, settler?: Unit): { tile: number
     if (best && s <= best.score) continue;
     // (A way there by sea, looked for only when the site would do.)
     if (overseas && !seaRoute(game, p, from, t)) continue;
+    // (Nor one it couldn't get to over its land, with another civ's land closed to it in the way: the
+    // settler's own way there, else a way that keeps out of such land.)
+    if (!overseas && fenced && !(settler ? route(ctx, settler, t) : landRoute(game, from, t, p))) continue;
     best = { tile: t, score: s };
   }
   return best;
