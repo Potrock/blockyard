@@ -3,7 +3,7 @@ import type { UnitWire, View } from '../protocol';
 import { dangerCost, dangerZones, type Danger } from '../rules/danger';
 import { ALL, findWay, neighbours, type Walker } from '../rules/hex';
 import { FEATURES, HILLS, RAIL_MOVE, ROAD_MOVE, TERRAINS } from '../rules/terrain';
-import { isGreatPerson, isMilitary, stackKind, UNITS } from '../rules/units';
+import { heedsBorders, isGreatPerson, isMilitary, stackKind, UNITS } from '../rules/units';
 import { cityAt, enemyAt, me, outOfReach, store } from './store';
 
 /**
@@ -67,7 +67,7 @@ function mover(u: UnitWire, view: View) {
     if (city && city.owner !== me()) return false;
     const owner = store.known[t]?.owner ?? -1;
     const them = owner >= 0 && owner !== me() ? view.players[owner] : undefined;
-    return !(military && them && !them.war && !them.cityState && !them.opensBorders);
+    return !(heedsBorders(u.type) && them && !them.war && !them.cityState && !them.opensBorders);
   };
   /** Next to an enemy unit or city (a zone of control: stepping from one into another ends the move). */
   const zoc = (t: number) =>
@@ -249,11 +249,11 @@ const ownThere = (u: UnitWire, t: number) => store.view?.units.find((x) => x.til
 /** Another civ's unit on a tile that the player isn't at war with: no unit of theirs can stop there (nor attack it). */
 const neutralThere = (t: number) => store.view?.units.find((x) => x.tile === t && x.owner !== me() && !store.view?.players[x.owner]?.war);
 
-/** Whether a tile is in land closed to a soldier: another civ's, at peace, without open borders to it. */
+/** Whether a tile is in land closed to a unit: another civ's, at peace, without open borders to it (missionaries, inquisitors and prophets aside). */
 function closedTo(u: UnitWire, t: number): boolean {
   const owner = store.known[t]?.owner ?? -1;
   const them = owner >= 0 && owner !== me() ? store.view?.players[owner] : undefined;
-  return soldier(u) && !!them && !them.war && !them.cityState && !them.opensBorders;
+  return heedsBorders(u.type) && !!them && !them.war && !them.cityState && !them.opensBorders;
 }
 
 /** Why a unit can't go to a tile, in a few words: what's in the way there, or that there's no way. */

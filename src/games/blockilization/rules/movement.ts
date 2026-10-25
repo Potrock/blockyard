@@ -5,7 +5,7 @@ import { dangerCost, dangerZones, type Danger } from './danger';
 import { ALL, distance, findWay, neighbours } from './hex';
 import type { Game, Unit } from './state';
 import { FEATURES, HILLS, RAIL_MOVE, ROAD_MOVE, TERRAINS } from './terrain';
-import { isGreatPerson, isMilitary, stackKind, UNITS } from './units';
+import { heedsBorders, isGreatPerson, isMilitary, stackKind, UNITS } from './units';
 
 /**
  * Moving: what each step costs (terrain, features, roads, rivers; the Great Wall's border and the
@@ -149,14 +149,20 @@ export function canEnter(game: Game, u: Unit, t: number, passing = false): boole
   const waits = (!!UNITS[u.type].abilities?.includes('trade_route') || isGreatPerson(u.type)) && city?.owner === u.owner;
   const held = holding(game, u.type, t, here);
   if (!passing && held && held !== u && (military || !waits)) return false;
-  // Closed borders: no entering another civ's land in peace without open borders (Civ V's).
+  // Closed borders: no entering another civ's land in peace without open borders (Civ V's), soldier or civilian.
+  return !(heedsBorders(u.type) && closedLand(game, u.owner, t));
+}
+
+/**
+ * Whether a tile is in land closed to a player's units: another civ's that it's at peace with and
+ * that hasn't opened its borders to it (their grant lets it in: open borders it has given them
+ * doesn't open their land to it). A city-state's land is open to all.
+ */
+export function closedLand(game: Game, by: number, t: number): boolean {
   const owner = game.tiles[t].owner;
-  if (owner >= 0 && owner !== u.owner && !atWar(game, u.owner, owner)) {
-    const them = game.players[owner];
-    // (Their grant lets us in: open borders we've given them doesn't open their land to us.)
-    if (!them.cityState && !them.diplomacy.openBorders[u.owner] && military) return false;
-  }
-  return true;
+  if (owner < 0 || owner === by || atWar(game, by, owner)) return false;
+  const them = game.players[owner];
+  return !!them && !them.cityState && !them.diplomacy.openBorders[by];
 }
 
 /**

@@ -27,7 +27,7 @@ import { congressProposal, congressVote } from '../rules/ai/congress';
 import { moveUnits } from '../rules/ai/military';
 import { exploreSea } from '../rules/ai/navy';
 import { pickProduction } from '../rules/ai/production';
-import { siteValue } from '../rules/ai/settle';
+import { bestSite, siteValue } from '../rules/ai/settle';
 import { canEnter, occupants, planPath, stepCost } from '../rules/movement';
 import { adoptable, ALL_POLICIES } from '../rules/policies';
 import { previewAttack, previewCityFire } from '../rules/preview';
@@ -1111,20 +1111,110 @@ test('meeting goes both ways, and lasts', () => {
   ok(hasMet(game, a, b) && hasMet(game, b, a), 'out of sight, still met');
 });
 
-test('a soldier in land closed to it is moved out as the turn ends (it could never step anywhere there)', () => {
+test('units in land closed to them are moved out as the turn ends, soldiers and civilians alike (they could never step anywhere there)', () => {
   const { game, at } = blank();
+  city(game, 0, at(2, 2));
   const theirs = city(game, 1, at(10, 8));
-  const inside = neighbours(game.grid, theirs.tile)[0];
+  const [inside, beside, third, fourth] = neighbours(game.grid, theirs.tile);
   const w = unit(game, 'warrior', 0, inside);
-  const scout = unit(game, 'worker', 0, neighbours(game.grid, theirs.tile)[1]);
+  const worker = unit(game, 'worker', 0, beside);
+  const musician = unit(game, 'great_musician', 0, third);
+  const missionary = unit(game, 'missionary', 0, fourth);
   endTurn(game);
   ok(game.tiles[w.tile].owner !== 1, 'the warrior is out of their land');
   eq(distance(game.grid, w.tile, inside), 1, 'to the nearest tile outside (next door: their land is one ring)');
-  eq(game.tiles[scout.tile].owner, 1, 'civilians may stay');
+  ok(game.tiles[worker.tile].owner !== 1 && distance(game.grid, worker.tile, beside) === 1, 'the worker too');
+  ok(game.tiles[musician.tile].owner !== 1, 'and a great person');
+  eq(missionary.tile, fourth, 'a missionary may stay (closed borders don’t keep the faith out)');
   w.tile = inside;
+  worker.tile = beside;
   game.players[1].diplomacy.openBorders[0] = 10;
   endTurn(game);
-  eq(w.tile, inside, 'with open borders it stays');
+  eq(w.tile, inside, 'with open borders the warrior stays');
+  eq(worker.tile, beside, 'and the worker');
+  // Open borders ended: out they go.
+  game.players[1].diplomacy.openBorders[0] = 0;
+  endTurn(game);
+  ok(game.tiles[w.tile].owner !== 1 && game.tiles[worker.tile].owner !== 1, 'once their borders close again, both are moved out');
+});
+
+test('closed borders keep civilians out as well as soldiers: no order into another civ’s land in peace, ways go round it; open borders, a war or a city-state’s land let them in; the faith goes in regardless', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { cityStates: 1 });
+  const [egypt, babylon] = game.players;
+  egypt.bot = false;
+  const theirs = city(game, 1, at(10, 8));
+  const inside = neighbours(game.grid, theirs.tile)[0];
+  const worker = unit(game, 'worker', 0, at(10, 4));
+  const settler = unit(game, 'settler', 0, at(10, 3));
+  const caravan = unit(game, 'caravan', 0, at(9, 3));
+  const musician = unit(game, 'great_musician', 0, at(11, 3));
+  for (const u of [worker, settler, caravan, musician]) ok(!canEnter(game, u, inside), `a ${u.type} can't step into their land`);
+  const refused = apply(game, 0, { t: 'move', unit: worker.id, to: inside });
+  ok(!refused.ok && !!refused.error?.includes('borders are closed'), `the order is refused, and says why (${refused.error})`);
+  eq(worker.tile, at(10, 4), 'the worker stays put');
+  // Across their land: round it.
+  const way = planPath(game, settler, at(10, 13))!;
+  ok(!!way?.length, 'a settler finds a way past them');
+  ok(way.every((t) => game.tiles[t].owner !== 1), 'round their land, not through it');
+  // Faith goes in without leave.
+  ok(canEnter(game, unit(game, 'missionary', 0, at(8, 4)), inside), 'a missionary may go in');
+  ok(canEnter(game, unit(game, 'great_prophet', 0, at(12, 4)), inside), 'and a Great Prophet');
+  // Open borders we've given them don't open their land to us; theirs given to us do.
+  egypt.diplomacy.openBorders[1] = 10;
+  ok(!canEnter(game, worker, inside), 'our borders open to them: theirs still closed to us');
+  babylon.diplomacy.openBorders[0] = 10;
+  for (const u of [worker, settler, caravan, musician]) ok(canEnter(game, u, inside), `with their borders open, a ${u.type} may go in`);
+  babylon.diplomacy.openBorders[0] = 0;
+  war(game, 0, 1);
+  ok(canEnter(game, worker, inside), 'at war, their land is no longer closed');
+  // A city-state's land is open to all.
+  const cs = game.players.find((p) => p.cityState)!;
+  const town = city(game, cs.index, at(18, 12));
+  ok(canEnter(game, unit(game, 'worker', 0, at(18, 9)), neighbours(game.grid, town.tile)[0]), 'a city-state’s land is open to everyone');
+});
+
+test('a bot’s settler doesn’t head for a site its land is cut off from by land closed to it; open borders, and it does', () => {
+  const sites = (wall: boolean, open = false) => {
+    const { game, at } = blank();
+    const [egypt, babylon] = game.players;
+    // Poor land west, good land east.
+    for (let t = 0; t < game.tiles.length; t++) if (colOf(game.grid, t) < 12) game.tiles[t].terrain = 'snow';
+    city(game, 0, at(4, 8));
+    const settler = unit(game, 'settler', 0, at(8, 8));
+    if (wall) for (let t = 0; t < game.tiles.length; t++) if (colOf(game.grid, t) === 12 || colOf(game.grid, t) === 13) game.tiles[t].owner = 1;
+    if (open) babylon.diplomacy.openBorders[0] = 10;
+    for (let t = 0; t < game.tiles.length; t++) egypt.explored[t] = 1;
+    const site = bestSite(makeCtx(game, egypt), settler.tile, settler);
+    return site && colOf(game.grid, site.tile);
+  };
+  ok((sites(false) ?? 0) > 13, 'with nothing in the way, the good land east');
+  ok((sites(true) ?? 0) < 12, 'beyond another’s closed land, not');
+  ok((sites(true, true) ?? 0) > 13, 'with their borders open to it, east again');
+});
+
+test('a bot’s worker passes over a job it can’t get to past land closed to it for one it can', () => {
+  const run = (wall: boolean) => {
+    const { game, at } = blank();
+    const egypt = game.players[0];
+    techsTo(game, 0, 4);
+    city(game, 0, at(4, 8));
+    city(game, 0, at(17, 8));
+    const worker = unit(game, 'worker', 0, at(9, 8));
+    // A luxury by the eastern city, the western one's land bare.
+    const lux = neighbours(game.grid, at(17, 8))[3];
+    game.tiles[lux].resource = 'wine';
+    game.tiles[lux].terrain = 'plains';
+    if (wall) for (let t = 0; t < game.tiles.length; t++) if (colOf(game.grid, t) === 12 || colOf(game.grid, t) === 13) game.tiles[t].owner = 1;
+    for (let t = 0; t < game.tiles.length; t++) egypt.explored[t] = 1;
+    const ctx = makeCtx(game, egypt);
+    workers(ctx, [worker]);
+    return { to: ctx.mem.orders[worker.id]?.to, lux, moved: worker.tile !== at(9, 8), col: (t: number) => colOf(game.grid, t) };
+  };
+  const free = run(false);
+  eq(free.to, free.lux, 'nothing in the way: off to the luxury');
+  const walled = run(true);
+  ok(walled.to !== undefined && walled.col(walled.to) < 12, 'walled off from it: a job on its own side');
+  ok(walled.moved, 'and it sets off this turn');
 });
 
 test('news names only civs the reader has met, and speaks to who it’s about', () => {

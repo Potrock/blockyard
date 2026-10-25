@@ -101,12 +101,13 @@ function slotUnderway(ctx: Ctx, work: 'art' | 'writing' | 'music'): boolean {
 
 /**
  * A Great Musician's concert tour, in the land of the civ the bot's culture holds least sway over (of
- * those it's met and at peace with): there, and it plays. False if there's none to go to.
+ * those it's met, at peace with and whose borders are open to it): there, and it plays. False if
+ * there's none it can go to.
  */
 function concertTour(ctx: Ctx, u: Unit): boolean {
   const { game, p } = ctx;
   const sway = (o: Player) => (p.tourism[o.index] ?? 0) / Math.max(1, o.lifetimeCulture);
-  const host = game.players.filter((o) => o !== p && o.alive && !o.cityState && o.civ !== 'barbarian' && hasMet(game, p, o) && !p.diplomacy.war[o.index]).sort((a, b) => sway(a) - sway(b))[0];
+  const host = game.players.filter((o) => o !== p && o.alive && !o.cityState && o.civ !== 'barbarian' && hasMet(game, p, o) && !p.diplomacy.war[o.index] && o.diplomacy.openBorders[p.index] > 0).sort((a, b) => sway(a) - sway(b))[0];
   if (!host) return false;
   if (game.tiles[u.tile].owner === host.index) return act(ctx, { t: 'greatPerson', unit: u.id, action: 'concert' });
   // (The nearest of its land it knows, not a city's own tile.)
@@ -114,7 +115,8 @@ function concertTour(ctx: Ctx, u: Unit): boolean {
   for (let t = 0; t < game.tiles.length; t++) if (game.tiles[t].owner === host.index && p.explored[t] && !cityOn(ctx, t) && !civilianAt(ctx, t) && !TERRAINS[game.tiles[t].terrain].water && (best < 0 || dist(ctx, u.tile, t) < dist(ctx, u.tile, best))) best = t;
   if (best < 0) return false;
   if (goTo(ctx, u, best, 'great')) act(ctx, { t: 'greatPerson', unit: u.id, action: 'concert' });
-  return true;
+  // (There, or on its way: else, with no way there, it does something else.)
+  return u.tile === best || !!ctx.mem.orders[u.id];
 }
 
 /** A Great Admiral: repairs the fleet once enough of it is hurt about it; else to the most hurt of its ships, or a port. */

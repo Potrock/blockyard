@@ -5,13 +5,13 @@ import { dangerCost, dangerZones, type Danger } from '../danger';
 import { happiness, type CityYields } from '../economy';
 import { apply, eraOf, type Order } from '../game';
 import { distance, neighbours, path, within } from '../hex';
-import { ALL, canCrossOcean, canEmbark, occupants, stepCost } from '../movement';
+import { ALL, canCrossOcean, canEmbark, closedLand, occupants, stepCost } from '../movement';
 import { questsFor, type QuestKind } from '../quests';
 import type { City, Game, Player, Unit } from '../state';
 import { teammates } from '../teams';
 import { TERRAINS } from '../terrain';
 import { unVote } from '../trade';
-import { isGreatPerson, isMilitary, UNITS } from '../units';
+import { heedsBorders, isGreatPerson, isMilitary, UNITS } from '../units';
 import { memoryOf, type BotMemory } from './memory';
 import { aimLeaning, personalityOf, type Personality } from './personality';
 import { nearVictory } from './opinion';
@@ -215,12 +215,7 @@ export function passable(ctx: Ctx, u: Unit, t: number, passing = false): boolean
   if (c && c.owner !== u.owner && !military) return false;
   // (A caravan, cargo ship or great person may stop in its own city beside another civilian, as the rules have it.)
   if (!passing && (military ? m && m !== u : c && c !== u && !((type.abilities?.includes('trade_route') || isGreatPerson(u.type)) && city?.owner === u.owner))) return false;
-  const owner = game.tiles[t].owner;
-  if (military && owner >= 0 && owner !== u.owner && !atWar(game, u.owner, owner)) {
-    const them = game.players[owner];
-    if (!them.cityState && !them.diplomacy.openBorders[u.owner]) return false;
-  }
-  return true;
+  return !(heedsBorders(u.type) && closedLand(game, u.owner, t));
 }
 
 /**
