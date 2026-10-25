@@ -61,6 +61,7 @@ const BTN_GREEN = button('#a6ec7c', '#2c6420');
 const BTN_RED = button('#ee7c64', '#5e1c12');
 const BTN_GOLD = button('#ffe48a', '#7a5a12');
 const BTN_BLUE = button('#a8dcff', '#1e4a80');
+const BTN_ORANGE = button('#ffcc88', '#7a3e10');
 const CHIP = frame(1, ['O'], { O: '#07090c' }, 2, 0);
 const CHIP_ON = frame(1, ['O'], { O: '#f2c14e' }, 2, 0);
 const TIP = frame(2, ['O', 'bev'], { O: '#07090c', H: '#5d6884', L: '#0d1015' });
@@ -73,6 +74,7 @@ const FACE_GREEN = face('#6cc04c', '#5fb042');
 const FACE_RED = face('#c04a34', '#b0412d');
 const FACE_GOLD = face('#e8bc48', '#dcae3a');
 const FACE_BLUE = face('#4a8ed8', '#3f80c8');
+const FACE_ORANGE = face('#d97e30', '#c97028');
 // Bars: blocks of 8 with a 2-pixel gap, each lit on top.
 const blocks = (bc: string, bh: string, bl: string) => `background: repeating-linear-gradient(90deg, transparent 0 8px, #0f1218 8px 10px), linear-gradient(180deg, ${bh} 0 2px, ${bc} 2px calc(100% - 2px), ${bl} calc(100% - 2px)) !important;`;
 
@@ -210,6 +212,11 @@ export const PIXEL_CSS = `
 .cv-unit .acts .cv-btn.small { padding: 2px 5px 3px !important; gap: 4px !important; font-size: 17px !important; }
 .cv-unit .cv-ustats { font-size: 13px !important; }
 .cv-unit .cv-ustats b { font-size: 22px !important; line-height: 1; ${SH} }
+.cv-unit .cv-work { ${border(SLOT_SM)} background: #2c2519 !important; background-clip: padding-box !important; box-shadow: none !important; padding: 5px 8px 6px !important; }
+.cv-unit .cv-work .going { font: 400 21px/1 ${D} !important; letter-spacing: .03em; ${SH} } .cv-unit .cv-work .left { color: #fff !important; }
+.cv-unit .cv-work small { font-size: 13px !important; }
+.cv-btn.on { ${border(BTN_ORANGE)} ${FACE_ORANGE} color: #fff !important; text-shadow: 2px 2px 0 #5a2a08 !important; cursor: default !important; }
+.cv-btn.on:hover:not(.off), .cv-btn.on:active:not(.off) { ${FACE_ORANGE} transform: none !important; }
 .cv-mod { font: 400 16px/1.1 ${D} !important; letter-spacing: .04em; padding: 1px 6px !important; }
 .cv-mod.up { background: #24402a !important; box-shadow: inset 0 0 0 2px #3c6a3c; } .cv-mod.down { background: #4a2420 !important; box-shadow: inset 0 0 0 2px #7a3a30; }
 .cv-defence { font-size: 14px !important; } .cv-defence b { font-size: 20px; ${SH} }

@@ -26,6 +26,9 @@ let asked = '';
 /** Workers on their way to recommended work: where, what to build there, where they set out from and when. */
 const plans = new Map<number, { tile: number; what: BuildWhat; from: number; turn: number }>();
 
+/** Where a worker of yours is on its way to recommended work, and what it builds there. */
+export const workPlan = (unit: number) => plans.get(unit);
+
 /** A new game: the last one's plans (and advice) go (its unit ids mean other units now). */
 export function resetWorkPlans() {
   plans.clear();
@@ -71,6 +74,7 @@ export function buildName(what: BuildWhat, t: number): string {
   if (what === 'rail') return 'Railroad';
   if (what === 'repair') return 'Repair';
   if (what === 'scrub_fallout') return 'Scrub Fallout';
+  if (what === 'artifact') return 'Artifact';
   if (what === 'remove_feature') {
     const f = store.terrain[t]?.feature;
     return f ? `Clear the ${FEATURES[f].name}` : 'Clear the land';

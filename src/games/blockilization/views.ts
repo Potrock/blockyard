@@ -4,7 +4,7 @@ import { BUILDINGS } from './rules/buildings';
 import { canPillage, cityMaxHp, cityStrength, strength, type Modifier } from './rules/combat';
 import { atWar, citiesOf, civEffects, has, knows, seesResource, seesUnit, techCost } from './rules/core';
 import { assignCitizens, blockaded, cityEffects, cityYields, goldUpkeep, goldenCost, growthThreshold, happiness, luxuries, nextTile, policyCost, purchaseCost, SPECIALIST_YIELD, specialistSlots, strategic, tileCultureCost, tileGoldCost, tileYields, workedYields } from './rules/economy';
-import { ANARCHY_TURNS, blockers, buyable, canChooseIdeology, ideologySwitch, constructible, eraOf, faithPurchases, heldBuildings, itemCost, productionToward, reformationDue, score, trainable, trainOptions, upgradeCost, upgradeTo, workTurns } from './rules/game';
+import { ANARCHY_TURNS, blockers, buyable, canChooseIdeology, ideologySwitch, constructible, eraOf, faithPurchases, heldBuildings, itemCost, productionToward, reformationDue, score, trainable, trainOptions, upgradeCost, upgradeTo, workLeft } from './rules/game';
 import { distance, neighbours, within } from './rules/hex';
 import { pantheonCost } from './rules/religion';
 import type { City, Game, Player, Production, Unit } from './rules/state';
@@ -365,7 +365,7 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
         w.setUp = u.setUp;
         w.skip = u.skip;
         w.auto = u.auto;
-        if (u.work) w.work = { what: u.work.what, turns: Math.max(0, Math.ceil(workTurns(game, u.work.what) - u.work.done)) };
+        if (u.work) w.work = { what: u.work.what, ...workLeft(game, u)! };
         w.promotions = u.promotions;
         w.promotionsDue = promotionsDue(u);
         if (w.promotionsDue > 0) w.promotionOptions = promotionsFor(u).map((x) => x.id);

@@ -837,6 +837,21 @@ export function workTurns(game: Game, what: string): number {
   return Math.max(1, Math.round(base * speed(game)));
 }
 
+/** How much work a civ's units do a turn: a turn's worth, more with Citizenship, the Pyramids... */
+export const workRate = (game: Game, p: Player) => 1 + civEffects(game, p).reduce((s, e) => s + (e.workRate ?? 0), 0) / 100;
+
+/**
+ * How many turns a unit's work has left at its civ's pace, and how far along it is. This turn counts
+ * only if it still has a move at the turn's end (work isn't done with none: one that walked there
+ * and used them up starts next turn).
+ */
+export function workLeft(game: Game, u: Unit): { turns: number; progress: number } | undefined {
+  if (!u.work) return undefined;
+  const total = workTurns(game, u.work.what);
+  const turns = Math.max(1, Math.ceil((total - u.work.done) / workRate(game, game.players[u.owner]) - 1e-9));
+  return { turns: turns + (u.moves > 0 ? 0 : 1), progress: Math.min(1, u.work.done / total) };
+}
+
 /** What an order's field must be: a whole number, a tile of the map, a whole number or nothing, a string, one of some strings (or nothing, null or left out, where null is one), a list of strings, a list (checked where it's used), a yes or no, a production item; `?` when it may be left out. */
 type Field = 'int' | 'tile' | 'int|null' | 'string' | 'strings' | 'list' | 'bool' | 'bool?' | 'item' | readonly (string | null)[];
 
@@ -1151,6 +1166,8 @@ function applyOrder(game: Game, by: number, o: Order): Outcome {
     }
     case 'build': {
       if (!canBuild(game, u, o.what)) return fail(buildWhy(game, u, o.what));
+      // (Told again what it's already at: it carries on, keeping what it's done.)
+      if (u.work?.what === o.what) return OK;
       u.work = { what: o.what, done: 0 };
       u.path = undefined;
       if (SEA_WORK.includes(o.what)) {
@@ -2085,7 +2102,7 @@ function unitTurn(game: Game, u: Unit) {
   const p = game.players[u.owner];
   // Workers' work (faster with Citizenship, the Pyramids...); an archaeologist's dig.
   if (u.work && u.moves > 0) {
-    u.work.done += 1 + civEffects(game, p).reduce((s, e) => s + (e.workRate ?? 0), 0) / 100;
+    u.work.done += workRate(game, p);
     const w = u.work.what;
     if (u.work.done >= workTurns(game, w) && (w === 'artifact' || (w === 'landmark' && type.abilities?.includes('archaeology')))) {
       dig(game, p, u, w);

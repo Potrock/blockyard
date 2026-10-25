@@ -2,6 +2,7 @@ import type { Client, ClientRooms } from '@platform/client';
 import { centre } from '../geometry';
 import type { CityInfo, CityWire, ClientToServer, LobbyAction, UnitWire, View } from '../protocol';
 import { takenAlive } from '../rules/combat';
+import { aName } from '../rules/core';
 import { article, formationBonus, formationKind, unitName } from '../rules/armies';
 import type { CombatPreview, PreviewSide } from '../rules/preview';
 import { BUILDINGS, SPACESHIP_PARTS } from '../rules/buildings';
@@ -35,7 +36,7 @@ import { gameId, roomCode } from '../saves';
 import { ADVICE_CSS, adviceTag, researchHint } from './advice';
 import { POLITICS_CSS } from './politics';
 import { heldTile, tileMenuFree } from './input';
-import { workQuiet, workTip, workTipLines } from './workadvice';
+import { workPlan, workQuiet, workTip, workTipLines } from './workadvice';
 import { FAME_CSS, renderFame } from './fame';
 import { defenceAdvice } from './defend';
 import { closePinMenu, pinButtons, pinColor, pinMenuOpen, pinsButton, PINS_CSS, pinTip, renderPinList, renderPinMenu } from './pins';
@@ -1194,15 +1195,15 @@ function drawMinimap(cv: HTMLCanvasElement) {
 // The selected unit
 // -------------------------------------------------------------------------------------------------
 
-/** Improvements a worker might build on its tile, and what each does there (the server checks it can). */
-function buildOptions(t: number): { what: string; name: string; does: string }[] {
+/** Improvements a worker might build on its tile, and what each does there (an improvement's yields and resource: `gives`). The server checks it can. */
+function buildOptions(t: number): { what: string; name: string; does: string; gives?: string }[] {
   const v = store.view!;
   const techs = new Set(v.self.techs);
   const s = store.terrain[t];
   const k = store.known[t];
   // (Nothing's built on a natural wonder, not even a road.)
   if (!s || !k || k.wonder) return [];
-  const out: { what: string; name: string; does: string }[] = [];
+  const out: { what: string; name: string; does: string; gives?: string }[] = [];
   // (No road on the water: an embarked worker builds none, as the rules' `canBuild` has it.)
   if (!k.road && techs.has('the_wheel') && !TERRAINS[s.terrain].water) out.push({ what: 'road', name: 'Road', does: 'Faster moves, and a link from a city to your capital' });
   if (k.road === 'road' && techs.has('railroad')) out.push({ what: 'rail', name: 'Railroad', does: 'Much faster moves' });
@@ -1217,7 +1218,8 @@ function buildOptions(t: number): { what: string; name: string; does: string }[]
     if (imp.great || (imp.tech && !techs.has(imp.tech)) || k.improvement === id || cleared(id, t)) continue;
     const res = k.resource && tapsWith({ resource: k.resource, terrain: s.terrain }) === id ? RESOURCES[k.resource] : undefined;
     const gain = yieldWords(addYields(imp.yields, res?.improved ?? {}));
-    if (imp.on.includes('resource') ? res : fitsLand(id, t) || res) out.push({ what: id, name: imp.name, does: `${imp.name}: ${gain || 'no yields of its own'} here${res ? ` (with the ${res.name}${res.kind === 'bonus' ? '' : `: your empire gets the ${res.name}`})` : ''}` });
+    const gives = `${gain || 'no yields of its own'} here${res ? ` (with the ${res.name}${res.kind === 'bonus' ? '' : `: your empire gets the ${res.name}`})` : ''}`;
+    if (imp.on.includes('resource') ? res : fitsLand(id, t) || res) out.push({ what: id, name: imp.name, does: `${imp.name}: ${gives}`, gives });
   }
   if (s.feature && FEATURES[s.feature].removable && techs.has(FEATURES[s.feature].removable!.tech)) out.push({ what: 'remove_feature', name: `Clear ${FEATURES[s.feature].name}`, does: `Clear the ${FEATURES[s.feature].name}${FEATURES[s.feature].removable!.prod ? ': its wood is production for the nearest city' : ''}` });
   return out;
@@ -1280,7 +1282,42 @@ function seaBlocked(t: number): { what: ImprovementId; name: string; why: string
 export const BUILD_GLYPH: Record<string, string> = {
   road: 'trade', rail: 'rail', repair: 'hammer', farm: 'wheat', mine: 'pick', pasture: 'cattle', camp: 'deer', plantation: 'leaf', quarry: 'stone',
   trading_post: 'gold', lumber_mill: 'hammer', fishing_boats: 'fish', oil_well: 'oil', offshore_platform: 'oil', fort: 'shield', remove_feature: 'axe', scrub_fallout: 'drop',
+  landmark: 'pick', artifact: 'frame',
 };
+
+/** What a unit at work is doing on its tile, in words: 'Building a Farm', 'Clearing the Forest'. */
+export function workWords(what: string, t: number): string {
+  const s = store.terrain[t];
+  const k = store.known[t];
+  if (what === 'road') return 'Building a Road';
+  if (what === 'rail') return 'Laying a Railroad';
+  if (what === 'repair') return `Repairing the pillaged ${k?.improvement ? (IMPROVEMENTS[k.improvement as ImprovementId]?.name ?? 'improvement') : 'Road'}`;
+  if (what === 'remove_feature') return `Clearing the ${s?.feature ? FEATURES[s.feature].name : 'land'}`;
+  if (what === 'scrub_fallout') return 'Scrubbing away the Fallout';
+  if (what === 'landmark') return 'Making the site a Landmark';
+  if (what === 'artifact') return 'Digging up an Artifact';
+  return `Building ${aName(IMPROVEMENTS[what as ImprovementId]?.name ?? what.replace('_', ' '))}`;
+}
+
+/** When a unit's work is done, in words: its turns left counted as `views.ts` counts them (this turn the first, if it has a move). */
+export const workWhen = (turns: number) => (turns <= 1 ? 'done at the end of this turn' : `${turns} turns left`);
+
+/**
+ * A unit at work's lines on its card: what it's doing, how far along, when it's done, and (an
+ * improvement) what that brings; or, with its moves spent, that the work only starts next turn.
+ */
+function workRow(u: UnitWire): El {
+  const w = u.work!;
+  const spent = (u.moves ?? 0) <= 0;
+  const gives = buildOptions(u.tile).find((b) => b.what === w.what)?.gives;
+  return h(
+    'div.cv-work',
+    { title: `${Math.round(w.progress * 100)}% done` },
+    h('div.going', {}, icon(BUILD_GLYPH[w.what] ?? 'hammer', 14, '#f0a24a'), h('span.cv-grow', {}, workWords(w.what, u.tile)), h('span.left', {}, workWhen(w.turns))),
+    h('div.cv-bar.orange', {}, h('i', { style: `width:${Math.round(w.progress * 100)}%` })),
+    spent ? h('small.spent', {}, 'No moves left this turn: the work starts next turn') : gives ? h('small.cv-muted', {}, `When done: ${gives}`) : null,
+  );
+}
 
 /** The selected unit's card's line for where the mouse is (how many turns to get there), kept current every frame. */
 let arrival: El | null = null;
@@ -1308,12 +1345,21 @@ function renderUnit(): El | null {
   if (u.auto) act('Stop automating', { t: 'automate', unit: u.id, mode: null }, 'Take it back: it waits for your orders again', 'close', '.gold');
   else if (type.abilities?.includes('build') || type.abilities?.includes('build_sea')) act('Automate', { t: 'automate', unit: u.id, mode: 'work' }, 'Let it improve your land by itself each turn (E): luxuries and resources first, then the tiles your cities work, then roads', 'gear');
   else if (explores(u)) act('Explore', { t: 'automate', unit: u.id, mode: 'explore' }, `Let it explore by itself each turn, until there is nothing left to see${type.domain === 'sea' ? ' on the seas' : ''}; then it heads home (E)`, 'compass');
-  // (The advisor's recommended work here, if any, in gold: `workadvice.ts`.)
+  // (The advisor's recommended work here, if any, in gold; the work it's on its way to: `workadvice.ts`.)
   const advised = workTip(u.tile);
+  const plan = workPlan(u.id);
+  const then = plan && workWords(plan.what, plan.tile);
   // (A work boat builds fishing boats, or an offshore platform on Oil, on a sea resource in your waters, and is spent doing it.)
   const sea = !type.abilities?.includes('build') && !!type.abilities?.includes('build_sea');
   const builds = type.abilities?.includes('build') ? buildOptions(u.tile) : sea ? buildOptions(u.tile).filter((b) => SEA_WORK.includes(b.what)).map((b) => ({ ...b, does: `${b.does}. The ${type.name} is spent building it` })) : [];
-  for (const b of builds) act(b.name, { t: 'build', unit: u.id, what: b.what as never }, advised?.what === b.what ? `Advised: ${advised.why}. ${b.does}` : b.does, BUILD_GLYPH[b.what] ?? 'hammer', advised?.what === b.what || sea ? '.gold' : '');
+  // (At work: its work's button marked as under way, and a word on each other that switching loses what's done.)
+  const busy = u.work && { ...u.work, words: workWords(u.work.what, u.tile) };
+  for (const b of builds)
+    if (busy?.what === b.what) act(b.name, () => {}, `${busy.words}: ${workWhen(busy.turns)}`, BUILD_GLYPH[b.what] ?? 'hammer', '.on');
+    else {
+      const does = advised?.what === b.what ? `Advised: ${advised.why}. ${b.does}` : b.does;
+      act(b.name, { t: 'build', unit: u.id, what: b.what as never }, busy ? `${does}. Stops what it's doing now (${busy.words.toLowerCase()}) and starts this instead: the work done so far is lost` : does, BUILD_GLYPH[b.what] ?? 'hammer', advised?.what === b.what || sea ? '.gold' : '');
+    }
   const blocked = type.abilities?.includes('build') ? buildBlocked(u.tile) : sea ? seaBlocked(u.tile) : [];
   // (Why the advisor marks no work for it, when it marks none.)
   const quiet = workQuiet();
@@ -1372,7 +1418,9 @@ function renderUnit(): El | null {
       ? 'Exploring by itself each turn. Any order takes it back.'
       : type.abilities?.includes('found_city')
     ? 'Move to good land (rivers, coast, food), then found a city.'
-    : type.abilities?.includes('build')
+    : u.work
+      ? 'Moving it or giving it other work stops this, and what it has done is lost.'
+      : type.abilities?.includes('build')
       ? 'Improve tiles your cities work: farms, mines, roads.'
       : type.abilities?.includes('combat_bonus_aura')
         ? `${ABILITY_TEXT.combat_bonus_aura} Keep it with your army (it can share a tile with a soldier), out of the enemy's reach.`
@@ -1408,7 +1456,6 @@ function renderUnit(): El | null {
           type.ranged ? h('span', { title: 'Ranged strength · range' }, icon('ranged', 14, '#6ab8ff'), h('b', {}, `${type.ranged}`), formed, ` · ${reachOf(u)}`) : null,
           h('span', { title: 'Moves' }, icon('moves', 14, '#7bd16a'), h('b', {}, `${Math.round((u.moves ?? 0) * 10) / 10}/${u.maxMoves ?? type.moves}`)),
           u.xp ? h('span', { title: 'Experience' }, icon('xp', 14, '#f2c14e'), h('b', {}, String(u.xp))) : null,
-          u.work ? h('span', {}, icon('hammer', 14), h('b', {}, `${u.work.turns} turn${u.work.turns === 1 ? '' : 's'}`)) : null,
         ),
       ),
     ),
@@ -1425,8 +1472,11 @@ function renderUnit(): El | null {
       ),
     // (Standing where an enemy city's walls reach: they fire at it each turn, fortified or not.)
     isMilitary(type) && type.domain !== 'air' && wallsOver(u.tile) && h('div.going.danger', {}, icon('war', 14, '#e0604a'), h('span', {}, `In range of ${wallsOver(u.tile)!.name}'s walls: they fire at it each turn`)),
+    // At work: what, how far along, when it's done.
+    u.work && workRow(u),
     // Its orders: where it's going, and when it gets there; the units gathered with it.
-    u.path?.length ? h('div.going', {}, icon('moves', 14, '#ffd23a'), h('span', {}, `Moving to ${placeName(u.path[u.path.length - 1])} · ${arrives(routeOf(u))}${marching(u.id) ? ' (with its group, at the pace of the slowest)' : ''}`)) : null,
+    // (A worker sent to recommended work: what it builds when it gets there, `workadvice.ts`.)
+    u.path?.length ? h('div.going', {}, icon('moves', 14, '#ffd23a'), h('span', {}, `Moving to ${placeName(u.path[u.path.length - 1])} · ${arrives(routeOf(u))}${marching(u.id) ? ' (with its group, at the pace of the slowest)' : ''}${then ? `, then ${then.charAt(0).toLowerCase()}${then.slice(1)}` : ''}`)) : null,
     // (One of a march that's ahead waits a turn for the slowest, with no way of its own to show.)
     !u.path?.length &&
       marchOf(u.id) &&
