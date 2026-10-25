@@ -450,22 +450,34 @@ export function die(game: Game, u: Unit, by: Unit | null, how?: string) {
   cityHooks.killed(game, u, by);
 }
 
-/** A civilian taken by a military unit: settlers become workers (Civ V's), workers change hands. */
 /** Whether an enemy's civilian of this type is taken when caught (workers, settlers), not killed (great people, missionaries, caravans). */
 export const takenAlive = (type: string) => !isGreatPerson(type) && !['missionary', 'inquisitor', 'caravan', 'cargo_ship'].includes(type);
 
+/**
+ * A civilian taken by a military unit: settlers become workers (Civ V's), workers change hands. One
+ * the barbarians take is led back to their camp (`barbarians.ts`), for anyone to take back on the
+ * way there or by clearing the camp.
+ */
 export function capture(game: Game, by: Unit, civ: Unit) {
+  const name = UNITS[civ.type].name;
   if (!takenAlive(civ.type)) {
     removeUnit(game, civ);
-    note(game, civ.owner, { text: `Your ${UNITS[civ.type].name} was killed by ${game.players[by.owner].name}'s ${UNITS[by.type].name}.`, at: civ.tile, kind: 'bad' });
+    note(game, civ.owner, { text: `Your ${name} was killed by ${game.players[by.owner].name}'s ${UNITS[by.type].name}.`, at: civ.tile, kind: 'bad' });
     return;
   }
-  note(game, civ.owner, { text: `Your ${UNITS[civ.type].name} was captured.`, at: civ.tile, kind: 'bad' });
+  const barbarians = game.players[by.owner].civ === 'barbarian';
+  note(game, civ.owner, { text: barbarians ? `Your ${name} was captured by barbarians, who are taking it back to their camp: catch it on the way, or clear the camp, to free it.` : `Your ${name} was captured.`, at: civ.tile, kind: 'bad' });
+  if (game.players[civ.owner].civ === 'barbarian') note(game, by.owner, { text: `You have freed a ${name} from the barbarians.`, at: civ.tile, kind: 'good' });
   civ.owner = by.owner;
   civ.type = civ.type === 'settler' ? 'worker' : civ.type;
+  // (Taken by a clan's raider, it's that clan's, and goes to its camp; taken from them, no one's.)
+  civ.clan = by.clan;
   civ.moves = 0;
   civ.path = undefined;
   civ.work = undefined;
+  civ.auto = undefined;
+  civ.stance = undefined;
+  civ.site = undefined;
   if (TERRAINS[game.tiles[civ.tile].terrain].water) removeUnit(game, civ);
 }
 

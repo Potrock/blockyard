@@ -266,6 +266,8 @@ export function drawModels(client: Client, dt: number) {
         units.set(u.id, s);
       }
       s.seen = frame;
+      // (Whose it is now: a worker captured is the captor's, and isn't seen to die when it walks off out of sight.)
+      s.owner = u.owner;
       // Moved: it marches there, tile by tile.
       if (s.tile !== t) {
         march(s, u, s.tile, t, tx, tz, client.time);
