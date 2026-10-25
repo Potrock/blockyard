@@ -144,6 +144,10 @@ select.cv-input { width: auto; flex: 1; }
 .cv-blocked > div { display: flex; align-items: center; gap: 6px; } .cv-blocked b { font-weight: 700; color: var(--text); }
 .cv-unit .going { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; color: #ffe3a1; }
 .cv-unit .going.danger { color: #f0a090; }
+.cv-unit .cv-work { display: flex; flex-direction: column; gap: 4px; padding: 7px 9px; border-radius: var(--r2); background: rgba(240,162,74,.1); box-shadow: inset 0 0 0 1px rgba(240,162,74,.3); }
+.cv-unit .cv-work .going { color: #ffd9a8; } .cv-unit .cv-work .left { color: var(--text); white-space: nowrap; }
+.cv-unit .cv-work small { font-size: 12px; } .cv-unit .cv-work .spent { color: #ffe3a1; }
+.cv-btn.on { background: rgba(240,162,74,.18); box-shadow: inset 0 0 0 1px #f0a24a; color: #ffd9a8; cursor: default; }
 .cv-unit .arrive { font-size: 12px; font-weight: 700; color: #cfe6ff; } .cv-unit .arrive:empty { display: none; } .cv-unit .arrive.no { color: #ff9a8e; }
 .cv-promos { display: flex; flex-direction: column; gap: 5px; padding: 8px; border-radius: 10px; background: rgba(242,193,78,.1); border: 1px solid rgba(242,193,78,.3); }
 .cv-promo { display: block; text-align: left; padding: 6px 9px; border-radius: 8px; background: rgba(242,193,78,.12); border: 1px solid rgba(242,193,78,.35) !important; transition: background .12s; }

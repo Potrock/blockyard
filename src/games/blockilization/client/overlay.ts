@@ -14,6 +14,7 @@ import { marchingAt } from './models3d';
 import { drawPins } from './pins';
 import { drawPings } from './chat';
 import { drawWorkTips } from './workadvice';
+import { BUILD_GLYPH } from './ui';
 import { previewPath, routeOf, type Route } from './path';
 import { mapFont } from './pixel';
 import { cityAt, enemyAt, me, myUnit, reachOf, attackable, store, TEAM_COLORS, tone } from './store';
@@ -706,8 +707,8 @@ export function drawOverlay(now: number) {
       ctx.textBaseline = 'middle';
       shadowText(label, tx + tw / 2, ty + th / 2 + 1, '#f2c14e');
     }
-    // Fortified, asleep, working: a small sign at its corner.
-    const sign = u.stance === 'fortify' ? 'shield' : u.stance === 'sleep' ? 'turn' : u.work ? 'hammer' : '';
+    // Fortified, asleep, working (the sign of what it's building): a small sign at its corner.
+    const sign = u.stance === 'fortify' ? 'shield' : u.stance === 'sleep' ? 'turn' : u.work ? (BUILD_GLYPH[u.work.what] ?? 'hammer') : '';
     if (sign && own) {
       ctx.fillStyle = 'rgba(13,19,27,0.9)';
       dotPath(x + fw / 2, y - fw / 2, size * 0.42);

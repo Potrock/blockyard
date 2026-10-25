@@ -484,6 +484,29 @@ test('workers: the Pyramids and Citizenship each a quarter faster', () => {
   void p;
 });
 
+test('workers: their card is told the turns left at their pace, and how far along; told again, they carry on', () => {
+  const { game, at } = blank();
+  const p = game.players[0];
+  city(game, 0, at(5, 5));
+  techsTo(game, 0, 1);
+  const w = unit(game, 'worker', 0, at(6, 5));
+  const left = () => viewFor(game, p, null).units.find((x) => x.id === w.id)!.work!;
+  ok(apply(game, 0, { t: 'build', unit: w.id, what: 'farm' }).ok, 'build a farm');
+  const total = workTurns(game, 'farm');
+  eq(left().turns, total, 'all of it, this turn the first');
+  eq(left().progress, 0, 'nothing done yet');
+  endTurn(game);
+  eq(left().turns, total - 1, 'a turn less');
+  near(left().progress, 1 / total, 'a turn of it done');
+  ok(apply(game, 0, { t: 'build', unit: w.id, what: 'farm' }).ok, 'told again');
+  eq(w.work?.done, 1, 'what it had done is kept');
+  w.moves = 0;
+  eq(left().turns, total, 'with no moves left, this turn does no work');
+  w.moves = 2;
+  adopt(game, 0, 'citizenship');
+  eq(left().turns, Math.ceil((total - 1) / 1.25), 'a quarter faster');
+});
+
 // -------------------------------------------------------------------------------------------------
 // Combat
 // -------------------------------------------------------------------------------------------------

@@ -222,7 +222,8 @@ export interface UnitWire {
   maxMoves?: number;
   stance?: string;
   path?: number[];
-  work?: { what: string; turns: number };
+  /** Own units at work: what (an improvement's id, or `road`, `repair`, `remove_feature`...), the turns it has left (this one counted if it has a move to spend), how far along it is (0 to 1). */
+  work?: { what: string; turns: number; progress: number };
   xp?: number;
   attacked?: boolean;
   setUp?: boolean;

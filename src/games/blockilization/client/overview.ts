@@ -1,5 +1,6 @@
 import { centre } from '../geometry';
 import type { CityWire, DemographicId, UnitWire } from '../protocol';
+import type { BuildWhat } from '../rules/game';
 import { CIVS } from '../rules/civs';
 import { distance } from '../rules/hex';
 import { ERA_NAMES, ERAS } from '../rules/techs';
@@ -7,8 +8,9 @@ import { UNITS } from '../rules/units';
 import { lookAt } from './camera';
 import { emblemEl, GREAT_GLYPH, icon, svg, YIELD_COLOR } from './icons';
 import { me, store } from './store';
-import { askCity, cityBuild, h, itemArt, itemName, openCity, pic, portrait, tell, tile, togglePanel, type El } from './ui';
+import { askCity, cityBuild, h, itemArt, itemName, openCity, pic, portrait, tell, tile, togglePanel, workWhen, workWords, type El } from './ui';
 import { unitModel } from './models3d';
+import { buildName } from './workadvice';
 import { renderPolitics } from './politics';
 
 /**
@@ -261,7 +263,7 @@ function renderUnits(): El {
             return h(
               `div.ov-unit${chosen ? '.chosen' : ''}`,
               { onclick: (e: MouseEvent) => select(u, e), title: 'Click to select it; shift-click to add it to the selected unit’s group' },
-              h('span.st', { style: `color:${STATUS[st][1]}` }, h('i.dot', { style: `background:${STATUS[st][1]}` }), st === 'working' && u.work ? `${STATUS[st][0]} (${u.work.turns}t)` : st === 'moving' ? `${STATUS[st][0]} (${u.path!.length} tile${u.path!.length === 1 ? '' : 's'})` : STATUS[st][0]),
+              h('span.st', { style: `color:${STATUS[st][1]}`, title: st === 'working' && u.work ? `${workWords(u.work.what, u.tile)}: ${workWhen(u.work.turns)}` : undefined }, h('i.dot', { style: `background:${STATUS[st][1]}` }), st === 'working' && u.work ? `${buildName(u.work.what as BuildWhat, u.tile)} (${u.work.turns}t)` : st === 'moving' ? `${STATUS[st][0]} (${u.path!.length} tile${u.path!.length === 1 ? '' : 's'})` : STATUS[st][0]),
               u.embarked && h('span.cv-chip', {}, 'at sea'),
               h('span.cv-grow.cv-muted', {}, whereIs(u)),
               h('span.hp', {}, h(`div.cv-bar.${u.hp > 50 ? 'green' : u.hp > 25 ? 'gold' : 'red'}`, {}, h('i', { style: `width:${u.hp}%` }))),
