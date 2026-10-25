@@ -3,7 +3,7 @@ import { canFortify, isMilitary, UNITS } from '../rules/units';
 import type { CityWire, PreviewAsk, UnitWire } from '../protocol';
 import { cam, centreHere, pick, zoom } from './camera';
 import { flagsIn, hitAt, type Hit } from './overlay';
-import { ask, attackable, cityAt, enemyAt, me, myCity, myUnit, store, unitsAt } from './store';
+import { ask, attackable, cityAt, enemyAt, isNuke, me, myCity, myUnit, store, unitsAt } from './store';
 import { closePanels, endTurnAction, explores, front, openCity, platformMenuOpen, selectNextIdle, send, setTipPosition, toggleLens, togglePanel } from './ui';
 import { openPedia, tileArticle } from './pedia';
 import { openOverview } from './overview';
@@ -90,6 +90,9 @@ function talkAt(city: CityWire): boolean {
   return true;
 }
 
+/** Whether a unit is an aircraft of yours that could rebase to a tile now (as its owner's view lists: its cities and ships with room, in reach). */
+const rebasesTo = (u: UnitWire | undefined, t: number) => !!u && t !== u.tile && !!u.bases?.includes(t);
+
 /** A click on the map (or a tap, `touch`): on a unit's flag or a city's banner (`hit`), else on the tile under it. */
 function act(t: number, right: boolean, hit: Hit | null = null, touch = false, shift = false) {
   const v = store.view;
@@ -130,7 +133,8 @@ function act(t: number, right: boolean, hit: Hit | null = null, touch = false, s
       store.changed++;
       return;
     }
-    if (!right && city?.owner === me()) return openCity(city.id);
+    // (Your city's banner opens it: unless an aircraft of yours is selected that could rebase there, which goes.)
+    if (!right && city?.owner === me() && !rebasesTo(myUnit(store.selectedUnit), t)) return openCity(city.id);
     // (Another's banner: its city-state or its leader, unless a unit of yours is about to be sent there.)
     if (!right && city && !myUnit(store.selectedUnit) && talkAt(city)) return;
   }
@@ -138,7 +142,8 @@ function act(t: number, right: boolean, hit: Hit | null = null, touch = false, s
   const sel = myUnit(store.selectedUnit);
   const mineHere = unitsAt(t).filter((u) => u.owner === me());
   const city = cityAt(t);
-  if (!right) {
+  // (An aircraft selected, a click on where it could rebase: it goes there, not selecting what's there.)
+  if (!right && !rebasesTo(sel, t)) {
     // Selecting: your own units here (each click the next), else your city.
     if (sel && sel.tile === t && mineHere.length > 1) {
       const i = mineHere.findIndex((u) => u.id === sel.id);
@@ -194,8 +199,13 @@ function act(t: number, right: boolean, hit: Hit | null = null, touch = false, s
     store.changed++;
     return;
   }
-  if (attackable(sel, t)) send({ t: 'attack', unit: sel.id, target: t });
-  else if (UNITS[sel.type]?.domain === 'air') send({ t: 'rebase', unit: sel.id, to: t });
+  if (attackable(sel, t)) {
+    // (A nuclear strike can't be taken back, and the world won't forget it: asked first.)
+    if (isNuke(sel)) {
+      const unit = sel.id;
+      ask(`Launch the ${UNITS[sel.type].name} here? Everything in the blast is struck, its land left in fallout, and every civ that knows you will long remember it. It can only fall where everyone it would hit is someone you're at war with.`, 'Launch it', () => send({ t: 'attack', unit, target: t }));
+    } else send({ t: 'attack', unit: sel.id, target: t });
+  } else if (UNITS[sel.type]?.domain === 'air') send({ t: 'rebase', unit: sel.id, to: t });
   else {
     // A melee unit sent at an enemy it can reach this turn charges: next to it, then the attack.
     const from = chargeFrom(sel, t);

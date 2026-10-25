@@ -1833,6 +1833,8 @@ export function endTurn(game: Game) {
   congressTurn(game, eraOf);
   barbarianTurn(game);
   raze(game);
+  // (A city burnt to the ground loses the aircraft there, as one taken does.)
+  strandedAircraft(game);
   // The world's own turn: its disasters and its climate (what they did kept for the screens to show).
   const events = [...disasterTurn(game), ...climateTurn(game)];
   if (events.length) game.events = events;

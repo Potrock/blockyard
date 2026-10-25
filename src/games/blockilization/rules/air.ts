@@ -2,27 +2,48 @@ import { cityStrength, damage, die, gain, rangeOf, strength, type CombatResult }
 import { atWar, cityAt, note, removeUnit, seesUnit } from './core';
 import { distance } from './hex';
 import { occupants } from './movement';
+import { fromPromotions } from './promotions';
 import type { City, Game, Unit } from './state';
 import { isMilitary, UNITS } from './units';
 
 /**
  * Aircraft, Civ V's way (the basics). They live in their civ's cities (six to a city) and aboard its
- * carriers (three to a carrier, carried where it sails), rebase between them (up to twice their
- * range), and strike what's within range instead of moving (no line of sight needed). Before a strike
- * lands the defence may intercept it: the strongest of an enemy fighter on patrol with the target in
- * its range, or an enemy anti-aircraft unit within two tiles of it, fires on the striker first (each
- * once a turn). A striker that comes through takes something from the target's reply (more from a
- * city's guns). A city taken or a carrier sunk loses the aircraft there.
+ * ships that carry them (`CARGO`: a Carrier's fighters and bombers, a Missile Cruiser's or a Nuclear
+ * Submarine's missiles, carried where it sails), rebase between them (up to twice their range), and
+ * strike what's within range instead of moving (no line of sight needed). Before a strike lands the
+ * defence may intercept it: the strongest of an enemy fighter on patrol with the target in its range,
+ * or an enemy anti-aircraft unit within two tiles of it, fires on the striker first (each once a turn).
+ * A striker that comes through takes something from the target's reply (more from a city's guns); a
+ * Guided Missile is spent in its strike. A city taken or a ship sunk loses the aircraft there.
  */
 
 export const CITY_AIRCRAFT = 6;
-export const CARRIER_AIRCRAFT = 3;
+
+/**
+ * The ships that carry aircraft, and how many (Civ V's): a Carrier, fighters and bombers (not the
+ * Stealth Bomber) and the Atomic Bomb a bomber drops; a Missile Cruiser or a Nuclear Submarine,
+ * Guided and Nuclear Missiles.
+ */
+export const CARGO: Record<string, { room: number; missiles: boolean }> = {
+  carrier: { room: 3, missiles: false },
+  missile_cruiser: { room: 3, missiles: true },
+  nuclear_submarine: { room: 2, missiles: true },
+};
 
 export const isAircraft = (u: Unit) => UNITS[u.type]?.domain === 'air';
 
-const isCarrier = (u: Unit) => UNITS[u.type]?.class === 'carrier';
+/** A missile (not the Atomic Bomb: a bomber's load, as `combat.ts` has it). */
+const isMissile = (type: string) => UNITS[type]?.class === 'missile' && type !== 'atomic_bomb';
 
-/** Where an aircraft of `owner` could be based on a tile (not counting `self`): its city there, a carrier of its there with room, or nowhere (null). */
+/** Whether a ship of this type carries aircraft of that type (with `aircraft` unknown, whether it carries any). */
+export function carries(ship: string, aircraft?: string): boolean {
+  const cargo = CARGO[ship];
+  if (!cargo) return false;
+  if (aircraft === undefined) return true;
+  return cargo.missiles ? isMissile(aircraft) : !isMissile(aircraft) && aircraft !== 'stealth_bomber';
+}
+
+/** Where an aircraft of `owner` could be based on a tile (not counting `self`): its city there, a ship of its there with room for it, or nowhere (null). */
 export function airBase(game: Game, owner: number, t: number, self?: Unit): { carrier?: Unit } | null {
   const city = cityAt(game, t);
   if (city?.owner === owner && game.units.filter((a) => a !== self && a.tile === t && a.owner === owner && isAircraft(a) && a.carrier === undefined).length < CITY_AIRCRAFT) return {};
@@ -30,22 +51,48 @@ export function airBase(game: Game, owner: number, t: number, self?: Unit): { ca
   return carrier ? { carrier } : null;
 }
 
-/** A carrier of `owner`'s on a tile with room for one more aircraft (not counting `self`). */
+/** A ship of `owner`'s on a tile that carries `self`'s kind, with room for one more (not counting `self`). */
 const carrierWithRoom = (game: Game, owner: number, t: number, self?: Unit) =>
-  game.units.find((c) => c.tile === t && c.owner === owner && isCarrier(c) && game.units.filter((a) => a !== self && a.carrier === c.id).length < CARRIER_AIRCRAFT);
+  game.units.find((c) => c.tile === t && c.owner === owner && carries(c.type, self?.type) && game.units.filter((a) => a !== self && a.carrier === c.id).length < CARGO[c.type].room);
 
 /** How far an aircraft rebases: twice its strike range. */
 export const rebaseRange = (u: Unit) => rangeOf(u) * 2;
 
-/** An aircraft flies to another of its civ's cities or carriers (why it can't, if it can't). */
+/**
+ * Where an aircraft could be based on a tile it rebases to (null: nowhere). Where it is already, only
+ * the other kind of base there: from a city to a ship in its port, or from the ship to the city.
+ */
+function rebaseSpot(game: Game, u: Unit, to: number): { carrier?: Unit } | null {
+  if (to !== u.tile) return airBase(game, u.owner, to, u);
+  if (u.carrier === undefined) {
+    const ship = carrierWithRoom(game, u.owner, to, u);
+    return ship ? { carrier: ship } : null;
+  }
+  const city = cityAt(game, to);
+  return city?.owner === u.owner && game.units.filter((a) => a !== u && a.tile === to && a.owner === u.owner && isAircraft(a) && a.carrier === undefined).length < CITY_AIRCRAFT ? {} : null;
+}
+
+/** The tiles an aircraft could rebase to now (its own cities and ships with room for it, in reach), for the screens to show. */
+export function rebaseSpots(game: Game, u: Unit): number[] {
+  if (!isAircraft(u) || u.moves <= 0) return [];
+  const reach = rebaseRange(u);
+  const tiles = new Set<number>();
+  for (const c of game.cities) if (c.owner === u.owner) tiles.add(c.tile);
+  for (const s of game.units) if (s.owner === u.owner && carries(s.type, u.type)) tiles.add(s.tile);
+  return [...tiles].filter((t) => distance(game.grid, u.tile, t) <= reach && !!rebaseSpot(game, u, t));
+}
+
+/** An aircraft flies to another of its civ's cities or ships (why it can't, if it can't). */
 export function rebase(game: Game, u: Unit, to: number): string | null {
   if (u.moves <= 0) return 'It has no moves left this turn';
   if (distance(game.grid, u.tile, to) > rebaseRange(u)) return `Too far: aircraft rebase up to ${rebaseRange(u)} tiles`;
-  // (In a port, aboard the carrier there; else to the city or a carrier.)
-  const aboard = to === u.tile && u.carrier === undefined ? carrierWithRoom(game, u.owner, to, u) : undefined;
-  if (to === u.tile && !aboard) return 'It is based there already';
-  const base = aboard ? { carrier: aboard } : airBase(game, u.owner, to, u);
-  if (!base) return 'Only to one of your cities (six aircraft) or carriers (three) with room';
+  const base = rebaseSpot(game, u, to);
+  if (!base) {
+    if (to === u.tile) return 'It is based there already';
+    return isMissile(u.type)
+      ? 'Only to one of your cities (six aircraft), Missile Cruisers (three missiles) or Nuclear Submarines (two) with room'
+      : `Only to one of your cities (six aircraft)${u.type === 'stealth_bomber' ? '' : ' or Carriers (three)'} with room`;
+  }
   u.tile = to;
   u.carrier = base.carrier?.id;
   u.moves = 0;
@@ -96,7 +143,8 @@ export function airStrike(game: Game, u: Unit, target: number): CombatResult | n
     guard.by.intercepted = game.turn;
     // (A bomber is a bigger, slower mark than a fighter.)
     const evade = strength(game, u, 'ranged', guard.by, u.tile) * (UNITS[u.type].class === 'fighter' ? 1 : 0.6);
-    taken = damage(game, guard.power, evade);
+    // (Evasion takes some of it off.)
+    taken = Math.round(damage(game, guard.power, evade) * (1 - Math.min(100, fromPromotions(u, 'evasion')) / 100));
     u.hp -= taken;
     gain(game, guard.by, 2, u.owner);
     note(game, guard.by.owner, { text: `Your ${UNITS[guard.by.type].name} intercepted ${game.players[u.owner].name}'s ${UNITS[u.type].name}.`, at: guard.by.tile, kind: 'good' });
@@ -126,6 +174,11 @@ export function airStrike(game: Game, u: Unit, target: number): CombatResult | n
     killed = v.hp <= 0;
     if (killed) die(game, v, u);
   }
+  // A Guided Missile is spent in its strike (it takes no reply, and learns nothing from it).
+  if (UNITS[u.type].class === 'missile') {
+    removeUnit(game, u);
+    return { attacker: u.id, dealt, taken, killed, died: true, at: target };
+  }
   u.hp -= reply;
   taken += reply;
   gain(game, u, 3, aim.city?.owner ?? aim.unit!.owner);
@@ -134,12 +187,12 @@ export function airStrike(game: Game, u: Unit, target: number): CombatResult | n
   return { attacker: u.id, dealt, taken, killed, died, at: target };
 }
 
-/** A carrier's aircraft go where it goes. */
+/** A ship's aircraft go where it goes. */
 export function carry(game: Game, carrier: Unit) {
   for (const a of game.units) if (a.carrier === carrier.id) a.tile = carrier.tile;
 }
 
-/** Aircraft left with no base (their city taken, their carrier sunk) are lost. */
+/** Aircraft left with no base (their city taken or burnt, their ship sunk) are lost. */
 export function strandedAircraft(game: Game) {
   for (const a of game.units.filter(isAircraft)) {
     const based = a.carrier !== undefined ? game.units.some((c) => c.id === a.carrier && c.owner === a.owner) : cityAt(game, a.tile)?.owner === a.owner;

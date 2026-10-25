@@ -180,18 +180,21 @@ const STATUS: Record<string, [string, string]> = {
   fortified: ['Fortified', '#7bd16a'],
   sleeping: ['Asleep', '#8fa1b3'],
   alert: ['On alert', '#7bd16a'],
+  patrol: ['On patrol', '#7bd16a'],
   skipped: ['Waiting this turn', '#8fa1b3'],
   done: ['Done this turn', '#5f7286'],
 };
 
 function statusOf(u: UnitWire): string {
-  if ((u.promotionsDue ?? 0) > 0) return 'promote';
+  // (Due, and one open to it to take: as the unit's own card has it.)
+  if ((u.promotionsDue ?? 0) > 0 && u.promotionOptions?.length) return 'promote';
   if (u.work) return 'working';
   if (u.auto) return u.auto === 'explore' ? 'exploring' : 'automated';
   if (u.path?.length) return 'moving';
   if (u.stance === 'fortify') return 'fortified';
   if (u.stance === 'sleep') return 'sleeping';
-  if (u.stance === 'alert') return 'alert';
+  // (A fighter on alert is on patrol: intercepting.)
+  if (u.stance === 'alert') return UNITS[u.type]?.class === 'fighter' ? 'patrol' : 'alert';
   if (u.skip) return 'skipped';
   return (u.moves ?? 0) > 0 ? 'idle' : 'done';
 }

@@ -242,6 +242,8 @@ export interface UnitWire {
   destinations?: { city: number; name: string; gold: number; science: number; food: number; prod: number; home: boolean }[];
   /** Own units: whether it can pillage where it stands now. */
   pillage?: boolean;
+  /** Own aircraft: the tiles it could rebase to now (its cities and ships with room for it, in reach). */
+  bases?: number[];
   /** Own military units: their strength defending where they stand, and what changes it. */
   defence?: { strength: number; mods: Modifier[] };
   /** Own units: what they can be upgraded to now, and for how much gold. */

@@ -576,8 +576,22 @@ export function drawOverlay(now: number) {
     const committed = routeOf(sel);
     if (committed) drawPath(sel.tile, committed, 'committed', now);
     const goal = committed?.tiles[committed.tiles.length - 1];
+    // An aircraft doesn't go by a way: where it could rebase, outlined (as a rebase's aim has it, below).
+    const air = UNITS[sel.type]?.domain === 'air';
+    if (air && !store.unitAim) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(106,184,255,0.6)';
+      for (const t of sel.bases ?? []) if (hexPath(t, tileY(t), 0.9)) ctx.stroke();
+    }
     if (hover >= 0 && hover !== sel.tile && attackable(sel, hover)) drawTarget(hover);
-    else if (hover >= 0 && hover !== sel.tile && hover !== goal) {
+    else if (air) {
+      // (Nowhere it could rebase: no way there.)
+      if (hover >= 0 && hover !== sel.tile && known[hover] && !sel.bases?.includes(hover)) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(255,107,94,0.85)';
+        if (hexPath(hover, tileY(hover), 0.9)) ctx.stroke();
+      }
+    } else if (hover >= 0 && hover !== sel.tile && hover !== goal) {
       const preview = previewPath(sel, hover);
       if (preview) drawPath(sel.tile, preview, 'preview', now);
       else if (known[hover]) {
@@ -613,12 +627,14 @@ export function drawOverlay(now: number) {
     if (store.hover >= 0 && store.hover !== aiming.tile && enemyAt(store.hover)) drawTarget(store.hover);
   }
   // A unit choosing where to go by air: where it can (a paratrooper, empty land it knows within its
-  // drop's reach; an airlift, your other cities with an airport), outlined.
+  // drop's reach; an airlift, your other cities with an airport; an aircraft, its bases in reach), outlined.
   const flier = store.unitAim ? view.units.find((u) => u.id === store.unitAim!.unit) : undefined;
   if (flier && store.unitAim) {
     const places = store.unitAim.order === 'paradrop'
       ? within(g, flier.tile, PARADROP_RANGE).filter((t) => t !== flier.tile && known[t] && !TERRAINS[store.terrain[t]?.terrain]?.water && store.terrain[t]?.elevation !== 'mountain' && !view.units.some((u) => u.tile === t) && !cityAt(t))
-      : view.cities.filter((c) => c.owner === me() && c.tile !== flier.tile && c.buildings?.includes('airport')).map((c) => c.tile);
+      : store.unitAim.order === 'rebase'
+        ? (flier.bases ?? [])
+        : view.cities.filter((c) => c.owner === me() && c.tile !== flier.tile && c.buildings?.includes('airport')).map((c) => c.tile);
     ctx.lineWidth = 2;
     ctx.strokeStyle = 'rgba(106,184,255,0.75)';
     ctx.fillStyle = 'rgba(106,184,255,0.14)';

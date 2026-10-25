@@ -6,6 +6,7 @@ import type { Lens } from './lenses';
 import type { Reaction } from './leaderscene';
 import { prefs } from './prefs';
 import type { CombatPreview } from '../rules/preview';
+import { PROMOTIONS } from '../rules/promotions';
 import type { Yields } from '../rules/terrain';
 import { isGreatPerson, isMilitary, UNITS } from '../rules/units';
 
@@ -101,8 +102,8 @@ export interface Store {
   tap: { unit: number; tile: number } | null;
   /** A city of yours taking aim (its ranged attack): the next click on the map is its target. */
   cityTarget: number | null;
-  /** A unit of yours choosing where to go by air (a paratrooper's drop, an airlift): the next click on the map is where. */
-  unitAim: { unit: number; order: 'paradrop' | 'airlift' } | null;
+  /** A unit of yours choosing where to go by air (a paratrooper's drop, an airlift, an aircraft's rebase): the next click on the map is where. */
+  unitAim: { unit: number; order: 'paradrop' | 'airlift' | 'rebase' } | null;
   /** A move just ordered by a click: the unit, where to, and once the server has taken it, when (this screen's time): its destination's marker pulses, then the next unit can be selected. */
   ordered: { unit: number; to: number; at: number; taken: boolean; advanced?: boolean } | null;
   /** A question waiting for a yes (the sandboxed frame has no `confirm()`). */
@@ -315,10 +316,27 @@ export function enemyAt(t: number): boolean {
   return unitsAt(t).some((u) => war(u.owner)) || (!!city && war(city.owner));
 }
 
-/** How far a unit reaches with an attack: its range if it fires (the Range promotion one more), else next door. */
+/** How far a unit reaches with an attack: its range if it fires or flies (more with promotions: Range, Air Range), else next door. */
 export function reachOf(u: UnitWire): number {
   const type = UNITS[u.type];
-  return type?.ranged ? (type.range ?? 1) + (u.promotions?.includes('range') ? 1 : 0) : 1;
+  if (!type || (!type.ranged && type.domain !== 'air')) return 1;
+  return (type.range ?? 1) + (u.promotions ?? []).reduce((s, id) => s + (PROMOTIONS[id]?.range ?? 0), 0);
+}
+
+/** Whether a unit is a nuclear weapon (it strikes a tile, not a unit: `nukeable`). */
+export const isNuke = (u: UnitWire) => !!UNITS[u.type]?.abilities?.includes('nuke');
+
+/**
+ * Whether a nuclear weapon could be aimed at a tile, as far as this screen knows: a known tile in its
+ * range with an enemy there, or in an enemy's land. (The rules refuse it if the blast would reach
+ * anyone you're not at war with: the strike's confirmation says so.)
+ */
+export function nukeable(u: UnitWire, t: number): boolean {
+  const v = store.view;
+  const g = store.grid;
+  if (!v || !g || t === u.tile || !store.known[t] || distance(g, u.tile, t) > reachOf(u)) return false;
+  const owner = store.known[t]!.owner;
+  return enemyAt(t) || (owner >= 0 && owner !== me() && !!v.players[owner]?.war);
 }
 
 /**
@@ -335,6 +353,8 @@ export function outOfReach(u: UnitWire, t: number): string {
 export function attackable(u: UnitWire, t: number): boolean {
   const type = UNITS[u.type];
   const g = store.grid;
+  // (A nuclear weapon has no strength of its own: it strikes where it's aimed.)
+  if (type && isNuke(u)) return nukeable(u, t);
   if (!type || !isMilitary(type) || type.abilities?.includes('no_attack') || !g) return false;
   if (!store.known[t]?.visible || !enemyAt(t)) return false;
   // A ranged shot from the ground (as the rules' `ranged`): not from the water, and only at an enemy

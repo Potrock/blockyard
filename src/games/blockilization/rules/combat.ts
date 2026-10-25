@@ -212,8 +212,12 @@ function promotionCounts(when: PromotionWhen, game: Game, role: 'attack' | 'defe
       return fired;
     case 'vs_mounted':
       return !!vsUnit && UNITS[vsUnit.type].class === 'mounted';
+    case 'vs_land':
+      return !!vsUnit && UNITS[vsUnit.type].domain === 'land';
     case 'vs_ships':
       return !!vsUnit && UNITS[vsUnit.type].domain === 'sea';
+    case 'vs_aircraft':
+      return !!vsUnit && UNITS[vsUnit.type].domain === 'air';
     case 'vs_cities':
       return !!vsCity && role !== 'defend';
     case 'always':
@@ -452,7 +456,7 @@ export function cityFire(game: Game, c: City, target: number): CombatResult | nu
 /** A unit is destroyed (by someone, or nobody; `how` says by what when no unit did it: a city's walls, a citadel). */
 export function die(game: Game, u: Unit, by: Unit | null, how?: string) {
   removeUnit(game, u);
-  // A carrier sunk loses the aircraft aboard (however it was sunk: a unit, a city's fire, a strike, a citadel).
+  // A ship sunk loses the aircraft aboard (however it was sunk: a unit, a city's fire, a strike, a citadel).
   for (const a of game.units.filter((x) => x.carrier === u.id && x.owner === u.owner)) {
     removeUnit(game, a);
     note(game, a.owner, { text: `Your ${UNITS[a.type].name} was lost with its base.`, at: a.tile, kind: 'bad' });
@@ -635,6 +639,8 @@ export function nuke(game: Game, u: Unit, target: number): CombatResult | null {
   let killed = false;
   for (const t of area) {
     for (const o of game.units.filter((x) => x.tile === t)) {
+      // (Aircraft already lost with the ship that carried them aren't struck again.)
+      if (!game.units.includes(o)) continue;
       const harm = isMilitary(UNITS[o.type]) ? 60 + Math.floor(random(game) * 41) : 100;
       dealt += harm;
       o.hp -= harm;
