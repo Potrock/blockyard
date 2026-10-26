@@ -1,6 +1,6 @@
 import { unitName } from './armies';
 import { airTarget, isAircraft } from './air';
-import { canFire, cityFireStrength, cityMaxHp, cityStrength, damageFor, rangeOf, strength, type Modifier } from './combat';
+import { canFire, cityFireStrength, cityMaxHp, cityStrength, damageFor, indirectFire, rangeOf, strength, type Modifier } from './combat';
 import { atWar, cityAt } from './core';
 import { distance, neighbours } from './hex';
 import { occupants } from './movement';
@@ -107,7 +107,7 @@ function previewFight(game: Game, u: Unit, target: number): CombatPreview | null
   // (Units with a ranged attack always fire, next door too, as the attack order has them: mounted archers as well.)
   const fires = !!type.ranged;
   if (fires) {
-    if (!(isAircraft(u) ? airTarget(game, u, target) : canFire(game, u.tile, target, rangeOf(u)))) return null;
+    if (!(isAircraft(u) ? airTarget(game, u, target) : canFire(game, u.tile, target, rangeOf(u), indirectFire(u)))) return null;
     // (A siege unit not set up sets up as it fires, with two moves left: one to set up, one to fire.)
     const blocked = type.abilities?.includes('must_setup') && !u.setUp && u.moves < 2 ? 'Too few moves to set up and fire: set it up now, it fires next turn' : undefined;
     const why: Modifier[] = [];

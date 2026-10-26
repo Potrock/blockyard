@@ -74,6 +74,15 @@ export const FEATURES: Record<FeatureId, Feature> = {
 };
 
 /**
+ * Sight's levels (Civ V's): how high a tile stands to see from, hills a level up and mountains two;
+ * and to see past, forest and jungle a level higher still. Only what stands higher than the eye
+ * blocks it, so from flat land forest, jungle, hills and mountains do (they're seen, not what's behind
+ * them); from a hill, only wooded hills and mountains.
+ */
+export const seeFromLevel = (tile: { elevation: Elevation }) => (tile.elevation === 'mountain' ? 2 : tile.elevation === 'hills' ? 1 : 0);
+export const seeThroughLevel = (tile: { elevation: Elevation; feature?: string }) => seeFromLevel(tile) + (tile.feature === 'forest' || tile.feature === 'jungle' ? 1 : 0);
+
+/**
  * Nuclear fallout (Civ V's): each land tile of a blast (not a city's, a mountain or a natural
  * wonder's) gets it by this chance, the blast's forests, jungles and marshes burnt away whether or
  * not; flood plains, oases, ice and atolls are left as they are, and keep it off. Workers scrub it

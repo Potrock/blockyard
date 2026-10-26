@@ -414,7 +414,7 @@ function unitPage(u: UnitType): Page {
   if (abilities.length) body.push(h('ul.pd-list', {}, ...abilities.map((a) => h('li', {}, a))));
   const replacedBy = UNIT_LIST.filter((x) => x.replaces === u.id).map((x) => `unit:${x.id}`);
   const from = UNIT_LIST.filter((x) => x.upgrade === u.id).map((x) => `unit:${x.id}`);
-  const promos = u.class === 'civilian' || u.class === 'great' || u.class === 'trade' || u.class === 'religious' ? [] : PROMOTION_LIST.filter((p) => p.classes.includes(u.class) && !p.needs?.length).map((p) => `promotion:${p.id}`);
+  const promos = u.class === 'civilian' || u.class === 'great' || u.class === 'trade' || u.class === 'religious' ? [] : PROMOTION_LIST.filter((p) => p.classes.includes(u.class) && !p.needs?.length && !p.needsOne?.length).map((p) => `promotion:${p.id}`);
   return {
     sub: u.civ ? `${CIVS[u.civ]?.name} · unique unit` : u.unbuildable ? 'Not built in cities' : `${ERA_NAMES[eraOfTech(u.tech)]} unit`,
     facts,
@@ -755,7 +755,8 @@ function promotionPage(id: string): Page {
     body: [rich(p.text), rich('A unit takes a promotion each time it has the experience for one: at 10, 30, 60, 100 and so on.')],
     related: [
       ['Needs', (p.needs ?? []).map((n) => `promotion:${n}`)],
-      ['Leads to', PROMOTION_LIST.filter((x) => x.needs?.includes(id)).map((x) => `promotion:${x.id}`)],
+      ['Needs one of', (p.needsOne ?? []).map((n) => `promotion:${n}`)],
+      ['Leads to', PROMOTION_LIST.filter((x) => x.needs?.includes(id) || x.needsOne?.includes(id)).map((x) => `promotion:${x.id}`)],
     ],
   };
 }

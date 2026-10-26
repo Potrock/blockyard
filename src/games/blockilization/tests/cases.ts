@@ -4,7 +4,7 @@ import { cityHeal } from '../rules/combat';
 import { routeBlockaded } from '../rules/trade';
 import { adviseResearch, adviseWork } from '../advisor';
 import { BUILDINGS } from '../rules/buildings';
-import { canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, gain, leadership, rangeOf, strength } from '../rules/combat';
+import { canFire, canPillage, cityFireStrength, cityHooks, cityMaxHp, cityStrength, damageFor, gain, indirectFire, leadership, rangeOf, strength } from '../rules/combat';
 import { CITY_STATES, CIV_LIST } from '../rules/civs';
 import { PERSONALITIES } from '../rules/ai/personality';
 import { UNITS } from '../rules/units';
@@ -16,7 +16,7 @@ import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constru
 import { colOf, distance, line, neighbour, neighbours, rowOf, tileAt, within } from '../rules/hex';
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
-import { IMPROVEMENTS, TERRAINS, type ImprovementId } from '../rules/terrain';
+import { IMPROVEMENTS, TERRAINS, type Elevation, type FeatureId, type ImprovementId } from '../rules/terrain';
 import { makeCtx, militaryAt } from '../rules/ai/context';
 import { opinionOf } from '../rules/ai/opinion';
 import { planWar } from '../rules/ai/strategy';
@@ -813,6 +813,115 @@ test('a siege unit sets up as it fires when it has the moves for both (Civ V’s
   t.moves = 2;
   ok(apply(game, 0, { t: 'attack', unit: t.id, target: d.tile }).ok, 'two moves: set up and fire');
   ok(!!t.setUp && d.hp < 100, 'set up, and hit it');
+});
+
+test('line of sight (Civ V’s): forest, jungle, hills and mountains block a shot past them, not at them; next door always; from a hill, only wooded hills and mountains', () => {
+  const { game, at } = blank();
+  const from = at(10, 8);
+  const between = at(11, 8);
+  const past = at(12, 8);
+  const set = (t: number, elevation: Elevation, feature?: FeatureId) => Object.assign(game.tiles[t], { elevation, feature });
+  ok(canFire(game, from, past, 2), 'over open ground');
+  for (const [elevation, feature] of [['flat', 'forest'], ['flat', 'jungle'], ['hills', undefined], ['mountain', undefined]] as const) {
+    set(between, elevation, feature);
+    ok(!canFire(game, from, past, 2), `not past ${feature ?? elevation}`);
+    ok(canFire(game, from, between, 2), `at ${feature ?? elevation} next door`);
+  }
+  set(between, 'flat', 'marsh');
+  ok(canFire(game, from, past, 2), 'past marsh');
+  set(between, 'flat');
+  set(past, 'hills', 'forest');
+  ok(canFire(game, from, past, 2), 'at a wooded hill, nothing between');
+  set(past, 'flat');
+  set(from, 'flat', 'forest');
+  set(between, 'flat', 'forest');
+  ok(!canFire(game, from, past, 2), 'standing in a forest is no help');
+  set(from, 'hills');
+  for (const [elevation, feature, sees] of [['flat', 'forest', true], ['flat', 'jungle', true], ['hills', undefined, true], ['hills', 'forest', false], ['hills', 'jungle', false], ['mountain', undefined, false]] as const) {
+    set(between, elevation, feature);
+    eq(canFire(game, from, past, 2), sees, `from a hill, past ${feature ? `${feature} on ` : ''}${elevation}`);
+  }
+  // Sight goes the same way.
+  set(from, 'flat');
+  set(between, 'flat', 'forest');
+  unit(game, 'warrior', 0, from);
+  const sees = (t: number) => game.players[0].visible[t] > 0;
+  ok(sees(between) && !sees(past), 'it sees the forest, not past it');
+  set(from, 'hills');
+  updateAllVisibility(game);
+  ok(sees(past), 'from a hill, past it');
+  set(between, 'hills', 'forest');
+  updateAllVisibility(game);
+  ok(!sees(past), 'not past a wooded hill');
+});
+
+test('line of sight: two tiles off, a shot passing between two tiles is stopped only when both block; further, by any it crosses, or two it runs beside', () => {
+  const { game, at } = blank();
+  const from = at(10, 8);
+  const off = at(11, 9);
+  const wood = (...ts: number[]) => {
+    for (const t of game.tiles) delete t.feature;
+    for (const t of ts) game.tiles[t].feature = 'forest';
+  };
+  const sides = neighbours(game.grid, from).filter((t) => neighbours(game.grid, off).includes(t));
+  eq(sides.length, 2, 'two tiles between');
+  for (const t of sides) {
+    wood(t);
+    ok(canFire(game, from, off, 2), 'round the other side of one');
+  }
+  wood(...sides);
+  ok(!canFire(game, from, off, 2), 'not between two');
+  // Looking round it, a unit sees there too.
+  wood(sides[0]);
+  unit(game, 'warrior', 0, from);
+  ok(game.players[0].visible[off] > 0, 'and sees it');
+  // Three off (a longbowman's range): it crosses (11, 8) and (11, 9), and runs beside (10, 9) and (12, 8).
+  const far = at(12, 9);
+  for (const t of [at(11, 8), at(11, 9)]) {
+    wood(t);
+    ok(!canFire(game, from, far, 3), 'three off, not past a tile it crosses');
+  }
+  for (const t of [at(10, 9), at(12, 8)]) {
+    wood(t);
+    ok(canFire(game, from, far, 3), 'one beside it is no matter');
+  }
+  wood(at(10, 9), at(12, 8));
+  ok(!canFire(game, from, far, 3), 'two beside it block it');
+  wood(at(12, 8));
+  ok(!canFire(game, from, at(13, 8), 3), 'nor round one on a straight line');
+});
+
+test('Indirect Fire: Artillery, Rocket Artillery and the Battleship fire over what blocks, at what their side sees; ranged units earn it after Accuracy III or Barrage III; cities fire over it all', () => {
+  const { game, at } = blank();
+  war(game, 0, 1);
+  game.tiles[at(11, 8)].feature = 'forest';
+  const gun = unit(game, 'artillery', 0, at(10, 8), { moves: 2 });
+  const foe = unit(game, 'warrior', 1, at(12, 8));
+  ok(!apply(game, 0, { t: 'attack', unit: gun.id, target: foe.tile }).ok, 'not at what its side can’t see');
+  unit(game, 'scout', 0, at(13, 8));
+  ok(apply(game, 0, { t: 'attack', unit: gun.id, target: foe.tile }).ok, 'over the forest, at what a scout sees');
+  ok(foe.hp < 100, 'and hits it');
+  for (const [type, has] of [['artillery', true], ['rocket_artillery', true], ['battleship', true], ['cannon', false], ['frigate', false], ['missile_cruiser', false], ['crossbowman', false]] as const) eq(indirectFire({ ...gun, type }), has, type);
+  ok(!canFire(game, at(10, 8), foe.tile, 2, indirectFire({ ...gun, type: 'cannon' })), 'a cannon can’t');
+  // The promotion.
+  const bow = unit(game, 'crossbowman', 0, at(4, 4), { xp: 200 });
+  const offered = () => promotionsFor(bow).some((p) => p.id === 'indirect_fire');
+  bow.promotions = ['accuracy_1', 'accuracy_2'];
+  ok(!offered(), 'not before Accuracy III');
+  bow.promotions.push('accuracy_3');
+  ok(offered(), 'after Accuracy III');
+  bow.promotions = ['barrage_1', 'barrage_2', 'barrage_3'];
+  ok(offered(), 'or Barrage III');
+  ok(apply(game, 0, { t: 'promote', unit: bow.id, promotion: 'indirect_fire' }).ok, 'taken');
+  ok(indirectFire(bow), 'it fires over what’s in the way');
+  gun.promotions = ['accuracy_1', 'accuracy_2', 'accuracy_3'];
+  ok(!promotionsFor(gun).some((p) => p.id === 'indirect_fire'), 'not offered to Artillery, which has it');
+  // A city fires over forest at whatever its side sees.
+  const c = city(game, 0, at(10, 14));
+  game.tiles[at(11, 14)].feature = 'forest';
+  const raider = unit(game, 'warrior', 1, at(12, 14));
+  unit(game, 'scout', 0, at(13, 14));
+  ok(apply(game, 0, { t: 'cityFire', city: c.id, target: raider.tile }).ok, 'the city fires past the forest');
 });
 
 test('a soldier stepping onto an enemy’s civilian takes it; at peace it can’t step there', () => {

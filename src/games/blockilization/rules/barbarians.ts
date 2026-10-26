@@ -1,6 +1,6 @@
 import { atWar, cityAt, civOf, has, note, random, spawnUnit, unitsOf } from './core';
 import { service } from './citystates';
-import { canFire, canPillage, melee, pillage, ranged } from './combat';
+import { canFire, canPillage, indirectFire, melee, pillage, ranged } from './combat';
 import { distance, neighbours, within } from './hex';
 import { canEnter, occupants, planPath, campHooks } from './movement';
 import { campCleared } from './quests';
@@ -100,7 +100,7 @@ function raid(game: Game, u: Unit, b: number) {
     const city = cityAt(game, t);
     const whose = city ? city.owner : enemy && atWar(game, b, enemy.owner) ? enemy.owner : -1;
     if (whose < 0 || spared(whose)) continue;
-    if (type.ranged && !canFire(game, u.tile, t, type.range ?? 1)) continue;
+    if (type.ranged && !canFire(game, u.tile, t, type.range ?? 1, indirectFire(u))) continue;
     if (city && !type.ranged && city.hp <= 30) continue; // they don't take cities
     const r = type.ranged ? ranged(game, u, t) : melee(game, u, t);
     if (r) return;

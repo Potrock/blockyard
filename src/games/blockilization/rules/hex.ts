@@ -154,6 +154,109 @@ export function line(g: Grid, a: number, b: number): number[] {
   return out;
 }
 
+/**
+ * A shot's way from one tile to another, as Civ V aims one (its targeting ray, `CvTargeting`): a line
+ * stepped across the grid's axial coordinates, a neighbouring tile at a time, so it's as long as the
+ * distance. `tiles` are those it enters in turn (the last is where it ends); `grazed`, for each, the
+ * tile it runs beside on the way in, round the other side of the one before (the way it could have
+ * gone instead): -1 off the map, none on its first step or along one of the grid's six straight lines.
+ */
+export interface Ray {
+  tiles: number[];
+  grazed: (number | undefined)[];
+}
+
+export function ray(g: Grid, a: number, b: number): Ray {
+  const [aq, ar] = cube(g, a);
+  let [bq, br] = cube(g, b);
+  // (The copy of b round the world nearest a, as `line` takes it.)
+  if (g.wrap) {
+    const apart = bq - aq + (br - ar) / 2;
+    bq += apart > g.width / 2 ? -g.width : apart < -g.width / 2 ? g.width : 0;
+  }
+  const dq = bq - aq;
+  const dr = br - ar;
+  const sq = dq < 0 ? -1 : 1;
+  const sr = dr < 0 ? -1 : 1;
+  // Bresenham's line, in doubled steps: along the longer axis, a step on the shorter now and then.
+  // Where both axes grow the same way, a step on both isn't to a neighbour: it's made one then the other.
+  const ex = Math.abs(dq) * 2;
+  const ey = Math.abs(dr) * 2;
+  const diagonal = sq !== sr;
+  const straight = dq === 0 || dr === 0;
+  const out: Ray = { tiles: [], grazed: [] };
+  let q = 0;
+  let r = 0;
+  let lastQ = 0;
+  let lastR = 0;
+  let stepQ = 0;
+  let stepR = 0;
+  // Enters the tile it's come to (true: the end).
+  const enter = () => {
+    out.grazed.push(straight || !out.tiles.length ? undefined : fromCube(g, aq + q - stepQ, ar + r - stepR));
+    out.tiles.push(fromCube(g, aq + q, ar + r));
+    stepQ = q - lastQ;
+    stepR = r - lastR;
+    lastQ = q;
+    lastR = r;
+    return q === dq && r === dr;
+  };
+  const alongQ = ex > ey;
+  const long = alongQ ? ex : ey;
+  const short = alongQ ? ey : ex;
+  // (Civ V starts it lower for a line two rows to each column across, so that its first step leans
+  // the better way.)
+  let f = alongQ ? ex >> 1 : ey !== ex && ex !== 0 && ey >> 1 === ex ? (ey >> 1) - ex : ey >> 1;
+  while (alongQ ? q !== dq : r !== dr) {
+    f += short;
+    if (f >= long) {
+      f -= long;
+      if (diagonal) {
+        q += sq;
+        r += sr;
+      } else {
+        q += sq;
+        if (enter()) break;
+        r += sr;
+      }
+    } else if (alongQ) q += sq;
+    else r += sr;
+    if (enter()) break;
+  }
+  return out;
+}
+
+/**
+ * Whether a ray gets through, `blocks` saying which tiles stop it (and one off the map does). Civ V's:
+ * within two tiles, a tile in the way can be looked round when the line passes by its side and the
+ * tile beside is clear; further, every tile it crosses must be clear, and of those it runs beside, one
+ * may block in its first three steps, no more, and none after.
+ */
+export function clear(path: Ray, blocks: (t: number) => boolean): boolean {
+  const stops = (t: number) => t < 0 || blocks(t);
+  const n = path.tiles.length;
+  const strict = n > 2;
+  let grazed = 0;
+  let behind = false;
+  for (let i = 0; i < n; i++) {
+    const side = path.grazed[i];
+    if (strict) {
+      if (side !== undefined && stops(side) && (i > 2 || ++grazed >= 2)) return false;
+    } else if (behind) {
+      // Behind the last tile: round it by the one beside (none on a straight line).
+      if (side === undefined || stops(side)) return false;
+      behind = false;
+    }
+    // (The end itself never stops it: a tile that blocks is seen, and shot at, but not past.)
+    if (i === n - 1) break;
+    if (stops(path.tiles[i])) {
+      if (strict) return false;
+      behind = true;
+    }
+  }
+  return true;
+}
+
 /** The nearest whole cube coordinates. */
 export function roundCube(q: number, r: number, s: number): [number, number, number] {
   let rq = Math.round(q);

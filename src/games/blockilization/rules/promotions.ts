@@ -5,11 +5,11 @@ import { UNITS, type UnitClass } from './units';
  * Promotions: a unit earns experience fighting, and at each step (10, 30, 60, 100, 150, 210, then
  * more) it can take one, each class of unit from its own list, some needing another first. Civ V's,
  * the common ones: Shock and Drill (open ground, rough ground), Cover, Accuracy and Barrage for archers
- * and siege, March and Medic, Blitz, Logistics and Range, Formation against horses, Siege against
- * cities, Sentry for sight, a couple for ships, and aircraft's own (Interception, Air Siege, Bombardment,
- * Air Targeting, Evasion, Air Repair, Air Range). What each does is data (`combat`, `range`...),
- * which the combat, movement and healing rules read; a few are only given (Morale, the Heroic Epic's;
- * Altitude Training, the Cloudcrown's).
+ * and siege, March and Medic, Blitz, Logistics, Range and Indirect Fire, Formation against horses,
+ * Siege against cities, Sentry for sight, a couple for ships, and aircraft's own (Interception, Air
+ * Siege, Bombardment, Air Targeting, Evasion, Air Repair, Air Range). What each does is data
+ * (`combat`, `range`...), which the combat, movement and healing rules read; a few are only given
+ * (Morale, the Heroic Epic's; Altitude Training, the Cloudcrown's).
  */
 
 /** When a promotion's combat bonus counts. */
@@ -36,7 +36,9 @@ export interface Promotion {
   text: string;
   /** The classes that can take it (none: only given, never chosen). */
   classes: UnitClass[];
+  /** Promotions it needs first: all of `needs`, and one of `needsOne`. */
   needs?: string[];
+  needsOne?: string[];
   /** Combat strength percent, and when it counts. */
   combat?: { percent: number; when: PromotionWhen };
   /** More range, sight and moves; attacks a turn; less damage from interception, in percent (an aircraft's Evasion). */
@@ -45,6 +47,8 @@ export interface Promotion {
   moves?: number;
   attacks?: number;
   evasion?: number;
+  /** Fires over what's in the way of its shot (Indirect Fire). */
+  indirect?: boolean;
   /** Heals even after moving or fighting (March). */
   healsOnTheMove?: boolean;
   /** Units next to it heal this much more (Medic). */
@@ -79,6 +83,7 @@ export const PROMOTION_LIST: Promotion[] = [
   { id: 'barrage_3', name: 'Barrage III', text: '+15% more in rough terrain.', classes: RANGED, needs: ['barrage_2'], combat: { percent: 15, when: 'ranged_rough' } },
   { id: 'logistics', name: 'Logistics', text: 'Can fire twice a turn.', classes: RANGED, needs: ['accuracy_3'], attacks: 1 },
   { id: 'range', name: 'Range', text: '+1 range.', classes: RANGED, needs: ['barrage_2'], range: 1 },
+  { id: 'indirect_fire', name: 'Indirect Fire', text: 'Fires over hills, forest, jungle and mountains in the way, at anything your units see.', classes: RANGED, needsOne: ['accuracy_3', 'barrage_3'], indirect: true },
   { id: 'siege', name: 'Siege', text: '+50% against cities.', classes: ['melee', 'gun', 'ranged', 'siege', 'armor'], combat: { percent: 50, when: 'vs_cities' } },
   { id: 'sentry', name: 'Sentry', text: '+1 sight.', classes: [...MELEE, ...RANGED, ...NAVAL], sight: 1 },
   { id: 'mobility', name: 'Mobility', text: '+1 move.', classes: ['mounted', 'armor', 'recon', ...NAVAL], needs: ['shock_2'], moves: 1 },
@@ -119,7 +124,10 @@ export function promotionsDue(u: Unit): number {
 export function promotionsFor(u: Unit): Promotion[] {
   const cls = UNITS[u.type]?.class;
   if (!cls) return [];
-  return PROMOTION_LIST.filter((p) => p.classes.includes(cls) && !u.promotions.includes(p.id) && (p.needs ?? []).every((n) => u.promotions.includes(n)));
+  const has = (id: string) => u.promotions.includes(id);
+  // (Indirect Fire isn't for those that have it already: Artillery, Rocket Artillery, the Battleship.)
+  const indirect = !!UNITS[u.type].abilities?.includes('indirect_fire');
+  return PROMOTION_LIST.filter((p) => p.classes.includes(cls) && !has(p.id) && (p.needs ?? []).every(has) && (!p.needsOne || p.needsOne.some(has)) && !(p.indirect && indirect));
 }
 
 /** The sum of a number its promotions add (range, sight, moves, attacks, evasion). */

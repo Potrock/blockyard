@@ -1,13 +1,14 @@
 import { unpackKnown, unpackStatic, unpackYields, type CityInfo, type DealCheck, type KnownTile, type LobbyView, type MapWire, type ReshapeWire, type PreviewAsk, type ResearchAdvice, type StatsInfo, type UnitWire, type View } from '../protocol';
+import { indirectFire } from '../rules/combat';
 import type { DealItem } from '../rules/diplomacy';
-import { distance, line, type Grid } from '../rules/hex';
+import { clear, distance, ray, type Grid } from '../rules/hex';
 import type { Note } from '../rules/state';
 import type { Lens } from './lenses';
 import type { Reaction } from './leaderscene';
 import { prefs } from './prefs';
 import type { CombatPreview } from '../rules/preview';
 import { PROMOTIONS } from '../rules/promotions';
-import type { Yields } from '../rules/terrain';
+import { seeFromLevel, seeThroughLevel, type Yields } from '../rules/terrain';
 import { isGreatPerson, isMilitary, UNITS } from '../rules/units';
 
 /**
@@ -339,17 +340,18 @@ export function nukeable(u: UnitWire, t: number): boolean {
   return enemyAt(t) || (owner >= 0 && owner !== me() && !!v.players[owner]?.war);
 }
 
-/**
- * Whether a unit could attack a tile from where it stands: a fighting unit, an enemy in sight there,
- * in reach; and for a shot past the next tile, nothing in the way (hills, forest, jungle or mountains
- * between, unless it fires from a hill), as the rules' `canFire` has it. Aircraft need no line of sight.
- */
 /** Why a ranged unit can't fire at an enemy it's pointed at: too far, or something in the way of its shot. */
 export function outOfReach(u: UnitWire, t: number): string {
   const g = store.grid;
-  return g && distance(g, u.tile, t) <= reachOf(u) ? 'Hills, forest or jungle block its shot' : `Out of range (${reachOf(u)})`;
+  return g && distance(g, u.tile, t) <= reachOf(u) ? 'Hills, forest, jungle or mountains block its shot' : `Out of range (${reachOf(u)})`;
 }
 
+/**
+ * Whether a unit could attack a tile from where it stands: a fighting unit, an enemy in sight there,
+ * in reach; and for a shot past the next tile, a line of sight to it, as the rules' `canFire` has it
+ * (`inSight`: what stands higher than the shooter blocks, unless it has Indirect Fire). Aircraft need
+ * no line of sight.
+ */
 export function attackable(u: UnitWire, t: number): boolean {
   const type = UNITS[u.type];
   const g = store.grid;
@@ -368,13 +370,12 @@ export function attackable(u: UnitWire, t: number): boolean {
   }
   const d = distance(g, u.tile, t);
   if (d > reachOf(u)) return false;
-  if (d <= 1 || type.domain === 'air' || store.terrain[u.tile]?.elevation === 'hills') return true;
-  return line(g, u.tile, t)
-    .slice(1, -1)
-    .every((x) => {
-      const s = store.terrain[x];
-      return !!s && s.elevation !== 'mountain' && s.elevation !== 'hills' && s.feature !== 'forest' && s.feature !== 'jungle';
-    });
+  if (d <= 1 || type.domain === 'air' || indirectFire(u)) return true;
+  const from = store.terrain[u.tile];
+  if (!from) return false;
+  const eye = seeFromLevel(from);
+  // (A tile not known blocks it, as the edge of the map does.)
+  return clear(ray(g, u.tile, t), (x) => !store.terrain[x] || seeThroughLevel(store.terrain[x]) > eye);
 }
 
 /** Ask before doing something drastic: a dialog of the game's own, `then` on yes. */

@@ -150,7 +150,7 @@ function attackWhy(game: Game, u: Unit, target: number): string {
   if (UNITS[u.type].ranged) {
     if (u.embarked) return "It can't fire from the water";
     const range = rangeOf(u);
-    return distance(game.grid, u.tile, target) > range ? `Out of range: it fires up to ${range} tile${range === 1 ? '' : 's'} away` : 'It has no clear line to it: hills, forest, jungle or mountains in the way (from a hill it sees over them)';
+    return distance(game.grid, u.tile, target) > range ? `Out of range: it fires up to ${range} tile${range === 1 ? '' : 's'} away` : 'It has no clear line to it: hills, forest, jungle or mountains in the way (from a hill it sees over forest and hills, not wooded hills or mountains)';
   }
   return neighbours(game.grid, u.tile).includes(target) ? "It can't attack that" : 'It fights hand to hand: move it next to the enemy first';
 }
