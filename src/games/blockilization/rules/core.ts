@@ -2,7 +2,7 @@ import { BUILDINGS } from './buildings';
 import { CITY_STATES, CIVS, unitFor } from './civs';
 import { handicapEffects, handicapOf } from './difficulty';
 import type { Effects } from './effects';
-import { distance, line, neighbours, within, type Grid } from './hex';
+import { clear, distance, neighbours, ray, within, type Grid, type Ray } from './hex';
 import { generate, placeVolcanoes, Rng } from './mapgen';
 import { FIRST_FINDER_GOLDEN, FOUND_HAPPINESS, NATURAL_WONDERS, wondersBeside } from './nature';
 import { policyEffects } from './policies';
@@ -10,7 +10,7 @@ import { fromPromotions } from './promotions';
 import { beliefEffects } from './religion';
 import { earthSize, MAP_SIZES, SPEEDS, type City, type Game, type Note, type Player, type Settings, type Unit } from './state';
 import { bestUnit, eraStartOf, scenarioOf, startEraOf, startTechs } from './starts';
-import { RESOURCES, TERRAINS } from './terrain';
+import { RESOURCES, seeFromLevel, seeThroughLevel, TERRAINS } from './terrain';
 import { bindTeams, teammates, teamOf } from './teams';
 import { baseTechCost, ERA_NAMES, ERAS, TECHS } from './techs';
 import { UNITS } from './units';
@@ -309,36 +309,34 @@ export function removeUnit(game: Game, u: Unit) {
 // Fog of war
 // -------------------------------------------------------------------------------------------------
 
-/** What blocks sight: mountains, and hills, forests and jungles (which are seen, but not past). */
-const blocks = (game: Game, t: number) => {
-  const tile = game.tiles[t];
-  return tile.elevation === 'mountain' || tile.elevation === 'hills' || tile.feature === 'forest' || tile.feature === 'jungle';
-};
-
 /**
- * The tiles within `radius` of a tile, each with those between them on the line of sight: the grid's
- * alone (a map of that size always has the same), so worked out once for each tile and radius.
+ * The tiles within `radius` of a tile, each with the way a line of sight takes to it: the grid's alone
+ * (a map of that size always has the same), so worked out once for each tile and radius.
  */
-const viewLines = new Map<string, Map<number, { t: number; between: number[] }[]>>();
-function linesOfSight(g: Grid, from: number, radius: number): { t: number; between: number[] }[] {
+const viewLines = new Map<string, Map<number, { t: number; way: Ray }[]>>();
+function linesOfSight(g: Grid, from: number, radius: number): { t: number; way: Ray }[] {
   const size = `${g.width}x${g.height}${g.wrap ? 'w' : ''}`;
-  const lines = viewLines.get(size) ?? new Map<number, { t: number; between: number[] }[]>();
+  const lines = viewLines.get(size) ?? new Map<number, { t: number; way: Ray }[]>();
   viewLines.set(size, lines);
   const key = from * 16 + radius;
   let out = lines.get(key);
   if (!out) {
-    out = within(g, from, radius).map((t) => ({ t, between: distance(g, from, t) <= 1 ? [] : line(g, from, t).slice(1, -1) }));
+    out = within(g, from, radius).map((t) => ({ t, way: ray(g, from, t) }));
     lines.set(key, out);
   }
   return out;
 }
 
-/** The tiles a unit or city on `from` sees within `radius` (higher ground sees over what blocks). */
+/** Whether `from` sees the end of a ray from it past what's between (`hex.ts`'s `clear`): only what stands higher than `from` blocks (`seeThroughLevel`). */
+export function inSight(game: Game, from: number, way: Ray): boolean {
+  const eye = seeFromLevel(game.tiles[from]);
+  return clear(way, (x) => seeThroughLevel(game.tiles[x]) > eye);
+}
+
+/** The tiles a unit or city on `from` sees within `radius` (from higher ground, over more of what blocks). */
 export function sight(game: Game, from: number, radius: number): number[] {
-  const high = game.tiles[from].elevation === 'hills';
   const out: number[] = [];
-  // Seen unless something between blocks the view (from a hill, only mountains do).
-  for (const { t, between } of linesOfSight(game.grid, from, radius)) if (between.every((x) => (high ? game.tiles[x].elevation !== 'mountain' : !blocks(game, x)))) out.push(t);
+  for (const { t, way } of linesOfSight(game.grid, from, radius)) if (inSight(game, from, way)) out.push(t);
   return out;
 }
 

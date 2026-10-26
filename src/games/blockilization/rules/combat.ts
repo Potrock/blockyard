@@ -1,10 +1,10 @@
 import { formationBonus, formationKind, sizeOf, unitName } from './armies';
 import { BUILDINGS } from './buildings';
-import { atWar, canStand, cityAt, cityById, citiesOf, note, random, removeUnit, seesUnit, speed, updateVisibility } from './core';
+import { atWar, canStand, cityAt, cityById, citiesOf, inSight, note, random, removeUnit, seesUnit, speed, updateVisibility } from './core';
 import { assignCitizens, blockaded, cityEffects, civEffects, garrisoned, has, happiness } from './economy';
 import type { CombatWhen } from './effects';
 import { cityReligion } from './faith';
-import { distance, line, neighbours, within } from './hex';
+import { distance, neighbours, ray, within } from './hex';
 import { campHooks, civiliansAt, occupants } from './movement';
 import { fromPromotions, PROMOTIONS, type PromotionWhen } from './promotions';
 import type { City, Game, Unit } from './state';
@@ -290,18 +290,18 @@ export function gain(game: Game, u: Unit, xp: number, foe: number) {
   if (!barbarian && !p.cityState && p.civ !== 'barbarian') cityHooks.greatPoints(game, u, xp);
 }
 
-/** Whether `from` can see `to` for a ranged attack (range, and nothing in the way unless it's next door). */
-export function canFire(game: Game, from: number, to: number, range: number): boolean {
+/**
+ * Whether `from` can fire on `to` (Civ V's): in range, and in sight of it past what's between (next
+ * door always: `inSight`). A unit with Indirect Fire fires over it all, at whatever its side sees.
+ */
+export function canFire(game: Game, from: number, to: number, range: number, indirect = false): boolean {
   const d = distance(game.grid, from, to);
   if (d < 1 || d > range) return false;
-  if (d === 1) return true;
-  return line(game.grid, from, to)
-    .slice(1, -1)
-    .every((t) => {
-      const tile = game.tiles[t];
-      return tile.elevation !== 'mountain' && !(tile.elevation === 'hills' || tile.feature === 'forest' || tile.feature === 'jungle') || game.tiles[from].elevation === 'hills';
-    });
+  return indirect || inSight(game, from, ray(game.grid, from, to));
 }
+
+/** Whether a unit fires over what's in the way: Indirect Fire (Artillery's, Rocket Artillery's and the Battleship's, or a promotion). */
+export const indirectFire = (u: { type: string; promotions?: string[] }) => !!UNITS[u.type]?.abilities?.includes('indirect_fire') || !!u.promotions?.some((p) => PROMOTIONS[p]?.indirect);
 
 /** A unit's range (more with the Range promotion). */
 export const rangeOf = (u: Unit) => (UNITS[u.type]?.range ?? 1) + fromPromotions(u, 'range');
@@ -370,7 +370,7 @@ export function melee(game: Game, u: Unit, target: number): CombatResult | null 
 /** A ranged attack on a military unit or a city it can see: no reply, and it doesn't advance. Not from a boat. */
 export function ranged(game: Game, u: Unit, target: number): CombatResult | null {
   const type = UNITS[u.type];
-  if (!type.ranged || u.embarked || !canFire(game, u.tile, target, rangeOf(u))) return null;
+  if (!type.ranged || u.embarked || !canFire(game, u.tile, target, rangeOf(u), indirectFire(u))) return null;
   if (type.abilities?.includes('must_setup') && !u.setUp) return null;
   const p = game.players[u.owner];
   if (!(p.visible[target] > 0)) return null;

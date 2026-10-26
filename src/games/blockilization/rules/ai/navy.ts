@@ -1,4 +1,4 @@
-import { canFire, rangeOf } from '../combat';
+import { canFire, indirectFire, rangeOf } from '../combat';
 import { canStand } from '../core';
 import { trainable } from '../game';
 import { neighbours, within } from '../hex';
@@ -154,7 +154,7 @@ export function moveNavy(ctx: Ctx, ships: Unit[], claimed: Set<number>) {
     }
     // With an invasion: off the target city (to batter it) or off the beach (to guard the landing).
     if (spot === undefined && target && plan?.amphibious) {
-      spot = ranged ? seaSpot(ctx, u, target.tile, rangeOf(u), claimed, (t) => canFire(game, t, target.tile, rangeOf(u))) : plan.landing !== undefined ? seaSpot(ctx, u, plan.landing, 2, claimed) : undefined;
+      spot = ranged ? seaSpot(ctx, u, target.tile, rangeOf(u), claimed, (t) => canFire(game, t, target.tile, rangeOf(u), indirectFire(u))) : plan.landing !== undefined ? seaSpot(ctx, u, plan.landing, 2, claimed) : undefined;
     }
     // Enemies at sea near home: after them.
     if (spot === undefined && threats.length) {
@@ -164,7 +164,7 @@ export function moveNavy(ctx: Ctx, ships: Unit[], claimed: Set<number>) {
     // A war: bombard the nearest enemy city on the coast (ranged ships), the melee ones with them.
     if (spot === undefined && shores.length) {
       const city = [...shores].sort((a, b) => dist(ctx, a.tile, u.tile) - dist(ctx, b.tile, u.tile))[0];
-      if (dist(ctx, city.tile, u.tile) <= 14) spot = seaSpot(ctx, u, city.tile, ranged ? rangeOf(u) : 2, claimed, (t) => !ranged || canFire(game, t, city.tile, rangeOf(u)));
+      if (dist(ctx, city.tile, u.tile) <= 14) spot = seaSpot(ctx, u, city.tile, ranged ? rangeOf(u) : 2, claimed, (t) => !ranged || canFire(game, t, city.tile, rangeOf(u), indirectFire(u)));
     }
     // Otherwise: on station off the bot's own city with the fewest ships about.
     if (spot === undefined) {

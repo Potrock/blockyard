@@ -1,5 +1,5 @@
 import { sizeOf } from '../armies';
-import { canFire, canPillage, cityFireStrength, cityMaxHp, cityStrength, rangeOf, strength } from '../combat';
+import { canFire, canPillage, cityFireStrength, cityMaxHp, cityStrength, indirectFire, rangeOf, strength } from '../combat';
 import { canStand, citiesOf } from '../core';
 import { weighing } from '../economy';
 import { neighbours, within } from '../hex';
@@ -151,7 +151,7 @@ function bestStrike(ctx: Ctx, u: Unit, garrison: boolean): Strike | null {
     if (needsSetup && u.moves < 2) return null;
     const range = rangeOf(u);
     // (A mounted archer next to its target would charge instead of shooting: only from range.)
-    for (const t of within(game.grid, u.tile, range)) if (t !== u.tile && canFire(game, u.tile, t, range) && !(type.class === 'mounted' && dist(ctx, u.tile, t) === 1)) consider(t, u.tile, needsSetup);
+    for (const t of within(game.grid, u.tile, range)) if (t !== u.tile && canFire(game, u.tile, t, range, indirectFire(u)) && !(type.class === 'mounted' && dist(ctx, u.tile, t) === 1)) consider(t, u.tile, needsSetup);
     return best;
   }
   if (garrison) return null;
@@ -404,7 +404,7 @@ export function moveUnits(ctx: Ctx, garrisons: Set<number>) {
         goTo(ctx, u, camp, 'camp');
         continue;
       }
-      const spot = freeSpot(ctx, u, camp, fires(u) ? 2 : 1, claimed, (t) => t !== camp && (!fires(u) || canFire(game, t, camp, rangeOf(u))));
+      const spot = freeSpot(ctx, u, camp, fires(u) ? 2 : 1, claimed, (t) => t !== camp && (!fires(u) || canFire(game, t, camp, rangeOf(u), indirectFire(u))));
       if (spot === undefined) continue;
       claimed.add(spot);
       goTo(ctx, u, spot, 'camp');
@@ -571,7 +571,7 @@ function siege(ctx: Ctx, army: Unit[], claimed: Set<number>) {
     if (!u.embarked && !sameLand(game, u.tile, target.tile)) continue;
     if (fires(u)) {
       const r = rangeOf(u);
-      const spot = freeSpot(ctx, u, target.tile, r, claimed, (t) => dist(ctx, t, target.tile) >= (type.class === 'mounted' ? 2 : Math.min(2, r)) && canFire(game, t, target.tile, r));
+      const spot = freeSpot(ctx, u, target.tile, r, claimed, (t) => dist(ctx, t, target.tile) >= (type.class === 'mounted' ? 2 : Math.min(2, r)) && canFire(game, t, target.tile, r, indirectFire(u)));
       if (spot === undefined) {
         if (far > r + 1) goTo(ctx, u, target.tile, 'siege');
         continue;

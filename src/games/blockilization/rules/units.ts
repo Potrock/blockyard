@@ -38,6 +38,8 @@ export type Ability =
   | 'bonus_vs_cities'
   | 'penalty_vs_cities'
   | 'must_setup'
+  /** Fires over what's in the way of its shot, at anything its side sees (Civ V's Indirect Fire). */
+  | 'indirect_fire'
   | 'no_attack'
   | 'coast_only'
   | 'see_submarines'
@@ -158,7 +160,7 @@ export const UNIT_LIST: UnitType[] = [
   U({ id: 'rifleman', name: 'Rifleman', class: 'gun', cost: 225, strength: 34, moves: 2, tech: 'rifling', obsolete: 'replaceable_parts', upgrade: 'great_war_infantry' }),
   U({ id: 'cavalry', name: 'Cavalry', class: 'mounted', cost: 225, strength: 34, moves: 4, tech: 'military_science', obsolete: 'combustion', upgrade: 'landship', resource: 'horses', abilities: ['no_terrain_defense', 'penalty_vs_cities', 'withdraw'] }),
   U({ id: 'gatling_gun', name: 'Gatling Gun', class: 'ranged', cost: 225, strength: 30, ranged: 30, range: 1, moves: 2, tech: 'industrialization', obsolete: 'ballistics', upgrade: 'machine_gun' }),
-  U({ id: 'artillery', name: 'Artillery', class: 'siege', cost: 250, strength: 21, ranged: 28, range: 3, moves: 2, tech: 'dynamite', obsolete: 'rocketry', upgrade: 'rocket_artillery', abilities: ['bonus_vs_cities', 'must_setup'] }),
+  U({ id: 'artillery', name: 'Artillery', class: 'siege', cost: 250, strength: 21, ranged: 28, range: 3, moves: 2, tech: 'dynamite', obsolete: 'rocketry', upgrade: 'rocket_artillery', abilities: ['bonus_vs_cities', 'must_setup', 'indirect_fire'] }),
   U({ id: 'ironclad', name: 'Ironclad', class: 'naval_melee', domain: 'sea', cost: 250, strength: 45, moves: 4, tech: 'steam_power', obsolete: 'combustion', upgrade: 'destroyer', resource: 'coal', abilities: ['coast_only'] }),
   U({ id: 'great_war_infantry', name: 'Great War Infantry', class: 'gun', cost: 320, strength: 50, moves: 2, tech: 'replaceable_parts', obsolete: 'plastics', upgrade: 'infantry' }),
   U({ id: 'triplane', name: 'Triplane', class: 'fighter', domain: 'air', cost: 325, strength: 0, ranged: 35, range: 5, moves: 1, tech: 'flight', obsolete: 'radar', upgrade: 'fighter', resource: 'oil' }),
@@ -169,7 +171,7 @@ export const UNIT_LIST: UnitType[] = [
   U({ id: 'anti_aircraft_gun', name: 'Anti-Aircraft Gun', class: 'gun', cost: 300, strength: 50, moves: 2, tech: 'ballistics', obsolete: 'rocketry', upgrade: 'mobile_sam', abilities: ['intercept'] }),
   U({ id: 'landship', name: 'Landship', class: 'armor', cost: 350, strength: 60, moves: 4, tech: 'combustion', obsolete: 'combined_arms', upgrade: 'tank', resource: 'oil', abilities: ['no_terrain_defense', 'penalty_vs_cities'] }),
   U({ id: 'destroyer', name: 'Destroyer', class: 'naval_melee', domain: 'sea', cost: 375, strength: 55, moves: 6, tech: 'combustion', abilities: ['see_submarines'] }),
-  U({ id: 'battleship', name: 'Battleship', class: 'naval_ranged', domain: 'sea', cost: 375, strength: 55, ranged: 65, range: 3, moves: 5, tech: 'electronics', resource: 'oil' }),
+  U({ id: 'battleship', name: 'Battleship', class: 'naval_ranged', domain: 'sea', cost: 375, strength: 55, ranged: 65, range: 3, moves: 5, tech: 'electronics', resource: 'oil', abilities: ['indirect_fire'] }),
   U({ id: 'submarine', name: 'Submarine', class: 'submarine', domain: 'sea', cost: 325, strength: 35, ranged: 60, range: 1, moves: 5, tech: 'refrigeration', obsolete: 'telecommunications', upgrade: 'nuclear_submarine', abilities: ['invisible'] }),
   U({ id: 'carrier', name: 'Carrier', class: 'carrier', domain: 'sea', cost: 375, strength: 40, moves: 5, tech: 'electronics' }),
   U({ id: 'anti_tank_gun', name: 'Anti-Tank Gun', class: 'gun', cost: 300, strength: 50, moves: 2, tech: 'combined_arms', obsolete: 'computers', upgrade: 'helicopter_gunship' }),
@@ -182,7 +184,7 @@ export const UNIT_LIST: UnitType[] = [
   U({ id: 'mobile_sam', name: 'Mobile SAM', class: 'gun', cost: 425, strength: 65, moves: 4, tech: 'rocketry', abilities: ['intercept'] }),
   U({ id: 'atomic_bomb', name: 'Atomic Bomb', class: 'missile', domain: 'air', cost: 600, strength: 0, ranged: 0, range: 10, moves: 1, tech: 'nuclear_fission', resource: 'uranium', abilities: ['nuke'], blast: 1 }),
   U({ id: 'guided_missile', name: 'Guided Missile', class: 'missile', domain: 'air', cost: 150, strength: 0, ranged: 60, range: 8, moves: 1, tech: 'advanced_ballistics' }),
-  U({ id: 'rocket_artillery', name: 'Rocket Artillery', class: 'siege', cost: 425, strength: 45, ranged: 60, range: 3, moves: 3, tech: 'rocketry', resource: 'aluminum', abilities: ['bonus_vs_cities'] }),
+  U({ id: 'rocket_artillery', name: 'Rocket Artillery', class: 'siege', cost: 425, strength: 45, ranged: 60, range: 3, moves: 3, tech: 'rocketry', resource: 'aluminum', abilities: ['bonus_vs_cities', 'indirect_fire'] }),
   // ----- Information
   U({ id: 'helicopter_gunship', name: 'Helicopter Gunship', class: 'helicopter', cost: 425, strength: 60, moves: 6, tech: 'computers', resource: 'aluminum', abilities: ['ignore_terrain'] }),
   U({ id: 'mechanized_infantry', name: 'Mechanized Infantry', class: 'gun', cost: 375, strength: 90, moves: 3, tech: 'mobile_tactics' }),
