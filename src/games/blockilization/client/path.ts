@@ -4,7 +4,7 @@ import { dangerCost, dangerZones, type Danger } from '../rules/danger';
 import { ALL, findWay, neighbours, type Walker } from '../rules/hex';
 import { FEATURES, HILLS, RAIL_MOVE, ROAD_MOVE, TERRAINS } from '../rules/terrain';
 import { heedsBorders, isGreatPerson, isMilitary, stackKind, UNITS } from '../rules/units';
-import { cityAt, enemyAt, me, outOfReach, store } from './store';
+import { airWhyNot, cityAt, enemyAt, me, outOfReach, store } from './store';
 
 /**
  * The way a unit would go, as this screen can tell (the server works out the real one when it's
@@ -261,6 +261,8 @@ export function whyNot(u: UnitWire, to: number): string {
   const view = store.view;
   const type = UNITS[u.type];
   if (!view || !type) return "Can't get there";
+  // (An aircraft doesn't go by a way: it strikes, or rebases.)
+  if (type.domain === 'air') return airWhyNot(u, to);
   const military = soldier(u);
   const there = ownThere(u, to);
   if (there) return `Your ${unitName(there)} is there (one ${military ? 'soldier' : 'civilian'} to a tile)`;
