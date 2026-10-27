@@ -7303,6 +7303,13 @@ test('combat bonuses, Civ V’s: spears +50% against horses, anti-tank +100% aga
   ok(promotionsOf(samurai).includes('shock_1') && !samurai.promotions.includes('shock_1'), 'a samurai is born with Shock I');
   eq(promotionsDue(samurai), 1, 'which doesn’t use up its experience');
   ok(!promotionsFor(samurai).some((x) => x.id === 'shock_1'), 'nor is offered again');
+  const impi = unit(game, 'impi', 0, at(2, 18));
+  const musket = unit(game, 'musketman', 1, at(3, 18));
+  eq(mod(impi, 'attack', musket, 'Against Gunpowder'), 25, 'an impi against muskets');
+  const cossack = unit(game, 'cossack', 0, at(6, 18));
+  eq(mod(cossack, 'attack', musket, 'Stronger Against the Wounded'), 0, 'a cossack against a whole unit');
+  musket.hp = 60;
+  eq(mod(cossack, 'attack', musket, 'Stronger Against the Wounded'), 33, 'and against a wounded one');
   // A Nuclear Missile ties up two Uranium.
   unit(game, 'nuclear_missile', 0, at(2, 2));
   eq(strategic(game, game.players[0]).uranium?.used, 2, 'two Uranium');
