@@ -19,7 +19,7 @@ import { questsFor } from './rules/quests';
 import { delegates, delegateSources, embargoed, expectedVote, proposers, RESOLUTION_KINDS, resolutionInfo, RESOLUTIONS } from './rules/congress';
 import { cannotHold, isProject, openProject, PROJECTS, projectsFor, projectTotal, tiersOf } from './rules/projects';
 import { cityReligion, conversionNeed, faithCost, pressureOn, prophetCost, religionsLeft } from './rules/faith';
-import { promotionsDue, promotionsFor } from './rules/promotions';
+import { promotionsDue, promotionsFor, promotionsOf } from './rules/promotions';
 import { takenBeliefs } from './rules/religion';
 import { cityById, knowsOf, maxMoves, newPlayer } from './rules/core';
 import { electionTurns, influence, maxRoutes, partsBuildable, routeHome, routeWay, routeYield, routesGold, routesOf, spiesOf, theft, tourismOf, tradeReach, unVote } from './rules/trade';
@@ -367,7 +367,7 @@ export function viewFor(game: Game, p: Player | null, timer: number | null, pres
         w.skip = u.skip;
         w.auto = u.auto;
         if (u.work) w.work = { what: u.work.what, ...workLeft(game, u)! };
-        w.promotions = u.promotions;
+        w.promotions = promotionsOf(u);
         w.promotionsDue = promotionsDue(u);
         if (w.promotionsDue > 0) w.promotionOptions = promotionsFor(u).map((x) => x.id);
         w.religion = u.religion;

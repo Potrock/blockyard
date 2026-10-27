@@ -217,7 +217,9 @@ export function trainOptions(game: Game, p: Player, c: City): { id: string; why?
     if (id === 'settler' && p.cityState) continue;
     const spare = type.resource ? (res[type.resource]?.have ?? 0) - (res[type.resource]?.used ?? 0) : 1;
     const full = type.abilities?.includes('trade_route') ? routesFull(game, p) : undefined;
-    if (spare <= 0) out.push({ id, why: `Needs ${RESOURCES[type.resource!]?.name ?? type.resource} (${res[type.resource!]?.have ? 'all yours is in use' : 'you have none'})` });
+    // (Most need one of their resource; a Nuclear Missile two.)
+    const needs = type.needs ?? 1;
+    if (spare < needs) out.push({ id, why: `Needs ${needs > 1 ? `${needs} ` : ''}${RESOURCES[type.resource!]?.name ?? type.resource} (${res[type.resource!]?.have ? (spare > 0 ? `you have ${spare} spare` : 'all yours is in use') : 'you have none'})` });
     else if (id === 'settler' && c.pop < 2) out.push({ id, why: 'Needs a city of 2 (it takes a citizen)' });
     else if (full) out.push({ id, why: full });
     else out.push({ id });

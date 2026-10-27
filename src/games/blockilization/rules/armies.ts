@@ -1,10 +1,13 @@
 /**
  * Corps and armies, Civilization VI's: two units of one kind side by side join as a corps (a fleet,
  * at sea), and a corps and a third as an army (an armada). It's one unit on the map, much stronger
- * than either was (Civ VI's +10 and +17 strength, in this game's terms), that still costs what its
- * units did: their upkeep, their strategic resources, its upgrade. Corps come with Military Science,
- * armies with Replaceable Parts. A formation never comes apart again (one that can't be paid for loses
- * a unit at a time).
+ * than either was (Civ VI's +10 and +17 strength, in this game's terms: a multiplier of its own,
+ * `combat.ts`), whose gold upkeep is Civ VI's, half again a unit's for a corps and twice for an army.
+ * It still holds every one of its units' strategic resources, and pays for each in its upgrade: this
+ * game ties a resource up for as long as a unit lives, Civ V's way, with no stockpile to pay from as
+ * Civ VI's units do, so a formation holding only one would free the rest to build more. Corps come
+ * with Military Science, armies with Replaceable Parts. A formation never comes apart again (one that
+ * can't be paid for loses a unit at a time).
  */
 import { knows, note, removeUnit } from './core';
 import { distance } from './hex';
@@ -20,6 +23,9 @@ export const ARMY_BONUS = 125;
 
 /** How many units a unit is (1, or 2 for a corps, 3 for an army). */
 export const sizeOf = (u: { size?: number }) => u.size ?? 1;
+
+/** What a unit of this size costs in gold upkeep, in lone units' worth: Civ VI's half again for a corps, twice for an army. */
+export const formationUpkeep = (size: number) => (size >= 3 ? 2 : size === 2 ? 1.5 : 1);
 
 /** The strength a formation of this size adds (percent): 0 for a lone unit. */
 export const formationBonus = (size: number) => (size >= 3 ? ARMY_BONUS : size === 2 ? CORPS_BONUS : 0);

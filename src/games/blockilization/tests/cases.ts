@@ -31,13 +31,13 @@ import { bestSite, siteValue } from '../rules/ai/settle';
 import { canEnter, occupants, planPath, stepCost } from '../rules/movement';
 import { adoptable, ALL_POLICIES } from '../rules/policies';
 import { previewAttack, previewCityFire } from '../rules/preview';
-import { promotionsDue, promotionsFor } from '../rules/promotions';
+import { promotionsDue, promotionsFor, promotionsOf } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
 import { allyOf, cannotBully, cannotCoup, cityStateBonus, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
 import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
-import { MAP_SIZES, SPEEDS, TURN_LIMITS, type Game, type MapSize, type Settings } from '../rules/state';
+import { MAP_SIZES, SPEEDS, TURN_LIMITS, type City, type Game, type MapSize, type Settings, type Unit } from '../rules/state';
 import { lonLatOf, TRUE_STARTS, tileOfLonLat } from '../rules/earth';
 import { cityTourism, longGameTurn, maxRoutes, routesGold, routesOf, routeYield, spiesOf, spyCount, startRoute, surveillanceTurns, theft, THEFT_COST, unVote } from '../rules/trade';
 import { TECHS } from '../rules/techs';
@@ -69,13 +69,13 @@ import { openProject, startProject, type WorldProject } from '../rules/projects'
 import { expectedTier, leavesProject, projectPlan, worldProject } from '../rules/ai/projects';
 import { bestNukeStrike, nukeProduction, nukes as fireNukes, nukesWanted, strikeWorth } from '../rules/ai/nukes';
 import { NUKE_INFLUENCE } from '../rules/diplomacy';
-import { bombInterceptChance } from '../rules/combat';
+import { bombInterceptChance, type Modifier } from '../rules/combat';
 import { bestUnit, ERA_STARTS, SCENARIOS, startEraOf, startWords, techsBefore, turnLimitFor, withScenario } from '../rules/starts';
 import { TECH_LIST } from '../rules/techs';
 import { TURN_CHOICES } from '../rules/state';
 import { autoPromote, eraOf, foundCity } from '../rules/game';
 import { botAnswer, EMOTES, isEmote, isPing, moodOf, toneOf } from '../rules/chat';
-import { isMilitary } from '../rules/units';
+import { isMilitary, isRanged } from '../rules/units';
 import { civEffects, has } from '../rules/core';
 import { bribeTurns, clanCost, clansOf, clansTurn, clanUnit, hireRest, inciteTurns, newClan, raidTarget, SETTLE, spares } from '../rules/clans';
 import { CLAN_STATES, SEVEN_CITIES_GOLD, speed } from '../rules/core';
@@ -807,6 +807,8 @@ test('a siege unit sets up as it fires when it has the moves for both (Civ V’s
   war(game, 0, 1);
   const t = unit(game, 'trebuchet', 0, at(10, 8));
   const d = unit(game, 'warrior', 1, at(12, 8));
+  // (A siege unit sees only a tile round it, Civ V's: another unit spots for it.)
+  unit(game, 'warrior', 0, at(11, 7));
   game.players[0].techs.push('physics');
   t.moves = 1;
   ok(!apply(game, 0, { t: 'attack', unit: t.id, target: d.tile }).ok, 'one move: no');
@@ -1170,7 +1172,7 @@ test('a long march stops when enemies come in sight', () => {
   // (Each with a city, to stay in the game turn after turn.)
   city(game, 0, at(1, 1));
   city(game, 1, at(24, 16));
-  const t = unit(game, 'trebuchet', 0, at(4, 8));
+  const t = unit(game, 'spearman', 0, at(4, 8));
   ok(apply(game, 0, { t: 'move', unit: t.id, to: at(16, 8) }).ok, 'off it goes');
   const where = t.tile;
   unit(game, 'pikeman', 1, at(where % game.grid.width + 2, 8));
@@ -7047,7 +7049,7 @@ test('clans: a bot bribes a clan by its cities, pays one near its enemy to raid 
   ok(tries(() => clan.hired !== undefined), 'a warrior hired');
 });
 
-test('formations: two of a kind side by side join as a corps, and a third as an army: far stronger, costing what their units did', () => {
+test('formations: two of a kind side by side join as a corps, and a third as an army: far stronger, at Civ VI’s upkeep, holding their units’ resources', () => {
   const { game, at } = blank(['egypt', 'babylon']);
   const egypt = game.players[0];
   egypt.bot = false;
@@ -7075,7 +7077,14 @@ test('formations: two of a kind side by side join as a corps, and a third as an 
   ok(a.xp === 30 && a.promotions.includes('shock_1'), 'the more experienced one’s experience and promotions');
   eq(a.moves, 0, 'its turn spent');
   near(strength(game, { ...a, hp: 100, promotions: [] }, 'defend', null, a.tile) / lone, 1 + CORPS_BONUS / 100, 'a corps’s strength');
-  eq(goldUpkeep(game, egypt).units, upkeep, 'upkeep as two units');
+  // (Its bonus multiplies the rest, so it isn't watered down fortified on a hill: Civ VI's flat +10.)
+  const hill = { ...game.tiles[a.tile] };
+  Object.assign(game.tiles[a.tile], { elevation: 'hills', feature: undefined });
+  const dug = { stance: 'fortify' as const, fortified: 2 };
+  near(strength(game, { ...a, hp: 100, promotions: [], ...dug }, 'defend', null, a.tile) / strength(game, { ...a, hp: 100, promotions: [], size: undefined, ...dug }, 'defend', null, a.tile), 1 + CORPS_BONUS / 100, 'as strong again fortified on a hill');
+  game.tiles[a.tile] = hill;
+  // (Eight units' worth, three free, before; seven and a half after.)
+  eq(goldUpkeep(game, egypt).units, upkeep - 1, 'upkeep a unit and a half’s');
   ok(egypt.notes.some((n) => n.text.includes('A Rifleman Corps has formed')), 'said so');
   // An army: with Replaceable Parts, a corps and a third.
   const c = unit(game, 'rifleman', 0, at(7, 8));
@@ -7107,11 +7116,12 @@ test('formations: one that can’t be paid for loses a unit, not the lot', () =>
   const egypt = game.players[0];
   egypt.bot = false;
   city(game, 0, at(20, 4));
-  for (let i = 0; i < 4; i++) unit(game, 'rifleman', 0, at(3 + i * 2, 4), { size: 3 });
+  // (Each army's upkeep two units', Civ VI's.)
+  for (let i = 0; i < 6; i++) unit(game, 'rifleman', 0, at(3 + i * 2, 4), { size: 3 });
   egypt.gold = 0;
   endTurn(game);
-  eq(game.units.filter((u) => u.owner === 0).reduce((s, u) => s + (u.size ?? 1), 0), 11, 'a unit of one army gone');
-  eq(game.units.filter((u) => u.owner === 0).length, 4, 'every army still there');
+  eq(game.units.filter((u) => u.owner === 0).reduce((s, u) => s + (u.size ?? 1), 0), 17, 'a unit of one army gone');
+  eq(game.units.filter((u) => u.owner === 0).length, 6, 'every army still there');
   ok(egypt.notes.some((n) => n.text.includes('a unit of your Rifleman Army has disbanded')), 'said so');
 });
 
@@ -7132,4 +7142,44 @@ test('formations: a bot forms corps once it can, out of the enemy’s reach, nev
   ok(a.size === 2 && !game.units.includes(b), 'two side by side, out of reach, joined');
   ok(game.units.includes(garrison) && game.units.includes(by) && !garrison.size && !by.size, 'not the garrison');
   ok(game.units.includes(c) && game.units.includes(d) && !c.size && !d.size, 'not those in the enemy’s reach');
+});
+
+test('combat bonuses, Civ V’s: spears +50% against horses, anti-tank +100% against armour, siege +200% against cities and no ground to hide in, armour unhindered at walls and moving on after it attacks', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  war(game, 0, 1);
+  const mod = (u: Unit, role: 'attack' | 'defend' | 'ranged', against: Unit | City, label: string) => {
+    const why: Modifier[] = [];
+    strength(game, u, role, against, u.tile, why);
+    return why.find((m) => m.label === label)?.percent ?? 0;
+  };
+  const spear = unit(game, 'spearman', 0, at(8, 8));
+  const horse = unit(game, 'horseman', 1, at(9, 8));
+  eq(mod(spear, 'defend', horse, 'Against mounted'), 50, 'spearmen against horses');
+  const lancer = unit(game, 'lancer', 0, at(8, 10));
+  ok(promotionsOf(lancer).includes('formation_1') && mod(lancer, 'attack', horse, 'Formation I') === 33, 'a lancer’s Formation I instead');
+  const gun = unit(game, 'anti_tank_gun', 0, at(4, 4));
+  const tank = unit(game, 'tank', 1, at(5, 4));
+  eq(mod(gun, 'defend', tank, 'Against armour'), 100, 'anti-tank guns against armour');
+  const walls = city(game, 1, at(14, 8));
+  const catapult = unit(game, 'catapult', 0, at(12, 8));
+  eq(mod(catapult, 'ranged', walls, 'Against cities'), 200, 'siege against cities');
+  eq(mod(tank, 'attack', walls, 'Against cities'), 0, 'armour at walls as anywhere');
+  eq(mod(horse, 'attack', walls, 'Against cities'), -33, 'horses still a third weaker');
+  Object.assign(game.tiles[catapult.tile], { elevation: 'hills', feature: undefined });
+  eq(mod(catapult, 'defend', spear, 'Hills'), 0, 'no hills for a catapult to hide in');
+  eq(unitSight(game, catapult), 1, 'and a tile of sight');
+  ok(isRanged(UNITS.bazooka) && UNITS.bazooka.range === 1, 'a bazooka fires');
+  // Armour moves on after it attacks, as horses do.
+  const raider = unit(game, 'tank', 0, at(20, 14));
+  unit(game, 'warrior', 1, at(21, 14));
+  ok(apply(game, 0, { t: 'attack', unit: raider.id, target: at(21, 14) }).ok, 'the tank attacks');
+  ok(raider.moves > 0, 'and has moves left');
+  // A unique unit's own promotion: given, not earned.
+  const samurai = unit(game, 'samurai', 0, at(2, 14), { xp: 10 });
+  ok(promotionsOf(samurai).includes('shock_1') && !samurai.promotions.includes('shock_1'), 'a samurai is born with Shock I');
+  eq(promotionsDue(samurai), 1, 'which doesn’t use up its experience');
+  ok(!promotionsFor(samurai).some((x) => x.id === 'shock_1'), 'nor is offered again');
+  // A Nuclear Missile ties up two Uranium.
+  unit(game, 'nuclear_missile', 0, at(2, 2));
+  eq(strategic(game, game.players[0]).uranium?.used, 2, 'two Uranium');
 });
