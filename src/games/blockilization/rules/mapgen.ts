@@ -1,6 +1,7 @@
 import { earthDry, earthSeas, earthLand, earthLatitude, earthRidges, earthRivers, earthWet, TRUE_STARTS, tileOfLonLat } from './earth';
 import { distance, neighbour, neighbours, rowOf, colOf, within, type Grid } from './hex';
 import { fitsSite, NATURAL_WONDER_LIST, type NaturalWonder } from './nature';
+import { placeLuxuries, placeStrategics, SEA_OIL, type LuxuryRoles } from './resources';
 import { MAP_SIZES, sizeOfMap, type MapType, type Tile } from './state';
 import { FEATURES, RESOURCES, TERRAINS, type FeatureId, type TerrainId } from './terrain';
 
@@ -84,6 +85,8 @@ export interface Generated {
   tiles: Tile[];
   /** Good places to start, best first, spread out. */
   starts: number[];
+  /** How its luxuries were shared out (`resources.ts`). */
+  luxuries: LuxuryRoles;
 }
 
 /**
@@ -268,7 +271,13 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
   // --- Starting places, then resources (a fair few near each start), ruins.
   let starts = type === 'archipelago' ? pickIslandStarts(g, tiles, rng, players, cityStates, cellOf) : pickStarts(g, tiles, rng, players + cityStates);
   if (earth && trueStarts) starts = pickTrueStarts(g, tiles, trueStarts, starts);
-  placeResources(g, tiles, rng, starts.slice(0, players));
+  // (The bonus resources first, as many as before; then the luxuries and the strategic resources, Civ V's.)
+  const civStarts = starts.slice(0, players).filter((t) => t >= 0);
+  const csStarts = starts.slice(players, players + cityStates).filter((t) => t >= 0);
+  placeResources(g, tiles, rng, civStarts);
+  const luxuries = placeLuxuries(g, tiles, rng, sizeOfMap(g), civStarts, csStarts);
+  placeStrategics(g, tiles, rng, civStarts, csStarts);
+  strategicBalance(g, tiles, rng, civStarts);
   for (let t = 0; t < n; t++) {
     const tile = tiles[t];
     if (TERRAINS[tile.terrain].water || tile.elevation === 'mountain' || tile.resource) continue;
@@ -285,9 +294,7 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
     }
   }
   placeNaturalWonders(g, tiles, rng, starts, players);
-  strategicBalance(g, tiles, rng, starts.slice(0, players));
-  modernStrategics(g, tiles, rng, starts, starts.slice(players, players + cityStates).filter((t) => t >= 0));
-  return { tiles, starts };
+  return { tiles, starts, luxuries };
 }
 
 /**
@@ -318,7 +325,8 @@ export function placeVolcanoes(g: Grid, tiles: Tile[], seed: number, starts: num
 /**
  * Civ V's Strategic Balance: every civ's start has Horses and Iron within about four tiles (a near
  * spot first), and Coal and Oil on its own landmass within ten, unless there's no ground for them
- * (Oil may lie just off the coast). Each is placed only where the civ has none in reach already.
+ * (Oil may lie just off the coast). Each is placed only where the civ has none in reach already, a
+ * large deposit (Civ V's).
  */
 function strategicBalance(g: Grid, tiles: Tile[], rng: Rng, starts: number[]) {
   const fits = (t: number, id: string) => {
@@ -333,8 +341,7 @@ function strategicBalance(g: Grid, tiles: Tile[], rng: Rng, starts: number[]) {
     if (!options.length) return;
     const t = rng.pick(options);
     tiles[t].resource = id;
-    const amount = RESOURCES[id].amount;
-    if (amount) tiles[t].amount = rng.int(amount[0], amount[1]);
+    tiles[t].amount = TERRAINS[tiles[t].terrain].water ? SEA_OIL : RESOURCES[id].amount![1];
   };
   for (const s of starts) {
     const ground = (r: number) => within(g, s, r).filter((t) => t !== s && !TERRAINS[tiles[t].terrain].water);
@@ -346,48 +353,6 @@ function strategicBalance(g: Grid, tiles: Tile[], rng: Rng, starts: number[]) {
     ensure('oil', [...onLand, ...offshore], onLand);
   }
 }
-
-/**
- * Civ V's modern strategics, the last of a new world's resources: Aluminum about as common across the
- * land as Iron or Oil (commoner than Oil, in Civ V), Uranium about half as common, each scattered
- * where it belongs and near no start in particular, so many to the tiles that suit it (as Civ V
- * counts them, so a map is never without); and three city-states in four a small deposit of Coal,
- * Oil or Aluminum beside them (Civ V's `AddModernMinorStrategicsToCityStates`). (Left to the roll in
- * `placeResources` alone they were rare: a small map often had no Aluminum at all, and so no Jet
- * Fighters, Stealth Bombers, Modern Armor, Hydro Plants or Spaceship Factories.)
- */
-function modernStrategics(g: Grid, tiles: Tile[], rng: Rng, starts: number[], cityStates: number[]) {
-  const fits = (t: number, id: string) => {
-    const tile = tiles[t];
-    if (tile.resource || tile.ruin || tile.wonder || tile.antiquity || starts.includes(t) || tile.elevation === 'mountain' || tile.feature === 'ice' || tile.feature === 'oasis') return false;
-    return RESOURCES[id].on.some((on) => on === tile.terrain || on === tile.feature || on === tile.elevation);
-  };
-  const place = (t: number, id: string, small = false) => {
-    const [lo, hi] = RESOURCES[id].amount!;
-    tiles[t].resource = id;
-    tiles[t].amount = small ? lo : rng.int(lo, hi);
-  };
-  for (const [id, share] of Object.entries(MODERN_SHARE)) {
-    const spots = tiles.map((_, t) => t).filter((t) => fits(t, id));
-    // (Spread out: none beside another of its kind.)
-    for (let left = Math.ceil(spots.length * share); left > 0 && spots.length; ) {
-      const t = spots.splice(Math.floor(rng.next() * spots.length), 1)[0];
-      if (neighbours(g, t).some((n) => tiles[n].resource === id)) continue;
-      place(t, id);
-      left--;
-    }
-  }
-  for (const cs of cityStates) {
-    const roll = rng.int(0, 3);
-    if (!roll) continue;
-    const id = (['coal', 'oil', 'aluminum'] as const)[roll - 1];
-    const spots = within(g, cs, 3).filter((t) => t !== cs && fits(t, id));
-    if (spots.length) place(rng.pick(spots), id, true);
-  }
-}
-
-/** The share of the tiles free for it that get a deposit, in `modernStrategics`. */
-const MODERN_SHARE = { aluminum: 0.03, uranium: 0.02 };
 
 /** The land tiles joined to a tile by land (mountains included). */
 function landmass(g: Grid, tiles: Tile[], from: number): Set<number> {
@@ -633,21 +598,21 @@ function landmassesOf(g: Grid, land: boolean[]): number[] {
   return out;
 }
 
-/** Resources across the map, each kind where it belongs; a couple of food and luxuries near each start. */
+/**
+ * The bonus resources across the map, each kind where it belongs, and one near each start (the
+ * luxuries and strategic resources are Civ V's, before them: `resources.ts`).
+ */
 function placeResources(g: Grid, tiles: Tile[], rng: Rng, starts: number[]) {
   const fits = (t: number, id: string) => {
     const tile = tiles[t];
     const r = RESOURCES[id];
     if (tile.resource || tile.elevation === 'mountain' || tile.feature === 'ice' || tile.feature === 'oasis') return false;
+    if (r.open && (tile.feature || tile.elevation !== 'flat')) return false;
     return r.on.some((on) => on === tile.terrain || on === tile.feature || on === tile.elevation);
   };
   const ids = Object.keys(RESOURCES);
-  const place = (t: number, id: string) => {
-    const r = RESOURCES[id];
-    tiles[t].resource = id;
-    if (r.amount) tiles[t].amount = rng.int(r.amount[0], r.amount[1]);
-  };
-  // Every tile has a chance, weighted by kind.
+  // Every tile has a chance, weighted by kind: a bonus kept, a luxury or strategic one passed over
+  // (as many bonuses as when the roll placed them all).
   for (let t = 0; t < tiles.length; t++) {
     if (!rng.chance(0.12)) continue;
     const options = ids.filter((id) => fits(t, id));
@@ -655,7 +620,7 @@ function placeResources(g: Grid, tiles: Tile[], rng: Rng, starts: number[]) {
     const total = options.reduce((s, id) => s + RESOURCES[id].weight, 0);
     let roll = rng.next() * total;
     for (const id of options) if ((roll -= RESOURCES[id].weight) < 0) {
-      place(t, id);
+      if (RESOURCES[id].kind === 'bonus') tiles[t].resource = id;
       break;
     }
   }
@@ -665,20 +630,17 @@ function placeResources(g: Grid, tiles: Tile[], rng: Rng, starts: number[]) {
   for (let t = 0; t < tiles.length; t++) {
     if (tiles[t].resource || !rng.chance(TERRAINS[tiles[t].terrain].water ? 0.03 : 0.07)) continue;
     const options = food.filter((id) => fits(t, id));
-    if (options.length) place(t, rng.pick(options));
+    if (options.length) tiles[t].resource = rng.pick(options);
   }
-  // Near each start: a food resource and a luxury, if there's room for them.
+  // Near each start: a food resource, if there's room for one.
   for (const s of starts) {
-    const ring = within(g, s, 3).filter((t) => t !== s && distance(g, s, t) >= 1);
-    for (const kind of ['bonus', 'luxury', 'luxury'] as const) {
-      const spots = ring.filter((t) => !tiles[t].resource);
-      for (let tries = 0; tries < 20 && spots.length; tries++) {
-        const t = rng.pick(spots);
-        const options = ids.filter((id) => RESOURCES[id].kind === kind && fits(t, id));
-        if (!options.length) continue;
-        place(t, rng.pick(options));
-        break;
-      }
+    const spots = within(g, s, 3).filter((t) => t !== s && !tiles[t].resource);
+    for (let tries = 0; tries < 20 && spots.length; tries++) {
+      const t = rng.pick(spots);
+      const options = ids.filter((id) => RESOURCES[id].kind === 'bonus' && fits(t, id));
+      if (!options.length) continue;
+      tiles[t].resource = rng.pick(options);
+      break;
     }
   }
 }

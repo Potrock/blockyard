@@ -16,7 +16,8 @@ import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constru
 import { colOf, distance, line, neighbour, neighbours, rowOf, tileAt, within } from '../rules/hex';
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
-import { IMPROVEMENTS, TERRAINS, type Elevation, type FeatureId, type ImprovementId } from '../rules/terrain';
+import { IMPROVEMENTS, RESOURCES, TERRAINS, YIELD_KEYS, type Elevation, type FeatureId, type ImprovementId, type Yields } from '../rules/terrain';
+import { SEA_OIL } from '../rules/resources';
 import { makeCtx, militaryAt } from '../rules/ai/context';
 import { opinionOf } from '../rules/ai/opinion';
 import { planWar } from '../rules/ai/strategy';
@@ -3238,28 +3239,133 @@ test('map generation: Horses and Iron within four tiles of every civ’s start, 
   ok(coal >= starts * 0.9 && oil >= starts * 0.9, `Coal (${coal}) and Oil (${oil}) within reach of nearly all ${starts} starts`);
 });
 
-test('map generation: Aluminum and Uranium across every map, as in Civ V (about as much Aluminum as Iron, Uranium about half), and most city-states with a little Coal, Oil or Aluminum beside them', () => {
-  const total = { iron: 0, aluminum: 0, uranium: 0 };
+test('map generation: strategic resources as Civ V places them, each deposit a small or a large one of its kind (Iron 2 or 6, Horses 2 or 4, Coal and Oil 3 or 7, Aluminum 3 or 8, Uranium 2 or 4; Oil at sea 4), every kind on every map, and most city-states with a little Coal, Oil or Aluminum beside them', () => {
   let cityStates = 0;
   let supplied = 0;
-  for (const size of ['duel', 'small', 'standard'] as MapSize[])
+  for (const size of ['duel', 'small', 'standard', 'huge'] as MapSize[])
     for (const type of ['continents', 'pangaea', 'archipelago', 'fractal'] as const)
-      for (const seed of [1, 2, 3, 4]) {
+      for (const seed of [1, 2]) {
         const m = MAP_SIZES[size];
         const g = { width: m.width, height: m.height, wrap: true };
         const map = generate(g, seed, type, m.players, m.cityStates);
-        const count = (id: string) => map.tiles.filter((t) => t.resource === id).length;
-        // (Left to chance before, a small map often had no Aluminum at all.)
-        ok(count('aluminum') > 0 && count('uranium') > 0, `${size} ${type} ${seed}: Aluminum (${count('aluminum')}) and Uranium (${count('uranium')}) somewhere`);
-        for (const id of ['iron', 'aluminum', 'uranium'] as const) total[id] += count(id);
+        const what = `${size} ${type} ${seed}`;
+        const units: Record<string, number> = {};
+        map.tiles.forEach((tile, t) => {
+          const r = tile.resource && RESOURCES[tile.resource];
+          if (!r || r.kind !== 'strategic') return;
+          units[tile.resource!] = (units[tile.resource!] ?? 0) + (tile.amount ?? 0);
+          const sea = !!TERRAINS[tile.terrain].water;
+          ok(sea ? tile.resource === 'oil' && tile.amount === SEA_OIL : r.amount!.includes(tile.amount!), `${what}: ${r.name} at ${t}, ${tile.amount}, a deposit of its size`);
+        });
+        // (Civ V tops up a kind the map has too little of: a civ always has some within reach.)
+        for (const id of ['iron', 'horses', 'coal', 'oil', 'aluminum', 'uranium']) ok((units[id] ?? 0) >= (id === 'uranium' ? 1.5 : 2) * m.players, `${what}: ${RESOURCES[id].name} enough for every civ (${units[id] ?? 0} for ${m.players})`);
         for (const cs of map.starts.slice(m.players, m.players + m.cityStates)) {
           cityStates++;
           if (within(g, cs, 3).some((t) => ['coal', 'oil', 'aluminum'].includes(map.tiles[t].resource ?? ''))) supplied++;
         }
       }
-  ok(total.aluminum >= total.iron * 0.75 && total.aluminum <= total.iron * 1.5, `about as much Aluminum (${total.aluminum}) as Iron (${total.iron})`);
-  ok(total.uranium >= total.aluminum * 0.35 && total.uranium <= total.aluminum * 0.8, `Uranium (${total.uranium}) about half as common as Aluminum`);
   ok(supplied >= cityStates * 0.7, `most city-states (${supplied} of ${cityStates}) with Coal, Oil or Aluminum beside them`);
+});
+
+test('map generation: luxuries by region, as Civ V shares them out: each civ’s region a type of its own (up to eight civs), one by its start and more about it, and a second type there; three types the city-states’ alone; some left off the map; about as many as Civ V’s worlds have', () => {
+  // (Civ V's luxuries for the world of as many civs, before each start's second type: Duel, Tiny, Small, Standard, Large.)
+  const world: Record<MapSize, number> = { duel: 18, small: 30, standard: 45, large: 60, huge: 75 };
+  for (const size of ['duel', 'small', 'standard', 'large', 'huge'] as MapSize[])
+    for (const type of ['continents', 'pangaea', 'archipelago', 'earth'] as const)
+      for (const seed of [1, 2]) {
+        const m = MAP_SIZES[size];
+        const g = { width: m.width, height: m.height, wrap: true };
+        const map = generate(g, seed, type, m.players, m.cityStates);
+        const what = `${size} ${type} ${seed}`;
+        const { regions, cityStates, disabled } = map.luxuries;
+        const civs = map.starts.slice(0, m.players);
+        const cities = [...civs, ...map.starts.slice(m.players, m.players + m.cityStates).filter((t) => t >= 0)];
+        const copies = (id: string) => map.tiles.filter((x) => x.resource === id).length;
+        ok(regions.every(Boolean), `${what}: every region a type`);
+        if (m.players <= 8) eq(new Set(regions).size, regions.length, `${what}: each region’s its own`);
+        civs.forEach((s, i) => {
+          const near = new Set(within(g, s, 3).flatMap((t) => (map.tiles[t].resource && RESOURCES[map.tiles[t].resource!].kind === 'luxury' ? [map.tiles[t].resource!] : [])));
+          ok(near.has(regions[i]!), `${what}: ${regions[i]} by civ ${i}’s start`);
+          ok(near.size >= 2, `${what}: and a second type there (${[...near]})`);
+          ok(copies(regions[i]!) >= 2, `${what}: more ${regions[i]} about it (${copies(regions[i]!)})`);
+        });
+        eq(cityStates.length, 3, `${what}: three types for the city-states`);
+        map.tiles.forEach((x, t) => {
+          if (x.resource && cityStates.includes(x.resource)) ok(cities.some((c) => distance(g, c, t) <= 2), `${what}: ${x.resource} at ${t} by a city-state (or, wanting another, a start)`);
+        });
+        ok(disabled.length > 0 && disabled.every((id) => !copies(id)), `${what}: ${disabled.join(', ')} left off the map`);
+        const luxuries = map.tiles.filter((x) => x.resource && RESOURCES[x.resource].kind === 'luxury').length;
+        ok(luxuries >= world[size] * 0.9 && luxuries <= world[size] * 1.6, `${what}: ${luxuries} luxuries (Civ V’s world for as many civs, ${world[size]}, and a second type at each start)`);
+      }
+});
+
+test('resources yield as Civ V’s (Brave New World): what each gives, and what improving it adds (the improvement’s own yield and the resource’s with it)', () => {
+  const { game, at } = blank();
+  const t = at(6, 6);
+  const tile = game.tiles[t];
+  const words = (y: Yields) => YIELD_KEYS.flatMap((k) => (y[k] ? [`${y[k]} ${k}`] : [])).join(', ') || 'nothing';
+  const less = (a: Yields, b: Yields): Yields => Object.fromEntries(YIELD_KEYS.map((k) => [k, (a[k] ?? 0) - (b[k] ?? 0)]));
+  const CIV5: Record<string, [own: Yields, improved: Yields]> = {
+    wheat: [{ food: 1 }, { food: 1 }],
+    cattle: [{ food: 1 }, { prod: 1 }],
+    sheep: [{ food: 1 }, { food: 1 }],
+    deer: [{ food: 1 }, { prod: 1 }],
+    bison: [{ food: 1 }, { prod: 1 }],
+    fish: [{ food: 1 }, { food: 1 }],
+    stone: [{ prod: 1 }, { prod: 1 }],
+    horses: [{ prod: 1 }, { prod: 1 }],
+    iron: [{ prod: 1 }, { prod: 1 }],
+    coal: [{ prod: 1 }, { prod: 2 }],
+    aluminum: [{ prod: 1 }, { prod: 2 }],
+    uranium: [{ prod: 1 }, { prod: 2 }],
+    oil: [{ prod: 1 }, { prod: 3 }],
+    gold_ore: [{ gold: 2 }, { prod: 1 }],
+    silver: [{ gold: 2 }, { prod: 1 }],
+    copper: [{ gold: 2 }, { prod: 1 }],
+    gems: [{ gold: 3 }, { prod: 1 }],
+    salt: [{ food: 1, gold: 1 }, { food: 1, prod: 1 }],
+    marble: [{ gold: 2 }, { prod: 1 }],
+    ivory: [{ gold: 2 }, { gold: 1 }],
+    furs: [{ gold: 2 }, { gold: 1 }],
+    truffles: [{ gold: 2 }, { gold: 1 }],
+    dyes: [{ gold: 2 }, { gold: 1 }],
+    spices: [{ gold: 2 }, { gold: 1 }],
+    silk: [{ gold: 2 }, { gold: 1 }],
+    sugar: [{ gold: 2 }, { gold: 1 }],
+    cotton: [{ gold: 2 }, { gold: 1 }],
+    wine: [{ gold: 2 }, { gold: 1 }],
+    incense: [{ gold: 2 }, { gold: 1 }],
+    citrus: [{ food: 1, gold: 1 }, { gold: 1 }],
+    cocoa: [{ food: 1, gold: 1 }, { gold: 1 }],
+    whales: [{ food: 1, gold: 1 }, { food: 1 }],
+    pearls: [{ gold: 2 }, { food: 1 }],
+    crab: [{ food: 1, gold: 1 }, { food: 1 }],
+  };
+  const plain = tileYields(game, t, null);
+  for (const [id, [own, improved]] of Object.entries(CIV5)) {
+    tile.resource = id;
+    delete tile.improvement;
+    const bare = tileYields(game, t, null);
+    eq(words(less(bare, plain)), words(own), `${RESOURCES[id].name}: its own yield`);
+    tile.improvement = RESOURCES[id].improvement;
+    eq(words(less(tileYields(game, t, null), bare)), words(improved), `${RESOURCES[id].name}: improved with a ${IMPROVEMENTS[RESOURCES[id].improvement].name}`);
+  }
+});
+
+test('Bison, a bonus resource (Brave New World’s): on open flat plains and grassland, worked from a camp; drawn on its tiles, with its icon', () => {
+  let found = 0;
+  for (const seed of [1, 2, 3]) {
+    const m = MAP_SIZES.standard;
+    const map = generate({ width: m.width, height: m.height, wrap: true }, seed, 'continents', m.players, m.cityStates);
+    for (const tile of map.tiles) {
+      if (tile.resource !== 'bison') continue;
+      found++;
+      ok(['plains', 'grassland'].includes(tile.terrain) && tile.elevation === 'flat' && !tile.feature, `on open flat land (${tile.terrain}, ${tile.elevation}, ${tile.feature ?? 'nothing on it'})`);
+    }
+  }
+  ok(found >= 3, `Bison on the maps (${found})`);
+  eq(RESOURCES.bison.improvement, 'camp', 'a camp taps it');
+  ok(!!KINDS.bison && glyphPaths('bison') !== glyphPaths(''), 'its models on its tiles, and an icon');
 });
 
 test('map generation: an archipelago is many islands, the civs mostly each on their own, each with room for three or four cities', () => {
@@ -3868,6 +3974,21 @@ test('the replay after a load carries on where it was (nothing twice); a turn co
   endTurn(loaded);
   const moved = loaded.tiles.filter((tile, t) => tile.owner !== before[t]).length;
   eq(JSON.stringify(loaded.replay).length - size, 3 + 3 * moved, `a turn's record: three characters, and three for each of the ${moved} tiles that changed hands`);
+});
+
+test('the replay of a huge map (more tiles than two digits number): its borders recorded too, a tile in three digits', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { size: 'huge' });
+  ok(game.tiles.length > 64 * 64, `${game.tiles.length} tiles`);
+  city(game, 0, at(4, 4));
+  city(game, 1, at(80, 50));
+  endTurn(game);
+  const owners = replayAt(game.replay!, game.tiles.length, Infinity).owners;
+  ok(game.tiles.every((tile, t) => owners[t] === tile.owner), 'every tile’s owner as it is, the far corner’s too');
+  const size = JSON.stringify(game.replay).length;
+  const before = game.tiles.map((tile) => tile.owner);
+  endTurn(game);
+  const moved = game.tiles.filter((tile, t) => tile.owner !== before[t]).length;
+  eq(JSON.stringify(game.replay).length - size, 3 + 4 * moved, `a turn's record: three characters, and four for each of the ${moved} tiles that changed hands`);
 });
 
 test('saved games are each person’s, by account: listed in any room, carried on anywhere, never replaced by a new game; room saves moved over', () => {

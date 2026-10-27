@@ -107,10 +107,12 @@ export interface Resource {
   reveal?: string;
   /** Where it's found: terrains, features, elevations. */
   on: (TerrainId | FeatureId | Elevation)[];
-  /** How common, relative to others of its kind. */
+  /** Only on open flat land (no hills, nothing growing there). */
+  open?: boolean;
+  /** How common a bonus resource is, relative to the others (`mapgen.ts`; the rest are placed as Civ V places them, `resources.ts`). */
   weight: number;
-  /** A strategic resource's quantity per deposit (a unit needs one each). */
-  amount?: [number, number];
+  /** A strategic resource's quantity in a small deposit and in a large one (Civ V's; a unit needs one each). */
+  amount?: [small: number, large: number];
   /** Its colour on the map (and its icon's). */
   color: string;
 }
@@ -119,42 +121,43 @@ export type ImprovementId = 'farm' | 'mine' | 'trading_post' | 'lumber_mill' | '
 
 export const RESOURCES: Record<string, Resource> = {
   // Bonus
-  wheat: { name: 'Wheat', kind: 'bonus', yields: { food: 1 }, improvement: 'farm', improved: { food: 1 }, on: ['plains', 'floodplains', 'desert'], weight: 10, color: '#e8c95a' },
+  wheat: { name: 'Wheat', kind: 'bonus', yields: { food: 1 }, improvement: 'farm', improved: {}, on: ['plains', 'floodplains', 'desert'], weight: 10, color: '#e8c95a' },
   cattle: { name: 'Cattle', kind: 'bonus', yields: { food: 1 }, improvement: 'pasture', improved: { prod: 1 }, on: ['grassland'], weight: 10, color: '#8a5a3a' },
-  sheep: { name: 'Sheep', kind: 'bonus', yields: { food: 1 }, improvement: 'pasture', improved: { prod: 1 }, on: ['hills'], weight: 10, color: '#f0eee6' },
+  sheep: { name: 'Sheep', kind: 'bonus', yields: { food: 1 }, improvement: 'pasture', improved: { food: 1 }, on: ['hills'], weight: 10, color: '#f0eee6' },
   deer: { name: 'Deer', kind: 'bonus', yields: { food: 1 }, improvement: 'camp', improved: { prod: 1 }, on: ['forest', 'tundra'], weight: 10, color: '#b07a4a' },
   bananas: { name: 'Bananas', kind: 'bonus', yields: { food: 1 }, improvement: 'plantation', improved: { food: 1 }, on: ['jungle'], weight: 8, color: '#f2d43a' },
-  fish: { name: 'Fish', kind: 'bonus', yields: { food: 2 }, improvement: 'fishing_boats', improved: { food: 1 }, on: ['coast'], weight: 12, color: '#7ac8e8' },
+  fish: { name: 'Fish', kind: 'bonus', yields: { food: 1 }, improvement: 'fishing_boats', improved: { food: 1 }, on: ['coast'], weight: 12, color: '#7ac8e8' },
+  bison: { name: 'Bison', kind: 'bonus', yields: { food: 1 }, improvement: 'camp', improved: { prod: 1 }, on: ['plains', 'grassland'], open: true, weight: 5, color: '#6a4a2e' },
   stone: { name: 'Stone', kind: 'bonus', yields: { prod: 1 }, improvement: 'quarry', improved: { prod: 1 }, on: ['grassland', 'plains', 'desert', 'tundra'], weight: 6, color: '#9a9a9a' },
   // Strategic
   horses: { name: 'Horses', kind: 'strategic', yields: { prod: 1 }, improvement: 'pasture', improved: { prod: 1 }, reveal: 'animal_husbandry', on: ['grassland', 'plains', 'tundra'], weight: 10, amount: [2, 4], color: '#c49a6c' },
-  iron: { name: 'Iron', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: { prod: 1 }, reveal: 'bronze_working', on: ['hills', 'grassland', 'plains', 'desert', 'tundra', 'snow'], weight: 10, amount: [2, 6], color: '#7a8a9a' },
-  coal: { name: 'Coal', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: { prod: 1 }, reveal: 'industrialization', on: ['hills', 'grassland', 'plains'], weight: 8, amount: [2, 6], color: '#a0a0ac' },
-  oil: { name: 'Oil', kind: 'strategic', yields: { prod: 1 }, improvement: 'oil_well', improved: { prod: 1 }, reveal: 'biology', on: ['desert', 'tundra', 'snow', 'marsh', 'jungle', 'coast'], weight: 8, amount: [2, 6], color: '#9a88c8' },
-  aluminum: { name: 'Aluminum', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: { prod: 1 }, reveal: 'electricity', on: ['hills', 'plains', 'desert', 'tundra'], weight: 6, amount: [2, 6], color: '#d8dde3' },
-  uranium: { name: 'Uranium', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: { prod: 1 }, reveal: 'atomic_theory', on: ['hills', 'tundra', 'desert', 'forest', 'jungle', 'marsh'], weight: 4, amount: [1, 4], color: '#7aff3a' },
+  iron: { name: 'Iron', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: {}, reveal: 'bronze_working', on: ['hills', 'grassland', 'plains', 'desert', 'tundra', 'snow', 'forest'], weight: 10, amount: [2, 6], color: '#7a8a9a' },
+  coal: { name: 'Coal', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: { prod: 1 }, reveal: 'industrialization', on: ['hills', 'forest', 'jungle', 'grassland', 'plains'], weight: 8, amount: [3, 7], color: '#a0a0ac' },
+  oil: { name: 'Oil', kind: 'strategic', yields: { prod: 1 }, improvement: 'oil_well', improved: { prod: 3 }, reveal: 'biology', on: ['desert', 'tundra', 'snow', 'marsh', 'jungle', 'coast'], weight: 8, amount: [3, 7], color: '#9a88c8' },
+  aluminum: { name: 'Aluminum', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: { prod: 1 }, reveal: 'electricity', on: ['hills', 'tundra', 'snow', 'desert', 'jungle'], weight: 6, amount: [3, 8], color: '#d8dde3' },
+  uranium: { name: 'Uranium', kind: 'strategic', yields: { prod: 1 }, improvement: 'mine', improved: { prod: 1 }, reveal: 'atomic_theory', on: ['marsh', 'jungle', 'forest', 'tundra', 'snow'], weight: 4, amount: [2, 4], color: '#7aff3a' },
   // Luxury
-  gold_ore: { name: 'Gold', kind: 'luxury', yields: { gold: 2 }, improvement: 'mine', improved: { gold: 1 }, on: ['hills', 'desert', 'plains', 'grassland'], weight: 6, color: '#ffc531' },
-  silver: { name: 'Silver', kind: 'luxury', yields: { gold: 2 }, improvement: 'mine', improved: { gold: 1 }, on: ['hills', 'desert', 'tundra'], weight: 6, color: '#cfd6dc' },
-  gems: { name: 'Gems', kind: 'luxury', yields: { gold: 3 }, improvement: 'mine', improved: { gold: 1 }, on: ['jungle', 'hills', 'desert', 'grassland', 'plains', 'tundra'], weight: 6, color: '#3ad0ff' },
-  marble: { name: 'Marble', kind: 'luxury', yields: { gold: 2 }, improvement: 'quarry', improved: { prod: 1 }, on: ['grassland', 'plains', 'desert', 'tundra', 'hills'], weight: 5, color: '#f4f1ea' },
-  copper: { name: 'Copper', kind: 'luxury', yields: { gold: 2 }, improvement: 'mine', improved: { gold: 1 }, on: ['hills', 'desert', 'plains', 'grassland', 'tundra'], weight: 5, color: '#d8844a' },
-  salt: { name: 'Salt', kind: 'luxury', yields: { food: 1, gold: 1 }, improvement: 'mine', improved: { prod: 1 }, on: ['plains', 'desert', 'tundra'], weight: 5, color: '#f8f4ec' },
-  ivory: { name: 'Ivory', kind: 'luxury', yields: { gold: 2 }, improvement: 'camp', improved: { prod: 1 }, on: ['plains'], weight: 5, color: '#f4ecd4' },
-  furs: { name: 'Furs', kind: 'luxury', yields: { gold: 2 }, improvement: 'camp', improved: { prod: 1 }, on: ['tundra', 'forest'], weight: 5, color: '#8a5a2a' },
-  truffles: { name: 'Truffles', kind: 'luxury', yields: { gold: 2 }, improvement: 'camp', improved: { prod: 1 }, on: ['forest', 'jungle', 'marsh'], weight: 4, color: '#5a3a2a' },
-  dyes: { name: 'Dyes', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['jungle', 'forest'], weight: 5, color: '#b03ad0' },
-  spices: { name: 'Spices', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['jungle', 'forest'], weight: 5, color: '#d8642a' },
-  silk: { name: 'Silk', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['forest'], weight: 5, color: '#ff8ab6' },
-  sugar: { name: 'Sugar', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['floodplains', 'marsh'], weight: 5, color: '#ffffff' },
-  cotton: { name: 'Cotton', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['grassland', 'plains', 'desert'], weight: 5, color: '#f4f4f4' },
+  gold_ore: { name: 'Gold', kind: 'luxury', yields: { gold: 2 }, improvement: 'mine', improved: {}, on: ['hills', 'desert'], weight: 6, color: '#ffc531' },
+  silver: { name: 'Silver', kind: 'luxury', yields: { gold: 2 }, improvement: 'mine', improved: {}, on: ['hills', 'tundra', 'grassland'], weight: 6, color: '#cfd6dc' },
+  gems: { name: 'Gems', kind: 'luxury', yields: { gold: 3 }, improvement: 'mine', improved: {}, on: ['hills', 'jungle'], weight: 6, color: '#3ad0ff' },
+  marble: { name: 'Marble', kind: 'luxury', yields: { gold: 2 }, improvement: 'quarry', improved: { prod: 1 }, on: ['grassland', 'desert', 'plains', 'tundra', 'hills'], weight: 5, color: '#f4f1ea' },
+  copper: { name: 'Copper', kind: 'luxury', yields: { gold: 2 }, improvement: 'mine', improved: {}, on: ['hills', 'grassland', 'tundra'], weight: 5, color: '#d8844a' },
+  salt: { name: 'Salt', kind: 'luxury', yields: { food: 1, gold: 1 }, improvement: 'mine', improved: { food: 1 }, on: ['plains', 'desert', 'tundra', 'forest'], weight: 5, color: '#f8f4ec' },
+  ivory: { name: 'Ivory', kind: 'luxury', yields: { gold: 2 }, improvement: 'camp', improved: { gold: 1 }, on: ['plains', 'grassland'], weight: 5, color: '#f4ecd4' },
+  furs: { name: 'Furs', kind: 'luxury', yields: { gold: 2 }, improvement: 'camp', improved: { gold: 1 }, on: ['tundra', 'forest'], weight: 5, color: '#8a5a2a' },
+  truffles: { name: 'Truffles', kind: 'luxury', yields: { gold: 2 }, improvement: 'camp', improved: { gold: 1 }, on: ['forest', 'jungle', 'marsh', 'hills'], weight: 4, color: '#5a3a2a' },
+  dyes: { name: 'Dyes', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['forest', 'jungle', 'marsh'], weight: 5, color: '#b03ad0' },
+  spices: { name: 'Spices', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['jungle', 'forest', 'marsh'], weight: 5, color: '#d8642a' },
+  silk: { name: 'Silk', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['forest', 'jungle'], weight: 5, color: '#ff8ab6' },
+  sugar: { name: 'Sugar', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['marsh', 'jungle', 'floodplains', 'grassland'], weight: 5, color: '#ffffff' },
+  cotton: { name: 'Cotton', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['floodplains', 'grassland'], weight: 5, color: '#f4f4f4' },
   wine: { name: 'Wine', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['grassland', 'plains'], weight: 5, color: '#8a1a3a' },
-  incense: { name: 'Incense', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['desert', 'plains'], weight: 5, color: '#c4a46a' },
-  citrus: { name: 'Citrus', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['grassland', 'plains', 'jungle'], weight: 4, color: '#ff9a1a' },
-  cocoa: { name: 'Cocoa', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['jungle', 'forest'], weight: 4, color: '#6a3a1a' },
+  incense: { name: 'Incense', kind: 'luxury', yields: { gold: 2 }, improvement: 'plantation', improved: { gold: 1 }, on: ['desert', 'floodplains', 'plains'], weight: 5, color: '#c4a46a' },
+  citrus: { name: 'Citrus', kind: 'luxury', yields: { food: 1, gold: 1 }, improvement: 'plantation', improved: { gold: 1 }, on: ['jungle', 'forest', 'floodplains'], weight: 4, color: '#ff9a1a' },
+  cocoa: { name: 'Cocoa', kind: 'luxury', yields: { food: 1, gold: 1 }, improvement: 'plantation', improved: { gold: 1 }, on: ['jungle', 'forest'], weight: 4, color: '#6a3a1a' },
   whales: { name: 'Whales', kind: 'luxury', yields: { food: 1, gold: 1 }, improvement: 'fishing_boats', improved: { food: 1 }, on: ['coast'], weight: 4, color: '#3a5a7a' },
   pearls: { name: 'Pearls', kind: 'luxury', yields: { gold: 2 }, improvement: 'fishing_boats', improved: { food: 1 }, on: ['coast'], weight: 4, color: '#f4f8ff' },
-  crab: { name: 'Crab', kind: 'luxury', yields: { gold: 2 }, improvement: 'fishing_boats', improved: { food: 1 }, on: ['coast'], weight: 3, color: '#e8543a' },
+  crab: { name: 'Crab', kind: 'luxury', yields: { food: 1, gold: 1 }, improvement: 'fishing_boats', improved: { food: 1 }, on: ['coast'], weight: 3, color: '#e8543a' },
 };
 
 /** The improvement that taps a tile's resource: the resource's own, but Oil out at sea takes an Offshore Platform (a work boat's, with Refrigeration). */

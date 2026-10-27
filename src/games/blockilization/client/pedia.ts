@@ -10,7 +10,7 @@ import { BELIEF_LIST, BELIEFS } from '../rules/religion';
 import { EUREKAS } from '../rules/eurekas';
 import { SPEEDS } from '../rules/state';
 import { baseTechCost, ERA_NAMES, ERAS, eraOfCol, TECH_LIST, TECHS, type Era, type Tech } from '../rules/techs';
-import { FALLOUT, FEATURES, HILLS, IMPROVEMENTS, MOUNTAIN, RESOURCES, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId, type TerrainId, type Yields } from '../rules/terrain';
+import { addYields, FALLOUT, FEATURES, HILLS, IMPROVEMENTS, MOUNTAIN, RESOURCES, TERRAINS, YIELD_KEYS, type FeatureId, type ImprovementId, type TerrainId, type Yields } from '../rules/terrain';
 import { UNIT_LIST, UNITS, type UnitType } from '../rules/units';
 import { centre } from '../geometry';
 import { lookAt } from './camera';
@@ -689,9 +689,9 @@ function resourcePage(id: string): Page {
   const r = RESOURCES[id];
   const facts: Fact[] = [
     ['food', YIELD_COLOR.food, 'Yields', yieldsEl(r.yields, true)],
-    ['hammer', '#f0a24a', 'Improved', yieldsEl(r.improved, true)],
+    ['hammer', '#f0a24a', 'Improved', yieldsEl(addYields(IMPROVEMENTS[r.improvement].yields, r.improved), true)],
   ];
-  if (r.amount) facts.push(['hexes', r.color, 'Each deposit', `${r.amount[0]}–${r.amount[1]}`]);
+  if (r.amount) facts.push(['hexes', r.color, 'Each deposit', `${r.amount[0]} small, ${r.amount[1]} large`]);
   const owned = store.view?.self.strategic[id];
   if (owned) facts.push(['check', '#6fd27a', 'You have', `${owned.have - owned.used} free of ${owned.have}`]);
   const kindText: Record<string, string> = {

@@ -67,6 +67,7 @@ const G: Record<string, string> = {
   cattle: '<path d="M5 6c0 2 1 3 3 3M19 6c0 2-1 3-3 3"/><path d="M8 9h8l1 6c0 3-2 5-5 5s-5-2-5-5z"/><path d="M10 15h.01M14 15h.01" stroke-width="2.4"/><path d="M10 18h4"/>',
   sheep: '<circle cx="12" cy="12" r="6"/><circle cx="7" cy="9" r="2.5"/><circle cx="17" cy="9" r="2.5"/><circle cx="12" cy="7" r="2.5"/><path d="M9 18v3M15 18v3"/>',
   deer: '<path d="M8 3v4l-3 1M8 7l3 2M16 3v4l3 1M16 7l-3 2"/><path d="M9 10h6l-1 8-2 3-2-3z"/>',
+  bison: '<path d="M5 12c0-4 3-7 7-7 3 0 4 2 6 3 2 1 3 3 3 5v3H6"/><path d="M5 12c-2 0-3 2-2 4l2 1h1"/><path d="M4 11l-1-2"/><path d="M8 16v4M11 16v4M16 16v4M19 16v4"/>',
   bananas: '<path d="M5 9c1 7 6 11 13 10M7 7c2 6 6 9 12 9M9 5c2 5 5 7 10 7"/><path d="M4 9l2-3"/>',
   fish: '<path d="M3 12c3-4 7-5 10-5s6 2 7 5c-1 3-4 5-7 5s-7-1-10-5z"/><path d="M20 12l2-3v6z"/><path d="M8 11h.01" stroke-width="2.4"/>',
   stone: '<path d="M4 17l3-8 6-3 6 4 1 7-8 3z"/><path d="M7 9l5 3 8-2M12 12l-1 8"/>',
