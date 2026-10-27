@@ -1,7 +1,7 @@
 import { earthDry, earthSeas, earthLand, earthLatitude, earthRidges, earthRivers, earthWet, TRUE_STARTS, tileOfLonLat } from './earth';
 import { distance, neighbour, neighbours, rowOf, colOf, within, type Grid } from './hex';
 import { fitsSite, NATURAL_WONDER_LIST, type NaturalWonder } from './nature';
-import type { MapType, Tile } from './state';
+import { MAP_SIZES, sizeOfMap, type MapType, type Tile } from './state';
 import { FEATURES, RESOURCES, TERRAINS, type FeatureId, type TerrainId } from './terrain';
 
 /**
@@ -254,8 +254,9 @@ export function generate(g: Grid, seed: number, type: MapType, players: number, 
       at = next;
     }
   }
-  // Flood plains: desert on a river.
-  for (const tile of tiles) if (tile.river && tile.terrain === 'desert' && tile.elevation === 'flat' && !tile.feature) tile.feature = 'floodplains';
+  // Flood plains: desert on a river. (An oasis is never on fresh water, as in Civ V: one a river runs
+  // through is flood plains.)
+  for (const tile of tiles) if (tile.river && tile.terrain === 'desert' && tile.elevation === 'flat' && (!tile.feature || tile.feature === 'oasis')) tile.feature = 'floodplains';
 
   // --- Heights for the voxel map: hills a step up, mountains tall, land rising inland.
   for (let t = 0; t < n; t++) {
@@ -403,14 +404,14 @@ function landmass(g: Grid, tiles: Tile[], from: number): Set<number> {
 }
 
 /**
- * Natural wonders: a few for the map's size (two on a duel map, six on a large one), each of a kind
+ * Natural wonders: a few for the map's size (Civ V's: two on a duel map, six on a huge one), each of a kind
  * picked at random where its site fits (`nature.ts`; a pair of tiles for some), spread apart, kept
  * off the starts (four tiles from a civ's, two from a city-state's) and never closing a way through
  * the land. Its tiles become its own: nothing else on them, and mountains to the rules unless it can
  * be entered.
  */
 function placeNaturalWonders(g: Grid, tiles: Tile[], rng: Rng, starts: number[], players: number) {
-  const want = Math.max(1, Math.round((g.width * g.height) / 250));
+  const want = MAP_SIZES[sizeOfMap(g)].wonders;
   const kinds = [...NATURAL_WONDER_LIST];
   for (let i = kinds.length - 1; i > 0; i--) {
     const j = Math.floor(rng.next() * (i + 1));

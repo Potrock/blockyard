@@ -7,7 +7,7 @@ import type { Game, Player } from './state';
  * lost, wars and peace, wonders built, eras reached, civs fallen, the victory. It's recorded by
  * comparing the game with how it stood at the last record, once a turn (and when a city taken ends
  * the game), so the rules need no hooks of their own; and it's kept small, for the save: a border
- * change is three characters, an event a short array.
+ * change is three characters (four on the largest maps), an event a short array.
  */
 
 /** What happened, when: a city founded (1: a civ's capital, not a city-state's), taken, lost; a war, a peace (between two civs standing); a wonder built; an era reached; a civ fallen; the victory. */
@@ -23,7 +23,7 @@ export type ReplayEvent =
   | [turn: number, kind: 'won', winner: number, how: string];
 
 export interface Replay {
-  /** Each turn's border changes, by turn: per tile whose owner changed, the tile (two digits) and its owner (one; `.`: nobody). */
+  /** Each turn's border changes, by turn: per tile whose owner changed, the tile (two digits, three on a map of more than 4,096 tiles: `tileDigits`) and its owner (one; `.`: nobody). */
   borders: string[];
   events: ReplayEvent[];
 }
@@ -31,8 +31,8 @@ export interface Replay {
 /** The digits border changes are written in: 64 of them, none that JSON escapes. */
 const DIGITS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_';
 const NOBODY = '.';
-/** Tiles two digits can name (the largest map has 1,500). */
-const MOST_TILES = DIGITS.length ** 2;
+/** The digits a tile is written in: two, or three on a map too big for two to name every tile (a huge map has 4,928, a huge Earth 5,900). */
+const tileDigits = (tiles: number) => (tiles > DIGITS.length ** 2 ? 3 : 2);
 
 /** How things stand at a point of the replay: each tile's owner, the cities (by id), the wars (`a,b`, a < b), each civ's era, who has fallen, the wonders built. */
 export interface ReplayState {
@@ -54,9 +54,11 @@ function emptyState(tiles: number): ReplayState {
 /** A turn's border changes applied to the owners. */
 function applyBorders(owners: Int16Array, packed: string) {
   if (!packed) return;
-  for (let i = 0; i + 2 < packed.length; i += 3) {
-    const t = DIGITS.indexOf(packed[i]) * DIGITS.length + DIGITS.indexOf(packed[i + 1]);
-    owners[t] = packed[i + 2] === NOBODY ? -1 : DIGITS.indexOf(packed[i + 2]);
+  const n = tileDigits(owners.length);
+  for (let i = 0; i + n < packed.length; i += n + 1) {
+    let t = 0;
+    for (let k = 0; k < n; k++) t = t * DIGITS.length + DIGITS.indexOf(packed[i + k]);
+    owners[t] = packed[i + n] === NOBODY ? -1 : DIGITS.indexOf(packed[i + n]);
   }
 }
 
@@ -147,7 +149,6 @@ const major = (p: Player) => !p.cityState && p.civ !== 'barbarian';
  * victory. `eraOf` is the rules' own (`game.ts`).
  */
 export function recordReplay(game: Game, turn: number, eraOf: (p: Player) => number) {
-  if (game.tiles.length > MOST_TILES) return;
   const r = (game.replay ??= { borders: [], events: [] });
   let s = lastSeen.get(game);
   if (!s) {
@@ -160,11 +161,13 @@ export function recordReplay(game: Game, turn: number, eraOf: (p: Player) => num
   };
   // Borders.
   let packed = '';
+  const n = tileDigits(game.tiles.length);
   for (let t = 0; t < game.tiles.length; t++) {
     const owner = game.tiles[t].owner;
     if (owner === s.owners[t] || owner >= DIGITS.length) continue;
     s.owners[t] = owner;
-    packed += DIGITS[Math.floor(t / DIGITS.length)] + DIGITS[t % DIGITS.length] + (owner < 0 ? NOBODY : DIGITS[owner]);
+    for (let k = n - 1; k >= 0; k--) packed += DIGITS[Math.floor(t / DIGITS.length ** k) % DIGITS.length];
+    packed += owner < 0 ? NOBODY : DIGITS[owner];
   }
   while (r.borders.length <= turn) r.borders.push('');
   r.borders[turn] += packed;
