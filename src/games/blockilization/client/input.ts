@@ -4,11 +4,11 @@ import type { CityWire, PreviewAsk, UnitWire } from '../protocol';
 import { cam, centreHere, pick, zoom } from './camera';
 import { flagsIn, hitAt, type Hit } from './overlay';
 import { ask, attackable, cityAt, enemyAt, isNuke, me, myCity, myUnit, store, unitsAt } from './store';
-import { closePanels, endTurnAction, explores, front, openCity, platformMenuOpen, selectNextIdle, send, setTipPosition, toggleLens, togglePanel } from './ui';
+import { closePanels, endTurnAction, explores, front, openCity, platformMenuOpen, selectNextIdle, send, setTipPosition, toast, toggleLens, togglePanel } from './ui';
 import { openPedia, tileArticle } from './pedia';
 import { openOverview } from './overview';
 import { cycleLens } from './lenses';
-import { chargeFrom } from './path';
+import { chargeFrom, whyNot } from './path';
 import { marchTo } from './march';
 import { play } from './sound';
 import { closePinMenu, openPinMenu } from './pins';
@@ -205,8 +205,11 @@ function act(t: number, right: boolean, hit: Hit | null = null, touch = false, s
       const unit = sel.id;
       ask(`Launch the ${UNITS[sel.type].name} here? Everything in the blast is struck, its land left in fallout, and every civ that knows you will long remember it. It can only fall where everyone it would hit is someone you're at war with.`, 'Launch it', () => send({ t: 'attack', unit, target: t }));
     } else send({ t: 'attack', unit: sel.id, target: t });
-  } else if (UNITS[sel.type]?.domain === 'air') send({ t: 'rebase', unit: sel.id, to: t });
-  else {
+  } else if (UNITS[sel.type]?.domain === 'air') {
+    // (At an enemy it can't strike, out of range or sight: why not, rather than a rebase there that can't be.)
+    if (enemyAt(t)) toast(whyNot(sel, t));
+    else send({ t: 'rebase', unit: sel.id, to: t });
+  } else {
     // A melee unit sent at an enemy it can reach this turn charges: next to it, then the attack.
     const from = chargeFrom(sel, t);
     if (from !== null) {

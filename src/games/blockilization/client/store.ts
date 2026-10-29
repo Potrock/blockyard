@@ -347,6 +347,20 @@ export function outOfReach(u: UnitWire, t: number): string {
 }
 
 /**
+ * Why an aircraft can't strike a tile or rebase to it: an enemy there out of its range, or out of
+ * sight (it strikes only what its side sees, as the rules' `airTarget` has it); else no base of
+ * yours there in reach.
+ */
+export function airWhyNot(u: UnitWire, t: number): string {
+  const g = store.grid;
+  if (g && enemyAt(t)) {
+    if (distance(g, u.tile, t) > reachOf(u)) return `Out of range: it strikes up to ${reachOf(u)} tiles away`;
+    if (!store.known[t]?.visible) return 'Not in sight: it strikes only what you can see now';
+  }
+  return `It rebases only to your cities and ships with room for it, within ${reachOf(u) * 2} tiles`;
+}
+
+/**
  * Whether a unit could attack a tile from where it stands: a fighting unit, an enemy in sight there,
  * in reach; and for a shot past the next tile, a line of sight to it, as the rules' `canFire` has it
  * (`inSight`: what stands higher than the shooter blocks, unless it has Indirect Fire). Aircraft need

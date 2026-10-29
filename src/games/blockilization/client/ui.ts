@@ -143,6 +143,11 @@ export const send = (o: Order) => {
 };
 /** An order the screen gives for the player (a march's, turn by turn). */
 export const sendFor = (o: Order) => client.send('order', o);
+/** A word at the top of the screen for a moment, as an order refused gets. */
+export function toast(text: string) {
+  store.toast = { text, until: client.time + 3 };
+  store.changed++;
+}
 /** Ask the server what another civ would make of a deal being drawn up (its answer comes as `dealCheck`). */
 export const checkDeal = (data: { target: number; items: DealItem[]; key: string }) => client.send('dealCheck', data);
 const lobby = (a: LobbyAction) => client.send('lobby', a);
@@ -1431,7 +1436,7 @@ function renderUnit(): El | null {
       : type.abilities?.includes('combat_bonus_aura')
         ? `${ABILITY_TEXT.combat_bonus_aura} Keep it with your army (it can share a tile with a soldier), out of the enemy's reach.`
       : type.domain === 'air'
-        ? `${click(true)} an enemy within ${reachOf(u)} tiles to strike it (they're ringed in red), or one of your cities or ships outlined in blue to rebase there. Fighters and anti-aircraft guns near a target may intercept.${type.class === 'missile' ? ' The missile is spent in its strike.' : ''}`
+        ? `${click(true)} an enemy you can see within ${reachOf(u)} tiles to strike it (they're ringed in red), or one of your cities or ships outlined in blue to rebase there. Fighters and anti-aircraft guns near a target may intercept.${type.class === 'missile' ? ' The missile is spent in its strike.' : ''}`
       : type.ranged
         ? `Enemies in reach are ringed in red: ${touchScreen() ? 'tap one to see how a shot would go, tap it again to fire' : 'point at one to see how a shot would go, click to fire'}.`
         : type.strength
@@ -1569,7 +1574,9 @@ function renderArrival() {
   let cls = '';
   if (u && t >= 0 && t !== u.tile && store.known[t]) {
     const route = attackable(u, t) ? undefined : previewPath(u, t);
-    if (route === null) [text, cls] = [whyNot(u, t), 'no'];
+    // (An aircraft goes by no way: it rebases there, or it's told why not.)
+    if (route === null && u.bases?.includes(t)) text = 'Rebases here: that takes its turn';
+    else if (route === null) [text, cls] = [whyNot(u, t), 'no'];
     else if (route) text = [wayThere(route, u), wallsOnWay(route, u)].filter(Boolean).join(' · ');
   }
   if (arrival.textContent !== text) {
@@ -2629,7 +2636,7 @@ function renderTip() {
       // (An aircraft rebases, rather than going by a way: where it could, or why not.)
       if (sel && t !== sel.tile && !attackable(sel, t) && UNITS[sel.type]?.domain === 'air') {
         const base = sel.bases?.includes(t);
-        bits.push(h(`div.ln.way${base ? '' : '.no'}`, {}, icon(base ? 'plane' : 'close', 13), base ? `${click(true)} to rebase it here` : `It rebases only to your cities and ships with room for it, within ${reachOf(sel) * 2} tiles`));
+        bits.push(h(`div.ln.way${base ? '' : '.no'}`, {}, icon(base ? 'plane' : 'close', 13), base ? `${click(true)} to rebase it here` : whyNot(sel, t)));
       } else if (sel && t !== sel.tile && !attackable(sel, t)) {
         const route = previewPath(sel, t);
         bits.push(h(`div.ln.way${route ? '' : '.no'}`, {}, icon(route ? 'moves' : 'close', 13), route ? wayThere(route, sel) : whyNot(sel, t)));
