@@ -441,14 +441,25 @@ export const MAP_TYPE_NAMES: Record<MapType, string> = { continents: 'Continents
 /** A map type in a sentence ("a small continents map", "a small Earth map"). */
 export const mapTypeWord = (t: MapType) => (t === 'earth' ? 'Earth' : MAP_TYPE_NAMES[t].toLowerCase());
 
-/** Map sizes: tiles across and down, and players and city-states they suit. */
-export const MAP_SIZES: Record<MapSize, { name: string; width: number; height: number; players: number; cityStates: number }> = {
-  duel: { name: 'Duel', width: 26, height: 18, players: 2, cityStates: 2 },
-  small: { name: 'Small', width: 34, height: 22, players: 4, cityStates: 4 },
-  standard: { name: 'Standard', width: 42, height: 26, players: 6, cityStates: 6 },
-  large: { name: 'Large', width: 50, height: 30, players: 8, cityStates: 8 },
-  huge: { name: 'Huge', width: 60, height: 36, players: 10, cityStates: 10 },
+/**
+ * Map sizes: tiles across and down, and players and city-states they suit. Each gives a civ about
+ * the land it has on Civ V's map for as many players (Duel's two, Tiny's four, Small's six,
+ * Standard's eight, Large's ten): with a little more of the map land than Civ V makes, a little
+ * smaller across. And that map's natural wonders (Civ V's count for it).
+ */
+export const MAP_SIZES: Record<MapSize, { name: string; width: number; height: number; players: number; cityStates: number; wonders: number }> = {
+  duel: { name: 'Duel', width: 32, height: 22, players: 2, cityStates: 2, wonders: 2 },
+  small: { name: 'Small', width: 46, height: 32, players: 4, cityStates: 4, wonders: 3 },
+  standard: { name: 'Standard', width: 56, height: 36, players: 6, cityStates: 6, wonders: 4 },
+  large: { name: 'Large', width: 70, height: 44, players: 8, cityStates: 8, wonders: 5 },
+  huge: { name: 'Huge', width: 88, height: 56, players: 10, cityStates: 10, wonders: 6 },
 };
+
+/** The size a map of so many tiles is: the largest it's as big as (an Earth map, a fifth bigger, its own; anything smaller a duel). */
+export function sizeOfMap(g: { width: number; height: number }): MapSize {
+  const sizes = Object.keys(MAP_SIZES) as MapSize[];
+  return sizes.filter((k) => MAP_SIZES[k].width * MAP_SIZES[k].height <= g.width * g.height).pop() ?? 'duel';
+}
 
 /**
  * The Earth map's tiles across and down at a size: a fifth more than the size's other maps have (the

@@ -40,6 +40,7 @@ export const KINDS: Partial<Record<string, Kind>> = {
   cattle: { models: ['r_cattle', 'r_cattle2', 'r_cattle'], count: 3, scale: 2.9, life: 'graze' },
   sheep: { models: ['r_sheep'], count: 3, scale: 2.9, life: 'graze' },
   deer: { models: ['r_deer'], count: 2, scale: 2.6, life: 'graze' },
+  bison: { models: ['r_bison'], count: 2, scale: 2.8, life: 'graze' },
   bananas: { models: ['r_bananas'], count: 2, scale: 3.4, life: 'still' },
   fish: { models: ['r_fish'], count: 2, scale: 2.4, life: 'swim', sea: true, lift: 0.1 },
   stone: { models: ['r_stone'], count: 2, scale: 3.1, life: 'still' },

@@ -6,7 +6,7 @@ import type { CombatWhen } from './effects';
 import { cityReligion } from './faith';
 import { distance, neighbours, ray, within } from './hex';
 import { campHooks, civiliansAt, occupants } from './movement';
-import { fromPromotions, PROMOTIONS, type PromotionWhen } from './promotions';
+import { fromPromotions, PROMOTIONS, promotionsOf, type PromotionWhen } from './promotions';
 import type { City, Game, Unit } from './state';
 import { FALLOUT, FEATURES, HILLS, IMPROVEMENTS, TERRAINS } from './terrain';
 import { canFortify, isGreatPerson, isMilitary, UNITS } from './units';
@@ -114,7 +114,9 @@ export interface Modifier {
 
 /**
  * A unit's strength on a tile, for attacking or defending, with everything that changes it (each
- * modifier that applies is added to `why`, when given).
+ * modifier that applies is added to `why`, when given). The modifiers add together, Civ V's way, but
+ * a corps's or an army's bonus multiplies the rest (Civ VI's flat +10 and +17 never shrink beside
+ * the others, so a formation keeps its edge fortified on a hill as in the open).
  */
 export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'ranged', against: Unit | City | null, at: number, why?: Modifier[]): number {
   const type = UNITS[u.type];
@@ -127,8 +129,9 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
     why?.push({ label, percent: n });
   };
   const civ = civEffects(game, p);
-  // A corps or an army: its units as one.
-  add(formationKind(u.type, sizeOf(u)) ?? '', formationBonus(sizeOf(u)));
+  // A corps or an army: its units as one (a multiplier of its own, below).
+  const formation = formationBonus(sizeOf(u));
+  if (formation) why?.push({ label: formationKind(u.type, sizeOf(u))!, percent: formation });
   // Wounds: up to half its strength gone at death's door (Civ V's); none for Japan's.
   if (!has(civ, 'no_wound_penalty')) add('Wounded', -(100 - u.hp) / 2);
   const tile = game.tiles[at];
@@ -152,10 +155,12 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
       why?.push({ label: 'Embarked', percent: 0 });
     }
   }
-  // Against mounted: spearmen and pikemen double. Against cities: siege doubles, horses lose a third.
-  if (vsUnit && UNITS[vsUnit.type].class === 'mounted' && type.abilities?.includes('bonus_vs_mounted')) add('Against mounted', 100);
+  // Civ V's: spearmen and pikemen +50% against mounted units, anti-tank guns and gunships +100%
+  // against armour; siege +200% against cities, horses a third less.
+  if (vsUnit && UNITS[vsUnit.type].class === 'mounted' && type.abilities?.includes('bonus_vs_mounted')) add('Against mounted', 50);
+  if (vsUnit && UNITS[vsUnit.type].class === 'armor' && type.abilities?.includes('bonus_vs_armor')) add('Against armour', 100);
   if (vsCity && role !== 'defend') {
-    if (type.abilities?.includes('bonus_vs_cities')) add('Against cities', 100);
+    if (type.abilities?.includes('bonus_vs_cities')) add('Against cities', 200);
     if (type.abilities?.includes('penalty_vs_cities')) add('Against cities', -33);
   }
   // A melee attack: +10% for each other unit of the attacker's next to the defender (flanking), -20%
@@ -167,8 +172,8 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
     if (game.tiles[target].river && !tile.river && !u.embarked && !amphibious) add('Across a river', -20);
     if (u.embarked && !amphibious) add('From the sea', -50);
   }
-  // Promotions.
-  for (const id of u.promotions) {
+  // Promotions (those its kind is born with too).
+  for (const id of promotionsOf(u)) {
     const c = PROMOTIONS[id]?.combat;
     if (c && promotionCounts(c.when, game, role, target, fired, vsUnit, vsCity)) add(PROMOTIONS[id].name, c.percent);
   }
@@ -194,7 +199,7 @@ export function strength(game: Game, u: Unit, role: 'attack' | 'defend' | 'range
     const mood = happiness(game, p);
     if (mood < 0) add('Unhappiness', -Math.min(90, -2 * mood));
   }
-  return Math.max(0.5, base * (1 + pct / 100));
+  return Math.max(0.5, base * (1 + pct / 100) * (1 + formation / 100));
 }
 
 /** Whether a promotion's bonus counts in a fight. */
@@ -212,6 +217,8 @@ function promotionCounts(when: PromotionWhen, game: Game, role: 'attack' | 'defe
       return fired;
     case 'vs_mounted':
       return !!vsUnit && UNITS[vsUnit.type].class === 'mounted';
+    case 'vs_gun':
+      return !!vsUnit && UNITS[vsUnit.type].class === 'gun';
     case 'vs_land':
       return !!vsUnit && UNITS[vsUnit.type].domain === 'land';
     case 'vs_ships':
@@ -220,6 +227,10 @@ function promotionCounts(when: PromotionWhen, game: Game, role: 'attack' | 'defe
       return !!vsUnit && UNITS[vsUnit.type].domain === 'air';
     case 'vs_cities':
       return !!vsCity && role !== 'defend';
+    case 'attacking':
+      return role !== 'defend';
+    case 'vs_wounded':
+      return role !== 'defend' && !!vsUnit && vsUnit.hp < 100;
     case 'always':
       return true;
   }

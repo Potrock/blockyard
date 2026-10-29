@@ -1,7 +1,7 @@
 /**
  * Blockilization's resources as little voxel models, built in code: what a tile's resource is, seen
  * on the tile itself (each screen places them, `client/resources3d.ts`). Grazing beasts (cattle,
- * sheep, horses, deer, an elephant for ivory, a fox for furs, a pig snuffling for truffles), crops
+ * sheep, horses, deer, bison, an elephant for ivory, a fox for furs, a pig snuffling for truffles), crops
  * and trees (wheat, bananas, cotton, dyes, spices, mulberry and cocoons for silk, sugar cane, vines,
  * frankincense, citrus, cocoa), the ground's riches (boulders, ores in their rock, marble, salt, an
  * oil seep, bauxite, uranium glowing green), and the sea's (a school of fish, a whale's back, crabs
@@ -26,7 +26,7 @@ const COLOURS = {
   emerald: 0x30c070, amethyst: 0xb060f0, vein: 0xa4a4b0, copperOre: 0xe0843a, salt: 0xfbf9f4, saltShade: 0xe2dad2, saltFlat: 0xe6ded2,
   dye: 0xb03ad8, indigo: 0x4a42c0, chili: 0xd82a1a, spice: 0xf0802a, mulberry: 0x3a1a3a, cocoon: 0xf8f4e6, cane: 0xb0c850,
   caneNode: 0x76863a, cotton: 0xfcfbf6, cottonShade: 0xe4e0d6, vine: 0x4a8a34, grape: 0x5a2470, resin: 0xf0a030, incenseBark: 0x8e7c62,
-  citrus: 0xff9418, cocoaPod: 0xe8a820, cocoaRed: 0xb44a1a,
+  citrus: 0xff9418, cocoaPod: 0xe8a820, cocoaRed: 0xb44a1a, bison: 0x6e4a2c, bisonDark: 0x3e2a1c, bisonShag: 0x2a1c14, bisonHorn: 0x2e2a28,
 };
 /** How much each colour glows (the rest don't). */
 const GLOW = { uranium: 0.6, goldBright: 0.35, ruby: 0.3, sapphire: 0.3, emerald: 0.3, amethyst: 0.3, pearl: 0.25, resin: 0.2 };
@@ -159,6 +159,21 @@ function horse(id, dark = false) {
   m.box([-1, 15, 7], [0, 16, 8], coat).box([0, 15, 7], [1, 16, 8], coat);
   m.box([-1, 10, 4], [1, 16, 5], mane).box([-1, 15, 5], [1, 16, 7], mane);
   m.box([-1, 5, -7], [1, 10, -6], mane).box([-1, 3, -8], [1, 6, -7], mane);
+  return m;
+}
+
+/** A bison: a great shaggy hump and mane over its shoulders, a brown body behind, its bearded head low, short dark horns. */
+function bison(id) {
+  const m = new Model(id);
+  body(m, { w: 6, h: 5, len: 11, legs: 4, leg: 2, coat: 'bison', shank: 'bisonDark', hoof: 'bisonHorn' });
+  const shag = (i, j, k) => (hash(i, j, k, 40) < 0.35 ? 'bisonShag' : 'bisonDark');
+  blob(m, 0, 9, 2.5, 3.4, 2.8, 3.2, shag, 8);
+  fill(m, [-3, 4, 2], [3, 9, 6], shag);
+  m.box([-2, 3, 6], [2, 8, 9], 'bisonDark');
+  m.box([-1, 1, 7], [1, 3, 9], 'bisonShag');
+  m.box([-3, 7, 6], [-2, 8, 8], 'bisonHorn').box([2, 7, 6], [3, 8, 8], 'bisonHorn');
+  m.box([-3, 8, 7], [-2, 9, 8], 'bisonHorn').box([2, 8, 7], [3, 9, 8], 'bisonHorn');
+  m.box([0, 6, -6], [1, 9, -5], 'bisonDark');
   return m;
 }
 
@@ -565,6 +580,7 @@ export const RESOURCE_MODELS = [
   horse('r_horses'),
   horse('r_horses2', true),
   deer('r_deer'),
+  bison('r_bison'),
   elephant('r_ivory'),
   fox('r_furs'),
   pig('r_truffles'),

@@ -9,7 +9,8 @@ import { UNITS, type UnitClass } from './units';
  * Siege against cities, Sentry for sight, a couple for ships, and aircraft's own (Interception, Air
  * Siege, Bombardment, Air Targeting, Evasion, Air Repair, Air Range). What each does is data
  * (`combat`, `range`...), which the combat, movement and healing rules read; a few are only given
- * (Morale, the Heroic Epic's; Altitude Training, the Cloudcrown's).
+ * (Morale, the Heroic Epic's; Altitude Training, the Cloudcrown's; and those some unique units are
+ * born with, Civ V's: the Janissary's, the Cossack's, the Impi's).
  */
 
 /** When a promotion's combat bonus counts. */
@@ -22,12 +23,16 @@ export type PromotionWhen =
   | 'ranged_rough'
   /** Defending against a ranged attack (a unit's or a city's). */
   | 'vs_ranged'
-  /** Fighting mounted units, land units, ships or aircraft; attacking a city. */
+  /** Fighting mounted units, gunpowder units, land units, ships or aircraft; attacking a city. */
   | 'vs_mounted'
+  | 'vs_gun'
   | 'vs_land'
   | 'vs_ships'
   | 'vs_aircraft'
   | 'vs_cities'
+  /** Attacking (a unit or a city), or attacking a unit that's wounded. */
+  | 'attacking'
+  | 'vs_wounded'
   | 'always';
 
 export interface Promotion {
@@ -106,12 +111,22 @@ export const PROMOTION_LIST: Promotion[] = [
   { id: 'air_range', name: 'Air Range', text: '+2 range (and so +4 to rebase).', classes: AIR, range: 2 },
   { id: 'morale', name: 'Morale', text: '+15% combat strength (from the Heroic Epic).', classes: [], combat: { percent: 15, when: 'always' } },
   { id: 'altitude_training', name: 'Altitude Training', text: '+15% combat strength in rough terrain; heals even after moving or fighting (from the Cloudcrown).', classes: [], combat: { percent: 15, when: 'rough' }, healsOnTheMove: true },
+  // Unique units' own (`units.ts`), Civ V's.
+  { id: 'attack_bonus', name: 'Attack Bonus', text: '+25% combat strength attacking (the Janissary’s).', classes: [], combat: { percent: 25, when: 'attacking' } },
+  { id: 'stronger_vs_damaged', name: 'Stronger Against the Wounded', text: '+33% combat strength attacking a wounded unit (the Cossack’s).', classes: [], combat: { percent: 33, when: 'vs_wounded' } },
+  { id: 'anti_gunpowder', name: 'Against Gunpowder', text: '+25% combat strength against gunpowder units (the Impi’s).', classes: [], combat: { percent: 25, when: 'vs_gun' } },
 ];
 
 export const PROMOTIONS: Record<string, Promotion> = Object.fromEntries(PROMOTION_LIST.map((p) => [p.id, p]));
 
 /** Experience needed for each promotion: 10, 30, 60, 100, 150, 210... (Civ V's). */
 export const xpFor = (n: number) => (n <= 0 ? 10 : 10 + 5 * n * (n + 3));
+
+/** A unit's promotions: those its kind is born with (`units.ts`; never counted against its experience, and gone if it upgrades), then its own. */
+export function promotionsOf(u: { type: string; promotions: string[] }): string[] {
+  const born = UNITS[u.type]?.promotions;
+  return born ? [...born, ...u.promotions.filter((id) => !born.includes(id))] : u.promotions;
+}
 
 /** How many promotions a unit can take now (the ones it was given don't count against its experience). */
 export function promotionsDue(u: Unit): number {
@@ -124,11 +139,12 @@ export function promotionsDue(u: Unit): number {
 export function promotionsFor(u: Unit): Promotion[] {
   const cls = UNITS[u.type]?.class;
   if (!cls) return [];
-  const has = (id: string) => u.promotions.includes(id);
+  const had = promotionsOf(u);
+  const has = (id: string) => had.includes(id);
   // (Indirect Fire isn't for those that have it already: Artillery, Rocket Artillery, the Battleship.)
   const indirect = !!UNITS[u.type].abilities?.includes('indirect_fire');
   return PROMOTION_LIST.filter((p) => p.classes.includes(cls) && !has(p.id) && (p.needs ?? []).every(has) && (!p.needsOne || p.needsOne.some(has)) && !(p.indirect && indirect));
 }
 
 /** The sum of a number its promotions add (range, sight, moves, attacks, evasion). */
-export const fromPromotions = (u: Unit, key: 'range' | 'sight' | 'moves' | 'attacks' | 'evasion') => u.promotions.reduce((s, id) => s + (PROMOTIONS[id]?.[key] ?? 0), 0);
+export const fromPromotions = (u: Unit, key: 'range' | 'sight' | 'moves' | 'attacks' | 'evasion') => promotionsOf(u).reduce((s, id) => s + (PROMOTIONS[id]?.[key] ?? 0), 0);

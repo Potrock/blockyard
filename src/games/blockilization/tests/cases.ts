@@ -16,7 +16,8 @@ import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constru
 import { colOf, distance, line, neighbour, neighbours, rowOf, tileAt, within } from '../rules/hex';
 import { generate, Rng, START_ISLAND } from '../rules/mapgen';
 import { NATURAL_WONDERS } from '../rules/nature';
-import { IMPROVEMENTS, TERRAINS, type Elevation, type FeatureId, type ImprovementId } from '../rules/terrain';
+import { IMPROVEMENTS, RESOURCES, TERRAINS, YIELD_KEYS, type Elevation, type FeatureId, type ImprovementId, type Yields } from '../rules/terrain';
+import { SEA_OIL } from '../rules/resources';
 import { makeCtx, militaryAt } from '../rules/ai/context';
 import { opinionOf } from '../rules/ai/opinion';
 import { planWar } from '../rules/ai/strategy';
@@ -31,13 +32,13 @@ import { bestSite, siteValue } from '../rules/ai/settle';
 import { canEnter, occupants, planPath, stepCost } from '../rules/movement';
 import { adoptable, ALL_POLICIES } from '../rules/policies';
 import { previewAttack, previewCityFire } from '../rules/preview';
-import { promotionsDue, promotionsFor } from '../rules/promotions';
+import { promotionsDue, promotionsFor, promotionsOf } from '../rules/promotions';
 import { BELIEF_LIST } from '../rules/religion';
 import { campCleared, QUEST_REWARD, questsFor, questsOf, questsTurn, type Quest, type QuestKind } from '../rules/quests';
 import { allyOf, cannotBully, cannotCoup, cityStateBonus, cityStateTurn, coupChance, influenceFall, TRIBUTE_COST, tributeGold, tributeTurns } from '../rules/citystates';
 import { banned, cannotPropose, delegates, delegateSources, embargoed, inForce, propose as proposeResolution, proposers, sessionTurns, vote as castVote } from '../rules/congress';
 import { replayAt, replayEnd, type ReplayEvent } from '../rules/replay';
-import { MAP_SIZES, SPEEDS, TURN_LIMITS, type Game, type MapSize, type Settings } from '../rules/state';
+import { MAP_SIZES, SPEEDS, TURN_LIMITS, type City, type Game, type MapSize, type Settings, type Unit } from '../rules/state';
 import { lonLatOf, TRUE_STARTS, tileOfLonLat } from '../rules/earth';
 import { cityTourism, longGameTurn, maxRoutes, routesGold, routesOf, routeYield, spiesOf, spyCount, startRoute, surveillanceTurns, theft, THEFT_COST, unVote } from '../rules/trade';
 import { TECHS } from '../rules/techs';
@@ -69,13 +70,13 @@ import { openProject, startProject, type WorldProject } from '../rules/projects'
 import { expectedTier, leavesProject, projectPlan, worldProject } from '../rules/ai/projects';
 import { bestNukeStrike, nukeProduction, nukes as fireNukes, nukesWanted, strikeWorth } from '../rules/ai/nukes';
 import { NUKE_INFLUENCE } from '../rules/diplomacy';
-import { bombInterceptChance } from '../rules/combat';
+import { bombInterceptChance, type Modifier } from '../rules/combat';
 import { bestUnit, ERA_STARTS, SCENARIOS, startEraOf, startWords, techsBefore, turnLimitFor, withScenario } from '../rules/starts';
 import { TECH_LIST } from '../rules/techs';
 import { TURN_CHOICES } from '../rules/state';
 import { autoPromote, eraOf, foundCity } from '../rules/game';
 import { botAnswer, EMOTES, isEmote, isPing, moodOf, toneOf } from '../rules/chat';
-import { isMilitary } from '../rules/units';
+import { isMilitary, isRanged } from '../rules/units';
 import { civEffects, has } from '../rules/core';
 import { bribeTurns, clanCost, clansOf, clansTurn, clanUnit, hireRest, inciteTurns, newClan, raidTarget, SETTLE, spares } from '../rules/clans';
 import { CLAN_STATES, SEVEN_CITIES_GOLD, speed } from '../rules/core';
@@ -807,6 +808,8 @@ test('a siege unit sets up as it fires when it has the moves for both (Civ V’s
   war(game, 0, 1);
   const t = unit(game, 'trebuchet', 0, at(10, 8));
   const d = unit(game, 'warrior', 1, at(12, 8));
+  // (A siege unit sees only a tile round it, Civ V's: another unit spots for it.)
+  unit(game, 'warrior', 0, at(11, 7));
   game.players[0].techs.push('physics');
   t.moves = 1;
   ok(!apply(game, 0, { t: 'attack', unit: t.id, target: d.tile }).ok, 'one move: no');
@@ -1170,7 +1173,7 @@ test('a long march stops when enemies come in sight', () => {
   // (Each with a city, to stay in the game turn after turn.)
   city(game, 0, at(1, 1));
   city(game, 1, at(24, 16));
-  const t = unit(game, 'trebuchet', 0, at(4, 8));
+  const t = unit(game, 'spearman', 0, at(4, 8));
   ok(apply(game, 0, { t: 'move', unit: t.id, to: at(16, 8) }).ok, 'off it goes');
   const where = t.tile;
   unit(game, 'pikeman', 1, at(where % game.grid.width + 2, 8));
@@ -1208,6 +1211,8 @@ test('a long march stops when enemies come in sight', () => {
 test('meeting goes both ways, and lasts', () => {
   const { game, at } = blank(['egypt', 'babylon']);
   const [a, b] = game.players;
+  // (Nothing seen yet of the map it began with.)
+  for (const p of game.players) p.explored.fill(0);
   const scout = unit(game, 'scout', 0, at(10, 8));
   city(game, 1, at(20, 14));
   ok(!hasMet(game, a, b) && !hasMet(game, b, a), 'strangers at first');
@@ -3234,28 +3239,133 @@ test('map generation: Horses and Iron within four tiles of every civ’s start, 
   ok(coal >= starts * 0.9 && oil >= starts * 0.9, `Coal (${coal}) and Oil (${oil}) within reach of nearly all ${starts} starts`);
 });
 
-test('map generation: Aluminum and Uranium across every map, as in Civ V (about as much Aluminum as Iron, Uranium about half), and most city-states with a little Coal, Oil or Aluminum beside them', () => {
-  const total = { iron: 0, aluminum: 0, uranium: 0 };
+test('map generation: strategic resources as Civ V places them, each deposit a small or a large one of its kind (Iron 2 or 6, Horses 2 or 4, Coal and Oil 3 or 7, Aluminum 3 or 8, Uranium 2 or 4; Oil at sea 4), every kind on every map, and most city-states with a little Coal, Oil or Aluminum beside them', () => {
   let cityStates = 0;
   let supplied = 0;
-  for (const size of ['duel', 'small', 'standard'] as MapSize[])
+  for (const size of ['duel', 'small', 'standard', 'huge'] as MapSize[])
     for (const type of ['continents', 'pangaea', 'archipelago', 'fractal'] as const)
-      for (const seed of [1, 2, 3, 4]) {
+      for (const seed of [1, 2]) {
         const m = MAP_SIZES[size];
         const g = { width: m.width, height: m.height, wrap: true };
         const map = generate(g, seed, type, m.players, m.cityStates);
-        const count = (id: string) => map.tiles.filter((t) => t.resource === id).length;
-        // (Left to chance before, a small map often had no Aluminum at all.)
-        ok(count('aluminum') > 0 && count('uranium') > 0, `${size} ${type} ${seed}: Aluminum (${count('aluminum')}) and Uranium (${count('uranium')}) somewhere`);
-        for (const id of ['iron', 'aluminum', 'uranium'] as const) total[id] += count(id);
+        const what = `${size} ${type} ${seed}`;
+        const units: Record<string, number> = {};
+        map.tiles.forEach((tile, t) => {
+          const r = tile.resource && RESOURCES[tile.resource];
+          if (!r || r.kind !== 'strategic') return;
+          units[tile.resource!] = (units[tile.resource!] ?? 0) + (tile.amount ?? 0);
+          const sea = !!TERRAINS[tile.terrain].water;
+          ok(sea ? tile.resource === 'oil' && tile.amount === SEA_OIL : r.amount!.includes(tile.amount!), `${what}: ${r.name} at ${t}, ${tile.amount}, a deposit of its size`);
+        });
+        // (Civ V tops up a kind the map has too little of: a civ always has some within reach.)
+        for (const id of ['iron', 'horses', 'coal', 'oil', 'aluminum', 'uranium']) ok((units[id] ?? 0) >= (id === 'uranium' ? 1.5 : 2) * m.players, `${what}: ${RESOURCES[id].name} enough for every civ (${units[id] ?? 0} for ${m.players})`);
         for (const cs of map.starts.slice(m.players, m.players + m.cityStates)) {
           cityStates++;
           if (within(g, cs, 3).some((t) => ['coal', 'oil', 'aluminum'].includes(map.tiles[t].resource ?? ''))) supplied++;
         }
       }
-  ok(total.aluminum >= total.iron * 0.75 && total.aluminum <= total.iron * 1.5, `about as much Aluminum (${total.aluminum}) as Iron (${total.iron})`);
-  ok(total.uranium >= total.aluminum * 0.35 && total.uranium <= total.aluminum * 0.8, `Uranium (${total.uranium}) about half as common as Aluminum`);
   ok(supplied >= cityStates * 0.7, `most city-states (${supplied} of ${cityStates}) with Coal, Oil or Aluminum beside them`);
+});
+
+test('map generation: luxuries by region, as Civ V shares them out: each civ’s region a type of its own (up to eight civs), one by its start and more about it, and a second type there; three types the city-states’ alone; some left off the map; about as many as Civ V’s worlds have', () => {
+  // (Civ V's luxuries for the world of as many civs, before each start's second type: Duel, Tiny, Small, Standard, Large.)
+  const world: Record<MapSize, number> = { duel: 18, small: 30, standard: 45, large: 60, huge: 75 };
+  for (const size of ['duel', 'small', 'standard', 'large', 'huge'] as MapSize[])
+    for (const type of ['continents', 'pangaea', 'archipelago', 'earth'] as const)
+      for (const seed of [1, 2]) {
+        const m = MAP_SIZES[size];
+        const g = { width: m.width, height: m.height, wrap: true };
+        const map = generate(g, seed, type, m.players, m.cityStates);
+        const what = `${size} ${type} ${seed}`;
+        const { regions, cityStates, disabled } = map.luxuries;
+        const civs = map.starts.slice(0, m.players);
+        const cities = [...civs, ...map.starts.slice(m.players, m.players + m.cityStates).filter((t) => t >= 0)];
+        const copies = (id: string) => map.tiles.filter((x) => x.resource === id).length;
+        ok(regions.every(Boolean), `${what}: every region a type`);
+        if (m.players <= 8) eq(new Set(regions).size, regions.length, `${what}: each region’s its own`);
+        civs.forEach((s, i) => {
+          const near = new Set(within(g, s, 3).flatMap((t) => (map.tiles[t].resource && RESOURCES[map.tiles[t].resource!].kind === 'luxury' ? [map.tiles[t].resource!] : [])));
+          ok(near.has(regions[i]!), `${what}: ${regions[i]} by civ ${i}’s start`);
+          ok(near.size >= 2, `${what}: and a second type there (${[...near]})`);
+          ok(copies(regions[i]!) >= 2, `${what}: more ${regions[i]} about it (${copies(regions[i]!)})`);
+        });
+        eq(cityStates.length, 3, `${what}: three types for the city-states`);
+        map.tiles.forEach((x, t) => {
+          if (x.resource && cityStates.includes(x.resource)) ok(cities.some((c) => distance(g, c, t) <= 2), `${what}: ${x.resource} at ${t} by a city-state (or, wanting another, a start)`);
+        });
+        ok(disabled.length > 0 && disabled.every((id) => !copies(id)), `${what}: ${disabled.join(', ')} left off the map`);
+        const luxuries = map.tiles.filter((x) => x.resource && RESOURCES[x.resource].kind === 'luxury').length;
+        ok(luxuries >= world[size] * 0.9 && luxuries <= world[size] * 1.6, `${what}: ${luxuries} luxuries (Civ V’s world for as many civs, ${world[size]}, and a second type at each start)`);
+      }
+});
+
+test('resources yield as Civ V’s (Brave New World): what each gives, and what improving it adds (the improvement’s own yield and the resource’s with it)', () => {
+  const { game, at } = blank();
+  const t = at(6, 6);
+  const tile = game.tiles[t];
+  const words = (y: Yields) => YIELD_KEYS.flatMap((k) => (y[k] ? [`${y[k]} ${k}`] : [])).join(', ') || 'nothing';
+  const less = (a: Yields, b: Yields): Yields => Object.fromEntries(YIELD_KEYS.map((k) => [k, (a[k] ?? 0) - (b[k] ?? 0)]));
+  const CIV5: Record<string, [own: Yields, improved: Yields]> = {
+    wheat: [{ food: 1 }, { food: 1 }],
+    cattle: [{ food: 1 }, { prod: 1 }],
+    sheep: [{ food: 1 }, { food: 1 }],
+    deer: [{ food: 1 }, { prod: 1 }],
+    bison: [{ food: 1 }, { prod: 1 }],
+    fish: [{ food: 1 }, { food: 1 }],
+    stone: [{ prod: 1 }, { prod: 1 }],
+    horses: [{ prod: 1 }, { prod: 1 }],
+    iron: [{ prod: 1 }, { prod: 1 }],
+    coal: [{ prod: 1 }, { prod: 2 }],
+    aluminum: [{ prod: 1 }, { prod: 2 }],
+    uranium: [{ prod: 1 }, { prod: 2 }],
+    oil: [{ prod: 1 }, { prod: 3 }],
+    gold_ore: [{ gold: 2 }, { prod: 1 }],
+    silver: [{ gold: 2 }, { prod: 1 }],
+    copper: [{ gold: 2 }, { prod: 1 }],
+    gems: [{ gold: 3 }, { prod: 1 }],
+    salt: [{ food: 1, gold: 1 }, { food: 1, prod: 1 }],
+    marble: [{ gold: 2 }, { prod: 1 }],
+    ivory: [{ gold: 2 }, { gold: 1 }],
+    furs: [{ gold: 2 }, { gold: 1 }],
+    truffles: [{ gold: 2 }, { gold: 1 }],
+    dyes: [{ gold: 2 }, { gold: 1 }],
+    spices: [{ gold: 2 }, { gold: 1 }],
+    silk: [{ gold: 2 }, { gold: 1 }],
+    sugar: [{ gold: 2 }, { gold: 1 }],
+    cotton: [{ gold: 2 }, { gold: 1 }],
+    wine: [{ gold: 2 }, { gold: 1 }],
+    incense: [{ gold: 2 }, { gold: 1 }],
+    citrus: [{ food: 1, gold: 1 }, { gold: 1 }],
+    cocoa: [{ food: 1, gold: 1 }, { gold: 1 }],
+    whales: [{ food: 1, gold: 1 }, { food: 1 }],
+    pearls: [{ gold: 2 }, { food: 1 }],
+    crab: [{ food: 1, gold: 1 }, { food: 1 }],
+  };
+  const plain = tileYields(game, t, null);
+  for (const [id, [own, improved]] of Object.entries(CIV5)) {
+    tile.resource = id;
+    delete tile.improvement;
+    const bare = tileYields(game, t, null);
+    eq(words(less(bare, plain)), words(own), `${RESOURCES[id].name}: its own yield`);
+    tile.improvement = RESOURCES[id].improvement;
+    eq(words(less(tileYields(game, t, null), bare)), words(improved), `${RESOURCES[id].name}: improved with a ${IMPROVEMENTS[RESOURCES[id].improvement].name}`);
+  }
+});
+
+test('Bison, a bonus resource (Brave New World’s): on open flat plains and grassland, worked from a camp; drawn on its tiles, with its icon', () => {
+  let found = 0;
+  for (const seed of [1, 2, 3]) {
+    const m = MAP_SIZES.standard;
+    const map = generate({ width: m.width, height: m.height, wrap: true }, seed, 'continents', m.players, m.cityStates);
+    for (const tile of map.tiles) {
+      if (tile.resource !== 'bison') continue;
+      found++;
+      ok(['plains', 'grassland'].includes(tile.terrain) && tile.elevation === 'flat' && !tile.feature, `on open flat land (${tile.terrain}, ${tile.elevation}, ${tile.feature ?? 'nothing on it'})`);
+    }
+  }
+  ok(found >= 3, `Bison on the maps (${found})`);
+  eq(RESOURCES.bison.improvement, 'camp', 'a camp taps it');
+  ok(!!KINDS.bison && glyphPaths('bison') !== glyphPaths(''), 'its models on its tiles, and an icon');
 });
 
 test('map generation: an archipelago is many islands, the civs mostly each on their own, each with room for three or four cities', () => {
@@ -3292,7 +3402,7 @@ test('map generation: an archipelago is many islands, the civs mostly each on th
 
 test('map generation: natural wonders by the map’s size, the same for a seed, off the starts, spread apart, each its tiles’ own', () => {
   for (const wrap of [false, true])
-    for (const [size, want] of [['duel', 2], ['small', 3], ['standard', 4], ['large', 6]] as [MapSize, number][]) {
+    for (const [size, want] of [['duel', 2], ['small', 3], ['standard', 4], ['large', 5]] as [MapSize, number][]) {
       const m = MAP_SIZES[size];
       const g = { width: m.width, height: m.height, wrap };
       for (const seed of [3, 11]) {
@@ -3387,7 +3497,7 @@ test('a world that wraps: new games wrap unless the lobby says not; the wrap is 
   const flat = createGame({ ...settings, victories: { ...settings.victories }, wrap: false }, seats, 5);
   ok(!('wrap' in flat.grid), 'a flat one is as a game always was');
   // The same seed, flat, makes the same world as it always did (one saved before the wrap is the same).
-  const before = generate({ width: 26, height: 18 }, 5, 'continents', 2, 0);
+  const before = generate({ width: MAP_SIZES.duel.width, height: MAP_SIZES.duel.height }, 5, 'continents', 2, 0);
   eq(flat.tiles.map((t) => t.terrain).join(), before.tiles.map((t) => t.terrain).join(), 'a flat world from a seed as before');
 });
 
@@ -3491,7 +3601,7 @@ test('a huge map: ten civs and ten city-states, each with a start', () => {
   const civs = CIV_LIST.slice(0, 10).map((c) => c.id);
   const settings = { ...blank().game.settings, size: 'huge' as MapSize, type: 'continents' as const, cityStates: 10, wrap: true };
   const game = createGame(settings, civs.map((civ) => ({ user: null, name: civ, civ, bot: true })), 3);
-  eq(game.grid.width * game.grid.height, 60 * 36, 'its size');
+  eq(game.grid.width * game.grid.height, 88 * 56, 'its size');
   eq(game.players.filter((p) => p.alive && !p.cityState).length, 10, 'every civ in it');
   eq(game.players.filter((p) => p.alive && p.cityState).length, 10, 'every city-state in it');
 });
@@ -3866,6 +3976,21 @@ test('the replay after a load carries on where it was (nothing twice); a turn co
   eq(JSON.stringify(loaded.replay).length - size, 3 + 3 * moved, `a turn's record: three characters, and three for each of the ${moved} tiles that changed hands`);
 });
 
+test('the replay of a huge map (more tiles than two digits number): its borders recorded too, a tile in three digits', () => {
+  const { game, at } = blank(['egypt', 'babylon'], { size: 'huge' });
+  ok(game.tiles.length > 64 * 64, `${game.tiles.length} tiles`);
+  city(game, 0, at(4, 4));
+  city(game, 1, at(80, 50));
+  endTurn(game);
+  const owners = replayAt(game.replay!, game.tiles.length, Infinity).owners;
+  ok(game.tiles.every((tile, t) => owners[t] === tile.owner), 'every tile’s owner as it is, the far corner’s too');
+  const size = JSON.stringify(game.replay).length;
+  const before = game.tiles.map((tile) => tile.owner);
+  endTurn(game);
+  const moved = game.tiles.filter((tile, t) => tile.owner !== before[t]).length;
+  eq(JSON.stringify(game.replay).length - size, 3 + 4 * moved, `a turn's record: three characters, and four for each of the ${moved} tiles that changed hands`);
+});
+
 test('saved games are each person’s, by account: listed in any room, carried on anywhere, never replaced by a new game; room saves moved over', () => {
   // A store as `game.store` is: every room's keys together.
   const data = new Map<string, unknown>();
@@ -4103,7 +4228,7 @@ test('a citadel takes the tiles round it, another civ’s too (not a city’s), 
 
 test('trade routes need a way: a cargo ship only between cities on the same water, a caravan only over land', () => {
   const { game, at } = blank();
-  for (let col = 0; col < 26; col++) game.tiles[at(col, 8)].terrain = 'coast';
+  for (let col = 0; col < game.grid.width; col++) game.tiles[at(col, 8)].terrain = 'coast';
   const p = game.players[0];
   p.techs.push('sailing', 'animal_husbandry');
   const port = city(game, 0, at(4, 7));
@@ -4313,7 +4438,8 @@ test('rivers run as a tree, not a web, round their tiles’ middles: none of a r
   // (Joined every way, they were 42% water on average, 58% where they're dense, and some 80%.)
   ok(mean(shares) < 0.33, `a river tile is under a third water, on average (${(mean(shares) * 100).toFixed(0)}%)`);
   ok(mean(dense) < 0.4, `where rivers are dense, well under half (${(mean(dense) * 100).toFixed(0)}%, of ${dense.length})`);
-  ok(Math.max(...shares) <= 0.62, `none is mostly water (${(Math.max(...shares) * 100).toFixed(0)}% at most)`);
+  // (The worst a fork three ways round, each a third of the tile apart: 63% on the bigger maps.)
+  ok(Math.max(...shares) <= 0.65, `none is mostly water (${(Math.max(...shares) * 100).toFixed(0)}% at most)`);
 });
 
 test('wonders open as Civ V’s Brave New World has it: the Pyramids with Liberty, the Kremlin with Order, and so on, not with the tech alone', () => {
@@ -7047,7 +7173,7 @@ test('clans: a bot bribes a clan by its cities, pays one near its enemy to raid 
   ok(tries(() => clan.hired !== undefined), 'a warrior hired');
 });
 
-test('formations: two of a kind side by side join as a corps, and a third as an army: far stronger, costing what their units did', () => {
+test('formations: two of a kind side by side join as a corps, and a third as an army: far stronger, at Civ VI’s upkeep, holding their units’ resources', () => {
   const { game, at } = blank(['egypt', 'babylon']);
   const egypt = game.players[0];
   egypt.bot = false;
@@ -7075,7 +7201,14 @@ test('formations: two of a kind side by side join as a corps, and a third as an 
   ok(a.xp === 30 && a.promotions.includes('shock_1'), 'the more experienced one’s experience and promotions');
   eq(a.moves, 0, 'its turn spent');
   near(strength(game, { ...a, hp: 100, promotions: [] }, 'defend', null, a.tile) / lone, 1 + CORPS_BONUS / 100, 'a corps’s strength');
-  eq(goldUpkeep(game, egypt).units, upkeep, 'upkeep as two units');
+  // (Its bonus multiplies the rest, so it isn't watered down fortified on a hill: Civ VI's flat +10.)
+  const hill = { ...game.tiles[a.tile] };
+  Object.assign(game.tiles[a.tile], { elevation: 'hills', feature: undefined });
+  const dug = { stance: 'fortify' as const, fortified: 2 };
+  near(strength(game, { ...a, hp: 100, promotions: [], ...dug }, 'defend', null, a.tile) / strength(game, { ...a, hp: 100, promotions: [], size: undefined, ...dug }, 'defend', null, a.tile), 1 + CORPS_BONUS / 100, 'as strong again fortified on a hill');
+  game.tiles[a.tile] = hill;
+  // (Eight units' worth, three free, before; seven and a half after.)
+  eq(goldUpkeep(game, egypt).units, upkeep - 1, 'upkeep a unit and a half’s');
   ok(egypt.notes.some((n) => n.text.includes('A Rifleman Corps has formed')), 'said so');
   // An army: with Replaceable Parts, a corps and a third.
   const c = unit(game, 'rifleman', 0, at(7, 8));
@@ -7107,11 +7240,12 @@ test('formations: one that can’t be paid for loses a unit, not the lot', () =>
   const egypt = game.players[0];
   egypt.bot = false;
   city(game, 0, at(20, 4));
-  for (let i = 0; i < 4; i++) unit(game, 'rifleman', 0, at(3 + i * 2, 4), { size: 3 });
+  // (Each army's upkeep two units', Civ VI's.)
+  for (let i = 0; i < 6; i++) unit(game, 'rifleman', 0, at(3 + i * 2, 4), { size: 3 });
   egypt.gold = 0;
   endTurn(game);
-  eq(game.units.filter((u) => u.owner === 0).reduce((s, u) => s + (u.size ?? 1), 0), 11, 'a unit of one army gone');
-  eq(game.units.filter((u) => u.owner === 0).length, 4, 'every army still there');
+  eq(game.units.filter((u) => u.owner === 0).reduce((s, u) => s + (u.size ?? 1), 0), 17, 'a unit of one army gone');
+  eq(game.units.filter((u) => u.owner === 0).length, 6, 'every army still there');
   ok(egypt.notes.some((n) => n.text.includes('a unit of your Rifleman Army has disbanded')), 'said so');
 });
 
@@ -7132,4 +7266,51 @@ test('formations: a bot forms corps once it can, out of the enemy’s reach, nev
   ok(a.size === 2 && !game.units.includes(b), 'two side by side, out of reach, joined');
   ok(game.units.includes(garrison) && game.units.includes(by) && !garrison.size && !by.size, 'not the garrison');
   ok(game.units.includes(c) && game.units.includes(d) && !c.size && !d.size, 'not those in the enemy’s reach');
+});
+
+test('combat bonuses, Civ V’s: spears +50% against horses, anti-tank +100% against armour, siege +200% against cities and no ground to hide in, armour unhindered at walls and moving on after it attacks', () => {
+  const { game, at } = blank(['egypt', 'babylon']);
+  war(game, 0, 1);
+  const mod = (u: Unit, role: 'attack' | 'defend' | 'ranged', against: Unit | City, label: string) => {
+    const why: Modifier[] = [];
+    strength(game, u, role, against, u.tile, why);
+    return why.find((m) => m.label === label)?.percent ?? 0;
+  };
+  const spear = unit(game, 'spearman', 0, at(8, 8));
+  const horse = unit(game, 'horseman', 1, at(9, 8));
+  eq(mod(spear, 'defend', horse, 'Against mounted'), 50, 'spearmen against horses');
+  const lancer = unit(game, 'lancer', 0, at(8, 10));
+  ok(promotionsOf(lancer).includes('formation_1') && mod(lancer, 'attack', horse, 'Formation I') === 33, 'a lancer’s Formation I instead');
+  const gun = unit(game, 'anti_tank_gun', 0, at(4, 4));
+  const tank = unit(game, 'tank', 1, at(5, 4));
+  eq(mod(gun, 'defend', tank, 'Against armour'), 100, 'anti-tank guns against armour');
+  const walls = city(game, 1, at(14, 8));
+  const catapult = unit(game, 'catapult', 0, at(12, 8));
+  eq(mod(catapult, 'ranged', walls, 'Against cities'), 200, 'siege against cities');
+  eq(mod(tank, 'attack', walls, 'Against cities'), 0, 'armour at walls as anywhere');
+  eq(mod(horse, 'attack', walls, 'Against cities'), -33, 'horses still a third weaker');
+  Object.assign(game.tiles[catapult.tile], { elevation: 'hills', feature: undefined });
+  eq(mod(catapult, 'defend', spear, 'Hills'), 0, 'no hills for a catapult to hide in');
+  eq(unitSight(game, catapult), 1, 'and a tile of sight');
+  ok(isRanged(UNITS.bazooka) && UNITS.bazooka.range === 1, 'a bazooka fires');
+  // Armour moves on after it attacks, as horses do.
+  const raider = unit(game, 'tank', 0, at(20, 14));
+  unit(game, 'warrior', 1, at(21, 14));
+  ok(apply(game, 0, { t: 'attack', unit: raider.id, target: at(21, 14) }).ok, 'the tank attacks');
+  ok(raider.moves > 0, 'and has moves left');
+  // A unique unit's own promotion: given, not earned.
+  const samurai = unit(game, 'samurai', 0, at(2, 14), { xp: 10 });
+  ok(promotionsOf(samurai).includes('shock_1') && !samurai.promotions.includes('shock_1'), 'a samurai is born with Shock I');
+  eq(promotionsDue(samurai), 1, 'which doesn’t use up its experience');
+  ok(!promotionsFor(samurai).some((x) => x.id === 'shock_1'), 'nor is offered again');
+  const impi = unit(game, 'impi', 0, at(2, 18));
+  const musket = unit(game, 'musketman', 1, at(3, 18));
+  eq(mod(impi, 'attack', musket, 'Against Gunpowder'), 25, 'an impi against muskets');
+  const cossack = unit(game, 'cossack', 0, at(6, 18));
+  eq(mod(cossack, 'attack', musket, 'Stronger Against the Wounded'), 0, 'a cossack against a whole unit');
+  musket.hp = 60;
+  eq(mod(cossack, 'attack', musket, 'Stronger Against the Wounded'), 33, 'and against a wounded one');
+  // A Nuclear Missile ties up two Uranium.
+  unit(game, 'nuclear_missile', 0, at(2, 2));
+  eq(strategic(game, game.players[0]).uranium?.used, 2, 'two Uranium');
 });
