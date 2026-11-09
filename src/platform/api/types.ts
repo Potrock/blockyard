@@ -314,6 +314,13 @@ export interface PlayerOptions {
    */
   controller?: 'walk' | 'none';
   /**
+   * `captured` (default): Play captures the mouse (pointer lock), as a game played by looking
+   * round needs; Escape frees it and brings up the pause menu. `free`: the game is played with
+   * the pointer on screen throughout (a board or strategy game with a screen of its own up, a
+   * `modal` widget): Play starts it at once and the mouse is never captured.
+   */
+  mouse?: 'captured' | 'free';
+  /**
    * Player skin (Minecraft layout, origin in `skinAtlas`). Used for the first-person arm.
    * Default `Skins.player`.
    */

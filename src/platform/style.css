@@ -65,6 +65,69 @@ body.framed #ui .home .home-play {
   pointer-events: none;
 }
 
+/* In the frame, while the page's home page is up over it: a shield over the game, so a click or a
+   hover the page let through meets nothing of the game's (src/frame.ts). The pointer is the page's. */
+.frame-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  cursor: default;
+  touch-action: none;
+}
+.frame-shield.over-play {
+  cursor: pointer;
+}
+.frame-shield.hidden {
+  display: none;
+}
+
+/* On the way to another room of the game being played (ui/travel.ts): in place of the home page. */
+.travel-screen {
+  z-index: 60;
+  background: #0b0e14;
+  overflow: hidden;
+}
+.travel-cover {
+  position: absolute;
+  inset: -40px;
+  background: center / cover no-repeat;
+  filter: blur(28px) saturate(1.1) brightness(0.42);
+}
+.travel-card {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  width: min(340px, 78vw);
+  justify-items: center;
+  text-align: center;
+  color: var(--text, #eef2f4);
+}
+.travel-title {
+  font: 600 clamp(26px, 4.4vw, 40px) / 1 var(--ui-display, var(--sans, sans-serif));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
+}
+.travel-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+.travel-bar i {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--game, #7fd46b);
+  transition: width 0.25s ease;
+}
+.travel-text {
+  font: 500 13px var(--sans, sans-serif);
+  color: rgba(255, 255, 255, 0.72);
+}
+
 /* Switching games: the old world fades out, the new one fades in once it's built. */
 #view.fading {
   opacity: 0;

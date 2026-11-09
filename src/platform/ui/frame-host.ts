@@ -101,7 +101,7 @@ export class FrameHost {
         return;
       }
       case 'select':
-        return title.select(m.id, m.title);
+        return title.select(m.id, m.title, m.quiet === true);
       case 'progress':
         return title.progress(m.fraction, m.text);
       case 'setReady':

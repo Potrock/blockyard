@@ -50,6 +50,12 @@ export interface HomeGame extends GameControls {
   online?: OnlineOptions | null;
   /** Uploaded by a player (not built into the site): it may be reported. */
   uploaded?: boolean;
+  /**
+   * Shown without bringing the page up: the player is already in the game, on the way to another
+   * of its rooms (`client.rooms.go`), and play carries on there. The page is ready behind for when
+   * they leave the game.
+   */
+  quiet?: boolean;
 }
 
 /**
@@ -61,7 +67,8 @@ export interface HomeScreen {
   readonly root: HTMLElement;
   onListed: ((entries: PackageEntry[]) => void) | null;
   show(g: HomeGame): void;
-  select(id: string, title?: string): void;
+  /** A game picked, loading (`quiet`: without bringing the page up, as `HomeGame.quiet`). */
+  select(id: string, title?: string, quiet?: boolean): void;
   progress(fraction: number, text: string): void;
   setReady(): void;
   present(names: string[]): void;
@@ -216,7 +223,7 @@ export class TitleScreen implements HomeScreen {
   /** Show the page for a game: it's the selected one, loading until `setReady`. */
   show(g: HomeGame) {
     this.game = g;
-    this.feature(g.current, g.title);
+    this.feature(g.current, g.title, g.quiet);
     this.actions.querySelector('.home-name')?.classList.toggle('hidden', !g.online);
     if (g.online) this.account.use(g.online.server.replace(/^ws/, 'http').replace(/\/+$/, ''));
     // (Back from a game: what was earned there.)
@@ -328,18 +335,20 @@ export class TitleScreen implements HomeScreen {
   }
 
   /** Picked another game: show it chosen at once, while the switch happens behind. */
-  select(id: string, title?: string) {
-    this.feature(id, title);
+  select(id: string, title?: string, quiet = false) {
+    this.feature(id, title, quiet);
     this.rooms.replaceChildren();
     this.hints.replaceChildren();
   }
 
   /** The game on show, loading: its name, pitch, colour and cover, and its card picked on the shelf. */
-  private feature(id: string, title?: string) {
+  private feature(id: string, title?: string, quiet = false) {
     const entry = this.games.find((x) => x.id === id);
     this.title = entry?.title ?? title ?? 'the game';
     this.root.style.setProperty('--game', entry?.accent ?? '#7fd46b');
-    this.root.classList.remove('hidden', 'ready');
+    // (Quietly: the page stays away, as it is, while the player goes from room to room in the game.)
+    if (!quiet) this.root.classList.remove('hidden');
+    this.root.classList.remove('ready');
     this.ready = false;
     this.cover.style.backgroundImage = entry?.cover ? `url("${entry.cover}")` : '';
     this.heading.textContent = this.title;
@@ -574,6 +583,8 @@ export class TitleScreen implements HomeScreen {
   failed(text: string, onPick: (id: string) => void) {
     // Any game may be picked again, this one included (its public game).
     this.game = { current: '', onPlay: () => {}, onPick };
+    // (Up, to say so, if it was away: a move between a game's rooms that didn't get there.)
+    this.root.classList.remove('hidden');
     this.label.textContent = `Couldn't load ${this.title}`;
     this.status.classList.add('error');
     this.setStatus(text);
@@ -585,6 +596,7 @@ export class TitleScreen implements HomeScreen {
    */
   busy(text: string, seconds: number): Promise<string | null> {
     this.status.classList.remove('error');
+    this.root.classList.remove('hidden');
     this.loading(`Waiting for ${this.title}…`);
     const said = text.replace(/[.\s]+$/, '');
     return new Promise((done) => {

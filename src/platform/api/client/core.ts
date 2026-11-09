@@ -420,7 +420,12 @@ export interface ClientRooms {
    * Go to another room of this game: a room of one's own by its code (4 to 24 lower-case letters
    * and digits; started if it isn't running), or the public game (null). The page's address
    * follows (a reload or a copied link comes back there), and the game starts again on this screen
-   * in that room, at its home page. Throws for a code that isn't one, or a game without `instances`.
+   * in that room: play carries on there as soon as its world is in, with no home page between and
+   * no Play to press (a short loading screen is up meanwhile; a room that can't be had, full or
+   * failed, brings the home page up to say so). The client starts afresh there: its kits' `dispose`,
+   * then `setup` again, so take down in `dispose` whatever `setup` put on the window. Called from
+   * the home page (before Play), the room is shown there instead. Throws for a code that isn't
+   * one, or a game without `instances`.
    */
   go(code: string | null): void;
   /**

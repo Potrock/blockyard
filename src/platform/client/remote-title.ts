@@ -45,8 +45,8 @@ export class RemoteTitle implements HomeScreen {
     this.send({ t: 'show', game: { ...rest, online: online ? { server: online.server, game: online.game, room: online.room, rooms: !!online.onRoom } : null } });
   }
 
-  select(id: string, title?: string) {
-    this.send({ t: 'select', id, title });
+  select(id: string, title?: string, quiet?: boolean) {
+    this.send({ t: 'select', id, title, quiet });
   }
 
   progress(fraction: number, text: string) {
