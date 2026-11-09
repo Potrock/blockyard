@@ -8,7 +8,8 @@ import { cosmeticCatalog, type Cosmetic } from '../cosmetics';
 import type { CosmeticDef } from '../api/types';
 import { hintChips, keyHints, type GameControls } from './controls';
 import { MyGamesPanel } from './mygames';
-import { DirectoryPanel } from './directory';
+import { LibraryPanel, type LibraryState } from './library';
+import { notePlayed, recentGames } from './recent';
 import type { PackageEntry } from '../package/link';
 
 /** Playing on a game server: the home page asks for a name, and says who's on. */
@@ -39,6 +40,30 @@ export const MARK = '<svg aria-hidden="true" viewBox="15.8 -1.9 168.5 168.5"><de
 
 /** How many of the game's control hints the home page shows before "more". */
 const HINTS = 6;
+
+/** "Make a game", along the top: how a game is made and put up. */
+const MAKE_A_GAME = 'https://github.com/Potrock/blockyard#make-a-game';
+
+const INK = '#0b0d10';
+
+/**
+ * What's written on a game's colour (its Play button, its card's plate): near black on the light
+ * ones (nearly all of them), white on a dark one. The colour is any CSS colour, read as a canvas
+ * reads it; one that can't be read counts as light.
+ */
+function inkOn(color: string): string {
+  const ctx = document.createElement('canvas').getContext('2d');
+  if (!ctx) return INK;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = color;
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(ctx.fillStyle));
+  if (!m) return INK;
+  const [r, g, b] = m.slice(1).map((x) => {
+    const c = parseInt(x, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.3 ? INK : '#ffffff';
+}
 
 /** What the home page shows for one game (and does when played or another game is picked). */
 export interface HomeGame extends GameControls {
@@ -81,10 +106,12 @@ interface Card {
 /**
  * The home page, shown while the world loads and until the player clicks Play. The game on show
  * fills the page (its world, slowly circling, behind everything; its cover, blurred, until the
- * world is in): its name and pitch large on the left, the name to play under and one button that
- * fills as the world loads and then starts the game, and a shelf of every game along the bottom
- * (with how many are playing each). It outlives a game: picking another switches in place
- * (`select`, then `show` for the new game), with the page staying put.
+ * world is in): who's in it, its name and its pitch large on the left; the name to play under and
+ * one button that fills as the world loads and then starts the game, with a game of one's own
+ * beside it; and a shelf of the games along the bottom (with how many are playing each). Every
+ * game, the community's too, is in the library over it ("All games": ui/library.ts), with a search
+ * and what was played last. It outlives a game: picking another switches in place (`select`, then
+ * `show` for the new game), with the page staying put. Its look is home.css.
  */
 export class TitleScreen implements HomeScreen {
   readonly root: HTMLElement;
@@ -97,7 +124,13 @@ export class TitleScreen implements HomeScreen {
   private actions: HTMLElement;
   private rooms: HTMLElement;
   private hints: HTMLElement;
+  /** The game on show's part of the page (its name, pitch and buttons), which comes in afresh with each game. */
+  private hero: HTMLElement;
   private shelf: HTMLElement;
+  /** Over the shelf: how many games there are, and the ways along it and to all of them. */
+  private count = h('span.home-dock-count');
+  private back: HTMLButtonElement;
+  private on: HTMLButtonElement;
   private online: HTMLElement;
   /** Who you are: sign in, or your account. */
   private account: AccountCorner;
@@ -109,11 +142,13 @@ export class TitleScreen implements HomeScreen {
   private locker: Locker;
   /** An uploader's games (the account menu's "Your games"). */
   private mygames = new MyGamesPanel();
-  /** The community directory: uploaded games not on the home page. */
-  private directory = new DirectoryPanel();
+  /** Every game, the community's (uploaded, not on the home page) too: "All games". */
+  private library = new LibraryPanel();
+  /** How many are playing each game's public game, as last asked. */
+  private players = new Map<string, number>();
   /** Under an uploaded game: report it. */
   private report = h('div.home-report');
-  /** `?directory` opens the directory, once. */
+  /** `?directory` opens the library at the community's games, once. */
   private askedDirectory = new URL(location.href).searchParams.has('directory');
   /**
    * Games the server hosts built (uploaded) and lists, which the page wasn't built with: they've
@@ -134,6 +169,8 @@ export class TitleScreen implements HomeScreen {
   private cards = new Map<string, Card>();
   private ready = false;
   private title = 'the game';
+  /** The game whose name is up (for the hero to come in afresh only when it changes). */
+  private featured: string | null = null;
   private poll = 0;
   private game: HomeGame | null = null;
   /** Who's in the room on show (a room of a player's own), as last said. */
@@ -180,28 +217,46 @@ export class TitleScreen implements HomeScreen {
     this.account.onLocker = () => this.openLocker();
     this.account.onGames = () => this.account.server && this.mygames.show(this.account.server);
     this.mygames.onOpen = (id) => this.game?.onPick(id);
-    this.directory.onPick = (id) => id !== this.game?.current && this.game?.onPick(id);
+    this.library.onPick = (id) => id !== this.game?.current && this.game?.onPick(id);
     const signIn = h('button.home-guest-signin', { onclick: () => this.account.signIn() }, 'Sign in with Discord');
     this.guest = h('div.home-guest.hidden', {}, 'Playing as a guest: what you earn lasts this visit. ', signIn, ' to keep it. ', h('a.home-guest-privacy', { href: '/privacy.html', target: '_blank', rel: 'noopener' }, 'Privacy'));
     const faceButton = h('button.home-face-button', { onclick: () => this.openLocker(), title: 'Your look', 'aria-label': 'Your look' }, this.face);
-    this.actions = h('div.home-actions', {}, faceButton, h('label.home-name', {}, h('span', {}, 'Playing as'), this.nameInput), this.button);
-    this.drawFace();
     this.rooms = h('div.home-rooms');
+    this.actions = h('div.home-actions', {}, faceButton, h('label.home-name', {}, h('span', {}, 'Playing as'), this.nameInput), this.button, this.rooms);
+    this.drawFace();
     this.hints = h('div.home-hints');
     this.shelf = h('nav.home-shelf', { 'aria-label': 'Games' });
     this.online = h('div.home-online');
+    // Along the top: every game, the community's, and how to make one.
+    const nav = h(
+      'nav.home-nav',
+      { 'aria-label': 'Blockyard' },
+      h('button.home-nav-item', { onclick: () => this.openLibrary() }, 'All games'),
+      h('button.home-nav-item', { onclick: () => this.openLibrary('community') }, 'Community'),
+      h('a.home-nav-item', { href: MAKE_A_GAME, target: '_blank', rel: 'noopener' }, 'Make a game', h('span.home-nav-out', { 'aria-hidden': 'true' }, '↗')),
+    );
+    this.hero = h('main.home-hero', {}, h('div.home-eyebrow', {}, this.kicker, this.status), this.heading, this.tagline, this.actions, h('div.home-under', {}, this.feats, this.guest), homeScreenTip(), this.hints, this.report);
+    // Over the shelf: how many games, the ways along it (when they don't all fit) and to all of them.
+    this.back = h('button.home-dock-step', { onclick: () => this.step(-1), 'aria-label': 'Earlier games', disabled: true }, '‹') as HTMLButtonElement;
+    this.on = h('button.home-dock-step', { onclick: () => this.step(1), 'aria-label': 'More games', disabled: true }, '›') as HTMLButtonElement;
+    const dock = h(
+      'section.home-dock',
+      {},
+      h('div.home-dock-head', {}, h('span.home-dock-title', {}, 'Games', this.count), h('span.home-dock-rule'), this.back, this.on, h('button.home-dock-all', { onclick: () => this.openLibrary() }, 'Browse all')),
+      this.shelf,
+    );
     this.root = h(
       'div.screen.title-screen.home',
       {},
       this.cover,
       h('div.home-scrim'),
-      h('header.home-top', {}, h('div.home-brand', {}, mark, h('span.home-logo', {}, 'Blockyard'), h('span.home-pitch', {}, 'Block games anyone can build, played together')), h('div.home-top-right', {}, this.online, this.account.root)),
-      h('main.home-hero', {}, this.kicker, this.heading, this.tagline, this.feats, this.status, this.actions, this.guest, homeScreenTip(), this.rooms, this.hints, this.report),
-      this.shelf,
+      h('header.home-top', {}, h('div.home-brand', {}, mark, h('span.home-logo', {}, 'Blockyard'), h('span.home-pitch', {}, 'Block games anyone can build, played together')), nav, h('div.home-top-right', {}, this.online, this.account.root)),
+      this.hero,
+      dock,
       this.profile.root,
       this.locker.root,
       this.mygames.root,
-      this.directory.root,
+      this.library.root,
     );
     // The mouse wheel runs the shelf sideways, when there are more games than fit.
     this.shelf.addEventListener('wheel', (e) => {
@@ -209,8 +264,25 @@ export class TitleScreen implements HomeScreen {
       e.preventDefault();
       this.shelf.scrollLeft += e.deltaY;
     }, { passive: false });
+    this.shelf.addEventListener('scroll', () => this.updateSteps(), { passive: true });
+    window.addEventListener('resize', () => this.updateSteps());
     this.renderShelf();
     parent.append(this.root);
+    this.updateSteps();
+  }
+
+  /** Along the shelf by most of what's in view (the arrows over it). */
+  private step(way: number) {
+    this.shelf.scrollBy({ left: way * this.shelf.clientWidth * 0.8, behavior: 'smooth' });
+  }
+
+  /** The arrows over the shelf: each is live while there are games out of view that way. */
+  private updateSteps() {
+    const s = this.shelf;
+    const most = s.scrollWidth - s.clientWidth;
+    this.back.disabled = s.scrollLeft <= 1;
+    this.on.disabled = s.scrollLeft >= most - 1;
+    this.root.classList.toggle('shelf-fits', most <= 1);
   }
 
   /** Show the page for a game: it's the selected one, loading until `setReady`. */
@@ -230,7 +302,7 @@ export class TitleScreen implements HomeScreen {
     this.renderReport(g);
     if (this.askedDirectory && g.online) {
       this.askedDirectory = false;
-      this.openDirectory();
+      this.openLibrary('community');
     }
   }
 
@@ -239,8 +311,14 @@ export class TitleScreen implements HomeScreen {
     return this.game?.online ? this.game.online.server.replace(/^ws/, 'http').replace(/\/+$/, '') : null;
   }
 
-  private openDirectory() {
-    if (this.http) void this.directory.show(this.http);
+  /** What the library shows of the games: who's playing, what was played last, what's earned. */
+  private libraryState(): LibraryState {
+    return { games: this.games, current: this.game?.current || this.featured, players: this.players, recent: recentGames(), earned: this.earned };
+  }
+
+  /** Every game, to search and pick from (`tab`: the community's alone). */
+  private openLibrary(tab: 'all' | 'community' = 'all') {
+    this.library.show(this.http, this.libraryState(), tab);
   }
 
   /** Under an uploaded game: "Report this game", which opens a line to say what's wrong. */
@@ -278,6 +356,7 @@ export class TitleScreen implements HomeScreen {
   private async refreshEarned() {
     this.earned = await this.account.earned();
     if (this.game) this.renderFeats(this.game.current);
+    this.library.update(this.libraryState());
   }
 
   /** The line under the game's name: its achievements, and how many are earned. */
@@ -357,6 +436,14 @@ export class TitleScreen implements HomeScreen {
     const card = this.cards.get(id)?.el;
     if (card) this.reveal(card);
     this.loading(`Loading ${this.title}…`);
+    this.root.style.setProperty('--on-game', inkOn(entry?.accent ?? '#7fd46b'));
+    // Another game: its name and buttons come in afresh.
+    if (id !== this.featured) {
+      this.featured = id;
+      this.hero.classList.remove('swap');
+      void this.hero.offsetWidth;
+      this.hero.classList.add('swap');
+    }
   }
 
   /** Scroll the shelf (only the shelf: never the page) so a card is in full view. */
@@ -384,26 +471,44 @@ export class TitleScreen implements HomeScreen {
 
   private renderShelf() {
     this.cards.clear();
+    this.count.textContent = String(this.games.length);
+    this.root.classList.toggle('alone', this.games.length < 2);
     if (this.games.length < 2) return this.shelf.replaceChildren();
     this.shelf.replaceChildren(
       ...this.games.map((x) => {
         const live = h('span.home-card-live');
-        const art = h('span.home-card-art');
+        const art = h('span.home-card-art', {}, live);
         if (x.cover) art.style.backgroundImage = `url("${x.cover}")`;
         else art.classList.add('blank');
+        const accent = x.accent ?? '#7fd46b';
         const el = h(
           'button.home-card',
-          { style: `--game: ${x.accent ?? '#7fd46b'}`, title: x.tagline ?? x.title, onclick: () => x.id !== this.game?.current && this.game?.onPick(x.id) },
+          { style: `--game: ${accent}; --on-game: ${inkOn(accent)}`, title: x.tagline ?? x.title, onclick: () => x.id !== this.game?.current && this.game?.onPick(x.id) },
           art,
-          live,
-          h('span.home-card-name', {}, x.title),
+          h('span.home-card-plate', {}, h('span.home-card-name', {}, x.title)),
         ) as HTMLButtonElement;
         this.cards.set(x.id, { el, live });
+        this.setLive(x.id, this.players.get(x.id) ?? 0);
         return el;
       }),
       // Last: the community's games, not on the home page.
-      h('button.home-card.home-card-community', { title: 'Games made and uploaded by players', onclick: () => this.openDirectory() }, h('span.home-card-art.blank'), h('span.home-card-name', {}, 'Community games')),
+      h(
+        'button.home-card.home-card-community',
+        { title: 'Games made and uploaded by players', onclick: () => this.openLibrary('community') },
+        h('span.home-card-art.blank', {}, h('span.home-card-plus', { 'aria-hidden': 'true' }, '+')),
+        h('span.home-card-plate', {}, h('span.home-card-name', {}, 'Community games')),
+      ),
     );
+    this.updateSteps();
+  }
+
+  /** How many are playing a game, on its card. */
+  private setLive(id: string, players: number) {
+    const card = this.cards.get(id);
+    if (!card) return;
+    card.live.textContent = players ? String(players) : '';
+    card.live.title = players ? `${players} playing now` : '';
+    card.live.classList.toggle('on', players > 0);
   }
 
   /**
@@ -416,17 +521,18 @@ export class TitleScreen implements HomeScreen {
     const onRoom = online.onRoom;
     if (!online.room) {
       this.rooms.append(
-        h('button.home-alt', { onclick: () => onRoom(true) }, h('span.home-alt-title', {}, 'Start a private game'), h('span.home-alt-note', {}, 'Just you and the bots, or friends you send the link to')),
+        h('button.home-alt', { onclick: () => onRoom(true), title: 'A game of your own: just you and the bots, or friends you send the link to' }, h('span.home-alt-title', {}, 'Private game'), h('span.home-alt-note', {}, 'Bots, or friends by link')),
       );
       return;
     }
     this.kicker.replaceChildren(h('span.home-room-tag', {}, 'Private game'));
-    const copy = h('button.home-alt.compact', {}, 'Copy invite link') as HTMLButtonElement;
+    const said = h('span.home-alt-title', {}, 'Copy invite link');
+    const copy = h('button.home-alt', {}, said, h('span.home-alt-note', {}, 'Friends join with it')) as HTMLButtonElement;
     copy.onclick = () => copyInvite((text) => {
-      copy.textContent = text;
-      window.setTimeout(() => (copy.textContent = 'Copy invite link'), 2000);
+      said.textContent = text;
+      window.setTimeout(() => (said.textContent = 'Copy invite link'), 2000);
     });
-    this.rooms.append(copy, h('button.home-alt.compact', { onclick: () => onRoom(false) }, 'Back to the public game'));
+    this.rooms.append(copy, h('button.home-alt.plain', { onclick: () => onRoom(false) }, h('span.home-alt-title', {}, 'Public game'), h('span.home-alt-note', {}, 'Leave this one')));
   }
 
   /** The controls in a line: the first few, and the rest on asking. */
@@ -516,14 +622,14 @@ export class TitleScreen implements HomeScreen {
             this.onListed?.(fresh);
           }
           let total = 0;
+          this.players.clear();
           for (const g of games) {
             total += g.players;
-            const card = this.cards.get(g.id);
-            if (!card) continue;
-            card.live.textContent = g.players ? String(g.players) : '';
-            card.live.classList.toggle('on', g.players > 0);
+            this.players.set(g.id, g.players);
+            this.setLive(g.id, g.players);
           }
           this.online.replaceChildren(...(total ? [h('span.live-dot'), `${total} playing now`] : []));
+          this.library.update(this.libraryState());
           // (In a room of one's own, `present` says who's in it; a problem stays said.)
           if (online.room || this.status.classList.contains('error')) return;
           const here = games.find((g) => g.id === online.game)?.players ?? 0;
@@ -607,10 +713,11 @@ export class TitleScreen implements HomeScreen {
     });
   }
 
-  /** Playing: the page fades away (it comes back with `show`). */
+  /** Playing: the page fades away (it comes back with `show`), and the game is the one played last. */
   hide() {
     window.clearInterval(this.poll);
     this.root.classList.add('hidden');
+    if (this.game?.current) notePlayed(this.game.current);
   }
 }
 
