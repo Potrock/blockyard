@@ -6,6 +6,7 @@ engine/pkg
 *.local
 data
 dist-server
+dist-frame
 .vercel
 .env*
 dist-sandbox

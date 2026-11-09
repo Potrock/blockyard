@@ -95,7 +95,9 @@ export default defineConfig({
       { find: /^@engine\//, replacement: r('./engine/pkg/') },
     ],
   },
-  plugins: [withServerAssets(), bundleReport(false)],
+  // (The frame alone needs neither the site's files nor the built-in games' server-named ones.)
+  plugins: process.env.FRAME_ONLY ? [] : [withServerAssets(), bundleReport(false)],
+  publicDir: process.env.FRAME_ONLY ? false : 'public',
   // (A sandboxed frame is an opaque origin: its requests for the page's modules come from `null`.)
   server: { port: 5173, strictPort: false, cors: { origin: [/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/, 'null'] } },
   worker: { format: 'es', plugins: () => [bundleReport(true)] },
@@ -103,7 +105,8 @@ export default defineConfig({
     target: 'es2022',
     sourcemap: true,
     chunkSizeWarningLimit: 1500,
-    // The site's page, and the page an uploaded game's sandboxed frame shows (src/frame.ts).
-    rollupOptions: { input: { main: r('./index.html'), frame: r('./frame.html') } },
+    // The site's page, and the page an uploaded game's sandboxed frame shows (src/frame.ts). With
+    // FRAME_ONLY, the frame alone (`npm run build:frame`: the game server serves it, host/frame.ts).
+    rollupOptions: { input: process.env.FRAME_ONLY ? { frame: r('./frame.html') } : { main: r('./index.html'), frame: r('./frame.html') } },
   },
 });

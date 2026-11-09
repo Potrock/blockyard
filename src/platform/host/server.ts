@@ -21,6 +21,7 @@ import type { Stats } from './stats';
 import { gameFiles, type SandboxLink } from './sandbox-link';
 import type { StoreSnapshot } from '../sandbox/protocol';
 import { Uploads, type UploadLimits, type UploadTerms } from './uploads';
+import { frameRoute, type FrameFiles } from './frame';
 
 /** Seconds a room's thread may go without a word (it says it's alive every 2) before it's stopped as stuck. */
 const STUCK = 30;
@@ -118,6 +119,8 @@ export interface ServeOptions {
   discord?: DiscordApp | null;
   /** The site's addresses: the only pages that may use a player's sign-in (see `AuthOptions.sites`). */
   sites?: string[];
+  /** The uploaded games' frame (host/frame.ts): its page and files, served from here. */
+  frame?: FrameFiles | null;
 }
 
 export interface Limits {
@@ -677,6 +680,7 @@ export function serve(o: ServeOptions): Promise<GameServer> {
     if (path === '/tickets' && auth) return void ticketRoute(req, res);
     if (path === '/errors') return void errorRoute(req, res);
     if (path.startsWith('/avatars/')) return void avatarRoute(res, path.slice('/avatars/'.length));
+    if (frameRoute(req, res, path, o.frame ?? null)) return;
     if (auth?.handle(req, res, path)) return;
     if (path === '/health') {
       res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');

@@ -4,10 +4,11 @@
 // are grouped as one issue (by what went wrong and where: the message without its numbers, and the
 // first place in the stack), counted, and kept for 30 days after they last happened. Stack traces
 // are put back into the source's own files and lines from source maps: an uploaded game's (from
-// the library) and the site's (fetched from the site). The admin sees every issue; an uploaded
+// the library), the frame's (beside the frame's build this server serves) and the site's (fetched
+// from the site). The admin sees every issue; an uploaded
 // game's owners see their game's (host/uploads.ts).
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SourceMapConsumer, type RawSourceMap } from 'source-map-js';
@@ -74,6 +75,8 @@ export interface ErrorLogOptions {
   library?: GameLibrary;
   /** The site's addresses: its scripts' source maps are fetched from there. */
   sites?: string[];
+  /** The uploaded games' frame, as this server serves it (host/frame.ts): its build, and this server's address. */
+  frame?: { dir: string; origin: string } | null;
   /** A Discord webhook told of each new issue (and one that comes back after being resolved). */
   webhook?: string | null;
   log?(line: string): void;
@@ -231,6 +234,13 @@ export class ErrorLog {
       const v = lib.version(own[1], own[2]);
       if (!v) return null;
       return new SourceMapConsumer(JSON.parse(readFileSync(join(v.dir, `${own[3]}.map`), 'utf8')) as RawSourceMap);
+    }
+    // The frame's scripts, as this server serves them (host/frame.ts): their maps are here.
+    const asset = /^\/assets\/([\w-][\w.-]*\.js)$/.exec(u.pathname);
+    const frame = this.o.frame;
+    if (frame && asset && u.origin === new URL(frame.origin).origin) {
+      const map = join(frame.dir, 'assets', `${asset[1]}.map`);
+      return existsSync(map) ? new SourceMapConsumer(JSON.parse(readFileSync(map, 'utf8')) as RawSourceMap) : null;
     }
     // The site's own scripts: their maps sit beside them.
     if (!(this.o.sites ?? []).includes(u.origin) || !u.pathname.startsWith('/assets/')) return null;
