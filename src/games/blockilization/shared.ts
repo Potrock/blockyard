@@ -178,7 +178,8 @@ export const shared = defineShared({
     civ_goldleaf: { texture: mottled(['#e0a830', '#f0c040', '#c88a20', '#d8b838'], 2), label: 'Golden Leaves' },
     civ_palm: { texture: mottled(['#4aa83a', '#56b444', '#3e9a30']), label: 'Palm' },
   },
-  player: { controller: 'none', health: false },
+  // (A board game: played with the pointer on screen throughout.)
+  player: { controller: 'none', health: false, mouse: 'free' },
   hud: {
     health: 'bar',
     theme: {

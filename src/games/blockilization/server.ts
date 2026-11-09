@@ -493,6 +493,9 @@ function begin(game: GameContext, g: Game, withSeats: LobbySeat[]) {
     lookAt(p, { x: size.w / 2, z: size.d / 2 });
   }
   game.world.spawn = { x: size.w / 2, y: SEA_Y + 70, z: size.d / 2 + 40, yaw: 0 };
+  // Saved as it begins, before its world is made (the making takes a while, and waits for someone
+  // to be here): whoever leaves meanwhile has the game on their list, at its address, all the same.
+  if (!g.over) save(game);
   sendLobby(game);
 }
 
@@ -1210,7 +1213,7 @@ export default defineServer(shared, {
       }
       if (host === key) host = humans(game).find((p) => p !== player) ? keyOf(humans(game).find((p) => p !== player)!) : null;
       // (The last person gone: saved, before the room stops, as no longer under way here: free to carry on elsewhere.)
-      if (phase === 'playing' && !humans(game).some((p) => p !== player)) save(game, false);
+      if ((phase === 'playing' || phase === 'building') && !humans(game).some((p) => p !== player)) save(game, false);
       else if (phase === 'playing' && playing) stillPlayed(game.store, playing, new Date(), humans(game).filter((p) => p !== player).map(keyOf));
       // (The others' screens show who's away: their turn counts as done.)
       if (civGame) markAll(game);

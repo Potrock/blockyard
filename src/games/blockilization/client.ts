@@ -59,9 +59,18 @@ function board(): ClientKit {
   let told = { x: NaN, z: NaN, at: 0 };
   /** The interface's layer (put away with H). */
   let ui: HTMLElement | null = null;
+  /** This run of the client: its listeners on the window go with it (`dispose`). */
+  let life: AbortController | null = null;
   return {
     name: 'blockilization.board',
+    dispose() {
+      life?.abort();
+      life = null;
+    },
     setup(client: Client) {
+      // (Each room is a fresh start of the client: the last one's listeners mustn't act with this one's.)
+      life?.abort();
+      life = new AbortController();
       bindPrefs(client);
       defineModelLooks(client);
       defineSounds(client);
@@ -71,9 +80,9 @@ function board(): ClientKit {
       mountFog(map);
       mountOverlay(map);
       ui = client.hud.layer('civ-ui', 'panels');
-      mountUI(client, ui);
+      mountUI(client, ui, life.signal);
       mountHandover(client, ui);
-      bindInput();
+      bindInput(life.signal);
       client.on('lobby', (d) => {
         store.lobby = d as LobbyView;
         // Back to the lobby (a new game) or building one: the last game's drawing goes.
