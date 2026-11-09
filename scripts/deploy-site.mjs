@@ -34,9 +34,11 @@ if (!flag('--deploy-only')) {
   // The old addresses redirect home, keeping the path and query (an invite link still lands in its
   // room). Hashed assets never change: cache them for good. The page itself is always checked.
   const redirects = moved.map((host) => ({ src: '/(.*)', has: [{ type: 'host', value: host }], status: 308, headers: { Location: `https://${home}/$1` } }));
-  // Assets for any origin too: an uploaded game's screen is a sandboxed frame (an opaque origin) that
-  // loads the platform's code from here. Its page, frame.html, gets a content security policy: it
-  // reaches only this site, the game server and Google's fonts, and only this site may frame it.
+  // Assets for any origin too. An uploaded game's screen is a sandboxed frame (an opaque origin),
+  // which the game server serves now (host/frame.ts): Vercel's DDoS protection challenges browsers
+  // by cookie, and the frame's requests carry none, so here its scripts could be turned away. This
+  // copy of frame.html (a content security policy: it reaches only this site, the game server and
+  // Google's fonts, and only this site may frame it) is for pages still open from an older build.
   const routes = [
     ...redirects,
     { src: '/assets/(.*)', headers: { 'cache-control': 'public, max-age=31536000, immutable', 'access-control-allow-origin': '*' }, continue: true },

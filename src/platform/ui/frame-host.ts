@@ -13,8 +13,13 @@ import { webOrigin } from '../client/packaged';
 import { Runtime, type FrameOpen } from '../runtime';
 import type { TitleScreen } from './home';
 
-/** The frame's page: on this site, but an opaque origin by its sandbox. */
-const FRAME_PAGE = '/frame.html';
+/**
+ * The frame's page: an opaque origin by its sandbox, wherever it's from. In production the game
+ * server serves it (host/frame.ts): the site's host may challenge browsers (Vercel's DDoS
+ * protection), and a sandboxed frame's requests carry no cookie to pass with, so every script of a
+ * frame from the site could be turned away. In development, this site's dev server has it.
+ */
+const framePage = (server: string) => (import.meta.env.DEV ? new URL('/frame.html', location.href) : new URL('/frame.html', webOrigin(server)));
 
 export class FrameHost {
   private frame: HTMLIFrameElement | null = null;
@@ -33,7 +38,7 @@ export class FrameHost {
   start(o: FrameOpen) {
     this.close();
     this.open = o;
-    const url = new URL(FRAME_PAGE, location.href);
+    const url = framePage(o.server);
     url.searchParams.set('game', o.id);
     url.searchParams.set('server', o.server);
     if (o.room) url.searchParams.set('room', o.room);

@@ -158,6 +158,17 @@ blockyard.gg (`/frame.html`): **no second domain**. The one change for workers: 
 `data:` URL (`import "<the worker's address>"`) rather than by URL or blob, the platform's engine
 workers and games' workers alike.
 
+**Later: the game server serves the frame** (`play.blockyard.gg/frame.html` and its
+`/assets/`, host/frame.ts), not the site. The site's host, Vercel, challenges some browsers
+(its automatic DDoS protection): a browser passes once and is let in by a cookie after that. A
+sandboxed frame's requests carry no cookie (the table above), so Vercel turned every script of
+the frame away (403) and the game hung on "Loading…", for some players and not others. Firewall
+rules can't exempt paths from that protection (only IP addresses), and pausing it lasts a day.
+The game server has no such check. Its image builds the frame (`npm run build:frame`), so the
+frame is always the same build as the platform the server checks uploaded games against, and a
+change to the frame deploys the server. The frame's own content security policy sandboxes it
+even when it's opened on its own, so an uploaded game never runs as the server's origin.
+
 ### The shape
 
 - **Built-in games stay as they are**: in the page, switching in place.
@@ -191,7 +202,8 @@ workers and games' workers alike.
   fonts from the site, the game server and Google Fonts. An uploaded game can't send anything
   anywhere but the game server.
 - **The site serves its assets with `Access-Control-Allow-Origin: *`** (the frame's module loads
-  are cross-origin now); the dev server allows the `null` origin.
+  are cross-origin now); the dev server allows the `null` origin. (The game server serves the
+  frame now, its files likewise: see "Later" above.)
 
 ### Plan
 

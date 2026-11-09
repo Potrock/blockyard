@@ -24,6 +24,7 @@ import { devGames, games } from './games/server';
 import type { GameDefinition } from './platform/api/types';
 import { Accounts } from './platform/host/accounts';
 import { ErrorLog } from './platform/host/errors';
+import { findFrameDir } from './platform/host/frame';
 import { Stats } from './platform/host/stats';
 import { GameLibrary, smokeInThread } from './platform/host/library';
 import { gameFiles, SandboxLink } from './platform/host/sandbox-link';
@@ -101,9 +102,12 @@ export async function main(args: string[], worker?: ServeOptions['worker'], mode
     console.log(`[${built.id}] built ${folder} as version ${built.version}: ?game=${built.id}`);
   }
   const sites = (process.env.SITE_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  // Uploaded games' frame (host/frame.ts), served from here: the image's build of it (`npm run
+  // build:frame`), or the site's whole build. In development the site's dev server has it.
+  const frameDir = dev ? null : findFrameDir([process.env.FRAME_DIR, 'dist-frame', 'dist']);
   // Error tracking (host/errors.ts): rooms' errors and screens' reports, kept 30 days; a Discord
   // webhook (ERRORS_WEBHOOK) hears of each new one. The server's own crash is kept on its way down.
-  const errors = ErrorLog.open(join(data, 'errors.sqlite'), { library, sites, webhook: process.env.ERRORS_WEBHOOK || null, log: (line) => console.log(line) });
+  const errors = ErrorLog.open(join(data, 'errors.sqlite'), { library, sites, frame: frameDir ? { dir: frameDir, origin: publicUrl } : null, webhook: process.env.ERRORS_WEBHOOK || null, log: (line) => console.log(line) });
   setInterval(() => errors.prune(), 24 * 3600_000).unref();
   // Stats (host/stats.ts): each play kept 90 days, then only each day's totals.
   const stats = Stats.open(join(data, 'stats.sqlite'));
@@ -141,6 +145,7 @@ export async function main(args: string[], worker?: ServeOptions['worker'], mode
     accounts: Accounts.open(join(data, 'accounts.sqlite')),
     discord: process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET ? { id: process.env.DISCORD_CLIENT_ID, secret: process.env.DISCORD_CLIENT_SECRET } : null,
     sites,
+    frame: frameDir ? { dir: frameDir, publicUrl, sites } : null,
     log: (line) => console.log(line),
   });
   const how = dev ? ' (development mode: cheats, development games, __game.dev)' : cheats ? ' (cheats on)' : '';

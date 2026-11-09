@@ -12,3 +12,4 @@ engine/Cargo.*
 .claude
 .vercel
 dist-sandbox
+dist-frame

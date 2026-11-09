@@ -22,9 +22,10 @@ const config = sandbox ? 'fly.sandbox.toml' : 'fly.toml';
 const app = /^app\s*=\s*"([^"]+)"/m.exec(readFileSync(config, 'utf8'))[1];
 
 if (!flag('--no-wasm')) run('npm run wasm');
-// The bundle the image will build, built here only to hash it.
-run(sandbox ? 'node scripts/build-sandbox.mjs' : 'npm run build:server');
-const build = `${sandbox ? 'sandbox' : 'server'}-${buildHash([sandbox ? 'dist-sandbox' : 'dist-server', 'engine/pkg/voxel_engine_bg.wasm', 'package-lock.json', 'Dockerfile', config])}`;
+// The bundle the image will build, built here only to hash it: the game server's with the uploaded
+// games' frame it serves (host/frame.ts), so a change to either deploys them together.
+run(sandbox ? 'node scripts/build-sandbox.mjs' : 'npm run build:server && npm run build:frame');
+const build = `${sandbox ? 'sandbox' : 'server'}-${buildHash([...(sandbox ? ['dist-sandbox'] : ['dist-server', 'dist-frame']), 'engine/pkg/voxel_engine_bg.wasm', 'package-lock.json', 'Dockerfile', config])}`;
 
 // Every machine's image tag: the label of the release it runs.
 let live = [];
