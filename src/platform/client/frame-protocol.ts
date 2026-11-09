@@ -9,6 +9,8 @@ export interface FramedGame extends GameControls {
   current: string;
   title?: string;
   uploaded?: boolean;
+  /** Without bringing the home page up (`HomeGame.quiet`: on the way to another of the game's rooms). */
+  quiet?: boolean;
   /** Online (always, in a frame): the server, the game on show, its room; whether it has rooms of one's own. */
   online: { server: string; game: string; room: string | null; rooms: boolean } | null;
 }
@@ -19,7 +21,7 @@ export type FrameToShell =
   | { t: 'ready' }
   /** The home page's calls (the runtime's `HomeScreen`). */
   | { t: 'show'; game: FramedGame }
-  | { t: 'select'; id: string; title?: string }
+  | { t: 'select'; id: string; title?: string; quiet?: boolean }
   | { t: 'progress'; fraction: number; text: string }
   | { t: 'setReady' }
   | { t: 'present'; names: string[] }

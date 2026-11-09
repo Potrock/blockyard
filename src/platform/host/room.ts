@@ -148,7 +148,11 @@ export class RoomCore {
 
   command(client: string, cmd: ClientCommand) {
     const id = this.ids.get(client);
-    if (id) this.host.command(id, cmd);
+    if (!id) return;
+    // Joining: with the game's data as its other rooms have left it (see `disconnect`), not as it
+    // was at this room's last save.
+    if (cmd.t === 'start') this.store?.flush();
+    this.host.command(id, cmd);
   }
 
   /** Who a watching client is, again (see `GameHost.identify`). */
@@ -162,6 +166,11 @@ export class RoomCore {
     this.ids.delete(client);
     this.had.delete(client);
     if (id) this.host.disconnect(id);
+    // What the game kept as they left is written out now, for its other rooms to read as someone
+    // joins them: not at the next save, which a room they've left empty doesn't come to until it
+    // stops. (A game that lists what its rooms hold, each saved game at its own address, would
+    // otherwise not list for a minute or more the one its player has just come from.)
+    this.store?.flush();
     this.count();
   }
 

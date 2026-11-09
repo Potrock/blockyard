@@ -158,4 +158,20 @@ export default async function blockilizationSaves() {
   last.rejoin();
   last.play();
   check(civ.game()!.turn === kept[2] + 1, `back in the room, the game as it's saved now: turn ${civ.game()!.turn}`);
+  last.leave();
+
+  // A game begun, and its player gone while its world was still being made (which waits for someone
+  // to be there): it's saved as it begins, so it's on her list all the same, and its room opens it.
+  const early = room('w0rldmak1ng');
+  early.send(duel);
+  early.send({ a: 'start' });
+  check(civ.phase() === 'building', `begun, its world being made (${civ.phase()})`);
+  early.leave();
+  const lists = room('public');
+  const begun = lists.lobby()?.saves.find((g) => g.id === 'w0rldmak1ng');
+  check(!!begun && !begun.live, `left while its world was made, the game is on her list: ${JSON.stringify(lists.lobby()?.saves.map((g) => g.id))}`);
+  lists.leave();
+  const reopened = room('w0rldmak1ng');
+  reopened.play();
+  check(civ.phase() === 'playing' && civ.game()!.players.some((p) => p.name === 'Ann'), `and its room opens it (${civ.phase()})`);
 }

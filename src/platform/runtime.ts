@@ -60,6 +60,7 @@ import { errorContext } from './client/errors';
 import { copyRoomLink, TitleScreen, type HomeScreen } from './ui/home';
 import { lastPlayed } from './ui/recent';
 import { PauseMenu } from './ui/pause';
+import { TravelScreen } from './ui/travel';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, isHandheld, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
@@ -82,6 +83,11 @@ interface Carry {
   renderer?: Renderer;
   textures?: TextureSet;
   biome?: BiomeMap;
+  /**
+   * On the way to another room of the game being played (`client.rooms.go`): the home page stays
+   * away, and play carries on in the room as soon as its world is in (`arrive`).
+   */
+  resume?: boolean;
 }
 
 /** An uploaded game to run in a sandboxed frame instead of in this page (see `Runtime.frames`). */
@@ -214,6 +220,8 @@ export class Runtime {
   private worldReady = false;
   /** First-person walker (default) or a game-driven camera (`player.controller: 'none'`). */
   private walker = true;
+  /** The game plays with the pointer on screen throughout (`player.mouse: 'free'`): the mouse is never captured. */
+  private free = false;
   private itemMode: boolean;
   private hudVisible = true;
   private dir = new THREE.Vector3();
@@ -280,6 +288,7 @@ export class Runtime {
     this.camera.layers.enable(LAYER_CHUNKS);
     this.input = new Input(canvas, this.life.signal);
     this.walker = (def.player?.controller ?? 'walk') === 'walk';
+    this.free = def.player?.mouse === 'free';
     this.tune = resolveMovement(def.player?.movement);
     this.hitscanRules = resolveHitscan(def.hitscan);
     this.itemMode = this.walker && (def.player?.hotbar ?? (def.player?.build ? 'blocks' : 'items')) === 'items';
@@ -294,7 +303,7 @@ export class Runtime {
     const online = { server: new URL(link.url).origin, game: def.id, room, onRoom: def.instances ? (own: boolean) => this.switchGame(def.id, own ? newRoomCode() : null) : undefined };
     this.title = title;
     const uploaded = !!packagedVersion([...this.games, ...this.hidden].find((g) => g.meta.id === def.id));
-    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, keys), touch: touchHints(touchButtons(def, this.walker, keys, this.walker), this.walker, this.walker), walks: this.walker, keys: { bound: this.settings.keys, game: keys }, online, uploaded });
+    this.title.show({ current: def.id, title: def.title, onPlay: () => this.play(), onPick: (id) => this.switchGame(id), controls: def.controls, pad: padHints(def, this.walker, keys), touch: touchHints(touchButtons(def, this.walker, keys, this.walker), this.walker, this.walker), walks: this.walker, keys: { bound: this.settings.keys, game: keys }, online, uploaded, quiet: !!carried?.resume });
   }
 
   /**
@@ -343,13 +352,17 @@ export class Runtime {
         games.push(entryOf(e));
       }
     };
-    title.select(listed.meta.id, listed.meta.title);
+    title.select(listed.meta.id, listed.meta.title, !!carried?.resume);
     // What an error report says (client/errors.ts): where to send it, the game on screen.
     if (base) errorContext.server = webOrigin(base);
     errorContext.game = listed.meta.id;
     errorContext.version = packagedVersion(listed) ?? null;
     // An uploaded game, on a page that runs those in a sandboxed frame: the frame takes it from here.
     if (Runtime.frames && base && packagedVersion(listed)) {
+      if (carried?.resume) {
+        Runtime.landed(carried);
+        title.select(listed.meta.id, listed.meta.title);
+      }
       Runtime.frames({ id: listed.meta.id, room: own, shard, server: base, carry: carried ?? { title }, canvas, ui, games, hidden });
       return null;
     }
@@ -374,6 +387,8 @@ export class Runtime {
             location.assign(to);
           });
         if (!(err instanceof Refused) || !err.retry) throw err;
+        // (On the way to another room: the home page comes up to say so, and takes it from here.)
+        Runtime.landed(carried);
         const next = await title.busy(err.message, wait);
         const entry = next === null ? null : find(next);
         if (!entry) {
@@ -439,6 +454,19 @@ export class Runtime {
    */
   static frames: ((o: FrameOpen) => void) | null = null;
 
+  /** What's on screen on the way to another room of the game being played (`rooms.go`), in place of the home page. */
+  private static travel: TravelScreen | null = null;
+
+  /**
+   * A move to another room is over: play carries on there, or it couldn't (turned away, the game
+   * failed to start) and the home page takes it from here, as for any game.
+   */
+  private static landed(carry: Carry | null) {
+    if (carry) carry.resume = false;
+    Runtime.travel?.close();
+    Runtime.travel = null;
+  }
+
   /**
    * A room ticket for `game` (a sandboxed frame, which can't carry the sign-in, asks the page around
    * it: client/frame.ts); null: none (a page of the site's own connects with its cookie).
@@ -485,7 +513,7 @@ export class Runtime {
 
   private async init() {
     const def = this.def;
-    this.title.progress(0.02, 'Compiling WebAssembly engine…');
+    this.progress(0.02, 'Compiling WebAssembly engine…');
     const module = await loadEngine();
     // The game's own blocks (with the ids a server gave them, if it said), before anything that
     // needs to know them: the registry, the terrain workers, the world.
@@ -494,7 +522,7 @@ export class Runtime {
     this.registry = loadRegistry(this.blocks);
     const destructible = def.world?.destructible;
     this.carving = destructible ? { ids: destructibleIds(this.registry, destructible), above: destructible.above ?? -1 } : null;
-    this.title.progress(0.06, 'Generating textures…');
+    this.progress(0.06, 'Generating textures…');
     const worldCfg = worldGenConfig(def, (b) => this.blockId(b));
     // (A phone or tablet: three at most, each a copy of the engine in memory it has little of.)
     const workers = Math.max(2, Math.min(isHandheld() ? 3 : 8, (navigator.hardwareConcurrency || 4) - 2));
@@ -588,9 +616,12 @@ export class Runtime {
       },
     };
     this.gameHud.onScreen = (open) => {
+      // (The game shutting down takes its screens with it: nothing to capture the mouse for. Leaving
+      // by a button on one, a click the browser still counts, captured it on the way to the home page.)
+      if (this.disposed) return;
       if (open) this.input.unlock();
       // Closed by a button click: grab the mouse again (needs a user gesture), or give the controller the game back.
-      else if (this.mode === 'playing' && (this.input.device !== 'mouse' || navigator.userActivation?.isActive)) this.input.lock();
+      else if (this.mode === 'playing' && !this.free && (this.input.device !== 'mouse' || navigator.userActivation?.isActive)) this.input.lock();
     };
     this.gameHud.onCrosshair = (v) => this.hud.setCrosshair(v);
     this.gameHud.player = this.playerId;
@@ -752,7 +783,8 @@ export class Runtime {
     this.pause.onRestart = () => {
       this.pause.hide();
       this.restart();
-      this.input.lock();
+      if (this.free) this.mode = 'playing';
+      else this.input.lock();
     };
     this.pause.onExit = () => this.exit();
 
@@ -787,6 +819,8 @@ export class Runtime {
         return;
       }
       if (this.gameHud.screenOpen) return;
+      // (A game that keeps the mouse free: nothing to capture.)
+      if (this.free) return void (this.mode === 'title' && this.play());
       // (Clicking while a controller plays hands the game to the mouse.)
       const unlockedPlay = this.mode === 'playing' && !this.input.pointerLocked;
       if (this.mode === 'paused' || unlockedPlay || (this.mode === 'title' && this.worldReady)) this.input.lock();
@@ -802,7 +836,8 @@ export class Runtime {
     this.commandBar.onClose = () => {
       if (this.mode !== 'console') return;
       this.mode = 'playing';
-      this.input.lock();
+      // (Not over a screen of the game's own, or in a game that keeps the mouse free: the pointer stays.)
+      if (!this.free && !this.gameHud.screenOpen) this.input.lock();
     };
     this.commandBar.onSubmit = (line) => {
       this.commandBar.print(`/${line.replace(/^\/+/, '')}`, 'echo');
@@ -837,7 +872,8 @@ export class Runtime {
           go: (code) => {
             if (!this.def.instances) throw new Error('rooms.go: this game has no rooms of its own (instances)');
             if (code !== null && !ROOM_CODE.test(code)) throw new Error(`rooms.go: not a room's code: ${String(code)}`);
-            this.switchGame(this.def.id, code);
+            // From the game (not its home page): straight to the room, and on with play there.
+            this.switchGame(this.def.id, code, this.mode !== 'title');
           },
           copyLink: (code) => copyRoomLink(code),
         },
@@ -918,7 +954,7 @@ export class Runtime {
     for (const e of this.early) this.client.emit(e);
     this.early = [];
     this.clientStarted = false;
-    this.title.progress(0.1, 'Generating terrain…');
+    this.progress(0.1, 'Generating terrain…');
     requestAnimationFrame((t) => this.frame(t));
   }
 
@@ -1161,15 +1197,21 @@ export class Runtime {
    * Another game, in place: the home page stays (showing it picked at once), the world fades
    * out, this game shuts down and the next starts, fading in when its world is ready.
    */
-  private switchGame(id: string, room: string | null = null) {
+  private switchGame(id: string, room: string | null = null, resume = false) {
     if (this.switching) return;
     this.switching = true;
     this.canvas.classList.add('fading');
     window.setTimeout(() => {
       const carry = this.shutdown();
+      carry.resume = resume;
       Runtime.switchTo(id, room, this.canvas, this.ui, this.games, this.hidden, carry);
     }, 260);
-    this.title.select(id, [...this.games, ...this.hidden].find((g) => g.meta.id === id)?.meta.title);
+    const meta = [...this.games, ...this.hidden].find((g) => g.meta.id === id)?.meta;
+    // A move within the game (`rooms.go`): not by way of the home page, which stays away.
+    if (resume) {
+      Runtime.travel?.close();
+      Runtime.travel = new TravelScreen(this.ui, { title: meta?.title ?? this.def.title, accent: meta?.accent, cover: meta?.cover });
+    } else this.title.select(id, meta?.title);
   }
 
   /** Start another game (or room) on the page the last one left (the home page stays up throughout). */
@@ -1185,9 +1227,10 @@ export class Runtime {
     const server = url.searchParams.get('server');
     if (server && Runtime.gameAddress(server)) url.searchParams.delete('server');
     history.replaceState(null, '', url);
-    carry.title.select(id, [...games, ...hidden].find((g) => g.meta.id === id)?.meta.title);
+    carry.title.select(id, [...games, ...hidden].find((g) => g.meta.id === id)?.meta.title, !!carry.resume);
     Runtime.start(canvas, ui, games, hidden, carry).catch((err: unknown) => {
       console.error(err);
+      Runtime.landed(carry);
       carry.title.failed(err instanceof Error ? err.message : String(err), (next) => Runtime.switchTo(next, null, canvas, ui, games, hidden, carry));
     });
   }
@@ -1231,7 +1274,7 @@ export class Runtime {
     this.unTheme();
     this.gameHud?.closeScreens();
     // The HUD, menus and overlays this game put up; the home page stays.
-    for (const el of [...this.ui.children]) if (el !== this.title.root) el.remove();
+    for (const el of [...this.ui.children]) if (el !== this.title.root && el !== Runtime.travel?.root) el.remove();
     return { title: this.title, renderer: r, textures: this.textures, biome: this.biome };
   }
 
@@ -1239,18 +1282,49 @@ export class Runtime {
   // Loading
   // ---------------------------------------------------------------------------------------------
 
+  /** How far along loading is: on the home page's button, or (on the way to another room) the travel screen. */
+  private progress(fraction: number, text: string) {
+    this.title.progress(fraction, text);
+    Runtime.travel?.progress(fraction, text);
+  }
+
   /** The title screen's progress: the terrain around the player (the host placed them) meshed. */
   private updateReadiness() {
     const s = this.mine(this.frameData);
     if (this.worldReady || !s || !this.hostReady) return;
     const ready = this.chunks.readiness(s.x, s.z, Math.min(this.viewDistance(this.settings), 6));
     const models = this.graphics.gltf.pending;
-    this.title.progress(0.1 + 0.9 * ready * (models ? 0.97 : 1), ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : models ? `Loading models… ${models} to go` : 'Ready');
+    const fraction = 0.1 + 0.9 * ready * (models ? 0.97 : 1);
+    this.progress(fraction, ready < 1 ? `Generating terrain… ${Math.round(ready * 100)}%` : models ? `Loading models… ${models} to go` : 'Ready');
     if (ready >= 0.999 && !models) {
       this.worldReady = true;
       this.title.setReady();
       this.canvas.classList.remove('fading');
+      if (this.carried?.resume) this.arrive();
     }
+  }
+
+  /**
+   * In the room a move within the game was to (`rooms.go`), its world in: play carries on, with no
+   * home page between and no Play to press. A game that captures the mouse takes it again if the
+   * browser still counts the click that sent them here; if not, the pause menu's up, a click from
+   * the game.
+   */
+  private arrive() {
+    Runtime.landed(this.carried);
+    this.sfx.unlock();
+    // (A controller or the touch controls: theirs again, as Play gives them.)
+    if (!this.free && this.input.device !== 'mouse') return this.input.lock();
+    this.beginPlay();
+    if (this.free) return;
+    const capture = (tries: number) => {
+      if (this.disposed || this.mode !== 'playing' || this.gameHud.screenOpen || this.input.locked) return;
+      if (!tries || !navigator.userActivation?.isActive) return this.showPause('help');
+      this.input.lock();
+      window.setTimeout(() => capture(tries - 1), 400);
+    };
+    // (Once the game's had a moment to put up a screen of its own, which frees the mouse anyway.)
+    window.setTimeout(() => capture(1), 400);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1260,7 +1334,10 @@ export class Runtime {
   private play() {
     this.sfx.unlock();
     if (this.input.device === 'touch') void TouchControls.fill();
-    if (this.worldReady) this.input.lock();
+    if (!this.worldReady) return;
+    // A game that keeps the mouse free starts at once; any other, as the mouse is captured.
+    if (!this.free) this.input.lock();
+    else if (this.mode === 'title') this.beginPlay();
   }
 
   private beginPlay() {
@@ -1304,7 +1381,7 @@ export class Runtime {
    * with a screen of its own up (the mouse free), straight back to that screen.
    */
   private resume() {
-    if (!this.gameHud.screenOpen) return this.input.lock();
+    if (!this.gameHud.screenOpen && !this.free) return this.input.lock();
     this.pause.hide();
     this.mode = 'playing';
   }

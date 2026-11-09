@@ -269,10 +269,16 @@ export function previewAsk(): PreviewAsk | null {
   return from !== null ? { unit: sel.id, target: t, from } : null;
 }
 
-export function bindInput() {
+/**
+ * The mouse, fingers and keys, for as long as this client runs (`signal`: the kit's `dispose`). A
+ * screen that goes from room to room, or back to the home page and in again, starts the client
+ * afresh each time: listeners left on the window would each act on every click, wheel and key
+ * along with the new ones (a click on the map taken twice, three times...).
+ */
+export function bindInput(signal: AbortSignal) {
   window.addEventListener('contextmenu', (e) => {
     if (onMap(e)) e.preventDefault();
-  });
+  }, { signal });
   window.addEventListener('pointerdown', (e) => {
     // (A finger on the interface puts away what a tap on the map showed: the tile's card, the way there; not on the card itself, which has a button.)
     if (!onMap(e)) {
@@ -310,7 +316,7 @@ export function bindInput() {
         store.changed++;
       }, HOLD_MS);
     }
-  });
+  }, { signal });
   window.addEventListener('pointermove', (e) => {
     setTipPosition(e.clientX, e.clientY);
     const last = pointers.get(e.pointerId);
@@ -345,7 +351,7 @@ export function bindInput() {
     if (t !== store.hover) {
       store.hover = t;
     }
-  });
+  }, { signal });
   const lift = (e: PointerEvent) => {
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
@@ -355,7 +361,7 @@ export function bindInput() {
     clearTimeout(holding);
     down = null;
     store.box = null;
-  });
+  }, { signal });
   window.addEventListener('pointerup', (e) => {
     lift(e);
     clearTimeout(holding);
@@ -382,14 +388,14 @@ export function bindInput() {
     // A right-click with nothing selected to move: the tile's menu (to pin it).
     if (d.button === 2 && tileMenuFree(false)) return openPinMenu(hit?.tile ?? pick(e.clientX, e.clientY), e.clientX, e.clientY);
     act(pick(e.clientX, e.clientY), d.button === 2, hit, e.pointerType === 'touch', e.shiftKey);
-  });
+  }, { signal });
   window.addEventListener(
     'wheel',
     (e) => {
       if (!onMap(e)) return;
       zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12);
     },
-    { passive: true },
+    { passive: true, signal },
   );
   // Keys. (Escape is ours: it closes a panel, and keeps the board up.)
   window.addEventListener(
@@ -416,15 +422,15 @@ export function bindInput() {
         e.stopImmediatePropagation();
       }
     },
-    true,
+    { capture: true, signal },
   );
   // What's typed in the game's own fields is theirs alone: it goes no further than the page (the
   // platform hears keys on the window, and would take T or / for its command bar).
   document.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) e.stopPropagation();
-  });
-  window.addEventListener('keyup', (e) => cam.keys.delete(e.code), true);
-  window.addEventListener('blur', () => cam.keys.clear());
+  }, { signal });
+  window.addEventListener('keyup', (e) => cam.keys.delete(e.code), { capture: true, signal });
+  window.addEventListener('blur', () => cam.keys.clear(), { signal });
 }
 
 function key(e: KeyboardEvent): boolean {

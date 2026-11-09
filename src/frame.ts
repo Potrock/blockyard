@@ -47,25 +47,48 @@ history.replaceState = (data, unused, url) => {
 };
 
 // The home page's Play button lets clicks through to here (pointer lock needs a click in this
-// frame): one there presses it. While the home page is up, nothing else here takes a click.
+// frame): one there presses it. The rest of the home page lets them through too (it can't let
+// through only the button's), so while it's up a shield lies over everything here: nothing of the
+// game takes a click or a hover meant for the page (a click on the page's empty space started the
+// game, and the pointer was whatever the game's was under it), and the pointer is the page's own
+// (a hand over Play). Up from the start: the home page is, until Play.
 let playButton: { x: number; y: number; w: number; h: number } | null = null;
 let playing = false;
-document.addEventListener(
-  'pointerdown',
-  (e) => {
-    if (playing) return;
-    const r = playButton;
-    if (r && e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h) shell({ t: 'press' });
-    e.stopPropagation();
-    e.preventDefault();
-  },
-  true,
-);
+const shield = document.createElement('div');
+shield.className = 'frame-shield';
+document.body.append(shield);
+const onPlay = (e: MouseEvent) => {
+  const r = playButton;
+  return !!r && e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h;
+};
+shield.addEventListener('pointermove', (e) => shield.classList.toggle('over-play', onPlay(e)));
+// (And nothing gets past it: a click fired on the game's canvas though its pointerdown was stopped.)
+for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'auxclick', 'contextmenu', 'wheel'])
+  document.addEventListener(
+    type,
+    (e) => {
+      if (playing) return;
+      if (type === 'pointerdown' && onPlay(e as MouseEvent)) shell({ t: 'press' });
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+    },
+    { capture: true, passive: false },
+  );
+const homeUp = (up: boolean) => {
+  playing = !up;
+  shield.classList.toggle('hidden', !up);
+  shield.classList.remove('over-play');
+};
 if (import.meta.env.DEV) (window as unknown as { __frame: unknown }).__frame = { get playButton() { return playButton; }, get playing() { return playing; } };
 const show = title.show.bind(title);
-title.show = (g) => ((playing = false), show(g));
+title.show = (g) => (homeUp(true), show(g));
 const hide = title.hide.bind(title);
-title.hide = () => ((playing = true), hide());
+title.hide = () => (homeUp(false), hide());
+// (The page comes up to say a game couldn't start, or is full: the same.)
+const failed = title.failed.bind(title);
+title.failed = (text, onPick) => (homeUp(true), failed(text, onPick));
+const busy = title.busy.bind(title);
+title.busy = (text, seconds) => (homeUp(true), busy(text, seconds));
 
 let started = false;
 window.addEventListener('message', (e) => {

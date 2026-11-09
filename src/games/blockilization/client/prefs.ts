@@ -69,7 +69,8 @@ export function loadPrefs(p: Prefs) {
 }
 
 export function onPrefs(f: () => void) {
-  listeners.push(f);
+  // (Once each: the client starts afresh with every room, and asks again.)
+  if (!listeners.includes(f)) listeners.push(f);
 }
 
 /** Change some and keep them. */

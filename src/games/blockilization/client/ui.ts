@@ -323,7 +323,8 @@ export function setLook(p: { uiSize?: UiSize; palette?: Palette }) {
   applyLook();
 }
 
-export function mountUI(c: Client, layer: El) {
+/** (`signal`: the client's over, its listeners on the window go: see `bindInput`.) */
+export function mountUI(c: Client, layer: El, signal: AbortSignal) {
   client = c;
   const style = (css: string) => c.hud.style(scaledCss(css));
   style(CSS);
@@ -370,17 +371,17 @@ export function mountUI(c: Client, layer: El) {
       if (e.pointerType === 'touch' && pressing) release = window.setTimeout(() => (pressing = false), 500);
       else pressing = false;
     },
-    true,
+    { capture: true, signal },
   );
-  window.addEventListener('pointercancel', () => (clearTimeout(release), (pressing = false)), true);
-  window.addEventListener('click', () => (clearTimeout(release), (pressing = false)), true);
+  window.addEventListener('pointercancel', () => (clearTimeout(release), (pressing = false)), { capture: true, signal });
+  window.addEventListener('click', () => (clearTimeout(release), (pressing = false)), { capture: true, signal });
   // (A release this screen never hears of, as when the press began on a tooltip that was taken away, mustn't hold the
   // redraws for good: a mouse moving with no button down has been let go.)
-  window.addEventListener('pointermove', (e) => e.buttons === 0 && (pressing = false), true);
+  window.addEventListener('pointermove', (e) => e.buttons === 0 && (pressing = false), { capture: true, signal });
   root.addEventListener('focusout', () => carrying || store.changed++);
-  window.addEventListener('resize', () => (applyLook(), fitTop(), coverCheck()));
+  window.addEventListener('resize', () => (applyLook(), fitTop(), coverCheck()), { signal });
   // (Taken to a screen with more or fewer device pixels: whole ones again.)
-  const sharpAgain = () => matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => (applyLook(), sharpAgain()), { once: true });
+  const sharpAgain = () => matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => (applyLook(), sharpAgain()), { once: true, signal });
   sharpAgain();
   bindPedia(root);
 }
