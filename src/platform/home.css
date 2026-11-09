@@ -1,0 +1,1471 @@
+/*
+ * The home page's look (its structure and behaviour are ui/home.ts's, and ui/library.ts's for "All
+ * games"). The game on show's world fills the page; over it, in three rows: who you are and the
+ * ways about along the top, the game's name and the way into it at the lower left, and a shelf of
+ * the games along the bottom.
+ *
+ * The yard's own hand: names in a heavy industrial face (Big Shoulders Display), standing off the
+ * page on a hard edge of the game's colour as a block stands off the ground; small labels in the
+ * pixel face; and everything that can be pressed a block too, with a side under it that it sinks
+ * onto. Each game's colour (`--game`, with `--on-game` to write on it) is the accent: its name's
+ * edge, its Play button, its card's plate.
+ */
+
+:root {
+  --home-display: 'Big Shoulders Display', 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue', sans-serif;
+}
+
+.home {
+  --game: #7fd46b;
+  --on-game: #0b0d10;
+  --pad-x: clamp(20px, 4.5vw, 64px);
+  /* The panels over the page (the profile, the locker, an uploader's games) write their names in it too. */
+  --pixel: var(--home-display);
+  --micro: 'Silkscreen', ui-monospace, 'SF Mono', Menlo, monospace;
+  --plate: rgba(9, 12, 18, 0.74);
+  --line: rgba(255, 255, 255, 0.13);
+  /* A block's side: how far what can be pressed stands off the page. */
+  --edge: 4px;
+  --corner: 6px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  place-items: stretch;
+}
+.home > * {
+  position: relative;
+  min-width: 0;
+}
+/* (A sandboxed game's frame under the page takes the clicks the page lets through; its links are the page's.) */
+#ui .home a {
+  pointer-events: auto;
+}
+/* Tabbed to (a keyboard's focus, not a click's): ringed in the game's colour. */
+.home button:focus-visible,
+.home a:focus-visible {
+  outline: 2px solid var(--game);
+  outline-offset: 2px;
+}
+/* (The frame counter is the game's: it stays out of the page's corner until the game's being played.) */
+#ui:has(> .home:not(.hidden)) > .fps {
+  display: none;
+}
+/* While the world loads (the canvas faded out), the game's cover, blurred, fills the page. */
+.home > .home-cover {
+  position: absolute;
+  inset: -48px;
+  background: var(--bg) center / cover no-repeat;
+  filter: blur(24px) brightness(0.5) saturate(1.1);
+  transition: opacity 700ms ease;
+}
+.home.ready > .home-cover {
+  opacity: 0;
+}
+/* The world shows through at the upper right; the page darkens under what's written on it. */
+.home > .home-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(6, 8, 13, 0.88) 0%, rgba(6, 8, 13, 0.62) 28%, rgba(6, 8, 13, 0.12) 56%, rgba(6, 8, 13, 0) 70%),
+    linear-gradient(0deg, rgba(6, 8, 13, 0.97) 0%, rgba(6, 8, 13, 0.82) 16%, rgba(6, 8, 13, 0.3) 36%, rgba(6, 8, 13, 0) 52%),
+    linear-gradient(180deg, rgba(6, 8, 13, 0.72) 0%, rgba(6, 8, 13, 0) 18%);
+}
+
+/* ---------- Along the top: Blockyard, the ways about, who you are ---------- */
+.home-top {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2vw, 28px);
+  padding: 18px var(--pad-x) 0;
+}
+.home-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.home-mark {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin: -6px 0;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
+}
+.home-mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.home-logo {
+  font: 900 27px/1 var(--home-display);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.45);
+}
+.home-pitch {
+  margin-left: 6px;
+  padding-left: 16px;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 13px;
+  color: rgba(226, 231, 240, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(2px, 0.8vw, 10px);
+  margin-left: auto;
+}
+.home-nav-item {
+  appearance: none;
+  position: relative;
+  padding: 9px 10px 8px;
+  border: 0;
+  background: none;
+  color: rgba(238, 241, 246, 0.82);
+  font: 800 16px/1 var(--home-display);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+.home-nav-item::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 2px;
+  height: 3px;
+  background: var(--game);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.home-nav-item:hover,
+.home-nav-item:focus-visible {
+  color: #fff;
+}
+.home-nav-item:hover::after,
+.home-nav-item:focus-visible::after {
+  transform: scaleX(1);
+}
+.home-nav-out {
+  display: inline-block;
+  margin-left: 5px;
+  font: 600 12px var(--sans);
+  opacity: 0.7;
+}
+.home-top-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.home-online {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 11px/1 var(--micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #cfeec8;
+  white-space: nowrap;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+}
+.home-online:empty {
+  display: none;
+}
+.home .live-dot {
+  animation: home-live 2.4s ease-in-out infinite;
+}
+@keyframes home-live {
+  50% {
+    box-shadow: 0 0 0 4px rgba(111, 227, 107, 0.16), 0 0 10px #6fe36b;
+  }
+}
+
+/* Who you are: "Sign in with Discord", or your avatar and name with a menu. */
+.home-account {
+  position: relative;
+}
+.home-signin {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px 9px 12px;
+  border: 0;
+  border-radius: var(--corner);
+  background: #5865f2;
+  color: #fff;
+  font: 600 13.5px var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 var(--edge) 0 #3a44b4, 0 12px 26px rgba(88, 101, 242, 0.3);
+  transition: filter 150ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+.home-signin:hover {
+  filter: brightness(1.08);
+}
+.home-signin:active {
+  transform: translateY(var(--edge));
+  box-shadow: 0 0 0 #3a44b4;
+}
+.home-signin svg {
+  width: 20px;
+  height: 20px;
+}
+.home-signin.small {
+  padding: 6px 12px;
+  font-size: 12.5px;
+  box-shadow: none;
+}
+.home-me {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 240px;
+  padding: 5px 12px 5px 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--corner);
+  background: var(--plate);
+  color: var(--text);
+  font: 600 13.5px var(--sans);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 var(--edge) 0 rgba(0, 0, 0, 0.45);
+  transition: background 150ms ease;
+}
+.home-me:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.home-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.home-avatar.blank {
+  display: grid;
+  place-items: center;
+  background: #5865f2;
+  font: 700 13px var(--sans);
+}
+.home-me-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-menu {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 5;
+  display: none;
+  flex-direction: column;
+  min-width: 230px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(12, 15, 23, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+.home-account.open .home-menu {
+  display: flex;
+}
+.home-menu-head {
+  padding: 8px 10px 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.home-menu-item {
+  appearance: none;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: 500 13.5px var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+a.home-menu-item {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.home-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.home-menu-item.danger {
+  color: #ff9f94;
+}
+
+/* ---------- The game on show: who's in it, its name and pitch, and the way in ---------- */
+.home-hero {
+  align-self: end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: min(1000px, 100%);
+  padding: 16px var(--pad-x) 26px;
+}
+/* Another game picked: its name and buttons come up into place, one after the other. */
+.home-hero.swap > * {
+  animation: home-in 460ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.home-hero.swap > :nth-child(2) {
+  animation-delay: 40ms;
+}
+.home-hero.swap > :nth-child(3) {
+  animation-delay: 90ms;
+}
+.home-hero.swap > :nth-child(4) {
+  animation-delay: 140ms;
+}
+.home-hero.swap > :nth-child(n + 5) {
+  animation-delay: 190ms;
+}
+@keyframes home-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+.home-eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 22px;
+  margin-bottom: 14px;
+}
+.home-kicker:empty {
+  display: none;
+}
+.home-room-tag {
+  display: inline-block;
+  padding: 5px 8px 4px;
+  border-radius: 3px;
+  font: 700 10px/1 var(--micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--on-game);
+  background: var(--game);
+}
+.home-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 500 13px/1.4 var(--sans);
+  color: rgba(226, 231, 240, 0.86);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+}
+.home-status.error {
+  color: #ffa59b;
+}
+/* The game's name: heavy capitals, standing off the page on an edge of its colour. */
+.home-title {
+  margin: 0;
+  font: 900 clamp(46px, min(7.6vw, 12.5vh), 128px)/0.86 var(--home-display);
+  letter-spacing: 0.024em;
+  text-transform: uppercase;
+  text-wrap: balance;
+  overflow-wrap: break-word;
+  color: #fff;
+  text-shadow:
+    0.022em 0.022em 0 var(--game),
+    0.044em 0.044em 0 var(--game),
+    0.05em 0.07em 0 rgba(0, 0, 0, 0.35),
+    0 0.16em 0.5em rgba(0, 0, 0, 0.55);
+}
+.home-tagline {
+  margin: 20px 0 0;
+  max-width: 56ch;
+  font: 400 clamp(15px, 1.22vw, 18.5px)/1.5 var(--sans);
+  color: rgba(240, 243, 248, 0.94);
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.75);
+}
+.home-tagline:empty {
+  display: none;
+}
+
+/* The way in: your look, your name, Play, and a game of your own beside it. */
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 26px;
+  /* (Room for the blocks' sides under them.) */
+  padding-bottom: var(--edge);
+}
+.home-face-button,
+.home-name,
+.home-alt {
+  border: 1px solid var(--line);
+  border-radius: var(--corner);
+  background: var(--plate);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 var(--edge) 0 rgba(0, 0, 0, 0.5);
+}
+.home-face-button {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  min-height: 64px;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 150ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+.home-face-button:hover {
+  border-color: var(--game);
+}
+.home-face-button:active,
+.home-alt:active {
+  transform: translateY(var(--edge));
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0.5);
+}
+.home-face {
+  width: 50px;
+  height: 50px;
+}
+.home-name {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 184px;
+  padding: 8px 14px;
+  cursor: text;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.home-name.hidden {
+  display: none;
+}
+.home-name:focus-within {
+  border-color: var(--game);
+  box-shadow: 0 var(--edge) 0 rgba(0, 0, 0, 0.5), 0 0 0 3px color-mix(in srgb, var(--game) 26%, transparent);
+}
+.home-name > span {
+  font: 400 9px/1 var(--micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.home-name-input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 600 16px var(--sans);
+  outline: none;
+}
+.home-name-input::placeholder {
+  color: rgba(232, 236, 243, 0.4);
+}
+.home-play {
+  appearance: none;
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-width: 232px;
+  min-height: 64px;
+  padding: 0 34px;
+  border: 0;
+  border-radius: var(--corner);
+  font: 900 31px/1 var(--home-display);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--on-game);
+  background: var(--game);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.4),
+    0 var(--edge) 0 color-mix(in srgb, var(--game) 55%, #000),
+    0 20px 44px color-mix(in srgb, var(--game) 34%, transparent);
+  cursor: pointer;
+  transition: transform 120ms ease, filter 150ms ease, box-shadow 120ms ease;
+}
+.home-play:not(:disabled)::before {
+  content: '';
+  position: relative;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 9px 0 9px 14px;
+  border-color: transparent transparent transparent currentColor;
+}
+.home-play:not(:disabled):hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.4),
+    0 calc(var(--edge) + 1px) 0 color-mix(in srgb, var(--game) 55%, #000),
+    0 24px 50px color-mix(in srgb, var(--game) 44%, transparent);
+}
+.home-play:not(:disabled):active {
+  transform: translateY(var(--edge));
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), 0 0 0 color-mix(in srgb, var(--game) 55%, #000);
+}
+/* Loading: the button is a plate that fills, in stripes of the game's colour, as the world comes in. */
+.home-play:disabled {
+  cursor: progress;
+  color: var(--text);
+  font: 600 13px var(--sans);
+  letter-spacing: 0.01em;
+  text-transform: none;
+  background: var(--plate);
+  box-shadow: inset 0 0 0 1px var(--line), 0 var(--edge) 0 rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.home-play-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--game) 46%, transparent) 0 12px, color-mix(in srgb, var(--game) 24%, transparent) 12px 24px);
+  background-size: 33.94px 100%;
+  border-right: 2px solid var(--game);
+  transition: width 250ms ease;
+  animation: home-load 800ms linear infinite;
+}
+@keyframes home-load {
+  to {
+    background-position-x: 33.94px;
+  }
+}
+.home-play:not(:disabled) .home-play-fill {
+  display: none;
+}
+.home-play-label {
+  position: relative;
+  white-space: nowrap;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+.home-play:not(:disabled) .home-play-label {
+  text-shadow: none;
+}
+/* The choice of room, beside Play: a game of one's own, or (in one) its link and the way back. */
+.home-rooms {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+.home-rooms:empty {
+  display: none;
+}
+.home-alt {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 16px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+.home-alt:hover {
+  border-color: var(--game);
+  background: rgba(22, 27, 38, 0.86);
+}
+.home-alt-title {
+  font: 800 18px/1 var(--home-display);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.home-alt:not(.plain) .home-alt-title::before {
+  content: '+';
+  display: inline-block;
+  width: 0.85em;
+  color: var(--game);
+}
+.home-alt-note {
+  font: 400 12px/1 var(--sans);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Under the way in: the game's achievements (the way to the profile), and what a guest keeps. */
+.home-under {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 16px;
+}
+.home-under:not(:has(> :not(.hidden))) {
+  display: none;
+}
+.home-feats {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--game) 42%, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+  background: var(--plate);
+  color: #eef1f6;
+  font: 600 12.5px var(--sans);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background 150ms ease;
+}
+.home-feats:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.home-feats.hidden {
+  display: none;
+}
+.home-feats svg {
+  width: 15px;
+  height: 15px;
+  color: var(--game);
+}
+.home-guest {
+  font-size: 12.5px;
+  color: rgba(214, 220, 230, 0.82);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+}
+.home-guest.hidden {
+  display: none;
+}
+.home-guest-signin {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #b3bbff;
+  font: 600 12.5px var(--sans);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.home-guest-signin:hover {
+  color: #d3d8ff;
+}
+.home-guest-privacy {
+  color: var(--muted);
+}
+.home-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+}
+
+/* The controls in a line: the first few, and the rest on asking. */
+.home-hints {
+  margin-top: 16px;
+}
+.hint-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  max-width: 700px;
+  font-size: 12.5px;
+  color: rgba(232, 236, 243, 0.78);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+}
+.hint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.home-hints:not(.open) .hint-chip.extra {
+  display: none;
+}
+.home-more {
+  appearance: none;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 600 12.5px var(--sans);
+  cursor: pointer;
+}
+.home-more:hover {
+  color: var(--text);
+}
+
+/* Under an uploaded game: report it. */
+.home-report {
+  margin-top: 8px;
+}
+.home-report:empty {
+  display: none;
+}
+.home-report-link {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 12.5px var(--sans);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.home-report-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.home-report-text {
+  width: min(320px, 100%);
+}
+.home-report-done {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ---------- The shelf: the games' cards in a row, the one on show lifted, its plate in its colour ---------- */
+.home-dock {
+  padding-bottom: 20px;
+}
+.home.alone .home-dock {
+  display: none;
+}
+.home-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 var(--pad-x);
+}
+.home-dock-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font: 400 10px/1 var(--micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(238, 241, 246, 0.78);
+}
+.home-dock-count {
+  padding: 3px 5px 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+.home-dock-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.05));
+}
+.home-dock-step,
+.home-dock-all {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--plate);
+  color: var(--text);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: border-color 150ms ease, background 150ms ease, opacity 150ms ease;
+}
+.home-dock-step {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0 0 3px;
+  font: 500 20px/1 var(--sans);
+}
+.home-dock-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.home.shelf-fits .home-dock-step {
+  display: none;
+}
+.home-dock-all {
+  height: 30px;
+  padding: 1px 12px 0;
+  font: 800 15px/1 var(--home-display);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.home-dock-all::after {
+  content: '→';
+  display: inline-block;
+  margin-left: 8px;
+  font: 600 13px var(--sans);
+  transition: transform 160ms ease;
+}
+.home-dock-step:not(:disabled):hover,
+.home-dock-all:hover {
+  border-color: var(--game);
+  background: rgba(22, 27, 38, 0.9);
+}
+.home-dock-all:hover::after {
+  transform: translateX(3px);
+}
+.home-shelf {
+  display: flex;
+  gap: 12px;
+  padding: 16px var(--pad-x) 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-padding: 0 var(--pad-x);
+  /* More games than fit: they fade out at the edges, into the margins. */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 calc(var(--pad-x) * 0.8), #000 calc(100% - var(--pad-x) * 0.8), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 calc(var(--pad-x) * 0.8), #000 calc(100% - var(--pad-x) * 0.8), transparent);
+}
+.home-shelf::-webkit-scrollbar {
+  display: none;
+}
+.home-card {
+  appearance: none;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: clamp(150px, 13.8vw, 220px);
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--corner);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0e1219;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  filter: saturate(0.82) brightness(0.8);
+  box-shadow: 0 var(--edge) 0 rgba(0, 0, 0, 0.55);
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+.home-card:hover,
+.home-card:focus-visible {
+  filter: none;
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--game) 70%, transparent);
+}
+.home-card.current {
+  cursor: default;
+  filter: none;
+  transform: translateY(-7px);
+  border-color: var(--game);
+  box-shadow: 0 0 0 1px var(--game), 0 var(--edge) 0 color-mix(in srgb, var(--game) 50%, #000), 0 20px 40px color-mix(in srgb, var(--game) 24%, rgba(0, 0, 0, 0.6));
+}
+.home-card-art {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #121722 center / cover no-repeat;
+  transition: transform 400ms ease;
+}
+/* A game with no cover: its colour. */
+.home-card-art.blank {
+  background:
+    radial-gradient(circle at 75% 15%, color-mix(in srgb, var(--game) 55%, transparent), transparent 60%),
+    linear-gradient(160deg, color-mix(in srgb, var(--game) 30%, #10141d), #0b0e15);
+}
+.home-card-plate {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 10px 6px;
+  border-top: 2px solid var(--game);
+  background: #0e1219;
+  transition: background 160ms ease, color 160ms ease;
+}
+.home-card.current .home-card-plate {
+  background: var(--game);
+  color: var(--on-game);
+}
+.home-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: 800 16px/1.1 var(--home-display);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-card-live {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 3px;
+  border-radius: 3px;
+  background: rgba(5, 7, 12, 0.82);
+  font: 700 11px/1 var(--micro);
+  color: #b9f5b0;
+}
+.home-card-live.on {
+  display: inline-flex;
+}
+.home-card-live.on::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6fe36b;
+  box-shadow: 0 0 6px #6fe36b;
+}
+/* Last on the shelf: the community's games. */
+.home-card-community {
+  --game: #8b93a5;
+  filter: none;
+}
+.home-card-community .home-card-art.blank {
+  display: grid;
+  place-items: center;
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0 10px, rgba(255, 255, 255, 0.025) 10px 20px);
+}
+.home-card-plus {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding-bottom: 3px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  font: 500 24px/1 var(--sans);
+  color: #fff;
+}
+
+/* ---------- "All games": every game, over the page, to search and pick from ---------- */
+.home > .library-screen {
+  position: absolute;
+  inset: 0;
+}
+.library-screen {
+  z-index: 10;
+  display: grid;
+  place-items: stretch center;
+  padding: clamp(0px, 3.4vh, 32px) clamp(0px, 3vw, 40px);
+  background: rgba(5, 7, 11, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  /* (In view at once as it opens, for its search to take the keys; out of it once it has faded.) */
+  transition: opacity 180ms ease, visibility 0s;
+}
+.library-screen.hidden {
+  transition: opacity 180ms ease, visibility 0s 180ms;
+}
+.library-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1240px, 100%);
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(11, 14, 21, 0.97);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.library-screen.hidden .library-panel {
+  transform: translateY(14px) scale(0.99);
+}
+.library-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 24px 14px;
+}
+.library-heading {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.library-title {
+  margin: 0;
+  font: 900 36px/1 var(--home-display);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.library-count {
+  font: 600 14px/1 var(--sans);
+  color: var(--muted);
+}
+.library-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(340px, 46vw);
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--corner);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: text;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.library-search:focus-within {
+  border-color: var(--game);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--game) 24%, transparent);
+}
+.library-search svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.library-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 500 15px var(--sans);
+  outline: none;
+  user-select: text;
+}
+.library-search-input::placeholder {
+  color: rgba(232, 236, 243, 0.42);
+}
+.library-search-input::-webkit-search-cancel-button {
+  filter: invert(1) opacity(0.6);
+  cursor: pointer;
+}
+.library-close {
+  appearance: none;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  padding: 0 0 2px;
+  border: 0;
+  border-radius: var(--corner);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: 400 24px/1 var(--sans);
+  cursor: pointer;
+}
+.library-close:hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+.library-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 24px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.library-tab {
+  appearance: none;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: 800 15px/1 var(--home-display);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.library-tab:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+.library-tab[aria-selected='true'] {
+  color: #0b0d10;
+  background: #f3f5f7;
+  border-color: #f3f5f7;
+}
+.library-tab-count {
+  font: 600 12px/1 var(--sans);
+  letter-spacing: 0;
+  opacity: 0.75;
+}
+.library-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  min-height: 0;
+  padding: 22px 24px 30px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+.library-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+}
+.library-section-head h3 {
+  margin: 0;
+  font: 400 11px/1 var(--micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #fff;
+}
+.library-section-head span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
+  gap: 16px 14px;
+}
+.library-empty {
+  padding: 18px 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.library-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--corner);
+  background: #131822;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 var(--edge) 0 rgba(0, 0, 0, 0.5);
+  transition: border-color 140ms ease, transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 140ms ease;
+}
+.library-card:hover,
+.library-card:focus-visible {
+  border-color: var(--game);
+  transform: translateY(-3px);
+  box-shadow: 0 var(--edge) 0 color-mix(in srgb, var(--game) 45%, #000), 0 16px 34px rgba(0, 0, 0, 0.45);
+}
+.library-card:active {
+  transform: translateY(1px);
+}
+.library-art {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-bottom: 2px solid var(--game);
+  background: color-mix(in srgb, var(--game) 30%, #111) center / cover no-repeat;
+}
+.library-art.blank {
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0 10px, rgba(255, 255, 255, 0.025) 10px 20px);
+}
+.library-live,
+.library-onshow {
+  position: absolute;
+  top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px 4px;
+  border-radius: 3px;
+  font: 400 9px/1 var(--micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.library-live {
+  left: 8px;
+  background: rgba(5, 7, 12, 0.82);
+  color: #b9f5b0;
+}
+.library-onshow {
+  right: 8px;
+  background: #f3f5f7;
+  color: #0b0d10;
+}
+.library-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 12px 12px;
+}
+.library-name {
+  font: 800 21px/1 var(--home-display);
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+.library-tagline {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.library-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: auto;
+  padding-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.library-played {
+  color: #dfe4ec;
+}
+.library-feats {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.library-feats svg {
+  width: 13px;
+  height: 13px;
+  color: var(--game);
+}
+
+/* ---------- Smaller screens ---------- */
+@media (max-width: 1180px) {
+  .home-pitch {
+    display: none;
+  }
+}
+@media (max-width: 860px) {
+  .home-nav,
+  .home-online {
+    display: none;
+  }
+  .home-top-right {
+    margin-left: auto;
+  }
+}
+@media (max-height: 700px) {
+  .home-hints {
+    display: none;
+  }
+  .home-hero {
+    padding-bottom: 16px;
+  }
+  .home-tagline {
+    margin-top: 14px;
+  }
+  .home-actions {
+    margin-top: 18px;
+  }
+  .home-dock {
+    padding-bottom: 12px;
+  }
+}
+/* A phone upright: the way in fills the width; the shelf's cards stay a thumb wide. */
+@media (max-width: 640px) {
+  .home > .home-scrim {
+    background: linear-gradient(180deg, rgba(6, 8, 13, 0.55) 0%, rgba(6, 8, 13, 0.18) 22%, rgba(6, 8, 13, 0.9) 62%, rgba(6, 8, 13, 0.97) 100%);
+  }
+  .home-top {
+    padding-top: calc(14px + env(safe-area-inset-top, 0px));
+  }
+  .home-hero {
+    padding-bottom: 14px;
+  }
+  .home-tagline {
+    margin-top: 14px;
+  }
+  .home-actions {
+    width: 100%;
+    margin-top: 18px;
+  }
+  .home-name {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+  .home-play {
+    flex: 1 0 100%;
+  }
+  .home-rooms {
+    flex: 1 0 100%;
+  }
+  .home-alt {
+    flex: 1;
+    min-width: 0;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px 12px 11px;
+  }
+  .home-alt-note {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .home-rooms:has(> :nth-child(2)) .home-alt-note {
+    display: none;
+  }
+  .home-hints {
+    display: none;
+  }
+  .home-dock {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .home-shelf {
+    padding-top: 14px;
+  }
+  .home-card {
+    width: 148px;
+  }
+  /* (A thumb runs the shelf along.) */
+  .home-dock-step {
+    display: none;
+  }
+  .library-screen {
+    padding: 0;
+  }
+  .library-panel {
+    border-radius: 0;
+    border-width: 0;
+  }
+  .library-head {
+    flex-wrap: wrap;
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 16px 12px;
+  }
+  .library-title {
+    font-size: 30px;
+  }
+  .library-search {
+    order: 3;
+    flex: 1 0 100%;
+  }
+  .library-tabs {
+    padding: 0 16px 12px;
+  }
+  .library-body {
+    padding: 18px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+  .library-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 10px;
+  }
+  .library-name {
+    font-size: 18px;
+  }
+}
+@media (max-width: 480px) {
+  .home-signin-more {
+    display: none;
+  }
+  .home-logo {
+    font-size: 23px;
+  }
+  .home-mark {
+    width: 38px;
+    height: 38px;
+  }
+}
+/* A phone on its side: the hero tighter and the page scrolls, so the game's name never runs off the top. */
+@media (max-height: 520px) {
+  .home {
+    grid-template-rows: auto auto auto;
+    align-content: space-between;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .home-top {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding-left: calc(var(--pad-x) + env(safe-area-inset-left, 0px));
+    padding-right: calc(var(--pad-x) + env(safe-area-inset-right, 0px));
+  }
+  .home-pitch {
+    display: none;
+  }
+  .home-hero {
+    padding: 8px calc(var(--pad-x) + env(safe-area-inset-right, 0px)) 8px calc(var(--pad-x) + env(safe-area-inset-left, 0px));
+  }
+  .home-eyebrow {
+    min-height: 0;
+    margin-bottom: 8px;
+  }
+  .home-title {
+    font-size: clamp(30px, 11vh, 46px);
+  }
+  .home-tagline,
+  .home-alt-note,
+  .home-feats,
+  .home-dock-head {
+    display: none;
+  }
+  .home-actions {
+    margin-top: 12px;
+  }
+  .home-play {
+    min-height: 48px;
+    min-width: 200px;
+    font-size: 24px;
+  }
+  .home-face-button {
+    width: 48px;
+    min-height: 48px;
+  }
+  .home-face {
+    width: 38px;
+    height: 38px;
+  }
+  .home-name {
+    padding: 4px 12px;
+  }
+  .home-under {
+    margin-top: 8px;
+  }
+  .home-guest,
+  .home-tip {
+    font-size: 11.5px;
+  }
+  .home-tip {
+    margin-top: 4px;
+  }
+  .home-shelf {
+    padding-top: 10px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .home-dock {
+    padding-bottom: 0;
+  }
+  .home-card {
+    width: 140px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-hero.swap > *,
+  .home-play-fill,
+  .home .live-dot {
+    animation: none;
+  }
+}

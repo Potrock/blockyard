@@ -58,6 +58,7 @@ import { cosmeticCatalog } from './cosmetics';
 import { entryOf, packagedEntry, packagedVersion, webOrigin } from './client/packaged';
 import { errorContext } from './client/errors';
 import { copyRoomLink, TitleScreen, type HomeScreen } from './ui/home';
+import { lastPlayed } from './ui/recent';
 import { PauseMenu } from './ui/pause';
 import { blockIcon } from './ui/icons';
 import { GRAPHICS, isHandheld, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
@@ -297,7 +298,7 @@ export class Runtime {
   }
 
   /**
-   * Boot the game selected by `?game=` (default: the first in the catalog) on its game server:
+   * Boot the game selected by `?game=` (default: the one played last, else the first in the catalog) on its game server:
    * connect to it, watching behind the title screen, and join on Play. The server is `?server=`
    * (`ws://localhost:8787`, or one game on one: `ws://localhost:8787/sandbox`), else the build's
    * (`VITE_GAME_SERVER`, e.g. wss://voxel-games.fly.dev), else in development the local one that
@@ -307,10 +308,12 @@ export class Runtime {
    */
   static async start(canvas: HTMLCanvasElement, ui: HTMLElement, games: GameEntry[], hidden: GameEntry[] = [], carried: Carry | null = null): Promise<Runtime | null> {
     const url = new URL(location.href);
-    const picked = url.searchParams.get('game');
     const given = url.searchParams.get('server');
     // A server (then as a build with one), or one game's address on it.
     const base = given ? (Runtime.gameAddress(given) ? null : given.replace(/\/+$/, '')) : Runtime.defaultServer();
+    // With no game asked for, the one they played last (if it's still to be had), so the home page
+    // opens where they left off; else the first in the catalog.
+    const picked = url.searchParams.get('game') ?? (base ? lastPlayed() : null);
     // Development games open by id but aren't listed in the launcher (a server names one too:
     // `?server=ws://host&game=highnoon`).
     const find = (id: string | null) => [...games, ...hidden].find((g) => g.meta.id === id);
