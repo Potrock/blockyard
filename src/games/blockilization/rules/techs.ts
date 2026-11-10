@@ -45,7 +45,18 @@ export const RESEARCH_PACE = 1.24;
  * are a quarter the size of Civ V's, with fewer cities to research with: techs cost less than Civ V's
  * (late ones much less).
  */
-export const baseTechCost = (t: Tech) => COL_COST[Math.min(t.col, COL_COST.length - 1)] * Math.max(0.12, 0.6 - 0.035 * t.col) * RESEARCH_PACE;
+export const baseTechCost = (t: Tech) => COLUMN_COST[Math.min(t.col, COLUMN_COST.length - 1)];
+
+/**
+ * Each column's cost here. The share of Civ V's cost falls column by column to a floor, and where it
+ * met the floor the cost itself fell (Ecology and Rocketry cost less than Penicillin and Radar, the
+ * column before): a column costs at least a hundredth more than the last.
+ */
+const COLUMN_COST = COL_COST.reduce<number[]>((out, cost, col) => {
+  const own = cost * Math.max(0.12, 0.6 - 0.035 * col) * RESEARCH_PACE;
+  out.push(col ? Math.max(own, out[col - 1] * 1.01) : own);
+  return out;
+}, []);
 
 const T = (id: string, name: string, col: number, needs: string[], note?: string): Tech => ({ id, name, col, needs, note });
 

@@ -2,7 +2,7 @@ import { atWar, cityAt, civOf, has, note, random, spawnUnit, unitsOf } from './c
 import { service } from './citystates';
 import { canFire, canPillage, indirectFire, melee, pillage, ranged } from './combat';
 import { distance, neighbours, within } from './hex';
-import { canEnter, occupants, planPath, campHooks } from './movement';
+import { canEnter, occupants, planPath, campHooks, roomNear } from './movement';
 import { campCleared } from './quests';
 import { clanAt, clanById, clanPillaged, clansTurn, endClan, newClan, raidTarget, spares } from './clans';
 import type { Game, Unit } from './state';
@@ -146,7 +146,7 @@ campHooks.onCamp = (game, u) => {
   // Germany: two times in three, a barbarian joins them.
   if (has([civOf(p).ability.effects], 'barbarian_recruits') && random(game) < 0.67) {
     const type = raider(game);
-    const at = within(game.grid, u.tile, 1).find((x) => canEnter(game, { id: -1, type, owner: u.owner, tile: x, moves: 0, hp: 100, xp: 0, promotions: [] }, x));
+    const at = roomNear(game, type, u.owner, u.tile);
     if (at !== undefined) {
       spawnUnit(game, type, u.owner, at, { moves: 0 });
       note(game, u.owner, { text: 'A barbarian warband joins your cause.', at, kind: 'good' });
