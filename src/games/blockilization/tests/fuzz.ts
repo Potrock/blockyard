@@ -14,6 +14,7 @@ import { MAP_SIZES, TURN_LIMITS, type Game, type MapSize, type Player, type Sett
 import { TECHS } from '../rules/techs';
 import { IMPROVEMENTS, RESOURCES, TERRAINS } from '../rules/terrain';
 import { stackKind, UNIT_LIST, UNITS } from '../rules/units';
+import { cityInfo, statsFor, viewFor, yieldsWire } from '../views';
 
 /**
  * The rules' fuzz test: games where a bot plays each civ, and after its turn each "person" (the
@@ -22,7 +23,8 @@ import { stackKind, UNIT_LIST, UNITS } from '../rules/units';
  * its own units and cities, tiles beside them, real ids, and now and then nonsense. No order may
  * throw, and none may leave the world broken: numbers that aren't numbers, units stacked or on tiles
  * that don't exist, dead units left about, cities with nobody or with a tile worked twice, a
- * treasury an order took below zero.
+ * treasury an order took below zero. After each person's orders the views the server would send
+ * them (their view, their cities' screens, the demographics) are built too, and may not throw either.
  *
  * Bundle and run from the platform's folder (it has esbuild):
  *   npx esbuild src/games/blockilization/tests/fuzz.ts --bundle --platform=node --format=esm --outfile=fuzz.mjs
@@ -285,7 +287,15 @@ function play(seed: number): { turn: number; orders: number; ok: number } {
         for (const w of broken(game, false)) report(w, how);
       }
       guard(`${p.civ}'s automation`, () => automate(game, p));
+      // What the server would send them now: a state the rules allow must also be one the views can draw.
+      guard(`${p.civ}'s view`, () => {
+        viewFor(game, p, null);
+        yieldsWire(game, p);
+        statsFor(game, p);
+        for (const c of citiesOf(game, p.index)) cityInfo(game, p, c);
+      });
     }
+    guard('the watcher\'s view', () => viewFor(game, null, null));
     guard('the turn\'s end', () => endTurn(game));
     for (const w of broken(game, true)) report(w, `${at()}, after the turn ended`);
   }
