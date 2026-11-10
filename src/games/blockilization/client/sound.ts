@@ -100,6 +100,9 @@ function choir(s: SynthKit, notes: number[], volume: number, length: number) {
 export function defineSounds(c: Client) {
   client = c;
   const a = c.audio;
+  // (The platform's blast effect, which a heavy shell's hit draws, asks for these by name: the hit's own sound is the blow's, below.)
+  a.define('explosion', () => {});
+  a.define('explosion_big', () => {});
   // ---------- The interface ----------
   a.define('civ_click', (s) => s.tone({ wave: 'triangle', from: 1400 * s.pitch, to: 900 * s.pitch, duration: 0.05, volume: 0.18 }), { reverb: 0 });
   a.define('civ_open', (s) => s.noise({ duration: 0.16, from: 900, to: 2800, filter: 'bandpass', q: 1.2, volume: 0.12 }), { reverb: 0 });

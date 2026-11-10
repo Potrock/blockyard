@@ -16,7 +16,7 @@ import { fromPromotions, promotionsDue, promotionsFor, PROMOTIONS } from './prom
 import { liberate, liberation } from './liberation';
 import { pledge, pledgeOffended } from './pledges';
 import { distance, neighbours, within } from './hex';
-import { advance, campHooks, canEnter, captureHooks, closedLand, moveTo, occupants, planPath, ruinHooks, sightStops, swap, swapWith } from './movement';
+import { advance, campHooks, canEnter, captureHooks, closedLand, moveTo, occupants, planPath, roomNear, ruinHooks, sightStops, swap, swapWith } from './movement';
 import { wondersBeside } from './nature';
 import { adoptable, ALL_POLICIES, IDEOLOGIES, policyMet, TREES, treeDone } from './policies';
 import { BELIEF_LIST, BELIEFS, pantheonCost, takenBeliefs } from './religion';
@@ -572,7 +572,7 @@ ruinHooks.onRuin = (game, u) => {
       return 'a map of the land around';
     },
     () => {
-      const at = within(game.grid, u.tile, 1).find((t) => t !== u.tile && canEnter(game, { ...u, id: -1, type: 'warrior' } as Unit, t));
+      const at = roomNear(game, unitFor(p.civ, 'warrior', UNITS), p.index, u.tile);
       if (at === undefined) return '';
       spawnUnit(game, unitFor(p.civ, 'warrior', UNITS), p.index, at, { moves: 0 });
       return 'warriors to join you';
@@ -868,7 +868,7 @@ export function workLeft(game: Game, u: Unit): { turns: number; progress: number
 }
 
 /** What an order's field must be: a whole number, a tile of the map, a whole number or nothing, a string, one of some strings (or nothing, null or left out, where null is one), a list of strings, a list (checked where it's used), a yes or no, a production item; `?` when it may be left out. */
-type Field = 'int' | 'tile' | 'int|null' | 'string' | 'strings' | 'list' | 'bool' | 'bool?' | 'item' | readonly (string | null)[];
+export type Field = 'int' | 'tile' | 'int|null' | 'string' | 'strings' | 'list' | 'bool' | 'bool?' | 'item' | readonly (string | null)[];
 
 /** The luxuries' ids (a resolution banning one names it). */
 const LUXURY_IDS = Object.keys(RESOURCES).filter((r) => RESOURCES[r].kind === 'luxury');
@@ -877,8 +877,8 @@ const STANCES = ['fortify', 'sleep', 'alert', 'wake'] as const;
 const FOCUSES = ['balanced', 'food', 'prod', 'gold', 'science', 'culture', 'faith'] as const;
 const ACTIONS = ['improvement', 'discover', 'hurry', 'trade', 'golden', 'work', 'culture', 'repair', 'concert'] as const;
 
-/** Every order's fields, and what each must be (orders come from screens nobody can trust). */
-const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }>, 't'>]-?: Field } } = {
+/** Every order's fields, and what each must be (orders come from screens nobody can trust; `tests/fuzz.ts` makes them up from this). */
+export const SHAPES: { [K in Order['t']]: { [F in Exclude<keyof Extract<Order, { t: K }>, 't'>]-?: Field } } = {
   move: { unit: 'int', to: 'tile' },
   attack: { unit: 'int', target: 'tile' },
   found: { unit: 'int' },
@@ -2293,7 +2293,11 @@ function raze(game: Game) {
     c.pop--;
     c.razing = c.pop;
     capFollowers(c);
-    if (c.pop > 0) continue;
+    if (c.pop > 0) {
+      // (One fewer to work its tiles.)
+      assignCitizens(game, c);
+      continue;
+    }
     noteAll(game, { text: `${c.name} has been burned to the ground.`, at: c.tile, kind: 'war' });
     for (const tile of game.tiles) if (tile.city === c.id) {
       tile.city = undefined;

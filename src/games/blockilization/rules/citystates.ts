@@ -6,7 +6,8 @@ import { cityReligion } from './faith';
 import { questsTurn } from './quests';
 import { pledged, pledgeOffended, pledgesTurn, PLEDGE_REST } from './pledges';
 import { spiesOf } from './trade';
-import { distance, neighbours, within } from './hex';
+import { distance, neighbours } from './hex';
+import { roomNear } from './movement';
 import { policyEffects } from './policies';
 import { beliefEffects } from './religion';
 import type { Game, Player, Unit } from './state';
@@ -308,7 +309,8 @@ export function cityStateTurn(game: Game) {
       if (k === 'militaristic' && game.turn % Math.round((s === 'ally' ? 14 : 20) / often) === cs.index % 7) {
         const home = capitalOf(game, p.index);
         const best = UNIT_LIST.filter((u) => u.domain === 'land' && !u.civ && !u.unbuildable && u.strength > 0 && (!u.tech || p.techs.includes(u.tech)) && !(u.obsolete && p.techs.includes(u.obsolete)) && !u.resource).sort((a, b) => b.strength - a.strength)[0];
-        const at = home ? within(game.grid, home.tile, 2).find((t) => !game.units.some((u) => u.tile === t)) : undefined;
+        // (In the capital, or by it: on ground it can stand on, not a mountain or a rival's land.)
+        const at = home && best ? roomNear(game, best.id, p.index, home.tile, 2, true) : undefined;
         if (best && at !== undefined) {
           spawnUnit(game, best.id, p.index, at);
           note(game, p.index, { text: `${cs.name} has sent you ${aName(UNITS[best.id].name)}.`, at, kind: 'good' });

@@ -10,7 +10,7 @@ import { PERSONALITIES } from '../rules/ai/personality';
 import { UNITS } from '../rules/units';
 import { CIV_SYMBOL, glyphPaths } from '../client/icons';
 import { atWar, canStand, cityAt, createGame, maxMoves, seesUnit, techCost, unitSight, updateAllVisibility } from '../rules/core';
-import { assignCitizens, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileGoldCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
+import { assignCitizens, unemployed, cityEffects, cityYields, workedYields, connected, dissent, foodKept, freshWater, goldUpkeep, growthThreshold, greatCost, greatPeopleBonus, happiness, policyCost, purchaseCost, strategic, tileCultureCost, tileGoldCost, tileYields, UNHAPPINESS_PER_CITY, weighing, workable } from '../rules/economy';
 import { faithCost, faithTurn, faithUnit, foundReligion, maxReligions, prophetCost, religionsLeft, spreadsOf } from '../rules/faith';
 import { ANARCHY_TURNS, apply, applyOnce, blockers, canBuild, workTurns, constructible, canChooseIdeology, ideologySwitch, SWITCH_DISSENT, canDig, canFound, checkVictory, endTurn, faithPurchases, healing, itemCost, learn, plunder, productionToward, score, shareResearch, trainable, trainOptions, upgradeCost, upgradeTo, wellFormed, type Order } from '../rules/game';
 import { colOf, distance, line, neighbour, neighbours, rowOf, tileAt, within } from '../rules/hex';
@@ -72,7 +72,7 @@ import { bestNukeStrike, nukeProduction, nukes as fireNukes, nukesWanted, strike
 import { NUKE_INFLUENCE } from '../rules/diplomacy';
 import { bombInterceptChance, type Modifier } from '../rules/combat';
 import { bestUnit, ERA_STARTS, SCENARIOS, startEraOf, startWords, techsBefore, turnLimitFor, withScenario } from '../rules/starts';
-import { TECH_LIST } from '../rules/techs';
+import { baseTechCost, TECH_LIST } from '../rules/techs';
 import { TURN_CHOICES } from '../rules/state';
 import { autoPromote, eraOf, foundCity } from '../rules/game';
 import { botAnswer, EMOTES, isEmote, isPing, moodOf, toneOf } from '../rules/chat';
@@ -83,7 +83,7 @@ import { CLAN_STATES, SEVEN_CITIES_GOLD, speed } from '../rules/core';
 import { barbarianTurn } from '../rules/barbarians';
 import { clans as botClans } from '../rules/ai/clans';
 import { die } from '../rules/combat';
-import { campHooks } from '../rules/movement';
+import { campHooks, roomNear } from '../rules/movement';
 import { ARMY_BONUS, CORPS_BONUS, CORPS_TECH, forms, mergeProblem, unitName } from '../rules/armies';
 import { formations } from '../rules/ai/armies';
 
@@ -146,6 +146,8 @@ test('city filters: size, coast, fresh water, garrison, specialists, holy city, 
   p.pantheon = 'god_of_craftsmen';
   eq(prod() - base, 0, 'craftsmen at 2');
   c.pop = 3;
+  // (The third to a tile too: one with no work would make a production of its own.)
+  assignCitizens(game, c);
   base = prod();
   p.pantheon = undefined;
   eq(base - prod(), 1, 'craftsmen at 3');
@@ -7313,4 +7315,83 @@ test('combat bonuses, Civ V’s: spears +50% against horses, anti-tank +100% aga
   // A Nuclear Missile ties up two Uranium.
   unit(game, 'nuclear_missile', 0, at(2, 2));
   eq(strategic(game, game.players[0]).uranium?.used, 2, 'two Uranium');
+});
+
+// -------------------------------------------------------------------------------------------------
+// What the fuzz test found (`fuzz.ts`: random orders, the world checked after each)
+// -------------------------------------------------------------------------------------------------
+
+test('a unit stopped by an enemy coming into sight while it goes through one of its own stops beyond it, never on it', () => {
+  const { game, at } = blank();
+  game.players[0].bot = false;
+  war(game, 0, 1);
+  // (A pass, so its way is through its own warrior.)
+  for (let x = 2; x <= 12; x++) for (const y of [7, 9]) game.tiles[at(x, y)].elevation = 'mountain';
+  const knight = unit(game, 'knight', 0, at(4, 8));
+  const own = unit(game, 'warrior', 0, at(5, 8), { stance: 'fortify' });
+  // (Three tiles from the knight: in sight only once it has stepped onto its warrior's tile.)
+  const foe = unit(game, 'warrior', 1, at(7, 8));
+  eq(distance(game.grid, knight.tile, foe.tile), 3, 'the enemy out of the knight’s reach as it sets off');
+  ok(apply(game, 0, { t: 'move', unit: knight.id, to: at(6, 8) }).ok, 'ordered through its warrior');
+  ok(knight.tile !== own.tile, 'not left on its own warrior’s tile');
+  eq(knight.tile, at(6, 8), 'on the tile beyond');
+  eq(game.units.filter((u) => u.tile === own.tile).length, 1, 'one soldier to a tile');
+});
+
+test('a new unit is put on ground it can stand on: dry land first, in its boats on the water, never on a mountain', () => {
+  const { game, at } = blank();
+  techsTo(game, 0, 3);
+  const camp = at(10, 8);
+  const [dry, ...wet] = neighbours(game.grid, camp).reverse();
+  for (const t of wet) game.tiles[t].terrain = 'coast';
+  eq(roomNear(game, 'warrior', 0, camp), dry, 'the one dry tile by it, though the water comes first');
+  game.tiles[dry].terrain = 'coast';
+  const sea = roomNear(game, 'warrior', 0, camp);
+  ok(sea !== undefined && sea !== camp, 'with only water by it, the water (it can embark)');
+  ok(unit(game, 'warrior', 0, sea!).embarked === true, 'and it’s in its boats there');
+  ok(!unit(game, 'trireme', 0, wet[1]).embarked, 'a ship isn’t');
+  // On the tile itself when that's asked for and free (a gift to a capital), else by it; not on a mountain.
+  const { game: g2, at: at2 } = blank();
+  const capital = city(g2, 0, at2(10, 8));
+  eq(roomNear(g2, 'spearman', 0, capital.tile, 2, true), capital.tile, 'in the capital while it has no garrison');
+  unit(g2, 'warrior', 0, capital.tile);
+  const [open, ...peaks] = neighbours(g2.grid, capital.tile).reverse();
+  for (const t of peaks) g2.tiles[t].elevation = 'mountain';
+  eq(roomNear(g2, 'spearman', 0, capital.tile, 2, true), open, 'by it with one: on the open ground, not a peak');
+  for (const t of within(g2.grid, capital.tile, 2)) if (t !== capital.tile) g2.tiles[t].elevation = 'mountain';
+  eq(roomNear(g2, 'spearman', 0, capital.tile, 2, true), undefined, 'and nowhere when there’s no room');
+});
+
+test('a city being razed works a tile fewer with each citizen it loses', () => {
+  const { game, at } = blank();
+  city(game, 0, at(4, 4));
+  const town = city(game, 0, at(10, 8), { pop: 6 });
+  for (const t of within(game.grid, town.tile, 2)) game.tiles[t].owner = 0;
+  assignCitizens(game, town);
+  eq(town.worked.length, 6, 'six at work');
+  town.razing = town.pop;
+  endTurn(game);
+  eq(town.pop, 5, 'one lost to the fire');
+  ok(town.worked.length <= town.pop, `no more tiles worked than it has people (${town.worked.length} for ${town.pop})`);
+});
+
+test('research never costs less a column on', () => {
+  const columns = [...new Set(TECH_LIST.map((t) => t.col))].sort((a, b) => a - b);
+  const cost = (col: number) => baseTechCost(TECH_LIST.find((t) => t.col === col)!);
+  for (let i = 1; i < columns.length; i++) ok(cost(columns[i]) > cost(columns[i - 1]), `column ${columns[i]} (${Math.round(cost(columns[i]))}) costs more than column ${columns[i - 1]} (${Math.round(cost(columns[i - 1]))})`);
+});
+
+test('a citizen with no tile to work and no specialist’s place makes 1 production', () => {
+  const { game, at } = blank();
+  const town = city(game, 0, at(10, 8), { pop: 1 });
+  // (Hemmed in: one tile of its own besides its centre.)
+  const [field] = neighbours(game.grid, town.tile);
+  for (const t of within(game.grid, town.tile, 3)) if (t !== town.tile && t !== field) Object.assign(game.tiles[t], { owner: -1, city: undefined });
+  assignCitizens(game, town);
+  const before = cityYields(game, town).prod;
+  town.pop = 3;
+  assignCitizens(game, town);
+  eq(town.worked.length, 1, 'one tile to work');
+  eq(unemployed(town), 2, 'two with nothing to do');
+  eq(cityYields(game, town).prod, before + 2, 'a production each');
 });

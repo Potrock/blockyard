@@ -2,7 +2,7 @@ import { airBase, carry, isAircraft } from './air';
 import { BUILDINGS } from './buildings';
 import { atWar, canStand, cityAt, civOf, knows, maxMoves, note, seesUnit, updateVisibility } from './core';
 import { dangerCost, dangerZones, type Danger } from './danger';
-import { ALL, distance, findWay, neighbours } from './hex';
+import { ALL, distance, findWay, neighbours, within } from './hex';
 import type { Game, Unit } from './state';
 import { FEATURES, HILLS, RAIL_MOVE, ROAD_MOVE, TERRAINS } from './terrain';
 import { heedsBorders, isGreatPerson, isMilitary, stackKind, UNITS } from './units';
@@ -46,6 +46,17 @@ export function holding(game: Game, type: string, t: number, here = occupants(ga
   const kind = stackKind(type, water);
   if (kind === 'civilian') return here.civilian;
   return [here.military, here.behind].find((m) => !!m && stackKind(m.type, water) === kind);
+}
+
+/**
+ * Where a new unit could be put by a tile (or on it, `on`): the nearest tile within `reach` that it
+ * may stop on, dry land before water for a land unit that would have to take to its boats there.
+ * None if there's no room. (A gift, a recruit, a hired warrior: each once chose its own tile, some
+ * without looking at what the tile was.)
+ */
+export function roomNear(game: Game, type: string, owner: number, t: number, reach = 1, on = false): number | undefined {
+  const options = within(game.grid, t, reach).filter((x) => (on || x !== t) && canEnter(game, { id: -1, type, owner, tile: x, moves: 0, hp: 100, xp: 0, promotions: [] }, x));
+  return options.find((x) => canStand(game, type, x)) ?? options[0];
 }
 
 /** Every civilian on a tile: a city may hold more than one (what it builds, traders waiting to set off). */
@@ -225,6 +236,8 @@ function dangerFor(game: Game, u: Unit): Danger | null {
  */
 export function advance(game: Game, u: Unit): void {
   let rerouted = false;
+  // Going through its own: where it last stood on a tile it may stop on, and the tiles stepped through since.
+  let stood: { tile: number; moves: number; embarked?: boolean; through: number[] } | null = null;
   while (u.path && u.path.length && u.moves > 0) {
     const next = u.path[0];
     let cost = stepCost(game, u, u.tile, next);
@@ -284,6 +297,8 @@ export function advance(game: Game, u: Unit): void {
       }
       break;
     }
+    if (free) stood = null;
+    else (stood ??= { tile: u.tile, moves: u.moves, embarked: u.embarked, through: [] }).through.push(next);
     u.tile = next;
     carry(game, u);
     u.path.shift();
@@ -300,8 +315,19 @@ export function advance(game: Game, u: Unit): void {
     if (tile.ruin && UNITS[u.type].domain === 'land' && !u.embarked) onRuin(game, u);
     if (tile.camp && isMilitary(UNITS[u.type])) campHooks.onCamp(game, u);
     updateVisibility(game, game.players[u.owner]);
-    // An enemy soldier newly in sight: it stops here, with the moves it has left.
-    if (u.path?.length && sightStops(game, u)) break;
+    // An enemy soldier newly in sight: it stops here, with the moves it has left (but not on top of
+    // one of its own it's going through: on the first tile beyond, where it may stand).
+    if (u.path?.length && !stood && sightStops(game, u)) break;
+  }
+  // Stopped among its own after all (the way on closed while it went through them: an enemy come
+  // into sight on the next tile): back to where it last stood, as two of a kind never share a tile.
+  if (stood) {
+    if (u.path) u.path = [...stood.through, ...u.path];
+    u.tile = stood.tile;
+    u.moves = stood.moves;
+    u.embarked = stood.embarked;
+    carry(game, u);
+    updateVisibility(game, game.players[u.owner]);
   }
   if (u.path && !u.path.length) u.path = undefined;
 }

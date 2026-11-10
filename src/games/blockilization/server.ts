@@ -527,7 +527,12 @@ function lookAt(p: Player, at: { x: number; z: number }) {
 
 function startNew(game: GameContext) {
   // Seats: each person with a civ (a random one for anyone who didn't pick), then the bots.
-  for (const s of seats) if (!s.civ) s.civ = CIV_LIST.find((c) => !seats.some((o) => o.civ === c.id))?.id ?? 'egypt';
+  // (At random, as the lobby says: the first one free in the list made everyone who didn't pick Egypt, every game.)
+  for (const s of seats) {
+    if (s.civ) continue;
+    const free = CIV_LIST.filter((c) => !seats.some((o) => o.civ === c.id));
+    s.civ = free[Math.floor(Math.random() * free.length)]?.id ?? 'egypt';
+  }
   const g = createGame(
     settings,
     seats.map((s) => ({ user: s.bot ? null : s.key, name: s.bot ? s.name : `${s.name}`, civ: s.civ!, bot: s.bot, team: teamsOn && typeof s.team === 'number' ? s.team : undefined })),
@@ -1293,7 +1298,7 @@ export default defineServer(shared, {
     game.commands.register('civ', {
       help: 'Blockilization tools',
       cheat: true,
-      usage: 'turn | turns [n] | gold [n] | tech [id] | spawn <unit> [player] | reveal | wonders [fog] | improve [pillaged] | grow [n] | decor | unit <type> [foe] [hp] [embarked] [corps|army] | take | win [how] [player] | revolt | vassal [master] [player] | camp | settle',
+      usage: 'turn | turns [n] | auto [n] | gold [n] | tech [id] | spawn <unit> [player] | reveal | wonders [fog] | improve [pillaged] | grow [n] | decor | unit <type> [foe] [hp] [embarked] [corps|army] | take | win [how] [player] | revolt | vassal [master] [player] | camp | settle',
       run(args) {
         const out = civCommand(args);
         // What a command changed is kept as an order's is: a restart, or a game carried on, still has it.
@@ -1313,6 +1318,24 @@ export default defineServer(shared, {
         // Turns played at once: the bots play theirs, people's units wait.
         const n = Math.max(1, Math.min(300, Math.floor(Number(arg)) || 10));
         for (let i = 0; i < n && !civGame.over; i++) {
+          for (const b of botQueue.splice(0)) if (civGame.players[b]?.alive) botTurn(civGame, civGame.players[b]);
+          nextTurn(game);
+        }
+        return `Turn ${civGame.turn}`;
+      }
+      if (cmd === 'auto') {
+        // Turns played at once with a bot playing each person's civ too: an empire of one's own to look at, mid-game or late.
+        const n = Math.max(1, Math.min(300, Math.floor(Number(arg)) || 10));
+        const people = civGame.players.filter((p) => !p.bot && p.alive && p.user);
+        for (let i = 0; i < n && !civGame.over; i++) {
+          for (const p of people) {
+            p.bot = true;
+            try {
+              if (p.alive) botTurn(civGame, p);
+            } finally {
+              p.bot = false;
+            }
+          }
           for (const b of botQueue.splice(0)) if (civGame.players[b]?.alive) botTurn(civGame, civGame.players[b]);
           nextTurn(game);
         }

@@ -10,7 +10,7 @@
 import { citiesOf, knowsOf, note, noteAll, random, spawnUnit, speed, updateAllVisibility } from './core';
 import { remember } from './diplomacy';
 import { distance, within } from './hex';
-import { canEnter } from './movement';
+import { canEnter, roomNear } from './movement';
 import type { City, Game, Player, Unit } from './state';
 import { teammates } from './teams';
 import { UNITS } from './units';
@@ -130,7 +130,7 @@ export function preyProblem(game: Game, p: Player, target: number | null): strin
 /** Where a hired warrior (or a raider sent out) can stand by the camp. */
 function hireSpot(game: Game, clan: Clan, owner: number): number | undefined {
   const type = clanUnit(game);
-  return within(game.grid, clan.tile, 1).find((t) => t !== clan.tile && canEnter(game, { id: -1, type, owner, tile: t, moves: 0, hp: 100, xp: 0, promotions: [] }, t));
+  return roomNear(game, type, owner, clan.tile);
 }
 
 /** A raider of the clan's sent out next to its camp (if there's room). */

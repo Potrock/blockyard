@@ -296,6 +296,8 @@ export function canStand(game: Game, type: string, t: number): boolean {
 
 export function spawnUnit(game: Game, type: string, owner: number, tile: number, extra: Partial<Unit> = {}): Unit {
   const u: Unit = { id: game.nextId++, type, owner, tile, moves: UNITS[type]?.moves ?? 2, hp: 100, xp: 0, promotions: [], ...extra };
+  // (A land unit put on the water is in its boats, whoever put it there: a warrior hired from a camp on the coast, a city-state's gift.)
+  if (UNITS[type]?.domain === 'land' && TERRAINS[game.tiles[tile]?.terrain]?.water) u.embarked = true;
   game.units.push(u);
   return u;
 }

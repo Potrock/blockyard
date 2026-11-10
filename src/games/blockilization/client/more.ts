@@ -1,4 +1,4 @@
-import type { CityWire, SelfWire, UnitWire } from '../protocol';
+import type { CityWire, SelfWire, UnitWire, View } from '../protocol';
 import { BELIEF_LIST, BELIEFS } from '../rules/religion';
 import { CHOOSABLE, type GreatKind } from '../rules/effects';
 import { PROMOTIONS } from '../rules/promotions';
@@ -456,6 +456,13 @@ export function renderEspionage(): El {
  * The World Leader vote as it would go now: each candidate's delegates against those needed, with the
  * city-states behind them, and a warning (with what to do about it) when someone else could win it.
  */
+/** A civ's mark and name in a race's row: its emblem and name, or a `?` for one you haven't met (as the Demographics have it). */
+const UNMET = 'A civilization you haven’t met';
+const knownTo = (v: View, i: number) => i === v.you || !!v.players[i]?.met;
+const raceMark = (v: View, i: number, size = 18): El =>
+  knownTo(v, i) ? emblemEl(v.players[i]?.civ ?? '', size) : h('span', { style: `width:${size}px;height:${size}px;flex:none;border-radius:50%;background:rgba(255,255,255,.08);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:11px`, title: UNMET }, '?');
+const raceName = (v: View, i: number) => (i === v.you ? 'You' : knownTo(v, i) ? (v.players[i]?.name ?? '?') : UNMET);
+
 function worldLeaderRace(): (El | null)[] {
   const v = store.view!;
   const tally = v.unVotes;
@@ -465,8 +472,8 @@ function worldLeaderRace(): (El | null)[] {
     h(
       'div.cv-row',
       {},
-      emblemEl(v.players[x.candidate]?.civ ?? '', 18),
-      h('small', { style: 'width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, x.candidate === v.you ? 'You' : (v.players[x.candidate]?.name ?? '?')),
+      raceMark(v, x.candidate),
+      h('small', { style: 'width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: raceName(v, x.candidate) }, knownTo(v, x.candidate) ? raceName(v, x.candidate) : 'Not met yet'),
       h(`div.cv-bar.${x.candidate === v.you ? 'gold' : 'green'}`, { style: 'flex:1' }, h('i', { style: `width:${Math.round(Math.min(1, x.votes / tally.needed) * 100)}%` })),
       h('small.cv-muted', { style: 'width:120px;text-align:right', title: 'Delegates of those needed, and the city-states whose ally it is' }, `${x.votes} / ${tally.needed} · ${allies(x.candidate)} allies`),
     ),
@@ -476,7 +483,7 @@ function worldLeaderRace(): (El | null)[] {
     h('small.cv-muted', {}, v.un === null ? 'If the vote were held now:' : 'As it stands:'),
     ...rows,
     threat
-      ? h('div.cv-muted', { style: 'font-size:12px;color:#ff9a8e' }, `${v.players[threat.candidate]?.name} is within reach of the World Leader vote. Win their city-states from them (gifts of gold, or a spy rigging their elections) and keep your vote, and your friends', away from them.`)
+      ? h('div.cv-muted', { style: 'font-size:12px;color:#ff9a8e' }, `${knownTo(v, threat.candidate) ? v.players[threat.candidate]?.name : UNMET} is within reach of the World Leader vote. Win their city-states from them (gifts of gold, or a spy rigging their elections) and keep your vote, and your friends', away from them.`)
       : null,
   ];
 }
@@ -530,7 +537,7 @@ export function renderVictory(): El {
         'Diplomacy',
         v.un === null
           ? 'Once someone builds the United Nations, the world votes every ten turns: two delegates a civ (the builder two more), one for each city-state with its ally. More than half of them all wins.'
-          : `The United Nations stands (${v.players[v.un]?.name}). Next vote: ${v.nextVote === v.turn ? 'at the end of this turn' : `turn ${v.nextVote}`}.`,
+          : `The United Nations stands (${knownTo(v, v.un) ? v.players[v.un]?.name : UNMET.toLowerCase()}). Next vote: ${v.nextVote === v.turn ? 'at the end of this turn' : `turn ${v.nextVote}`}.`,
         ...worldLeaderRace(),
         v.un !== null && h('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' }, h('small.cv-muted', {}, 'Your vote:'), ...majors.filter((p) => p.alive && p.met).map((p) => h(`button.cv-chip${(s.vote ?? v.you) === p.index ? '.on' : ''}`, { onclick: () => send({ t: 'vote', candidate: p.index }) }, p.name))),
       ),
@@ -544,16 +551,16 @@ export function renderVictory(): El {
               h(
                 'div.cv-row',
                 {},
-                typeof x.team === 'number' ? teamMark(x.team) : emblemEl(x.members[0].civ, 18),
-                ...(typeof x.team === 'number' ? x.members.map((p) => emblemEl(p.civ, 18)) : []),
-                h('small.cv-grow', {}, typeof x.team === 'number' ? `Team ${x.team + 1}: ${x.members.map((p) => p.name).join(', ')}` : x.members[0].name),
+                typeof x.team === 'number' ? teamMark(x.team) : raceMark(v, x.members[0].index),
+                ...(typeof x.team === 'number' ? x.members.map((p) => raceMark(v, p.index)) : []),
+                h('small.cv-grow', {}, typeof x.team === 'number' ? `Team ${x.team + 1}: ${x.members.map((p) => (knownTo(v, p.index) ? p.name : '?')).join(', ')}` : knownTo(v, x.members[0].index) ? x.members[0].name : UNMET),
                 h('b', {}, String(x.score)),
               ),
             )
           : majors
               .slice()
               .sort((a, b) => b.score - a.score)
-              .map((p) => h('div.cv-row', {}, emblemEl(p.civ, 18), h('small.cv-grow', {}, p.name), h('b', {}, String(p.score))))),
+              .map((p) => h('div.cv-row', {}, raceMark(v, p.index), h('small.cv-grow', {}, p.index === v.you ? `${p.name} (you)` : knownTo(v, p.index) ? p.name : UNMET), h('b', {}, String(p.score))))),
       ),
     ),
   );

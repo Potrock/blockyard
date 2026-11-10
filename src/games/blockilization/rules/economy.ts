@@ -301,6 +301,9 @@ export function greatPeopleBonus(effects: Effects[], kind: GreatKind): number {
 export const workCulture = (effects: Effects[]) => 2 + (has(effects, 'great_works_culture_1') ? 1 : 0);
 
 /** What a city makes this turn (its empire's happiness can be given, worked out once for many cities). */
+/** A city's citizens with nothing to do: more people than it has tiles to work and specialists' places (a city hemmed in by its neighbours). */
+export const unemployed = (c: City) => Math.max(0, c.pop - c.worked.length - Object.values(c.specialists).reduce((n, x) => n + (x ?? 0), 0));
+
 export function cityYields(game: Game, c: City, mood = happiness(game, game.players[c.owner])): CityYields {
   const p = game.players[c.owner];
   const effects = cityEffects(game, c);
@@ -320,6 +323,8 @@ export function cityYields(game: Game, c: City, mood = happiness(game, game.play
     for (const e of effects) y = addYields(y, e.specialistYields, n);
     gp[kind] = (gp[kind] ?? 0) + 3 * n;
   }
+  // A citizen with no tile to work and no specialist's place: 1 production (Civ V's unemployed).
+  y = addYields(y, { prod: unemployed(c) });
   // Every citizen: 1 science (Civ V's).
   y = addYields(y, { science: c.pop });
   // Great works: culture each.
