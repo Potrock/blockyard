@@ -43,6 +43,9 @@ export function researchHint(): string | null {
   return a ? `Advisor: ${TECHS[a.id]?.name ?? a.id}` : null;
 }
 
+/** The tech that hint names (pressing the hint researches it), and why it's advised. */
+export const researchPick = (): { id: string; why: string } | null => researchAdvice()[0] ?? null;
+
 /** The advisor's recommendations as chips that research them (the tech tree's header, with nothing chosen). */
 export function adviceChips(choose: (tech: string) => void): El[] {
   return researchAdvice().map((a) =>
@@ -61,5 +64,7 @@ export const ADVICE_CSS = `
 .cv-opt .adv-why { color: #9fd0ff; font-size: 13px; }
 .cv-tip .ln.f1 { color: var(--dim); font-size: 12px; margin-top: 2px; }
 .cv-research .adv-hint { display: flex; align-items: center; gap: 4px; color: #9fd0ff; font-size: 13px; }
+.cv-research button.adv-hint { margin-top: 3px; padding: 2px 7px 2px 4px; border: 0; background: #24486e; color: #cfe6ff; font: inherit; font-size: 13px; cursor: pointer; box-shadow: 0 0 0 2px #07090c; }
+.cv-research button.adv-hint:hover { background: #2f5c8c; color: #fff; }
 @media (max-width: 760px), (max-height: 520px) { .cv-research .adv-hint { display: none; } }
 `;

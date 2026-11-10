@@ -33,7 +33,7 @@ import { OVERVIEW_CSS, renderOverview } from './overview';
 import { HOTKEYS_CSS, renderHotkeys, renderMenu } from './hotkeys';
 import { discardedBox, eraRow, hubTop, inviteRow, LOBBY_CSS, lobbyFoot, mapTypeText, savedGamesBox, scenarioCards, seatTeam, seedRow, speedText, teamMark, teamsRow, victoryCards, type GameLinks } from './lobby';
 import { gameId, roomCode } from '../saves';
-import { ADVICE_CSS, adviceTag, researchHint } from './advice';
+import { ADVICE_CSS, adviceTag, researchHint, researchPick } from './advice';
 import { POLITICS_CSS } from './politics';
 import { heldTile, tileMenuFree } from './input';
 import { workPlan, workQuiet, workTip, workTipLines } from './workadvice';
@@ -870,6 +870,7 @@ function renderResearch(): El {
   const cost = t ? s.techCosts[t.id] : 1;
   const have = t ? (s.research[t.id] ?? 0) : 0;
   const turns = t && s.researchScience > 0 ? Math.max(1, Math.ceil((cost - have) / s.researchScience)) : null;
+  const pick = t ? null : researchPick();
   return h(
     `div.cv-research.cv-panel${t ? '' : '.none'}`,
     { onclick: () => togglePanel('tech'), 'data-pedia': t ? `tech:${t.id}` : 'concept:research' },
@@ -880,7 +881,8 @@ function renderResearch(): El {
       h('div.cv-row', { style: 'justify-content:space-between' }, h('span.name', {}, t ? t.name : 'Choose research'), turns !== null && h('small.cv-muted', {}, `${turns} turn${turns === 1 ? '' : 's'}`)),
       h('div.cv-bar', {}, h('i', { style: `width:${t ? Math.round((have / cost) * 100) : 0}%` })),
       !t && h('small.cv-muted', {}, `${click(true)} to open the tech tree`),
-      !t && researchHint() && h('div.adv-hint', {}, icon('lightbulb', 11, '#ffe48a'), researchHint()),
+      // (The advisor's pick, taken with one press: the box round it opens the tree for any other.)
+      !t && pick && h('button.adv-hint', { onclick: () => send({ t: 'research', tech: pick.id }), title: `Research ${TECHS[pick.id]?.name ?? pick.id} now: ${pick.why}`, 'data-pedia': `tech:${pick.id}` }, icon('lightbulb', 11, '#ffe48a'), researchHint()),
       // (On a team: what each teammate is researching.)
       s.mates.length > 0 && h('small.cv-muted', {}, `Team · ${matesResearch()}`),
     ),
@@ -1604,6 +1606,8 @@ export function openCity(id: number) {
   play('open', 0.7);
   client.send('city', { id });
   const city = myCity(id);
+  // (One with nothing to build opens on its build list, whichever tab the last city was left on.)
+  if (city && !city.puppet && !city.queue?.length) store.cityTab = 'build';
   if (city && store.grid) {
     const c = centre(store.grid, city.tile);
     lookAt(window.innerWidth >= 700 ? c.x + 12 : c.x, c.z);
@@ -1947,7 +1951,7 @@ function cityPeople(city: CityWire, info: CityInfo | null, refresh: () => void):
     h(
       'div.cv-card.cv-citizens',
       {},
-      h('div.cv-row', { style: 'gap:14px;flex-wrap:wrap' }, h('span', {}, icon('pop', 14, '#f2c14e'), h('b', {}, String(onTiles)), ' on tiles'), h('span', {}, icon('science', 14, '#6ab8ff'), h('b', {}, String(placed)), placed === 1 ? ' specialist' : ' specialists'), idle > 0 && h('span', { style: 'color:#ff9a8e' }, h('b', {}, String(idle)), ' unemployed'), byHand > 0 && h('span', {}, icon('lock', 13, '#f2c14e'), h('b', {}, String(byHand)), ' placed by hand')),
+      h('div.cv-row', { style: 'gap:14px;flex-wrap:wrap' }, h('span', {}, icon('pop', 14, '#f2c14e'), h('b', {}, String(onTiles)), ' on tiles'), h('span', {}, icon('science', 14, '#6ab8ff'), h('b', {}, String(placed)), placed === 1 ? ' specialist' : ' specialists'), idle > 0 && h('span', { style: 'color:#ff9a8e', title: 'More people than tiles to work or specialists’ places: each makes 1 production. Buy a tile, grow the borders, or build something with specialists’ places.' }, h('b', {}, String(idle)), ' unemployed', h('small.cv-muted', {}, ` · +${idle} production`)), byHand > 0 && h('span', {}, icon('lock', 13, '#f2c14e'), h('b', {}, String(byHand)), ' placed by hand')),
       h('small.cv-muted', {}, `On the map: ${click()} a tile to put a citizen there (a lock keeps it); ${click()} a locked one to free it. Gold tags are tiles you can buy.`),
     ),
     h('div.cv-label', { style: 'margin-top:4px' }, 'Specialists'),
