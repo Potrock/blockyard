@@ -21,9 +21,11 @@ export const PLATFORM_COSMETICS: Record<string, CosmeticDef> = {
     how: 'Yours to wear',
     model: {
       boxes: [
-        { from: [-4.4, -2.2, -4.4], to: [4.4, 1, 4.4], color: '#c9352e' },
-        { from: [-4.4, -2.2, 4.4], to: [4.4, -1.6, 8.2], color: '#9c231e' },
-        { from: [-0.6, 1, -0.6], to: [0.6, 1.5, 0.6], color: '#9c231e' },
+        // A domed crown on a band, a round bill, a button on top.
+        { from: [-4.4, -1.8, -4.4], to: [4.4, 1.3, 4.4], color: '#c9352e', round: 2.1 },
+        { from: [-4.4, -2.4, -4.4], to: [4.4, -1, 4.4], color: '#b32b25', round: 0.5 },
+        { from: [-3.7, -2.4, 3.4], to: [3.7, -1.9, 7.6], color: '#9c231e', round: 1.8 },
+        { from: [-0.6, 1.2, -0.6], to: [0.6, 1.7, 0.6], color: '#9c231e' },
       ],
     },
   },
@@ -33,9 +35,10 @@ export const PLATFORM_COSMETICS: Record<string, CosmeticDef> = {
     how: 'Yours to wear',
     model: {
       boxes: [
-        { from: [-4.4, -3, -4.4], to: [4.4, 1.4, 4.4], color: '#2f5fb0' },
-        { from: [-4.7, -3.2, -4.7], to: [4.7, -1.8, 4.7], color: '#4b7fd6' },
-        { from: [-1.2, 1.4, -1.2], to: [1.2, 3.4, 1.2], color: '#f1f1ec' },
+        // A round knit crown, a turned-up cuff, a pom-pom.
+        { from: [-4.5, -2.6, -4.5], to: [4.5, 1.7, 4.5], color: '#2f5fb0', round: 2.6 },
+        { from: [-4.8, -3.3, -4.8], to: [4.8, -1.7, 4.8], color: '#4b7fd6', round: 0.6 },
+        { from: [-1.3, 1.4, -1.3], to: [1.3, 3.6, 1.3], color: '#f1f1ec', round: 1.1 },
       ],
     },
   },
@@ -45,11 +48,14 @@ export const PLATFORM_COSMETICS: Record<string, CosmeticDef> = {
     how: 'Yours to wear',
     model: {
       boxes: [
-        { from: [-4.8, 0, -1], to: [4.8, 1, 1], color: '#26272c' },
-        { from: [-5.2, -5, -1.8], to: [-4.2, 0, 1.8], color: '#26272c' },
-        { from: [4.2, -5, -1.8], to: [5.2, 0, 1.8], color: '#26272c' },
-        { from: [-5.6, -4.4, -1.4], to: [-5.2, -1.2, 1.4], color: '#e04f7a', glow: true },
-        { from: [5.2, -4.4, -1.4], to: [5.6, -1.2, 1.4], color: '#e04f7a', glow: true },
+        // A band over the head and down each side, a padded cup on each ear, a glowing plate on each.
+        { from: [-4.7, 0, -0.8], to: [4.7, 0.7, 0.8], color: '#26272c', round: 0.5 },
+        { from: [-5, -3, -0.6], to: [-4.4, 0.5, 0.6], color: '#26272c' },
+        { from: [4.4, -3, -0.6], to: [5, 0.5, 0.6], color: '#26272c' },
+        { from: [-5.5, -5.9, -1.7], to: [-4.2, -2.6, 1.7], color: '#34363d', round: 0.8 },
+        { from: [4.2, -5.9, -1.7], to: [5.5, -2.6, 1.7], color: '#34363d', round: 0.8 },
+        { from: [-5.75, -5.2, -1], to: [-5.5, -3.3, 1], color: '#e04f7a', glow: true },
+        { from: [5.5, -5.2, -1], to: [5.75, -3.3, 1], color: '#e04f7a', glow: true },
       ],
     },
   },
@@ -59,9 +65,14 @@ export const PLATFORM_COSMETICS: Record<string, CosmeticDef> = {
     how: 'Yours to wear',
     model: {
       boxes: [
-        { from: [-3, -8, 0], to: [3, 0, 3], color: '#8a5a32' },
-        { from: [-3.2, -3, 0], to: [3.2, 0.4, 3.3], color: '#6e4526' },
-        { from: [-2, -7, 3], to: [2, -4, 3.6], color: '#6e4526' },
+        // A rounded pack, its flap over the top, a pocket in front with a buckle, a pocket each side, the straps' tops.
+        { from: [-3, -8, 0], to: [3, 0, 3.2], color: '#8a5a32', round: 1 },
+        { from: [-3.6, -7, 0.5], to: [3.6, -4.6, 2.5], color: '#7a4e2b', round: 0.5 },
+        { from: [-3.1, -2.8, 0], to: [3.1, 0.3, 3.5], color: '#6e4526', round: 1 },
+        { from: [-2, -7.2, 2.8], to: [2, -4.2, 3.9], color: '#6e4526', round: 0.5 },
+        { from: [-0.4, -3.2, 3.5], to: [0.4, -2.4, 3.75], color: '#d8b24a', round: 0 },
+        { from: [-2.6, -0.6, -0.5], to: [-1.6, 0.9, 0.6], color: '#4a2f1b' },
+        { from: [1.6, -0.6, -0.5], to: [2.6, 0.9, 0.6], color: '#4a2f1b' },
       ],
     },
   },

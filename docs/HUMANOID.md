@@ -83,6 +83,14 @@ axes line up with the world's: an item held there points forward (+z) with its u
 figures kit lines up a gun's `grip` point with `gripR` and its `grip2` with `gripL`, and bends the
 arms to reach them.
 
+A model may turn its grips to say how its hands close on a gun. The platform's characters do
+(`GRIPS` in `src/platform/character/build.ts`): the right grip is tipped so the forearm comes up
+behind a pistol grip instead of dropping straight down from it, and the left is rolled so the hand
+cups a handguard from underneath. The kits read a grip's turn wherever they place a fist (third
+person and first), so a gun sits the same in the hands whichever way they're turned. Anything
+that isn't a gun (a tool, a block, a sprite) is held across the hand, whatever the grip's turn:
+carried upright in front of the body with the forearm raised, and chopped down on an attack.
+
 ## Materials
 
 Materials use glTF's PBR metallic-roughness model: `baseColorFactor`, `metallicFactor` and

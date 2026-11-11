@@ -9,12 +9,18 @@
  * `flat=0` shades every mesh by the file's normals (as the game does), `flat=1` faceted.
  * `studio=1`: a product shot's light (a soft room's reflections, a soft key light, a grey backdrop).
  *
+ * The platform's own characters: `model=character:<look>` (`character:top=suit&hair=pomp`, the
+ * address `characterUrl` gives a look; URL-encode the `&`), built here as each screen builds them;
+ * `wear=cap,backpack` hangs the platform's cosmetics on them. `shot=<height>,<distance>` moves the
+ * camera in for a close look (metres: what it looks at, how far back it stands).
+ *
  * Any item and any clip:
  * - `item=<glb url>` puts that model in the hand wherever a pose holds a gun (High Noon's
  *   revolver: `item=/src/games/highnoon/models/revolver.glb`); `kind=melee` holds it as a blade,
  *   `kind=throw` in the fist as a throwable (the `throw` poses).
  * - `hold=<JSON>`: how the item holds a gun, as its `hold` and `hold.gun` say (`hands`, `stance`,
  *   `poses`) and its `action`: `hold={"hands":1,"action":"hammer","poses":{"reload":{"cycle":0.42}}}`.
+ * - `item=sprite`: a flat pixel pickaxe, as an item without a model is held (in the fist).
  * - `clips=<names>` (or `clips=all`: every clip in the model) adds a figure playing each clip,
  *   looping, holding the item if one's given; `layer=upper` plays them over the legs' own motion.
  *   With `clips` and no `poses`, only the clips are shown.
@@ -29,7 +35,10 @@ import type { Client } from '../src/platform/api/client';
 import type { ClipOptions, HumanoidJoint, HumanoidPoses, ItemDefinition, ItemPoses } from '../src/platform/api/types';
 import { humanoid } from '../src/platform/client-kits/figures';
 import { ShownFigure } from '../src/platform/client/figures';
-import { HumanoidRig } from '../src/platform/client/humanoid';
+import { HumanoidRig, wearAnchor } from '../src/platform/client/humanoid';
+import { characterModel } from '../src/platform/client/character';
+import { PLATFORM_COSMETICS } from '../src/platform/cosmetics';
+import { cosmeticLook } from '../src/platform/render/cosmetics';
 import type { AnimState } from '../src/platform/render/entities';
 
 const q = new URLSearchParams(location.search);
@@ -53,6 +62,25 @@ const ITEM = q.get('item');
 const KIND = q.get('kind') === 'melee' ? 'melee' : q.get('kind') === 'throw' ? 'throwable' : null;
 /** The held model for a pose's gun: the item given, else Call of Blocky's. */
 const gunUrl = (id: string) => ITEM ?? `${GUNS}${id}.glb`;
+/** The platform's cosmetics to hang on the figure, and a closer camera. */
+const WEAR = (q.get('wear') ?? '').split(',').filter(Boolean);
+const SHOT = q.get('shot')?.split(',').map(Number) ?? null;
+
+/** A pixel pickaxe a block square and a pixel thick, as an item's sprite is extruded: the handle's end at its lower left. */
+function sprite(): THREE.Object3D {
+  const g = new THREE.Group();
+  const px = (x: number, y: number, c: number) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(1 / 16, 1 / 16, 1 / 16), new THREE.MeshStandardMaterial({ color: c, roughness: 0.7 }));
+    m.position.set((x - 7.5) / 16, (y - 7.5) / 16, 0);
+    g.add(m);
+  };
+  for (let i = 1; i < 12; i++) for (const d of [0, 1]) px(i + d, i, 0x7a5230);
+  for (let i = 0; i < 9; i++) for (const d of [0, 1]) {
+    px(5 + i, 14 - d - Math.max(0, i - 5), 0x8fd3e8);
+    px(14 - d - Math.max(0, i - 5), 5 + i, 0x8fd3e8);
+  }
+  return g;
+}
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(1);
@@ -138,7 +166,7 @@ const kit = humanoid();
 const client = { figures: { all: [] as ShownFigure[] } };
 
 async function main() {
-  const model = await load(MODEL);
+  const model = characterModel(MODEL) ?? (await load(MODEL));
   // A figure for each clip asked for (`clips=all`: every one the model has), looping.
   const asked = q.get('clips');
   const clipNames = asked === 'all' ? model.animations.map((a) => a.name) : (asked?.split(',').map((n) => n.trim()).filter(Boolean) ?? []);
@@ -148,7 +176,7 @@ async function main() {
   const pick = q.get('poses')?.split(',').map((n) => n.trim().toLowerCase());
   const shown = pick ? all.filter((p) => pick.includes(p.name.toLowerCase())) : clipPoses.length ? clipPoses : POSES.slice(0, 8);
   const guns = new Map<string, THREE.Object3D>();
-  for (const id of new Set(shown.map((p) => p.gun).filter((g): g is string => !!g))) guns.set(id, (await load(gunUrl(id))).scene);
+  for (const id of new Set(shown.map((p) => p.gun).filter((g): g is string => !!g))) guns.set(id, ITEM === 'sprite' ? sprite() : (await load(gunUrl(id))).scene);
   const cols = shown.length;
   frameCamera(cols);
   shown.forEach((pose, i) => {
@@ -170,7 +198,18 @@ async function main() {
     // Turned to show the side (its right, the gun side), or three-quarters.
     root.rotation.y = VIEW === 'side' ? -Math.PI / 2 : VIEW === 'back' ? Math.PI : VIEW === '34' ? -0.6 : 0;
     scene.add(root);
+    // (A clone keeps the materials but not what its builder declared about it.)
+    copy.userData = { ...model.scene.userData };
     const rig = new HumanoidRig(copy, { joints: JOINTS, clips: model.animations });
+    const wear = rig.wearFrame();
+    for (const id of WEAR) {
+      const def = PLATFORM_COSMETICS[id];
+      if (!def?.model) continue;
+      const l = cosmeticLook(def.model);
+      const worn = new THREE.Mesh(l.geometry, new THREE.MeshStandardMaterial({ map: l.albedo, roughness: 0.8 }));
+      worn.castShadow = true;
+      (def.slot === 'hat' ? wearAnchor(rig, 'head', wear.top, wear.headWidth, false, copy) : wearAnchor(rig, 'chest', wear.back, wear.bodyWidth, true, copy)).add(worn);
+    }
     if (pose.clip) rig.play({ loop: false, fade: 0.2, layer: 'full', speed: 1, ...pose.clip, elapsed: 0 });
     const state = base();
     const hand = rig.joint('handR');
@@ -183,12 +222,13 @@ async function main() {
     if (pose.gun) {
       const g = guns.get(pose.gun)!.clone(true);
       g.traverse((o) => ((o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).castShadow = true) : null));
-      const points = Object.fromEntries((['grip', 'grip2', 'muzzle', 'sight', 'mag'] as const).flatMap((n) => (g.getObjectByName(n) ? [[n, g.getObjectByName(n)!.position.clone()]] : [])));
+      const flat = ITEM === 'sprite';
+      const points = flat ? {} : Object.fromEntries((['grip', 'grip2', 'muzzle', 'sight', 'mag'] as const).flatMap((n) => (g.getObjectByName(n) ? [[n, g.getObjectByName(n)!.position.clone()]] : [])));
       const bounds = new THREE.Box3().setFromObject(g);
-      const kind = KIND ?? (pose.gun === 'katana' && !ITEM ? 'melee' : 'gun');
+      const kind = flat ? 'tool' : (KIND ?? (pose.gun === 'katana' && !ITEM ? 'melee' : 'gun'));
       const def = { kind, name: pose.gun, ...(kind === 'gun' ? { hold: { stance: HOLD.stance, gun: { hands: HOLD.hands }, poses: HOLD.poses }, action: HOLD.action } : {}) } as ItemDefinition;
       mount.add(g);
-      fig.held = { item: pose.gun, def, node: g, mount, form: 'model', points, bounds, length: bounds.max.z - bounds.min.z };
+      fig.held = { item: pose.gun, def, node: g, mount, form: flat ? 'sprite' : 'model', points, bounds, length: bounds.max.z - bounds.min.z };
     }
     const label = document.createElement('span');
     label.textContent = pose.name;
@@ -205,6 +245,10 @@ function frameCamera(cols: number) {
   const dist = Math.max(STUDIO ? 5.6 : 4.5, width / 2 / Math.tan(((24 / 2) * Math.PI) / 180) / camera.aspect) * 1.05;
   camera.position.set(0, STUDIO ? 1.25 : 1.35, dist);
   camera.lookAt(0, STUDIO ? 0.98 : 0.95, 0);
+  if (SHOT) {
+    camera.position.set(0, SHOT[0] + 0.12, SHOT[1]);
+    camera.lookAt(0, SHOT[0], 0);
+  }
 }
 const start = performance.now();
 let time = 0;

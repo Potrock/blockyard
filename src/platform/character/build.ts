@@ -1,5 +1,5 @@
 import { PLAIN_LOOK, type CharacterLook, type TopStyle } from './look';
-import { DIRS, Palette, Voxels, atlas, cellKey, cellOf, faces, quadCorners, type Colouring } from './voxels';
+import { DIRS, Palette, Voxels, bake, cellKey, cellOf, quadMesh, type Colouring } from './voxels';
 
 /**
  * The platform's characters, built from a look (`CharacterLook`) as micro-voxel figures on the
@@ -7,18 +7,21 @@ import { DIRS, Palette, Voxels, atlas, cellKey, cellOf, faces, quadCorners, type
  * `troopers/build.mjs`, which this follows), made on each screen from a player's avatar or a
  * game's description instead of a file.
  *
- * - Voxels: 26 a metre, so a figure is about 48 voxels tall, with lean, stylized proportions: a
- *   big head (a quarter of the height), a neck, long legs, arms of an even width with fists their
- *   width, trim shoes. One voxel part per joint of the rig (docs/HUMANOID.md), painted in code in
- *   design units of 1/26 m: boxes, rounded boxes and ellipsoids, coloured by region (collars,
- *   sleeves, belts, stripes, prints), details placed voxel by voxel (faces, ties, buttons, laces). Every part is a closed surface; where two
- *   meet, one reaches into the other a voxel in from its surface, so bends open no gaps.
+ * - Voxels: 52 a metre (`SUB` to each design unit of 1/26 m, the size the fighters are drawn
+ *   at), so a figure is about 96 voxels tall, with lean, stylized proportions: a big head (a
+ *   quarter of the height), a neck, long legs, round arms that taper to the wrist, small fists
+ *   with a thumb and finger creases, trim shoes. One voxel part per joint of the rig
+ *   (docs/HUMANOID.md), painted in code in design units: shapes (rounded boxes, tapered limbs,
+ *   balls) filled voxel by voxel, coloured by region (collars, sleeves, belts, stripes, prints),
+ *   details half a unit thick placed voxel by voxel (faces, ties, buttons, laces). Every part is
+ *   a closed surface; where two meet, one reaches into the other, so bends open no gaps.
  * - Rig: joints hips > spine > chest > neck > head; chest > upperArmL > lowerArmL > handL > gripL
  *   (and the R mirror); hips > upperLegL > lowerLegL > footL (and R), where the proportions put
- *   them; standing straight, the arms hanging. Fists round a grip: the right's ahead of its wrist
- *   round a vertical bar, the left's below its wrist round a bar along z; `gripR` / `gripL` are at
- *   each hold's centre.
- * - Mesh: every vertex wholly on its part's joint (rigid skinning), one mesh and one material.
+ *   them; standing straight, the arms hanging. `gripR` / `gripL` are at the middle of each fist,
+ *   turned (`GRIPS`) as the hands close on a gun: the right forearm behind the grip, the left
+ *   hand under the handguard.
+ * - Mesh: every vertex wholly on its part's joint (rigid skinning), one mesh and one material;
+ *   faces merged into quads whatever their colours, each drawn into an atlas (`bake`).
  */
 
 // ---------------------------------------------------------------------------------------------
@@ -51,16 +54,81 @@ export const JOINTS = Object.keys(JOINT_PARENT) as CharacterJoint[];
 export const BONES = JOINTS.filter((j) => j !== 'gripL' && j !== 'gripR');
 const SIDES = [['L', 1], ['R', -1]] as const;
 
-/** Metres a design unit (a voxel). */
+/** Metres a design unit: the builder's measures (heights, widths, the joints) are in these. */
 export const VOXEL = 1 / 26;
+/** Voxels a design unit, each way: the figure's micro-voxels are half a design unit, 52 a metre. */
+export const SUB = 2;
+/** Metres a voxel. */
+export const CELL = VOXEL / SUB;
 
 // ---------------------------------------------------------------------------------------------
-// Shapes (design units; a cell's centre is (i + 0.5, j + 0.5, k + 0.5))
+// Shapes (design units). The figure's voxels are cells of half a design unit: shapes are filled
+// cell by cell (a cell's centre is ((i + 0.5) / SUB, …)), so their curves are as fine as the
+// voxels; details are placed by design cell (`Blocks.set`: a block of SUB x SUB x SUB voxels, or
+// the layer of them on one of its faces), or voxel by voxel (`Blocks.cells`).
 
 type P3 = [number, number, number];
 type Paintable = string | ((i: number, j: number, k: number) => Colouring);
+/** The layer of a design cell's voxels on one of its faces: something half a unit thick. */
+type Layer = '-x' | '+x' | '-y' | '+y' | '-z' | '+z';
 
+/** A design cell's centre. */
 const C = (i: number) => i + 0.5;
+/** A voxel's centre (design units). */
+const fc = (i: number) => (i + 0.5) / SUB;
+const down = (i: number) => Math.floor(i / SUB);
+const lerp = (a: number, b: number, t: number) => a + (b - a) * (t < 0 ? 0 : t > 1 ? 1 : t);
+const ease = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+
+/**
+ * A figure's voxels, reached by design cell: each design cell is a block of SUB x SUB x SUB voxels
+ * (`cells`: the voxels themselves, a part per joint).
+ */
+class Blocks {
+  readonly cells = new Voxels();
+  get parts() {
+    return this.cells.parts;
+  }
+  part(name: string) {
+    return this.cells.part(name);
+  }
+  /** Colour a design cell: all of it, or only the `layer` of voxels on one of its faces. */
+  set(part: string, i: number, j: number, k: number, colour: string, layer?: Layer) {
+    const span = (axis: string) => (layer?.[1] !== axis ? [0, SUB] : layer[0] === '-' ? [0, 1] : [SUB - 1, SUB]);
+    const [a0, a1] = span('x');
+    const [b0, b1] = span('y');
+    const [c0, c1] = span('z');
+    for (let c = c0; c < c1; c++) for (let b = b0; b < b1; b++) for (let a = a0; a < a1; a++) this.cells.set(part, i * SUB + a, j * SUB + b, k * SUB + c, colour);
+  }
+  /** A design cell's colour (its first voxel's that has one). */
+  get(part: string, i: number, j: number, k: number): string | undefined {
+    for (let c = 0; c < SUB; c++)
+      for (let b = 0; b < SUB; b++)
+        for (let a = 0; a < SUB; a++) {
+          const v = this.cells.get(part, i * SUB + a, j * SUB + b, k * SUB + c);
+          if (v) return v;
+        }
+    return undefined;
+  }
+  del(part: string, i: number, j: number, k: number) {
+    for (let c = 0; c < SUB; c++) for (let b = 0; b < SUB; b++) for (let a = 0; a < SUB; a++) this.cells.del(part, i * SUB + a, j * SUB + b, k * SUB + c);
+  }
+  /** Has a design cell any voxel of this part (or, without one, of any)? `whole`: is all of it filled? */
+  filled(i: number, j: number, k: number, part?: string, whole = false): boolean {
+    for (let c = 0; c < SUB; c++)
+      for (let b = 0; b < SUB; b++)
+        for (let a = 0; a < SUB; a++) {
+          const f = this.cells.filled(i * SUB + a, j * SUB + b, k * SUB + c, part);
+          if (f !== whole) return f;
+        }
+    return whole;
+  }
+  /** Recolour a part's voxels by the design cell each is in. */
+  recolour(part: string, fn: (i: number, j: number, k: number, colour: string) => Colouring) {
+    this.cells.recolour(part, (i, j, k, c) => fn(down(i), down(j), down(k), c));
+  }
+}
+
 /** Inside a box (faces lo..hi) rounded by r (a number or one per axis) on its edges. */
 function inRound(p: number[], lo: number[], hi: number[], r: number | number[]): boolean {
   let d2 = 0;
@@ -74,24 +142,41 @@ function inRound(p: number[], lo: number[], hi: number[], r: number | number[]):
   return d2 <= 1.0001;
 }
 const inEllipsoid = (p: number[], c: number[], r: number[]) => ((p[0] - c[0]) / r[0]) ** 2 + ((p[1] - c[1]) / r[1]) ** 2 + ((p[2] - c[2]) / r[2]) ** 2 <= 1;
+const inBall = (p: number[], c: number[], r: number) => (p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2 + (p[2] - c[2]) ** 2 <= r * r;
+/** Inside a limb's section at height: a circle squared off a little (a superellipse) of radius r about (cx, cz). */
+const inLimb = (p: number[], cx: number, cz: number, r: number, n = 2.8) => r > 0 && Math.abs((p[0] - cx) / r) ** n + Math.abs((p[2] - cz) / r) ** n <= 1;
 
-/** Fill a part: the cells whose centres lie in lo..hi (design units) and that `inside` accepts, coloured `colour`. */
-function fill(vox: Voxels, part: string, lo: number[], hi: number[], colour: Paintable, inside: ((p: number[]) => boolean) | null = null) {
+/**
+ * Fill a part: the voxels whose centres lie in lo..hi (design units) and that `inside` accepts,
+ * coloured `colour` (or by a function of the design cell each is in).
+ */
+function fill(vox: Blocks, part: string, lo: number[], hi: number[], colour: Paintable, inside: ((p: number[]) => boolean) | null = null) {
   const f = typeof colour === 'function' ? colour : () => colour;
-  vox.paint(part, lo.map((v) => Math.floor(v)), hi.map((v) => Math.ceil(v)), (i, j, k) => {
-    const p = [C(i), C(j), C(k)];
+  vox.cells.paint(part, lo.map((v) => Math.floor(v * SUB)), hi.map((v) => Math.ceil(v * SUB)), (i, j, k) => {
+    const p = [fc(i), fc(j), fc(k)];
     if (p[0] < lo[0] || p[0] > hi[0] || p[1] < lo[1] || p[1] > hi[1] || p[2] < lo[2] || p[2] > hi[2]) return;
     if (inside && !inside(p)) return;
-    return f(i, j, k);
+    return f(down(i), down(j), down(k));
   });
 }
 
+/** Each voxel whose centre lies in lo..hi (design units): `fn(p, i, j, k)`, its centre and its cell. */
+function each(lo: number[], hi: number[], fn: (p: number[], i: number, j: number, k: number) => void) {
+  for (let k = Math.floor(lo[2] * SUB); k < Math.ceil(hi[2] * SUB); k++)
+    for (let j = Math.floor(lo[1] * SUB); j < Math.ceil(hi[1] * SUB); j++)
+      for (let i = Math.floor(lo[0] * SUB); i < Math.ceil(hi[0] * SUB); i++) {
+        const p = [fc(i), fc(j), fc(k)];
+        if (p[0] < lo[0] || p[0] > hi[0] || p[1] < lo[1] || p[1] > hi[1] || p[2] < lo[2] || p[2] > hi[2]) continue;
+        fn(p, i, j, k);
+      }
+}
+
 /**
- * Cloth (or a plate) over a part: the empty cells across a face from its surface whose centres
+ * Cloth (or a plate) over a part: the empty voxels across a face from its surface whose centres
  * `where` accepts, a voxel proud. `axes`: the ways it grows ('xz': out to the sides, front and
  * back only, its top and bottom edges flush).
  */
-function coat(vox: Voxels, part: string, colour: string, where: (p: number[]) => boolean, axes = 'xyz') {
+function coat(vox: Blocks, part: string, colour: string, where: (p: number[]) => boolean, axes = 'xyz') {
   const cells = vox.parts.get(part)!;
   const add = new Map<number, P3>();
   for (const key of cells.keys()) {
@@ -100,19 +185,19 @@ function coat(vox: Voxels, part: string, colour: string, where: (p: number[]) =>
       if (!axes.includes('xyz'[d[0] ? 0 : d[1] ? 1 : 2])) continue;
       const q: P3 = [i + d[0], j + d[1], k + d[2]];
       const qk = cellKey(q[0], q[1], q[2]);
-      if (cells.has(qk) || add.has(qk) || !where(q.map(C))) continue;
+      if (cells.has(qk) || add.has(qk) || !where(q.map(fc))) continue;
       add.set(qk, q);
     }
   }
-  for (const q of add.values()) vox.set(part, q[0], q[1], q[2], colour);
+  for (const q of add.values()) vox.cells.set(part, q[0], q[1], q[2], colour);
 }
 
-/** A part's frontmost (+z) cell at column (i, j), or null; `backOf` its rearmost. */
-function frontOf(vox: Voxels, part: string, i: number, j: number): number | null {
+/** A part's frontmost (+z) design cell at column (i, j), or null; `backOf` its rearmost. */
+function frontOf(vox: Blocks, part: string, i: number, j: number): number | null {
   for (let k = 40; k > -40; k--) if (vox.filled(i, j, k, part)) return k;
   return null;
 }
-function backOf(vox: Voxels, part: string, i: number, j: number): number | null {
+function backOf(vox: Blocks, part: string, i: number, j: number): number | null {
   for (let k = -40; k < 40; k++) if (vox.filled(i, j, k, part)) return k;
   return null;
 }
@@ -186,10 +271,19 @@ function joints(b: Build): Record<CharacterJoint, P3> {
     footL: [L.lx, Y.ankle, L.lz],
   };
   for (const k of Object.keys(J) as CharacterJoint[]) if (k.endsWith('L')) J[(k.slice(0, -1) + 'R') as CharacterJoint] = [-J[k]![0], J[k]![1], J[k]![2]];
-  J.gripR = [-L.ax, Y.wrist - 2.5, 0.5];
+  J.gripR = [-L.ax, Y.wrist - 2.5, 0];
   J.gripL = [L.ax, Y.wrist - 2.5, 0];
   return J as Record<CharacterJoint, P3>;
 }
+
+/**
+ * How the fists take a gun (each grip's turn in its hand, which hangs below the wrist closed round
+ * a hold that runs fore and aft through it). The right takes a pistol grip with the forearm behind
+ * the gun, nearly in line with the barrel, the wrist cocked a little; the left cups the handguard
+ * from underneath, its wrist below the gun and out to the left. (Anything else is held across the
+ * hand, its handle through the fist: the figures kit's `across`.)
+ */
+const GRIPS: { gripL: P3; gripR: P3 } = { gripR: [1.2, 0, 0], gripL: [0, 0, 2.5] };
 
 // ---------------------------------------------------------------------------------------------
 // What a top is: how its sleeves and collar go, what's on it.
@@ -245,75 +339,89 @@ interface Spec {
 // The body: every part a closed voxel volume on its joint, in its base colour ('pants' the pelvis
 // and legs, 'top' the belly, chest and arms, 'skin' the neck and fists, 'shoes' on a 'sole').
 
-function body(vox: Voxels, s: Spec) {
+function body(vox: Blocks, s: Spec) {
   const { b } = s;
   const L = limbs(b);
   const sh = b.sh;
   const W = b.waist;
   const H = b.hip;
   // Pelvis (hips): the seat, its top row the belt.
-  fill(vox, 'hips', [-H, Y.pelvis, -4], [H, Y.spine, 4], 'pants', (p) => inRound(p, [-H, Y.pelvis - 2, -4], [H, Y.spine, 4], [1.3, 0, 1.3]));
+  fill(vox, 'hips', [-H, Y.pelvis, -4], [H, Y.spine, 4], 'pants', (p) => inRound(p, [-H, Y.pelvis - 2, -4], [H, Y.spine, 4], [1.7, 0, 1.7]));
   // Belly (spine): the waist; into the pelvis and the chest.
   const bz = 4 + b.belly;
-  fill(vox, 'spine', [-W, Y.spine, -4], [W, Y.chest, bz], 'top', (p) => inRound(p, [-W, Y.spine - 2, -4], [W, Y.chest + 2, bz], [1.4, 0, 1.3 + b.belly * 0.8]));
+  fill(vox, 'spine', [-W, Y.spine, -4], [W, Y.chest, bz], 'top', (p) => inRound(p, [-W, Y.spine - 2, -4], [W, Y.chest + 2, bz], [1.7, 0, 1.6 + b.belly * 0.8]));
   fill(vox, 'spine', [-W + 1, Y.spine - 2, -3], [W - 1, Y.spine, 3], 'top');
   fill(vox, 'spine', [-W + 1, Y.chest, -3], [W - 1, Y.chest + 2, 3], 'top');
-  // Chest: squared shoulders rounded over the top, a bust on the curvy builds.
+  // Chest: widening from the waist to squared shoulders rounded over the top, a bust on the curvy builds.
+  const half = (y: number) => lerp(Math.max(W, sh - 1), sh, ease((y - Y.chest) / 3));
   fill(vox, 'chest', [-sh, Y.chest, -4], [sh, Y.chestTop, 4 + b.bust], 'top', (p) => {
-    const w = p[1] < Y.chest + 2 ? Math.max(W, sh - 1) : sh;
-    if (inRound(p, [-w, Y.chest - 4, -4], [w, Y.chestTop, 4], [2, 2.2, 1.4])) return true;
+    const w = half(p[1]);
+    if (inRound(p, [-w, Y.chest - 4, -4], [w, Y.chestTop, 4], [2.2, 2.4, 1.7])) return true;
     return !!b.bust && inRound(p, [-sh + 1, Y.chest + 1, 0], [sh - 1, Y.chest + 5, 4 + b.bust], [1.4, 1.4, 1.2]);
   });
-  // Neck: into the chest below and the head above.
-  fill(vox, 'neck', [-2, Y.chestTop - 1, -3], [2, Y.head + 1, 1], 'skin');
+  // Neck: round, into the chest below and the head above.
+  fill(vox, 'neck', [-2, Y.chestTop - 1, -3], [2, Y.head + 1, 1], 'skin', (p) => inLimb(p, 0, -1, 2, 2.4));
   head(vox, s);
-  // Arms, of an even width: the upper arm (rounded over the shoulder), the forearm (into the
-  // upper arm), the fist (round the wrist).
+  // Arms, round and tapering: the upper arm (a dome over the shoulder, narrowing to the elbow),
+  // the forearm (a ball at the elbow, inside the upper arm until it bends; narrowing to the
+  // wrist), the hand.
   for (const [side, m] of SIDES) {
-    const X = (a: number, c: number) => (m > 0 ? [a, c] : [-c, -a]);
-    const [x0, x1] = X(sh, sh + b.arm);
-    const a2 = b.arm / 2;
-    fill(vox, `upperArm${side}`, [x0, Y.elbow, -a2], [x1, Y.chestTop, a2], 'top', (p) => inRound(p, [x0, Y.elbow - 4, -a2], [x1, Y.chestTop, a2], [0.8, 1.2, 0.8]));
-    const fx0 = m > 0 ? L.ax - 2 : -L.ax - 2;
-    const fx1 = fx0 + 4;
-    fill(vox, `lowerArm${side}`, [fx0 + 1, Y.elbow, -1], [fx1 - 1, Y.elbow + 2, 1], 'top');
-    fill(vox, `lowerArm${side}`, [fx0, Y.wrist, -2], [fx1, Y.elbow, 2], 'top', (p) => inRound(p, [fx0, Y.wrist - 3, -2], [fx1, Y.elbow + 3, 2], [0.9, 0, 0.9]));
-    fist(vox, side, [fx0, fx1]);
+    const cx = m * L.ax;
+    const r = b.arm / 2;
+    fill(vox, `upperArm${side}`, [cx - r, Y.elbow, -r], [cx + r, Y.chestTop, r], 'top', (p) => {
+      let rr = lerp(r * 0.84, r, (p[1] - Y.elbow) / (Y.shoulder - 1 - Y.elbow));
+      if (p[1] > Y.shoulder) rr *= Math.sqrt(Math.max(0, 1 - ((p[1] - Y.shoulder) / (Y.chestTop - Y.shoulder + 0.3)) ** 2));
+      return inLimb(p, cx, 0, rr);
+    });
+    fill(vox, `lowerArm${side}`, [cx - r, Y.wrist, -r], [cx + r, Y.elbow + r, r], 'top', (p) => {
+      if (p[1] > Y.elbow) return inBall(p, [cx, Y.elbow, 0], r * 0.8);
+      return inLimb(p, cx, 0, lerp(r * 0.68, r * 0.82, (p[1] - Y.wrist) / (Y.elbow - Y.wrist)));
+    });
+    hand(vox, side, cx, r);
   }
-  // Legs: thigh (inset where it's under the pelvis), shin (into the thigh), boot (into the shin).
+  // Legs, tapering: the thigh (up into the pelvis), the shin (a ball at the knee, inside the thigh
+  // until it bends), the shoe (into the shin).
   for (const [side, m] of SIDES) {
     const [x0, x1] = m > 0 ? [L.lx0, L.lx1] : [-L.lx1, -L.lx0];
     const { lz0: z0, lz1: z1 } = L;
-    fill(vox, `upperLeg${side}`, [x0, Y.knee, z0], [x1, Y.pelvis, z1], 'pants', (p) => inRound(p, [x0, Y.knee - 3, z0], [x1, Y.pelvis + 3, z1], [0.8, 0, 0.8]));
-    fill(vox, `upperLeg${side}`, [x0 + 1, Y.pelvis, z0 + 1], [x1 - 1, Y.hipJoint + 1, z1 - 1], 'pants');
-    fill(vox, `lowerLeg${side}`, [x0 + 1, Y.knee, z0 + 1], [x1 - 1, Y.knee + 2, z1 - 1], 'pants');
-    fill(vox, `lowerLeg${side}`, [x0, Y.ankle, z0], [x1, Y.knee, z1], 'pants', (p) => inRound(p, [x0, Y.ankle - 3, z0], [x1, Y.knee + 3, z1], [0.8, 0, 0.8]));
+    const cx = m * L.lx;
+    const cz = L.lz;
+    const r = b.leg / 2;
+    fill(vox, `upperLeg${side}`, [x0, Y.knee, z0], [x1, Y.hipJoint + 1, z1], 'pants', (p) => {
+      if (p[1] > Y.pelvis) return inLimb(p, cx, cz, r - 0.75, 4);
+      return inLimb(p, cx, cz, lerp(r * 0.9, r, (p[1] - Y.knee) / (Y.pelvis - Y.knee)), 3.4);
+    });
+    fill(vox, `lowerLeg${side}`, [x0, Y.ankle, z0], [x1, Y.knee + r, z1], 'pants', (p) => {
+      if (p[1] > Y.knee) return inBall(p, [cx, Y.knee, cz], r * 0.84);
+      return inLimb(p, cx, cz, lerp(r * 0.76, r * 0.88, (p[1] - Y.ankle) / (Y.knee - Y.ankle)), 3.4);
+    });
     shoe(vox, s, side, [x0, x1], [z0, z1]);
   }
 }
 
-/** A fist (6 wide): a rounded block round the grip, the fingers' creases across its knuckles. */
-function fist(vox: Voxels, side: 'L' | 'R', [x0, x1]: number[]) {
+/**
+ * A hand below its wrist, closed round a grip that runs fore and aft through it: a narrow wrist
+ * (into the cuff), a rounded fist of three fingers curled under (the creases between them down
+ * its outside and underneath), the thumb across its front.
+ */
+function hand(vox: Blocks, side: 'L' | 'R', cx: number, r: number) {
   const part = `hand${side}`;
-  const y0 = Y.wrist - 5;
-  const y1 = Y.wrist + 0.5;
-  if (side === 'R') {
-    // Ahead of the wrist, round a vertical grip: the knuckles to the front (+z).
-    const z0 = -2;
-    const z1 = 3;
-    fill(vox, part, [x0, y0, z0], [x1, y1, z1], 'skin', (p) => inRound(p, [x0, y0, z0], [x1, y1 + 1, z1], 1.2));
-    vox.recolour(part, (_i, j, k) => (k === z1 - 1 && j < Y.wrist - 1 && j > y0 && (j - Math.floor(y0)) % 2 === 1 ? 'skinCrease' : undefined));
-  } else {
-    // Below the wrist, round a bar along z: the knuckles to the outside (+x).
-    const z0 = -2;
-    const z1 = 2;
-    fill(vox, part, [x0, y0, z0], [x1, y1, z1], 'skin', (p) => inRound(p, [x0, y0, z0], [x1, y1 + 1, z1], 1.2));
-    vox.recolour(part, (i, j, k) => (i === x1 - 1 && j < Y.wrist - 1 && j > y0 && k > z0 && k < z1 - 1 && (k - z0) % 2 === 0 ? 'skinCrease' : undefined));
-  }
+  const m = side === 'L' ? 1 : -1;
+  const hx = Math.max(1.5, r * 0.74);
+  const hz = 1.75;
+  const y0 = Y.wrist - 4.5;
+  const y1 = Y.wrist - 0.5;
+  fill(vox, part, [cx - hx, y0, -hz], [cx + hx, Y.wrist + 0.5, hz], 'skin', (p) => (p[1] > y1 ? inLimb(p, cx, 0, r * 0.6) : inRound(p, [cx - hx, y0, -hz], [cx + hx, y1 + 0.6, hz], [0.9, 1.1, 0.9])));
+  fill(vox, part, [cx - 1, Y.wrist - 2.5, hz], [cx + 1, Y.wrist - 1.5, hz + 0.5], 'skin');
+  const cells = vox.parts.get(part)!;
+  vox.cells.recolour(part, (i, j, k) => {
+    if ((k !== -2 && k !== 1) || fc(j) > Y.wrist - 2.2) return;
+    return !cells.has(cellKey(i + m, j, k)) || !cells.has(cellKey(i, j - 1, k)) ? 'skinCrease' : undefined;
+  });
 }
 
-/** A shoe: chunky, its toe reaching forward, the sole a row underneath (boots higher, flats lower). */
-function shoe(vox: Voxels, s: Spec, side: 'L' | 'R', [lx0, lx1]: number[], [z0, z1]: number[]) {
+/** A shoe: its toe reaching forward, the sole a row underneath (boots higher, flats lower). */
+function shoe(vox: Blocks, s: Spec, side: 'L' | 'R', [lx0, lx1]: number[], [z0, z1]: number[]) {
   const part = `foot${side}`;
   const st = s.look.shoes;
   // A voxel wider than the leg, on the outside.
@@ -336,9 +444,9 @@ function shoe(vox: Voxels, s: Spec, side: 'L' | 'R', [lx0, lx1]: number[], [z0, 
 
 const HAIR = new Set(['hair', 'hairDark', 'hairTie']);
 
-function head(vox: Voxels, s: Spec) {
+function head(vox: Blocks, s: Spec) {
   const { look } = s;
-  const hv = new Voxels();
+  const hv = new Blocks();
   hv.part('head');
   skull(hv);
   face(hv, look);
@@ -348,23 +456,24 @@ function head(vox: Voxels, s: Spec) {
   if (look.hat !== 'none') headwear(hv, look.hat);
   // Under a hat: the hair cut close to the head above the brim's line.
   if (look.hatHair)
-    hv.recolour('head', (i, j, k, c) => {
+    hv.cells.recolour('head', (i, j, k, c) => {
       if (!HAIR.has(c)) return;
-      if (j >= 13) return false;
-      if (j >= 8 && !inRound([C(i), C(j), C(k)], [-7, 0, -7], [7, 13, 6], [2.7, 2.9, 2.7])) return false;
+      const p = [fc(i), fc(j), fc(k)];
+      if (p[1] >= 13) return false;
+      if (p[1] >= 8 && !inRound(p, [-7, 0, -7], [7, 13, 6], [2.7, 2.9, 2.7])) return false;
     });
   for (const [key, c] of hv.parts.get('head')!) {
     const [i, j, k] = cellOf(key);
-    vox.set('head', i, j + Y.head, k, c);
+    vox.cells.set('head', i, j + Y.head * SUB, k, c);
   }
 }
 
-/** The skull: rounded, the jaw narrowing to the chin. */
-function skull(hv: Voxels) {
+/** The skull: well rounded, the jaw narrowing to the chin. */
+function skull(hv: Blocks) {
   const lo = [-6, 0, -6];
   const hi = [6, 12, 5];
   fill(hv, 'head', lo, hi, 'skin', (p) => {
-    if (!inRound(p, lo, hi, [2.2, 2.4, 2.2])) return false;
+    if (!inRound(p, lo, hi, [3, 3, 3])) return false;
     const x = Math.abs(p[0]);
     if (p[1] < 1 && (x > 4.2 || p[2] < -3)) return false;
     if (p[1] < 2 && x > 5.2) return false;
@@ -373,49 +482,55 @@ function skull(hv: Voxels) {
 }
 
 /**
- * A face on the skull: ears, a nose, eyes set in under proud brows (a pupil inside, a white
- * outside), a mouth; lashes (finer brows, a lash at each eye's outer corner), lips, facial hair.
+ * A face on the skull, voxel by voxel: thin ears, a small nose, eyes set in a voxel under thin
+ * brows (a lid over each, the pupil in the middle of the white with a glint), a line of a mouth;
+ * lashes (finer brows, a lash at each eye's outer corner), lips, facial hair.
  */
-function face(hv: Voxels, look: Required<CharacterLook>) {
-  const set = (i: number, j: number, k: number, c: string) => hv.set('head', i, j, k, c);
-  const del = (i: number, j: number, k: number) => hv.del('head', i, j, k);
+function face(hv: Blocks, look: Required<CharacterLook>) {
+  const set = (i: number, j: number, k: number, c: string, layer?: Layer) => hv.set('head', i, j, k, c, layer);
+  /** One voxel (the face's front layer of them is `K`). */
+  const dot = (i: number, j: number, k: number, c: string) => hv.cells.set('head', i, j, k, c);
+  const K = FACE * SUB + SUB - 1;
   const P = FACE + 1;
   const lashes = look.face === 'lashes' || look.face === 'lipstick';
   const lips = look.face === 'lipstick';
   if (look.face === 'skull') return skullFace(hv);
-  for (const i of [6, -7]) for (const j of [4, 5]) for (const k of [-2, -1]) set(i, j, k, j === 4 && k === -1 ? 'skinShade' : 'skin');
+  for (const i of [6, -7]) for (const j of [4, 5]) for (const k of [-2, -1]) set(i, j, k, j === 4 && k === -1 ? 'skinShade' : 'skin', i > 0 ? '-x' : '+x');
+  // The nose: a bridge, wider at the nostrils, shaded underneath.
   for (const i of [-1, 0]) {
-    set(i, 4, P, 'skin');
-    set(i, 3, P, 'skinShade');
+    for (const j of [8, 9]) dot(i, j, K + 1, 'skin');
+    dot(i, 6, K + 1, 'skinShade');
   }
+  for (const i of [-2, -1, 0, 1]) dot(i, 7, K + 1, 'skin');
   for (const m of [1, -1]) {
-    const inner = m > 0 ? 2 : -3;
-    const outer = m > 0 ? 3 : -4;
-    for (const i of [inner, outer]) for (const j of [5, 6]) del(i, j, FACE);
-    for (const j of [5, 6]) {
-      set(inner, j, FACE - 1, 'eye');
-      set(outer, j, FACE - 1, 'white');
-    }
-    for (const i of [inner - m, inner, outer, outer + m]) if (i !== inner - m || !lashes) set(i, 7, i === inner - m ? FACE : P, lashes ? 'lash' : 'brow');
-    if (lashes) set(outer + m, 6, FACE, 'lash');
+    // Each eye two design cells square (x 2..4, y 5..7): `at(n)` its nth voxel out from the nose.
+    const at = (n: number) => (m > 0 ? 4 + n : -5 - n);
+    for (let n = 0; n < 4; n++)
+      for (let j = 10; j < 14; j++) {
+        hv.cells.del('head', at(n), j, K);
+        dot(at(n), j, K - 1, j === 13 ? (lashes ? 'lash' : 'lid') : n === 1 || n === 2 ? 'eye' : 'white');
+      }
+    dot(m > 0 ? at(1) : at(2), 12, K - 1, 'white');
+    for (let n = lashes ? 0 : -1; n < 5; n++) dot(at(n), n === 4 ? 14 : 15, K + 1, lashes ? 'lash' : 'brow');
+    if (lashes) for (const j of [12, 13]) dot(at(4), j, K, 'lash');
   }
-  for (const i of [-2, -1, 0, 1]) set(i, 1, FACE, lips ? 'lips' : 'mouth');
-  if (lips) for (const i of [-1, 0]) set(i, 2, FACE, 'lips');
+  for (let i = -3; i < 3; i++) dot(i, 3, K, lips ? 'lips' : 'mouth');
+  if (lips) for (let i = -2; i < 2; i++) dot(i, 2, K, 'lips');
   const fh = look.facialHair;
   if (fh === 'moustache' || fh === 'goatee') {
     // Over the mouth, a voxel proud, its ends turned down.
-    for (let i = -3; i < 3; i++) set(i, 2, P, 'beard');
-    for (const i of [-3, 2]) set(i, 1, P, 'beard');
+    for (let i = -3; i < 3; i++) set(i, 2, P, 'beard', '-z');
+    for (const i of [-3, 2]) set(i, 1, P, 'beard', '-z');
   }
   if (fh === 'goatee') {
-    for (const [i, j] of [[-2, 0], [-1, 0], [0, 0], [1, 0], [-1, -1], [0, -1]]) set(i, j, P, 'beard');
+    for (const [i, j] of [[-2, 0], [-1, 0], [0, 0], [1, 0], [-1, -1], [0, -1]]) set(i, j, P, 'beard', '-z');
     for (const i of [-1, 0]) set(i, 0, FACE, 'beard');
   }
-  if (fh === 'stubble') for (let i = -5; i < 5; i++) for (const j of [0, 1, 2]) if (hv.get('head', i, j, FACE) === 'skin' && (i + j) % 2 === 0) set(i, j, FACE, 'stubble');
+  if (fh === 'stubble') hv.cells.recolour('head', (i, j, k, c) => (c === 'skin' && fc(j) < 3 && k >= 0 && ((i + j + k) & 1) === 0 ? 'stubble' : undefined));
 }
 
 /** A skull's face: no ears, eyes glowing deep in dark sockets, a hollow for a nose, teeth. */
-function skullFace(hv: Voxels) {
+function skullFace(hv: Blocks) {
   const set = (i: number, j: number, k: number, c: string) => hv.set('head', i, j, k, c);
   for (const m of [1, -1]) {
     const inner = m > 0 ? 2 : -3;
@@ -440,8 +555,8 @@ function skullFace(hv: Voxels) {
 }
 
 /** A crown (gold, points round its rim, a gem in front), a fedora or a cap, over the hair (what's under the brim goes). */
-function headwear(hv: Voxels, hat: Required<CharacterLook>['hat']) {
-  const set = (i: number, j: number, k: number, c: string) => hv.set('head', i, j, k, c);
+function headwear(hv: Blocks, hat: Required<CharacterLook>['hat']) {
+  const set = (i: number, j: number, k: number, c: string, layer?: Layer) => hv.set('head', i, j, k, c, layer);
   if (hat === 'crown') {
     for (let i = -8; i < 8; i++)
       for (let j = 11; j < 15; j++)
@@ -464,72 +579,84 @@ function headwear(hv: Voxels, hat: Required<CharacterLook>['hat']) {
   }
   const y0 = hat === 'cap' ? 8 : 10;
   hv.recolour('head', (_i, j, _k, c) => (HAIR.has(c) && j >= y0 ? false : undefined));
+  const head = hv.part('head');
   if (hat === 'fedora') {
-    // A wide brim (turned down a little in front), a pinched crown with a band.
-    for (let i = -10; i < 10; i++) for (let k = -11; k < 10; k++) if (inEllipsoid([C(i), 0, C(k)], [0, 0, -0.5], [9.6, 1, 9.8])) set(i, y0 + (C(k) > 6.5 ? -1 : 0), k, 'hat');
-    for (let i = -7; i < 7; i++)
-      for (let j = y0; j < y0 + 6; j++)
-        for (let k = -8; k < 7; k++) {
-          const p = [C(i), C(j), C(k)];
-          if (!inRound(p, [-6.5, y0, -7.5], [6.5, y0 + 6, 5.5], [2.4, 1.6, 2.4])) continue;
-          if (j === y0 + 5 && Math.abs(p[0]) < 1.6) continue;
-          set(i, j, k, j <= y0 + 1 ? 'hatBand' : 'hat');
-        }
+    // A wide thin brim (turned down a little in front), a pinched crown with a band.
+    each([-10, y0 - 0.5, -11], [10, y0 + 0.5, 10], (p, i, j, k) => {
+      if (inEllipsoid([p[0], 0, p[2]], [0, 0, -0.5], [9.6, 1, 9.8]) && p[1] > y0 === p[2] <= 6.5) head.set(cellKey(i, j, k), 'hat');
+    });
+    each([-7, y0, -8], [7, y0 + 6, 7], (p, i, j, k) => {
+      if (!inRound(p, [-6.5, y0, -7.5], [6.5, y0 + 6, 5.5], [2.6, 1.8, 2.6])) return;
+      if (p[1] > y0 + 5.2 && Math.abs(p[0]) < 1.4) return;
+      head.set(cellKey(i, j, k), p[1] < y0 + 2 ? 'hatBand' : 'hat');
+    });
   } else {
-    // A cap: a rounded crown over the head, a bill in front, a button on top.
-    for (let i = -8; i < 8; i++)
-      for (let j = y0; j < 15; j++)
-        for (let k = -8; k < 8; k++) {
-          if (hv.filled(i, j, k, 'head') && !HAIR.has(hv.get('head', i, j, k)!)) continue;
-          if (inRound([C(i), C(j), C(k)], [-6.9, y0, -6.9], [6.9, 13.6, 5.9], [2.6, 2.2, 2.6])) set(i, j, k, 'hat');
-        }
-    for (let i = -5; i < 5; i++) for (let k = 6; k < 10; k++) if (!(Math.abs(C(i)) > 4 && k > 8)) set(i, y0, k, 'hatBand');
-    for (const i of [-1, 0]) for (const k of [-1, 0]) set(i, 14, k, 'hatBand');
+    // A cap: a rounded crown over the head, a thin bill round in front, a button on top.
+    each([-8, y0, -8], [8, 15, 8], (p, i, j, k) => {
+      const at = head.get(cellKey(i, j, k));
+      if (at !== undefined && !HAIR.has(at)) return;
+      if (inRound(p, [-6.9, y0, -6.9], [6.9, 13.6, 5.9], [3.4, 3, 3.4])) head.set(cellKey(i, j, k), 'hat');
+    });
+    each([-5.5, y0, 4], [5.5, y0 + 0.5, 10], (p, i, j, k) => {
+      if (!head.has(cellKey(i, j, k)) && inRound([p[0], 0, p[2]], [-5.5, -1, 0], [5.5, 1, 10], [3, 0, 3])) head.set(cellKey(i, j, k), 'hatBand');
+    });
+    for (const i of [-1, 0]) for (const k of [-1, 0]) set(i, 14, k, 'hatBand', '-y');
   }
 }
 
 /** Blush and freckles on the cheeks; sunglasses or specs over the eyes. */
-function details(hv: Voxels, look: Required<CharacterLook>) {
-  const set = (i: number, j: number, k: number, c: string) => hv.set('head', i, j, k, c);
+function details(hv: Blocks, look: Required<CharacterLook>) {
+  const set = (i: number, j: number, k: number, c: string, layer?: Layer) => hv.set('head', i, j, k, c, layer);
   const P = FACE + 1;
   if (look.face === 'lipstick') for (const i of [-5, -4, 3, 4]) set(i, 3, FACE, 'blush');
-  if (look.face === 'freckles') for (const [i, j, k] of [[-5, 3, FACE], [-4, 4, FACE], [-3, 3, FACE], [2, 3, FACE], [3, 4, FACE], [4, 3, FACE], [0, 4, P]]) if (hv.get('head', i, j, k)) set(i, j, k, 'freckle');
+  if (look.face === 'freckles') for (const [i, j, k] of [[-5, 3, FACE], [-4, 4, FACE], [-3, 3, FACE], [2, 3, FACE], [3, 4, FACE], [4, 3, FACE], [0, 4, P]]) if (hv.get('head', i, j, k)) hv.cells.set('head', i * SUB + ((i + j) & 1), j * SUB + (i & 1), k * SUB + (k === P ? 0 : SUB - 1), 'freckle');
   if (look.face === 'shades') {
     // A band across the eyes a voxel proud, a bridge, arms back over the ears.
-    for (let i = -6; i < 6; i++) for (const j of [5, 6]) if (!(j === 5 && (i === -1 || i === 0))) set(i, j, P, i === -1 || i === 0 || i === -6 || i === 5 ? 'frame' : 'glass');
-    for (const i of [6, -7]) for (let k = -2; k < P; k++) set(i, 6, k, 'frame');
+    for (let i = -6; i < 6; i++) for (const j of [5, 6]) if (!(j === 5 && (i === -1 || i === 0))) set(i, j, P, i === -1 || i === 0 || i === -6 || i === 5 ? 'frame' : 'glass', '-z');
+    for (const i of [6, -7]) for (let k = -2; k < P; k++) set(i, 6, k, 'frame', i > 0 ? '-x' : '+x');
   }
   if (look.face === 'specs') {
     // A rim round each eye a voxel proud (over the brows' inner ends), a bridge, arms back over the ears.
     for (const m of [1, -1]) {
       const [a, c] = m > 0 ? [1, 4] : [-5, -2];
+      // (Thin wire: the rim's top and bottom the voxels next to the lens, its sides likewise.)
       for (let i = a; i <= c; i++) {
-        set(i, 4, P, 'frame');
-        set(i, 7, P, 'frame');
+        for (let d = 0; d < SUB; d++) {
+          hv.cells.set('head', i * SUB + d, 4 * SUB + SUB - 1, P * SUB, 'frame');
+          hv.cells.set('head', i * SUB + d, 7 * SUB, P * SUB, 'frame');
+        }
       }
-      for (const j of [5, 6]) {
-        set(a, j, P, 'frame');
-        set(c, j, P, 'frame');
+      for (let j = 4 * SUB + SUB - 1; j <= 7 * SUB; j++) {
+        hv.cells.set('head', a * SUB + SUB - 1, j, P * SUB, 'frame');
+        hv.cells.set('head', c * SUB, j, P * SUB, 'frame');
       }
     }
-    for (const i of [-1, 0, 5, -6]) set(i, 6, P, 'frame');
-    for (const i of [6, -7]) for (let k = -2; k < P; k++) set(i, 6, k, 'frame');
+    for (const i of [-1, 0]) hv.cells.set('head', i, 6 * SUB, P * SUB, 'frame');
+    for (const i of [5, -6]) set(i, 6, P, 'frame', '-z');
+    for (const i of [6, -7]) for (let k = -2; k < P; k++) set(i, 6, k, 'frame', i > 0 ? '-x' : '+x');
   }
 }
 
 /** Hair: a shell a voxel over the skull where the style says, and its own shapes. */
-function hair(hv: Voxels, style: Required<CharacterLook>['hair']) {
-  const set = (i: number, j: number, k: number, c = 'hair') => hv.set('head', i, j, k, c);
-  const skullAt = (i: number, j: number, k: number) => hv.filled(i, j, k, 'head');
-  const shell = (where: (p: number[]) => boolean, grow = 1) => {
-    for (let i = -9; i < 9; i++)
-      for (let j = 0; j < 15; j++)
-        for (let k = -9; k < 8; k++) {
-          const p = [C(i), C(j), C(k)];
-          if (skullAt(i, j, k)) continue;
-          if (!inRound(p, [-6 - grow, 0, -6 - grow], [6 + grow, 12 + grow, 5 + grow], [2.2 + grow * 0.5, 2.4 + grow * 0.5, 2.2 + grow * 0.5])) continue;
-          if (where(p)) set(i, j, k);
+function hair(hv: Blocks, style: Required<CharacterLook>['hair']) {
+  const head = hv.part('head');
+  // Hair goes where the skull isn't (a design cell the skull only partly fills takes it in the rest).
+  const set = (i: number, j: number, k: number, c = 'hair') => {
+    for (let dk = 0; dk < SUB; dk++)
+      for (let dj = 0; dj < SUB; dj++)
+        for (let di = 0; di < SUB; di++) {
+          const key = cellKey(i * SUB + di, j * SUB + dj, k * SUB + dk);
+          const at = head.get(key);
+          if (at === undefined || HAIR.has(at)) head.set(key, c);
         }
+  };
+  const skullAt = (i: number, j: number, k: number) => hv.filled(i, j, k, 'head', true);
+  const shell = (where: (p: number[]) => boolean, grow = 1) => {
+    each([-9, 0, -9], [9, 15, 8], (p, i, j, k) => {
+      if (head.has(cellKey(i, j, k))) return;
+      if (!inRound(p, [-6 - grow, 0, -6 - grow], [6 + grow, 12 + grow, 5 + grow], [3 + grow * 0.6, 3 + grow * 0.6, 3 + grow * 0.6])) return;
+      if (where(p)) head.set(cellKey(i, j, k), 'hair');
+    });
   };
   const top = (p: number[]) => p[1] > 10.5;
   const back = (p: number[]) => p[2] < 1;
@@ -640,17 +767,15 @@ function hair(hv: Voxels, style: Required<CharacterLook>['hair']) {
 }
 
 /** A full beard and moustache, a voxel proud of the jaw, cheeks and chin; the mouth left open. */
-function beard(hv: Voxels) {
-  for (let i = -7; i < 7; i++)
-    for (let j = -2; j < 5; j++)
-      for (let k = -3; k < 7; k++) {
-        const p = [C(i), C(j), C(k)];
-        if (hv.filled(i, j, k, 'head')) continue;
-        if (!inRound(p, [-7, -2, -3], [7, 5, 6], [2.4, 2.2, 2.2])) continue;
-        if (p[2] < -1.5 && p[1] > 1) continue;
-        if (Math.abs(p[0]) > 6.4 && p[1] > 3) continue;
-        hv.set('head', i, j, k, 'beard');
-      }
+function beard(hv: Blocks) {
+  const head = hv.part('head');
+  each([-7, -2, -3], [7, 5, 6], (p, i, j, k) => {
+    if (head.has(cellKey(i, j, k))) return;
+    if (!inRound(p, [-7, -2, -3], [7, 5, 6], [3, 2.6, 3])) return;
+    if (p[2] < -1.5 && p[1] > 1) return;
+    if (Math.abs(p[0]) > 6.4 && p[1] > 3) return;
+    head.set(cellKey(i, j, k), 'beard');
+  });
   for (let i = -3; i < 3; i++) hv.set('head', i, 2, FACE + 1, 'beardDark');
   for (const i of [-2, -1, 0, 1]) {
     hv.del('head', i, 1, FACE + 1);
@@ -661,7 +786,7 @@ function beard(hv: Voxels) {
 // ---------------------------------------------------------------------------------------------
 // The clothes: the body's parts recoloured by region, and what's worn over them.
 
-function dress(vox: Voxels, s: Spec) {
+function dress(vox: Blocks, s: Spec) {
   const { b, top: t, look } = s;
   const L = limbs(b);
   const bz = F + b.belly;
@@ -693,36 +818,38 @@ function dress(vox: Voxels, s: Spec) {
     if (!t.open)
       for (let j = button + 1; j < Y.chestTop; j++) {
         const v = vHalf(j);
-        for (const m of [1, -1]) for (let x = Math.ceil(v - 0.5); x < v + 1.5; x++) vox.set(torso(j), m > 0 ? x : -x - 1, j, frontRow(torso(j)) + 1, 'lapel');
+        for (const m of [1, -1]) for (let x = Math.ceil(v - 0.5); x < v + 1.5; x++) vox.set(torso(j), m > 0 ? x : -x - 1, j, frontRow(torso(j)) + 1, 'lapel', '-z');
       }
-    if (!t.open) for (const i of [-1, 0]) vox.set('spine', i, Y.spine, bz + 1, 'button');
+    if (!t.open) for (const i of [-1, 0]) vox.set('spine', i, Y.spine, bz + 1, 'button', '-z');
     // The jacket's skirt over the seat (split in front).
     if (!t.open) vox.recolour('hips', (i, j, k) => (j >= Y.pelvis + 2 && !(k >= 3 && Math.abs(C(i)) < 1 + (Y.belt - j) * 0.6) ? 'top' : undefined));
   }
   // A tie down the middle, a knot under the collar.
   if (t.tie) {
-    for (let j = Y.spine; j < Y.chestTop - 1; j++) for (const i of j === Y.spine ? [0] : [-1, 0]) vox.set(torso(j), i, j, frontRow(torso(j)) + 1, 'accent');
+    for (let j = Y.spine; j < Y.chestTop - 1; j++) for (const i of j === Y.spine ? [0] : [-1, 0]) vox.set(torso(j), i, j, frontRow(torso(j)) + 1, 'accent', '-z');
     for (const i of [-1, 0]) vox.set('chest', i, Y.chestTop - 1, F + 1, 'accentShade');
   }
   // Buttons down a shirt's front.
-  if (t.buttons) for (let j = Y.spine + 1; j < Y.chestTop - 3; j += 2) vox.set(torso(j), -1, j, frontRow(torso(j)) + 1, t.panels ? 'button' : 'topShade');
+  if (t.buttons) for (let j = Y.spine + 1; j < Y.chestTop - 3; j += 2) vox.cells.set(torso(j), -1, j * SUB, (frontRow(torso(j)) + 1) * SUB, t.panels ? 'button' : 'topShade');
   // Collars: a band round the neck (on the chest, round the neck's cells); a shirt's points down
   // the front, open at the throat.
-  const ring = (c: string, j = Y.chestTop) => {
-    for (let i = -3; i < 3; i++) for (let k = -4; k < 2; k++) if (!(i >= -2 && i < 2 && k >= -3 && k < 1)) vox.set('chest', i, j, k, c);
+  const ring = (c: string, j = Y.chestTop, layer?: Layer) => {
+    each([-3, j, -4], [3, j + (layer ? 0.5 : 1), 2], (p, i, jj, k) => {
+      if (!inLimb(p, 0, -1, 2, 2.4) && inLimb(p, 0, -1, 3, 2.6)) vox.cells.set('chest', i, jj, k, c);
+    });
   };
   const collar = t.jacket && !t.open ? 'under' : t.panels ? 'accent' : 'top';
   if (t.collar === 'shirt' || t.collar === 'open' || t.collar === 'camp') {
     ring(collar);
     for (const m of [1, -1]) {
       const a = m > 0 ? 0 : -1;
-      vox.set('chest', a + m, Y.chestTop - 1, F + 2, collar);
-      vox.set('chest', a + 2 * m, Y.chestTop - 1, F + 2, collar);
-      vox.set('chest', a + 2 * m, Y.chestTop - 2, F + 2, collar);
-      if (t.collar !== 'shirt') vox.set('chest', a + 3 * m, Y.chestTop - 1, F + 2, collar);
+      vox.set('chest', a + m, Y.chestTop - 1, F + 1, collar, '-z');
+      vox.set('chest', a + 2 * m, Y.chestTop - 1, F + 1, collar, '-z');
+      vox.set('chest', a + 2 * m, Y.chestTop - 2, F + 1, collar, '-z');
+      if (t.collar !== 'shirt') vox.set('chest', a + 3 * m, Y.chestTop - 1, F + 1, collar, '-z');
     }
     if (t.collar !== 'shirt') for (const i of [-1, 0]) for (let j = Y.chestTop - 3; j < Y.chestTop; j++) vox.set('chest', i, j, F, 'skin');
-  } else if (t.collar === 'crew' || t.collar === 'track') ring(t.open ? 'under' : 'top');
+  } else if (t.collar === 'crew' || t.collar === 'track') ring(t.open ? 'under' : 'top', Y.chestTop, t.collar === 'crew' ? '-y' : undefined);
   if (t.collar === 'track') ring('top', Y.chestTop + 1);
   // A tank top: bare shoulders but for its straps, a scoop at the neck, wide arm holes.
   if (t.collar === 'scoop')
@@ -734,7 +861,7 @@ function dress(vox: Voxels, s: Spec) {
       if (x > b.sh - 1.5 && j >= Y.chest + 3) return 'skin';
     });
   // A track top's zip down the front, stripes down the sleeves and sides (and the joggers' legs).
-  if (t.zip) for (let j = Y.spine; j < Y.chestTop; j++) vox.set(torso(j), -1, j, frontRow(torso(j)), 'zip');
+  if (t.zip) for (let j = Y.spine; j < Y.chestTop; j++) vox.set(torso(j), -1, j, frontRow(torso(j)), 'zip', '+x');
   if (t.stripes) {
     for (const [side, m] of SIDES) {
       const armOut = m > 0 ? b.sh + b.arm - 1 : -b.sh - b.arm;
@@ -773,8 +900,8 @@ function dress(vox: Voxels, s: Spec) {
   if (t.hood) {
     const back = backOf(vox, 'chest', 0, Y.chestTop - 2)!;
     fill(vox, 'chest', [-6, Y.chestTop - 5, back - 3], [6, Y.chestTop + 2, back + 3], (_i, j, k) => (j === Y.chestTop - 2 && k < back - 1 ? 'topShade' : 'top'), (p) => inEllipsoid(p, [0, Y.chestTop - 1.5, back + 0.5], [5.8, 3.4, 3]));
-    for (const i of [-2, 1]) for (let j = Y.chestTop - 4; j < Y.chestTop; j++) vox.set('chest', i, j, F + 1 + (j < Y.chest + 5 ? b.bust : 0), 'accent');
-    for (let i = -4; i < 4; i++) for (let j = Y.spine; j < Y.spine + 3; j++) vox.set('spine', i, j, bz + 1, i === -4 || i === 3 ? 'topShade' : 'top');
+    for (const i of [-2, 1]) for (let j = Y.chestTop - 4; j < Y.chestTop; j++) vox.set('chest', i, j, F + 1 + (j < Y.chest + 5 ? b.bust : 0), 'accent', '-z');
+    for (let i = -4; i < 4; i++) for (let j = Y.spine; j < Y.spine + 3; j++) vox.set('spine', i, j, bz + 1, i === -4 || i === 3 ? 'topShade' : 'top', '-z');
   }
   // A skeleton's ribs (dark between them, front, sides and back), the spine down its hollow belly.
   if (t.ribs) {
@@ -790,14 +917,14 @@ function dress(vox: Voxels, s: Spec) {
   if (t.tunic) skirt(vox, s, 'top', { bottom: Y.knee + 2, flare: 1.2 });
   // An apron over it all: a bib, straps up to the neck, and a panel to the knee.
   if (t.apron) {
-    for (let i = -3; i < 3; i++) for (let j = Y.chest; j < Y.chest + 5; j++) vox.set('chest', i, j, F + b.bust + 1, 'accent');
-    for (const i of [-4, 3]) for (let j = Y.chest + 4; j < Y.chestTop; j++) vox.set('chest', i, j, F + 1, 'accent');
+    for (let i = -3; i < 3; i++) for (let j = Y.chest; j < Y.chest + 5; j++) vox.set('chest', i, j, F + b.bust + 1, 'accent', '-z');
+    for (const i of [-4, 3]) for (let j = Y.chest + 4; j < Y.chestTop; j++) vox.set('chest', i, j, F + 1, 'accent', '-z');
     for (let j = Y.knee + 1; j < Y.spine; j++)
       for (let i = -5; i < 5; i++) {
         const part = j >= Y.split ? 'hips' : C(i) > 0 ? 'upperLegL' : 'upperLegR';
-        vox.set(part, i, j, 4, j === Y.knee + 3 && i > -4 && i < 3 ? 'accentShade' : 'accent');
+        vox.set(part, i, j, 4, j === Y.knee + 3 && i > -4 && i < 3 ? 'accentShade' : 'accent', '-z');
       }
-    for (let i = -5; i < 5; i++) vox.set('spine', i, Y.spine, bz + 1, 'accent');
+    for (let i = -5; i < 5; i++) vox.set('spine', i, Y.spine, bz + 1, 'accent', '-z');
   }
   // The waist: a belt with a buckle (tucked in, or a tunic's), or the top's hem over it.
   const skirted = look.bottom === 'skirt';
@@ -806,7 +933,7 @@ function dress(vox: Voxels, s: Spec) {
       if (t.tunic) belt(vox);
       else {
         vox.recolour('hips', (_i, j) => (j === Y.belt ? 'belt' : undefined));
-        for (const i of [-1, 0]) vox.set('hips', i, Y.belt, 4, 'buckle');
+        for (const i of [-1, 0]) vox.set('hips', i, Y.belt, 4, 'buckle', '-z');
       }
     } else if (!skirted && !t.ribs) vox.recolour('hips', (i, j) => (j === Y.belt ? (t.rib && (i & 1) ? 'topShade' : 'top') : undefined));
   }
@@ -818,10 +945,10 @@ function dress(vox: Voxels, s: Spec) {
     const legs = [`upperLeg${side}`, `lowerLeg${side}`];
     switch (look.bottom) {
       case 'trousers':
-        for (const part of legs) vox.recolour(part, (i, _j, k, c) => (i === mid && k === L.lz1 - 1 && c === 'pants' ? 'pantsShade' : undefined));
+        for (const part of legs) vox.cells.recolour(part, (i, _j, k, c) => (i === mid * SUB + (m > 0 ? 0 : SUB - 1) && down(k) === L.lz1 - 1 && c === 'pants' ? 'pantsShade' : undefined));
         break;
       case 'jeans':
-        for (const part of legs) vox.recolour(part, (i, _j, k, c) => (c === 'pants' && i === out && k === Math.floor(L.lz) ? 'seam' : undefined));
+        for (const part of legs) vox.cells.recolour(part, (i, _j, k, c) => (c === 'pants' && down(i) === out && k === Math.floor(L.lz * SUB) ? 'seam' : undefined));
         vox.recolour(`lowerLeg${side}`, (_i, j) => (j === Y.ankle ? 'pantsShade' : undefined));
         break;
       case 'shorts':
@@ -846,7 +973,7 @@ function dress(vox: Voxels, s: Spec) {
       if (part === 'head' || part.startsWith('hand') || part.startsWith('foot')) continue;
       for (const [key, c] of [...cells]) {
         if (!cloth.has(c)) continue;
-        const [i, j, k] = cellOf(key);
+        const [i, j, k] = cellOf(key).map(down);
         const h = hash(i >> 1, j >> 1, k >> 1, 9);
         if (h < 0.1) cells.set(key, 'skin');
         else if (h < 0.22) cells.set(key, c.startsWith('top') ? 'topDark' : c.startsWith('pants') ? 'pantsDark' : c);
@@ -857,34 +984,30 @@ function dress(vox: Voxels, s: Spec) {
 }
 
 /** A belt round the pelvis's top row, a buckle a voxel proud in front. */
-function belt(vox: Voxels) {
-  coat(vox, 'hips', 'belt', (p) => p[1] > Y.belt + 0.5 - 1 && p[1] < Y.spine, 'xz');
+function belt(vox: Blocks) {
+  coat(vox, 'hips', 'belt', (p) => p[1] > Y.belt && p[1] < Y.spine, 'xz');
   const k = frontOf(vox, 'hips', 0, Y.belt)! + 1;
-  for (const i of [-2, -1, 0, 1]) vox.set('hips', i, Y.belt, k, 'buckle');
+  for (const i of [-2, -1, 0, 1]) vox.set('hips', i, Y.belt, k, 'buckle', '-z');
 }
 
 /**
  * A skirt of cloth from the belly's bottom down to `bottom`, out from the middle to the hips at the
- * top, flaring `flare` voxels to the sides (`zFlare` front and back) by the bottom. Each row goes
+ * top, flaring `flare` units to the sides (`zFlare` front and back) by the bottom. Each row goes
  * on the part it hangs from: the hips, and below `Y.split` each side's thigh (a stride swings it
- * with the leg). Below the pelvis it's a shell two voxels thick round the legs.
+ * with the leg). Below the pelvis it's a shell a unit and a half thick round the legs.
  */
-function skirt(vox: Voxels, s: Spec, colour: string, { bottom, flare = 2, zFlare = null }: { bottom: number; flare?: number; zFlare?: number | null }) {
+function skirt(vox: Blocks, s: Spec, colour: string, { bottom, flare = 2, zFlare = null }: { bottom: number; flare?: number; zFlare?: number | null }) {
   const { b } = s;
   const y0 = Y.spine;
-  const part = (i: number, j: number) => (j >= Y.split ? 'hips' : C(i) > 0 ? 'upperLegL' : 'upperLegR');
-  for (let i = -16; i < 16; i++)
-    for (let j = bottom; j < y0; j++)
-      for (let k = -16; k < 16; k++) {
-        const t = (y0 - j) / (y0 - bottom);
-        const hw = b.hip + 0.6 + t * flare;
-        const hd = 4.2 + t * (zFlare ?? flare * 0.9);
-        const x = C(i);
-        const z = C(k);
-        if (Math.abs(x) > hw || Math.abs(z) > hd) continue;
-        if (Math.abs(x) < hw - 2 && Math.abs(z) < hd - 2 && j < Y.pelvis) continue;
-        vox.set(part(i, j), i, j, k, j === bottom ? `${colour}Shade` : colour);
-      }
+  each([-16, bottom, -16], [16, y0, 16], (p, i, j, k) => {
+    const [x, y, z] = p;
+    const t = (y0 - y) / (y0 - bottom);
+    const hw = b.hip + 0.6 + t * flare;
+    const hd = 4.2 + t * (zFlare ?? flare * 0.9);
+    if (!inRound([x, 0, z], [-hw, -1, -hd], [hw, 1, hd], [1.8, 0, 1.8])) return;
+    if (Math.abs(x) < hw - 1.5 && Math.abs(z) < hd - 1.5 && y < Y.pelvis) return;
+    vox.cells.set(y >= Y.split ? 'hips' : x > 0 ? 'upperLegL' : 'upperLegR', i, j, k, y < bottom + 0.5 ? `${colour}Shade` : colour);
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -917,7 +1040,7 @@ function palette(s: Spec): Palette {
   const cloth = t.shine ? { rough: 0.42 } : { rough: 0.85 };
   P.add('skin', skin, { rough: 0.62 });
   P.add('skinShade', shade(skin, 0.8), { rough: 0.62 });
-  P.add('skinCrease', shade(skin, 0.8), { rough: 0.62 });
+  P.add('skinCrease', shade(skin, 0.84), { rough: 0.62 });
   P.add('blush', mix(skin, 0xe0607a, 0.3), { rough: 0.62 });
   P.add('freckle', mix(skin, 0x8a4a2a, 0.3), { rough: 0.62 });
   P.add('stubble', mix(skin, hairC, 0.28), { rough: 0.7 });
@@ -928,6 +1051,7 @@ function palette(s: Spec): Palette {
   P.add('beardDark', shade(hairC, 0.8), { rough: 0.7 });
   P.add('brow', shade(hairC, lightness(hairC) > 0.45 ? 0.62 : 0.9), { rough: 0.7 });
   P.add('lash', 0x141010, { rough: 0.5 });
+  P.add('lid', shade(skin, 0.66), { rough: 0.62 });
   P.add('eye', rgbOf(look.eyes), { rough: 0.15, glow: glow ? 1 : 0 });
   P.add('white', glow ? rgbOf(look.eyes) : 0xf2eee6, { rough: 0.3, glow: glow ? 0.8 : 0 });
   P.add('mouth', shade(skin, 0.6), { rough: 0.5 });
@@ -971,7 +1095,7 @@ function palette(s: Spec): Palette {
 }
 
 /** Colours that never vary: the face's details, metal, glass, buttons and laces. */
-const FLAT = new Set(['eye', 'white', 'lash', 'brow', 'mouth', 'lips', 'blush', 'freckle', 'glass', 'frame', 'button', 'zip', 'lace', 'buckle', 'gold', 'gem', 'socket', 'teeth', 'hairTie', 'flowerMid']);
+const FLAT = new Set(['eye', 'white', 'lash', 'lid', 'brow', 'mouth', 'lips', 'blush', 'freckle', 'glass', 'frame', 'button', 'zip', 'lace', 'buckle', 'gold', 'gem', 'socket', 'teeth', 'hairTie', 'flowerMid']);
 
 // ---------------------------------------------------------------------------------------------
 // The figure
@@ -980,6 +1104,8 @@ const FLAT = new Set(['eye', 'white', 'lash', 'brow', 'mouth', 'lips', 'blush', 
 export interface CharacterMesh {
   /** Where each joint is (metres, the model's space: +x its left, +z ahead, y up from the soles). */
   joints: Record<CharacterJoint, P3>;
+  /** How each fist takes a gun: its grip's turn in the hand ([x, y, z] radians, applied y, then x, then z). */
+  grips: { gripL: P3; gripR: P3 };
   /** Four corners a quad: positions (metres), normals, UVs (v down from the atlas's top), each corner's bone (an index into `BONES`). */
   position: Float32Array;
   normal: Float32Array;
@@ -1008,60 +1134,71 @@ export interface WearFrame {
 }
 
 /** A character's wear frame, from its voxels and build. */
-function wearFrame(vox: Voxels, b: Build): WearFrame {
-  let crown = Y.head + 12;
+function wearFrame(vox: Blocks, b: Build): WearFrame {
+  let crown = (Y.head + 12) * SUB;
   for (const key of vox.parts.get('head')!.keys()) crown = Math.max(crown, cellOf(key)[1] + 1);
   const torso = { width: (2 * b.sh) * VOXEL, height: (Y.chestTop - Y.spine) * VOXEL };
   return {
-    top: [0, crown * VOXEL, -0.5 * VOXEL],
+    top: [0, crown * CELL, -0.5 * VOXEL],
     headWidth: 14 * VOXEL,
     back: [0, (Y.chestTop - 1) * VOXEL, -4 * VOXEL],
     bodyWidth: 0.5 * Math.min(torso.width / 0.5, torso.height / 0.75),
   };
 }
 
-/** A character's voxels (a part per bone) and colours. */
-export function characterVoxels(look: Required<CharacterLook>): { vox: Voxels; palette: Palette; joints: Record<CharacterJoint, P3>; wear: WearFrame } {
+/** A character's voxels (a part per bone, `SUB` to a design unit), its colours, its joints (design units). */
+function characterCells(look: Required<CharacterLook>): { vox: Voxels; palette: Palette; joints: Record<CharacterJoint, P3>; wear: WearFrame } {
   const build = BUILDS[`${look.build}${look.curvy ? 'Curvy' : ''}`] ?? BUILDS.broad;
   const s: Spec = { b: build, look, top: TOPS[look.top] ?? TOPS.tee };
-  const vox = new Voxels();
+  const vox = new Blocks();
   for (const j of BONES) vox.part(j);
   body(vox, s);
   dress(vox, s);
-  return { vox, palette: palette(s), joints: joints(build), wear: wearFrame(vox, build) };
+  return { vox: vox.cells, palette: palette(s), joints: joints(build), wear: wearFrame(vox, build) };
+}
+
+/**
+ * A character's voxels by design cell (26 a metre: a cell most of whose voxels are filled, in the
+ * colour most of them are), for tools that paint over a character at that size (Arena's
+ * monsters).
+ */
+export function characterVoxels(look: Required<CharacterLook>): { vox: Voxels; palette: Palette; joints: Record<CharacterJoint, P3>; wear: WearFrame } {
+  const made = characterCells(look);
+  const vox = new Voxels();
+  for (const [part, cells] of made.vox.parts) {
+    const blocks = new Map<number, Map<string, number>>();
+    for (const [key, c] of cells) {
+      const [i, j, k] = cellOf(key).map(down);
+      const at = cellKey(i, j, k);
+      let n = blocks.get(at);
+      if (!n) blocks.set(at, (n = new Map()));
+      n.set(c, (n.get(c) ?? 0) + 1);
+    }
+    const out = vox.part(part);
+    for (const [at, n] of blocks) {
+      let total = 0;
+      let best = '';
+      for (const [c, count] of n) {
+        total += count;
+        if (count > (n.get(best) ?? 0)) best = c;
+      }
+      if (total * 2 >= SUB ** 3) out.set(at, best);
+    }
+  }
+  return { ...made, vox };
 }
 
 /** Build a character from its look (the plain look's where it's silent). */
 export function buildCharacter(look: CharacterLook): CharacterMesh {
   const full = { ...PLAIN_LOOK, ...look } as Required<CharacterLook>;
-  const { vox, palette: P, joints: J, wear } = characterVoxels(full);
-  const list = faces(vox);
-  const A = atlas(list, P);
+  const { vox, palette: P, joints: J, wear } = characterCells(full);
+  const A = bake(vox, P);
+  const { position, normal, uv, index } = quadMesh(A.quads, CELL);
   const boneOf = new Map<string, number>(BONES.map((j, i) => [j, i]));
-  const n = list.length;
-  const position = new Float32Array(n * 12);
-  const normal = new Float32Array(n * 12);
-  const uv = new Float32Array(n * 8);
-  const bone = new Uint8Array(n * 4);
-  const index = new Uint32Array(n * 6);
-  list.forEach((f, q) => {
-    const corners = quadCorners(f);
-    const d = DIRS[f.dir].n;
-    const b = boneOf.get(f.part) ?? 0;
-    for (let c = 0; c < 4; c++) {
-      const v = q * 4 + c;
-      for (let a = 0; a < 3; a++) {
-        position[v * 3 + a] = corners[c][a] * VOXEL;
-        normal[v * 3 + a] = d[a];
-      }
-      uv[v * 2] = A.uvs[q][c][0];
-      uv[v * 2 + 1] = A.uvs[q][c][1];
-      bone[v] = b;
-    }
-    index.set([q * 4, q * 4 + 1, q * 4 + 2, q * 4, q * 4 + 2, q * 4 + 3], q * 6);
-  });
+  const bone = new Uint8Array(A.quads.length * 4);
+  A.quads.forEach((f, q) => bone.fill(boneOf.get(f.part) ?? 0, q * 4, q * 4 + 4));
   const joints = Object.fromEntries(Object.entries(J).map(([k, v]) => [k, v.map((x) => x * VOXEL) as P3])) as Record<CharacterJoint, P3>;
   let glows = false;
   for (const c of P.colours.values()) glows ||= c.glow > 0;
-  return { joints, position, normal, uv, bone, index, atlas: A, glows, wear };
+  return { joints, grips: GRIPS, position, normal, uv, bone, index, atlas: A, glows, wear };
 }

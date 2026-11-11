@@ -118,11 +118,13 @@ export default async function figures() {
   check(rifle.mount.parent === fake.rig!.joints.chest, 'the gun hangs from the chest');
   check(gripR.distanceTo(at(new THREE.Vector3())) < 0.02 && gripL.distanceTo(at(rifle.points.grip2!)) < 0.02, `both fists on its grips (${gripR.distanceTo(at(new THREE.Vector3())).toFixed(3)}, ${gripL.distanceTo(at(rifle.points.grip2!)).toFixed(3)} m)`);
   check(Math.abs(rifle.node.scale.x - DEFAULT_POSES.heldScale) < 1e-9, 'held at the kit\'s size');
-  // A sprite in the hand: in the fist, the mount back on the hand.
+  // A sprite in the hand: carried upright in the right fist (the kit places it from the chest, as it does a tool's model).
   const sprite = heldIn(fake, { kind: 'misc' }, {}, 0.5, 'sprite');
   fake.held = sprite;
-  run([fake], 0.1, {});
-  check(sprite.mount.parent === fake.hand && Math.abs(sprite.node.scale.x - 0.62) < 1e-9 && sprite.node.position.y < -0.3, 'a sprite in the fist at the end of the hand');
+  run([fake], 0.5, {});
+  const fist = world(fake, 'gripR');
+  const from = sprite.node.getWorldPosition(new THREE.Vector3()).distanceTo(fist);
+  check(sprite.mount.parent === fake.rig!.joints.chest && from < 0.3 && fist.y > world(fake, 'lowerArmR').y - 0.05, `a sprite carried in the right fist, the forearm raised (${from.toFixed(2)} m from it)`);
   // A figure off the rig: what it holds goes in its fist; the kit leaves its animation to it.
   const box: Figure & { held: FigureHeld | null } = { id: 2, player: 'p', type: 'box', spec: Models.humanoid({ skin: [0, 0] }), root: new THREE.Group(), hand: new THREE.Object3D(), rig: null, state: still(), held: null, posed: false, used: () => {}, point: () => null };
   box.held = heldIn(box, { kind: 'gun' }, { grip: new THREE.Vector3(0, 0, 0.1) }, 1);

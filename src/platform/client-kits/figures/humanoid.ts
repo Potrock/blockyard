@@ -15,7 +15,8 @@ export interface HumanoidOptions {
  * them), crouching, sliding and jumping; the head and chest turned to look; a gun in both hands
  * aimed where they look (hands put on its grips), carried low across the chest to sprint, tipped
  * to reload, kicking as it fires, its lever or hammer worked; one hand free on a one-handed gun; a
- * sword swung two-handed; a throwable thrown overarm; and a fall when they die. How they hold
+ * sword swung two-handed; anything else carried upright in the right fist, the forearm raised, and
+ * swung from there; a throwable thrown overarm; and a fall when they die. How they hold
  * things and move is `HumanoidPoses`: the kit's options, each model's `poses`, each item's
  * `hold.poses`, each over the last.
  *
@@ -93,6 +94,9 @@ class Poser {
   private held: { mount: FigureNode; node: FigureNode; info: HeldInfo; stance: 'rifle' | 'pistol' } | null = null;
   /** What the figure held when `held` was worked out. */
   private heldFrom: FigureHeld | null = null;
+  /** Something's carried in the right fist (a model that's neither gun nor blade, or a sprite). */
+  private carried = false;
+  private carry = 0;
   /** The poses for what's held: its own (`hold.poses`) over the figure's. */
   private heldPoses: Poses;
   private last = -1;
@@ -136,20 +140,24 @@ class Poser {
   private hold(h: FigureHeld | null) {
     this.heldFrom = h;
     this.held = null;
+    this.carried = false;
     const info = h ? heldInfo(h) : null;
     this.heldPoses = info?.poses ? resolvePoses(info.poses, this.poses) : this.poses;
     if (!h) return;
     const mount = h.mount;
     if (!info) {
-      // A sprite: in the fist at the end of the hand, as a figure off the rig holds it.
-      const hand = this.fig.hand;
-      if (hand && mount.parent !== hand) {
-        hand.add(mount);
-        mount.position.set(0, 0, 0);
-        mount.quaternion.identity();
-      }
+      // A sprite: carried in the fist as a model is (the holder on the chest, put on the fist's
+      // grip each frame), standing on edge up out of the fist and tipped a little away from the
+      // wrist, its handle (lower left: the fist a little way up it) to tip (upper right) along the way it points.
+      if (mount.parent !== this.j.chest) this.j.chest.add(mount);
       mount.visible = true;
-      inFist(h);
+      const mesh = h.node;
+      const scale = 0.62 / this.worldScale();
+      mesh.scale.setScalar(scale);
+      mesh.rotation.set(1.04, -Math.PI / 2, 0);
+      mesh.position.set(-0.2, -0.2, 0).multiplyScalar(-scale).applyEuler(mesh.rotation);
+      this.held = { mount, node: mesh, info: { kind: 'other', grip: new Vec3(), length: h.length }, stance: 'rifle' };
+      this.carried = true;
       return;
     }
     if (mount.parent !== this.j.chest) this.j.chest.add(mount);
@@ -160,9 +168,10 @@ class Poser {
     node.scale.setScalar(scale / this.worldScale());
     node.quaternion.identity();
     node.position.copy(info.grip).multiplyScalar(-node.scale.x);
-    // In the fist, tipped up a little.
+    // In the fist, running up out of it (the forearm's raised to carry it), tipped a little away from the wrist.
     if (info.kind === 'other') {
-      node.quaternion.setFromAxisAngle(X, -0.3);
+      this.carried = true;
+      node.quaternion.setFromAxisAngle(X, 0.25);
       node.position.applyQuaternion(node.quaternion);
     }
   }
@@ -197,6 +206,7 @@ class Poser {
     this.sprint += ((s.sprint && held === 'gun' ? 1 : 0) - this.sprint) * clamp01(dt * 10);
     this.reload += ((s.reloading && held === 'gun' ? 1 : 0) - this.reload) * clamp01(dt * 12);
     this.reloadT = s.reloading ? this.reloadT + dt : 0;
+    this.carry += ((this.carried ? 1 : 0) - this.carry) * (dt ? clamp01(dt * 10) : 1);
     // Strides get longer as it speeds up; the phase runs with the ground covered.
     const stride = pace(G.stride, run);
     this.phase = (this.phase + (speed * dt) / stride) % 1;
@@ -267,13 +277,18 @@ class Poser {
     return this.leanLever;
   }
 
-  /** Something held in the right fist: the holder on its grip. */
+  /**
+   * Something held in the right fist: the holder at its grip, turned as the hand is (a handle runs
+   * through the fist across the hand, whichever way the fist takes a gun's grip).
+   */
   private inFist() {
     const grip = this.j.gripR;
+    const chest = this.j.chest;
     const mount = this.held!.mount;
     grip.updateWorldMatrix(true, false);
-    this.j.chest.updateWorldMatrix(true, false);
-    m1.copy(this.j.chest.matrixWorld).invert().multiply(grip.matrixWorld).decompose(mount.position, mount.quaternion, v5);
+    chest.updateWorldMatrix(true, false);
+    mount.position.copy(chest.worldToLocal(grip.getWorldPosition(v1)));
+    mount.quaternion.copy(chest.getWorldQuaternion(q2).invert().multiply(this.j.handR.getWorldQuaternion(q3)));
     mount.updateMatrixWorld(true);
   }
 
@@ -342,12 +357,14 @@ class Poser {
     // Hands on it: the right on the grip, the left on the handguard (or the magazine, reloading).
     const handQ = mount.getWorldQuaternion(new Quat());
     const grip = mount.getWorldPosition(v4);
-    this.limb('R', grip, handQ, v1.set(-0.8, -0.55, -0.35).applyQuaternion(bodyQ), false);
+    // (A gun's grips are the fists' own, turned as the model has them; a handle is held across the hand.)
+    const across = info.kind !== 'gun';
+    this.limb('R', grip, handQ, v1.set(-0.8, -0.55, -0.35).applyQuaternion(bodyQ), false, across);
     if (info.kind === 'gun' && info.hands === 1) return this.offHand(info, node, handQ, bodyQ, P);
     const support = info.grip2 ? node.localToWorld(v2.copy(info.grip2)) : null;
     if (support) {
       if (info.kind === 'gun' && this.reload > 0.001 && info.mag) support.lerp(this.reloading(node, info.mag, P, v3), this.reload);
-      this.limb('L', support, handQ, v1.set(0.45, -0.9, 0.05).applyQuaternion(bodyQ), false);
+      this.limb('L', support, handQ, v1.set(0.45, -0.9, 0.05).applyQuaternion(bodyQ), false, across);
     }
   }
 
@@ -377,7 +394,11 @@ class Poser {
     this.limb('L', at, handQ, pole.applyQuaternion(bodyQ), false);
   }
 
-  /** Empty-handed (or one thing in the fist): the arms swing as it walks. */
+  /**
+   * Empty-handed (or one thing in the fist): the arms swing as it walks. With something in the
+   * fist, the right arm carries it: the upper arm a little forward, the forearm raised to level
+   * (what's held stands up out of the fist), swinging less; an attack chops it down from there.
+   */
   private swingArms(s: Readonly<FigureState>, ph: number, moving: number, run: number, air: number) {
     const j = this.j;
     const swing = Math.sin(ph) * moving * pace(this.poses.gait.armSwing, run);
@@ -390,9 +411,12 @@ class Poser {
     const whip = t < 0.24 || t >= 1 ? 0 : t < 0.6 ? smooth((t - 0.24) / 0.36) : 1 - smooth((t - 0.6) / 0.4);
     const raised = s.raised ? 1 : s.casting ? 0.6 : 0;
     const bend = 0.25 + 0.9 * run;
-    rot(q1, -swing - 1.6 * attack - 2.4 * raised - 0.5 * air - 2.6 * cock - 1.2 * whip, 0.3 * whip, -0.08 - 0.3 * air - 0.25 * cock);
+    // Carried (not while it's thrown, or raised overhead): the windup of a chop lifts it, the chop brings it down.
+    const carry = this.carry * (1 - Math.max(cock, whip)) * (1 - raised);
+    const chop = carry * attack;
+    rot(q1, -swing * (1 - 0.6 * carry) - 0.3 * carry - 1.6 * attack * (1 - 0.45 * carry) - 2.4 * raised - 0.5 * air * (1 - carry) - 2.6 * cock - 1.2 * whip, 0.3 * whip, -0.08 - 0.3 * air - 0.25 * cock);
     j.upperArmR.quaternion.multiply(q1);
-    rot(q1, -bend - 0.6 * attack - 1.5 * cock, 0, 0);
+    rot(q1, -bend * (1 - carry) - 1.2 * carry + 0.75 * chop - 0.6 * attack * (1 - carry) - 1.5 * cock, 0, 0);
     j.lowerArmR.quaternion.multiply(q1);
     rot(q1, swing - 2.4 * raised - 0.5 * air - 1.1 * cock + 0.3 * whip, 0, 0.08 + 0.3 * air);
     j.upperArmL.quaternion.multiply(q1);
@@ -453,8 +477,10 @@ class Poser {
   /**
    * Two-bone IK: bend `side`'s arm (or leg) so its end joint puts its grip (or itself) at `target`,
    * turned to `endQ`, the elbow (knee) toward `pole`. Arms bend forward at the elbow, legs back.
+   * The grip is turned to `endQ` as the fist takes a gun (the model's grip's own turn), or
+   * (`across`) the hand itself is: a handle held across it.
    */
-  private limb(side: Side, target: Vec3, endQ: Quat, pole: Vec3, leg: boolean) {
+  private limb(side: Side, target: Vec3, endQ: Quat, pole: Vec3, leg: boolean, across = false) {
     const j = this.j;
     const rest = this.rig.rest;
     const upperName = leg ? (`upperLeg${side}` as const) : (`upperArm${side}` as const);
@@ -472,7 +498,7 @@ class Poser {
     const b = rest[endName].position.length() * scale;
     // Where the wrist goes for the grip to be at the target.
     const endWorldQ = q2.copy(endQ);
-    if (grip) endWorldQ.multiply(q3.copy(grip.quaternion).invert());
+    if (grip && !across) endWorldQ.multiply(q3.copy(grip.quaternion).invert());
     const wrist = v3.copy(target);
     if (grip) wrist.sub(v4.copy(grip.position).multiplyScalar(scale).applyQuaternion(endWorldQ));
     const S = upper.getWorldPosition(v4);

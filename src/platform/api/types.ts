@@ -126,9 +126,14 @@ export interface CosmeticDef {
   how?: string;
 }
 
-/** A cosmetic's model: boxes, each from one corner to the other (texels), in one colour. */
+/**
+ * A cosmetic's model: boxes, each from one corner to the other (texels), in one colour, later ones
+ * over earlier ones. It's drawn in micro-voxels, a quarter of a texel each, as the platform's
+ * characters are; `round` rounds a box's edges by so many texels (a dome, a pom-pom; a voxel's
+ * bevel if it's left out, 0 for sharp edges).
+ */
 export interface CosmeticModel {
-  boxes: { from: [number, number, number]; to: [number, number, number]; color: string; glow?: boolean }[];
+  boxes: { from: [number, number, number]; to: [number, number, number]; color: string; glow?: boolean; round?: number }[];
 }
 
 /**
