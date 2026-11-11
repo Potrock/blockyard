@@ -5,7 +5,7 @@ import { addXp, give } from '../survival/bag';
 import { ai, provoke } from './ai';
 import { registerArt, standIn } from './art';
 import { defineGear, resetGear, useGear } from './gear';
-import { modelUrl } from './models';
+import { modelUrl, strideOf } from './models';
 import { census, populate, spawnHerd } from './population';
 import { dismount, hurtMount, mountUp, updateRides } from './riding';
 import { adopt, flushTames, forgetTameHud, gainXp, loadTames, openMenu, registerTameCommands, releaseGuestTames, saddleUp, tagTames, tameDied, tendTames } from './tames';
@@ -35,7 +35,7 @@ function defineSpecies(game: GameContext) {
     game.entities.define(id, {
       name: s.name,
       // The species' own model once it's been built; a box animal in its hide until then.
-      model: url ? Models.gltf(url, { clips: { idle: 'idle', walk: 'walk', run: 'run', attack: 'attack' }, head: 'head' }) : standIn(id),
+      model: url ? Models.gltf(url, { clips: { idle: 'idle', walk: 'walk', run: 'run', attack: 'attack' }, head: 'head', stride: strideOf(id) }) : standIn(id),
       hitbox: s.hitbox,
       health: s.health,
       speed: s.walk,
