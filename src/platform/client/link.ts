@@ -26,8 +26,8 @@ export class Refused extends Error {
  * host's time for smooth playback.
  */
 export class SocketLink {
-  /** The connection dropped (the server stopped, the network went). */
-  onClose: (() => void) | null = null;
+  /** The connection dropped (the server stopped, the network went) or the server closed it: the close code, and its reason if it gave one. */
+  onClose: ((code: number, reason: string) => void) | null = null;
   private handler: ((b: HostBatch) => void) | null = null;
   private waiting: TimedBatch[] = [];
   /** Frames arrive as patches on the one before. */
@@ -52,7 +52,7 @@ export class SocketLink {
       };
       // Turned away (full, too many connections) or unreachable: the server's reason, if it gave one.
       ws.onclose = (e: CloseEvent) => {
-        if (link) link.onClose?.();
+        if (link) link.onClose?.(e.code, e.reason);
         else reject(new Refused(e.reason || `Can't reach the game server at ${url}`, e.code));
       };
     });

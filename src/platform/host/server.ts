@@ -132,7 +132,7 @@ export interface Limits {
   playersPerGame: number;
   /** Open connections from one address. */
   perAddress: number;
-  /** Messages a connection may send each second (a browser sends one per frame). */
+  /** Messages a connection may send each second (a browser sends its controls every frame: 480 a second on the fastest screens). */
   messagesPerSecond: number;
   /** Largest message, in bytes. */
   maxMessage: number;
@@ -150,7 +150,7 @@ export interface Limits {
 /** Turned away when the server runs as many rooms as it may. */
 const BUSY = { code: CLOSE_FULL, reason: 'The server is busy right now' };
 
-const LIMITS: Limits = { playersPerGame: 16, perAddress: 6, messagesPerSecond: 300, maxMessage: 16 * 1024, rooms: 12, roomsPerAddress: 3, uploadedRooms: 8 };
+const LIMITS: Limits = { playersPerGame: 16, perAddress: 6, messagesPerSecond: 600, maxMessage: 16 * 1024, rooms: 12, roomsPerAddress: 3, uploadedRooms: 8 };
 
 /** Turned away when uploaded games' rooms are as many as may run. */
 const UPLOADED_BUSY = { code: CLOSE_FULL, reason: 'Uploaded games are full right now' };

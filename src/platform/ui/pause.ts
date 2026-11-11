@@ -352,7 +352,7 @@ export class PauseMenu {
     const all = Object.entries(this.game.achievements ?? {});
     if (!all.length) return;
     const have = all.filter(([id]) => this.earned.has(id)).length;
-    this.featsHead.textContent = `Achievements · ${have} of ${all.length}${this.kept ? '' : ' · a guest’s last the visit'}`;
+    this.featsHead.textContent = `Achievements · ${have} of ${all.length}${this.kept ? '' : ' · sign in to keep them'}`;
     this.feats.replaceChildren(
       ...all.map(([id, a]) => {
         const done = this.earned.has(id);
