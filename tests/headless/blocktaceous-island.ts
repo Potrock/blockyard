@@ -18,7 +18,8 @@ export default function blocktaceousIsland() {
   const { size: N, cell: C, minX: O } = MAP;
   check(map.heights.length === N * N && map.zones.length === N * N, 'the grids are the map\'s size');
   console.log(`  the map: ${N} x ${N} samples of ${C} blocks, built in ${built.toFixed(0)} ms`);
-  check(built < 4000, `the map builds in a moment: ${built.toFixed(0)} ms`);
+  // (About half a second on a quiet machine; the bound is for one busy with other tests.)
+  check(built < 8000, `the map builds in a moment: ${built.toFixed(0)} ms`);
 
   // Land of every biome, a sensible share of each, and peaks that use the height.
   const share: Partial<Record<BiomeId, number>> = {};

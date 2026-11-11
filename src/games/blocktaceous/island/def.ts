@@ -21,7 +21,8 @@ export const world: WorldOptions = {
   spawn: { x: 0.5, y: 65.1, z: 2248.5 },
   spawnYaw: 0,
   time: 0.3,
-  viewDistance: 12,
+  // The island is big country: see a fair way across it (a phone holds itself to less).
+  viewDistance: 16,
 };
 
 /** The island's blocks (ore, crystal, obsidian, berry bushes...): 14 variants of the game's 24. */

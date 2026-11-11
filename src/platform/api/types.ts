@@ -1971,6 +1971,12 @@ export interface GltfSpec {
   clips?: { idle?: string | string[]; walk?: string | string[]; run?: string | string[]; attack?: string | string[]; cast?: string | string[] };
   /** Turn the model this far about its up axis (radians) if it doesn't face +z like glTF models should. */
   yaw?: number;
+  /**
+   * How far one loop of `walk` and `run` carries the model, in blocks at its own scale (a number
+   * for both, or one each), so its feet hold the ground: a big animal's loop covers many blocks.
+   * Default 1.5, a person's.
+   */
+  stride?: number | { walk?: number; run?: number };
   /** The node that turns to look (its name in the file). */
   head?: string;
   /** The node a held item hangs from (its name in the file). */

@@ -15,7 +15,9 @@ export const ENGINE_STRIDE = TAU / 4.2;
 /** How many of the engine's strides each animal's gait is drawn for (`--stride=<k>`, or `natural`: each animal's own). */
 export const STRIDE = process.argv.find((a) => a.startsWith('--stride='))?.slice(9) ?? '1';
 /** The ground one cycle of an animal's gait covers: `natural` is its own (metres), used with `--stride=natural`. */
-export const strideFor = (natural) => (STRIDE === 'natural' ? natural : ENGINE_STRIDE * Number(STRIDE));
+/** `--stride=natural` takes this much of an animal's own stride: what its legs reach without lifting off the ground. */
+const NATURAL = Number(process.argv.find((a) => a.startsWith('--natural='))?.slice(10) ?? 0.65);
+export const strideFor = (natural) => (STRIDE === 'natural' ? Math.max(ENGINE_STRIDE, Math.round(natural * NATURAL * 100) / 100) : ENGINE_STRIDE * Number(STRIDE));
 
 export const sin = (u) => Math.sin(u * TAU);
 export const cos = (u) => Math.cos(u * TAU);

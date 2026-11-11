@@ -12,6 +12,9 @@ import { characterModel } from './character';
 import { ClipLayer, type ClipPlay } from './clips';
 import { HELD_SCALE, HumanoidRig, rigFrames, wearAnchor, type RigFrames } from './humanoid';
 
+/** Blocks a figure covers per turn of its walk phase at scale 1 (entities.ts: 2π / 4.2). */
+const STRIDE = (Math.PI * 2) / 4.2;
+
 /** A model without an emissive map glows nowhere. */
 const BLACK = (() => {
   const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat);
@@ -596,6 +599,8 @@ export class GltfFigure implements Figure {
   private materials: THREE.RawShaderMaterial[] = [];
   private mixer: THREE.AnimationMixer | null = null;
   private clips = new Map<Clip, THREE.AnimationAction[]>();
+  /** Loops of walk and run per turn of the walk phase (`GltfSpec.stride`). */
+  private strides = { walk: 1, run: 1 };
   private looping: THREE.AnimationAction | null = null;
   private loopName: string | null = null;
   private head: THREE.Object3D | null = null;
@@ -691,6 +696,10 @@ export class GltfFigure implements Figure {
           return [a];
         });
       const c = spec.clips ?? {};
+      // The phase turns once per STRIDE blocks (a person's); a model with a longer loop turns slower.
+      const st = spec.stride;
+      const per = (n: number | undefined) => STRIDE / Math.max(0.1, n ?? STRIDE);
+      this.strides = typeof st === 'number' ? { walk: per(st), run: per(st) } : { walk: per(st?.walk), run: per(st?.run ?? st?.walk) };
       for (const k of ['idle', 'walk', 'run', 'attack', 'cast'] as const) {
         const list = actions(c[k], k === 'attack' || k === 'cast');
         if (list.length) this.clips.set(k, list);
@@ -728,7 +737,7 @@ export class GltfFigure implements Figure {
       for (const a of gait ?? []) {
         weights.set(a, moving);
         // In step with the ground covered: one cycle of the clip per stride.
-        a.time = ((s.walkPhase / (Math.PI * 2)) % 1) * (this.duration.get(a) ?? 1);
+        a.time = (((s.walkPhase / (Math.PI * 2)) * (running ? this.strides.run : this.strides.walk)) % 1) * (this.duration.get(a) ?? 1);
       }
       for (const a of casting ?? []) weights.set(a, 1);
       for (const k of ['idle', 'walk', 'run', 'cast'] as const) for (const a of this.clips.get(k) ?? []) a.setEffectiveWeight(weights.get(a) ?? 0);

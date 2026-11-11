@@ -95,7 +95,7 @@ PALETTE[Z.jungle] = {
 
 PALETTE[Z.redwood] = {
   surface: { top: 'podzol', bed: 'gravel' },
-  grass: '#4c8a48',
+  grass: '#447f42',
   roughness: 2.2,
   trees: [
     { shape: 'giant', log: 'redwood_log', leaves: 'spruce_leaves', height: [30, 46], density: 0.72 },
@@ -125,8 +125,8 @@ PALETTE[Z.swamp] = {
   ],
   scatter: [
     { block: 'mud', where: 'in', density: 0.6, clumps: 14 },
-    { block: 'reed', density: 0.14 },
-    { block: 'fiber_plant', density: 0.06 },
+    { block: 'reed', density: 0.09 },
+    { block: 'fiber_plant', density: 0.025 },
     { block: 'short_grass', density: 0.2 },
     { block: 'brown_mushroom', density: 0.01 },
     { block: 'fern', density: 0.05 },
