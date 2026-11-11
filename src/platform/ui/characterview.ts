@@ -75,7 +75,8 @@ export class CharacterView {
       const albedo = (l.albedo as THREE.DataTexture).image.data as Uint8Array;
       const lit = new Uint8Array(glow.length);
       for (let i = 0; i < glow.length; i += 4) if (glow[i]) lit.set([albedo[i], albedo[i + 1], albedo[i + 2], 255], i);
-      const emissive = new THREE.DataTexture(lit, 16, 16);
+      const image = (l.albedo as THREE.DataTexture).image;
+      const emissive = new THREE.DataTexture(lit, image.width, image.height);
       emissive.colorSpace = THREE.SRGBColorSpace;
       emissive.needsUpdate = true;
       const m = new THREE.Mesh(l.geometry, new THREE.MeshStandardMaterial({ map: l.albedo, emissiveMap: emissive, emissive: 0xffffff, roughness: 0.8 }));

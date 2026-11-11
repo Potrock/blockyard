@@ -28,6 +28,7 @@ export function characterScene(m: CharacterMesh): { gltf: GLTF; root: THREE.Grou
     const at = m.joints[j];
     const from = parent ? m.joints[parent] : [0, 0, 0];
     node.position.set(at[0] - from[0], at[1] - from[1], at[2] - from[2]);
+    if (j === 'gripL' || j === 'gripR') node.rotation.set(...m.grips[j], 'YXZ');
     (parent ? nodes[parent] : root).add(node);
     nodes[j] = node;
   }
@@ -50,7 +51,8 @@ export function characterScene(m: CharacterMesh): { gltf: GLTF; root: THREE.Grou
   const texture = (data: Uint8Array, srgb: boolean) => {
     const t = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
     if (srgb) t.colorSpace = THREE.SRGBColorSpace;
-    t.magFilter = THREE.LinearFilter;
+    // (A voxel face is a few texels: crisp up close, blended far off.)
+    t.magFilter = THREE.NearestFilter;
     t.minFilter = THREE.LinearMipmapLinearFilter;
     t.generateMipmaps = true;
     t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;

@@ -1,23 +1,27 @@
 /**
- * Micro-voxel models in code (the platform's characters: `build.ts`): shapes painted into voxel
- * volumes, meshed as the visible voxel faces, each on a tile of a small palette atlas: an albedo,
- * a metallic-roughness (G roughness, B metalness) and an emissive image of one UV layout. The look
- * is Call of Blocky's and Blockfront's (their build tools' `voxel.mjs`, which this follows): clean
- * voxels, flat colours, the grid read from the steps, the colours and the soft occlusion in the
- * concave corners.
+ * Micro-voxel models in code (the platform's characters, `build.ts`, and what they wear): shapes
+ * painted into voxel volumes, meshed as the visible voxel faces and baked onto an atlas: an
+ * albedo, a metallic-roughness (G roughness, B metalness) and an emissive image of one UV layout.
+ * The look is Call of Blocky's and Blockfront's (their build tools' `voxel.mjs`), finer: every
+ * voxel its own shade of its colour, so the grid reads on a flat surface as well as from the
+ * steps, and a soft occlusion in the concave corners.
  *
  * - Voxels: integer cells (i, j, k); cell (i, j, k) spans [i, i+1] x [j, j+1] x [k, k+1]. A model
  *   is parts (a character's: a part per joint), each a map of cells to colour names. Parts may
  *   share cells (a part reaching into its neighbour); a face shows where its own part has no
  *   voxel, so a part's surface is whole whatever the others do.
- * - Faces: each face of a voxel toward a cell its part leaves empty is a quad. Its occlusion: the
+ * - Faces: each face of a voxel toward a cell its part leaves empty shows. Its occlusion: the
  *   cells round the one it faces (any part's): an occupied edge neighbour darkens that edge of the
- *   tile, an occupied corner neighbour (both its edges open) that corner. The state is reduced to a
- *   canonical one under the square's eight symmetries, the quad's UVs turned to match, so a few
- *   tiles serve. Faces one part shows toward another's voxel are kept (they show when the parts
- *   move apart). Faces of one part, plane and colour that nothing shades merge into rectangles.
- * - Tiles: one per (colour, occlusion) in use, 8 x 8 texels; a quad's UVs half a texel in from its
- *   tile's edges.
+ *   face, an occupied corner neighbour (both its edges open) that corner. Faces one part shows
+ *   toward another's voxel are kept, unshaded (they show when the parts move apart: a knee's ball
+ *   as it bends).
+ * - Quads: the faces of one part in one plane merge into rectangles, whatever their colours: a
+ *   quad carries its faces as texels (`TEXELS` a face each way), so a figure of some eighteen
+ *   thousand voxel faces draws as under two thousand quads.
+ * - The atlas: each quad's rectangle of texels (its faces' colours, each voxel's own shade, the
+ *   occlusion), a gutter of its own edge round it, packed in shelves colour by colour (so coarser
+ *   mip levels blend a quad with others like it). Drawn with nearest magnification, the voxels
+ *   stay crisp up close.
  */
 
 /** A colour of a model: sRGB hex, how rough and metallic it is, how much it glows (0..1). */
@@ -118,127 +122,34 @@ export const DIRS = [
 ] as const;
 
 // Occlusion states: bits 0-3 the edges at s=0, s=1, t=0, t=1 (s along u, t along v); bits 4-7 the
-// corners (0,0), (1,0), (1,1), (0,1). The square's eight symmetries act on (s, t).
-type Sym = (s: number, t: number) => [number, number];
-const SYM: Sym[] = [(s, t) => [s, t], (s, t) => [1 - t, s], (s, t) => [1 - s, 1 - t], (s, t) => [t, 1 - s], (s, t) => [1 - s, t], (s, t) => [s, 1 - t], (s, t) => [t, s], (s, t) => [1 - t, 1 - s]];
-const FEATURES = [[0, 0.5], [1, 0.5], [0.5, 0], [0.5, 1], [0, 0], [1, 0], [1, 1], [0, 1]];
-const featureAt = (p: number[]) => FEATURES.findIndex((f) => f[0] === p[0] && f[1] === p[1]);
-const SYM_MAP = SYM.map((g) => FEATURES.map((f) => featureAt(g(f[0], f[1]))));
-const applySym = (g: number, mask: number) => {
-  let out = 0;
-  for (let b = 0; b < 8; b++) if (mask & (1 << b)) out |= 1 << SYM_MAP[g][b];
-  return out;
-};
-/** For each state: its canonical state, and the symmetry that takes the canonical one to it. */
-const CANON = Array.from({ length: 256 }, (_, mask) => {
-  let canon = mask;
-  for (let g = 0; g < 8; g++) canon = Math.min(canon, applySym(g, mask));
-  const g = SYM.findIndex((_, g2) => applySym(g2, canon) === mask);
-  return { canon, g };
-});
-const SYM_INV = SYM.map((g) =>
-  SYM.findIndex((h) =>
-    [[0, 0], [1, 0], [0, 1]].every(([s, t]) => {
-      const [a, b] = g(s, t);
-      const [c, d] = h(a, b);
-      return c === s && d === t;
-    }),
-  ),
-);
+// corners (0,0), (1,0), (1,1), (0,1).
 
-/** A visible face: its part, cell and direction, its colour and occlusion state, and (merged) its size in cells along u and v. */
-export interface Face {
+/** A quad: its part, direction, lowest cell and size in cells along the direction's u and v, and its texels in the atlas. */
+export interface Quad {
   part: string;
-  cell: [number, number, number];
   dir: number;
-  colour: string;
-  /** Its voxel's shade: 0 darker, 1, 2 lighter (all 1 unless shades vary). */
-  shade: number;
-  ao: number;
+  cell: [number, number, number];
   du: number;
   dv: number;
+  /** From its (0, 0) corner's (u0, v0) to its (1, 1) corner's (u1, v1), v down from the atlas's top. */
+  uv: [number, number, number, number];
 }
 
-/**
- * The visible faces of every part (merged where nothing shades them). A face toward another part's
- * voxel is kept, fully occluded; a face two parts both show (their voxels in one cell) is kept once.
- */
-export function faces(vox: Voxels, palette: Palette | null = null): Face[] {
-  const out: Face[] = [];
-  const all = new Set<number>();
-  for (const cells of vox.parts.values()) for (const key of cells.keys()) all.add(key);
-  const seen = new Set<string>();
-  const filled = (i: number, j: number, k: number) => all.has(cellKey(i, j, k));
-  for (const [part, cells] of vox.parts) {
-    for (const [key, colour] of cells) {
-      const [i, j, k] = cellOf(key);
-      const shade = palette && palette.get(colour).vary ? shadeOf(i, j, k) : 1;
-      for (let d = 0; d < 6; d++) {
-        const { n, u, v } = DIRS[d];
-        const a = [i + n[0], j + n[1], k + n[2]];
-        if (cells.has(cellKey(a[0], a[1], a[2]))) continue;
-        const fk = `${key},${d}`;
-        if (seen.has(fk)) continue;
-        seen.add(fk);
-        let ao = 0;
-        if (filled(a[0], a[1], a[2])) ao = 15;
-        else {
-          const at = (du: number, dv: number) => filled(a[0] + u[0] * du + v[0] * dv, a[1] + u[1] * du + v[1] * dv, a[2] + u[2] * du + v[2] * dv);
-          const e = [at(-1, 0), at(1, 0), at(0, -1), at(0, 1)];
-          for (let b = 0; b < 4; b++) if (e[b]) ao |= 1 << b;
-          const corners = [[-1, -1, 0, 2], [1, -1, 1, 2], [1, 1, 1, 3], [-1, 1, 0, 3]];
-          corners.forEach(([du, dv, e1, e2], b) => {
-            if (!e[e1] && !e[e2] && at(du, dv)) ao |= 1 << (4 + b);
-          });
-        }
-        out.push({ part, cell: [i, j, k], dir: d, colour, shade, ao, du: 1, dv: 1 });
-      }
-    }
-  }
-  return merge(out);
+/** A baked model: its quads and its atlas (RGBA images, rows from the top). */
+export interface Baked {
+  quads: Quad[];
+  width: number;
+  height: number;
+  albedo: Uint8Array;
+  /** G roughness, B metalness. */
+  mr: Uint8Array;
+  /** Each texel's colour times its glow. */
+  glow: Uint8Array;
 }
 
-/** Faces of one part, direction, plane and colour with no occlusion, merged into rectangles (greedy: along u, then v). */
-function merge(list: Face[]): Face[] {
-  const out: Face[] = [];
-  const groups = new Map<string, Face[]>();
-  for (const f of list) {
-    if (f.ao) {
-      out.push(f);
-      continue;
-    }
-    const { n } = DIRS[f.dir];
-    const a = n[0] ? 0 : n[1] ? 1 : 2;
-    const key = `${f.part}|${f.dir}|${f.cell[a]}|${f.colour}|${f.shade}`;
-    let g = groups.get(key);
-    if (!g) groups.set(key, (g = []));
-    g.push(f);
-  }
-  for (const fs of groups.values()) {
-    const { u, v } = DIRS[fs[0].dir];
-    const ua = u.indexOf(1);
-    const va = v.indexOf(1);
-    const at = new Set(fs.map((f) => `${f.cell[ua]},${f.cell[va]}`));
-    const used = new Set<string>();
-    const free = (x: number, y: number) => at.has(`${x},${y}`) && !used.has(`${x},${y}`);
-    fs.sort((p, q) => p.cell[va] - q.cell[va] || p.cell[ua] - q.cell[ua]);
-    for (const f of fs) {
-      const u0 = f.cell[ua];
-      const v0 = f.cell[va];
-      if (used.has(`${u0},${v0}`)) continue;
-      let w = 1;
-      while (free(u0 + w, v0)) w++;
-      let h = 1;
-      grow: for (;;) {
-        for (let x = 0; x < w; x++) if (!free(u0 + x, v0 + h)) break grow;
-        h++;
-      }
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) used.add(`${u0 + x},${v0 + y}`);
-      out.push({ ...f, du: w, dv: h });
-    }
-  }
-  return out;
-}
+/** Texels a voxel face, each way; the gutter round each quad's texels. */
+export const TEXELS = 2;
+const GUTTER = 1;
 
 /** A voxel's shade (0 darker, 1, 2 lighter) from its cell. */
 function shadeOf(i: number, j: number, k: number): number {
@@ -249,9 +160,6 @@ function shadeOf(i: number, j: number, k: number): number {
   return r < 0.3 ? 0 : r < 0.72 ? 1 : 2;
 }
 
-/** A tile's texels on a side. */
-export const TILE = 8;
-
 const toLinear = (c8: number) => {
   const c = c8 / 255;
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
@@ -261,94 +169,238 @@ const toSrgb8 = (l: number) => {
   return Math.max(0, Math.min(255, Math.round(v * 255)));
 };
 
-/** A tile's texels as brightness factors: flat, darkened in from its occluded edges and corners. */
-function tileFactors(ao: number): Float32Array {
-  const f = new Float32Array(TILE * TILE);
+/** How bright a point (x, y in 0..1) of a face is: 1, darkened in from its occluded edges and corners. */
+function occlusion(ao: number, x: number, y: number): number {
+  if (!ao) return 1;
   const ramp = (d: number) => (d < 0.75 ? 1 - 0.5 * (1 - d / 0.75) ** 2 : 1);
-  for (let t = 0; t < TILE; t++)
-    for (let s = 0; s < TILE; s++) {
-      const x = (s + 0.5) / TILE;
-      const y = (t + 0.5) / TILE;
-      let k = 1;
-      if (ao & 1) k *= ramp(x);
-      if (ao & 2) k *= ramp(1 - x);
-      if (ao & 4) k *= ramp(y);
-      if (ao & 8) k *= ramp(1 - y);
-      if (ao & 16) k *= ramp(Math.hypot(x, y) * 1.1);
-      if (ao & 32) k *= ramp(Math.hypot(1 - x, y) * 1.1);
-      if (ao & 64) k *= ramp(Math.hypot(1 - x, 1 - y) * 1.1);
-      if (ao & 128) k *= ramp(Math.hypot(x, 1 - y) * 1.1);
-      f[t * TILE + s] = k;
-    }
-  return f;
+  let k = 1;
+  if (ao & 1) k *= ramp(x);
+  if (ao & 2) k *= ramp(1 - x);
+  if (ao & 4) k *= ramp(y);
+  if (ao & 8) k *= ramp(1 - y);
+  if (ao & 16) k *= ramp(Math.hypot(x, y) * 1.1);
+  if (ao & 32) k *= ramp(Math.hypot(1 - x, y) * 1.1);
+  if (ao & 64) k *= ramp(Math.hypot(1 - x, 1 - y) * 1.1);
+  if (ao & 128) k *= ramp(Math.hypot(x, 1 - y) * 1.1);
+  return k;
 }
 
-/** An atlas: its images (RGBA, rows from the top) and each face's four corners' UVs. */
-export interface Atlas {
-  width: number;
-  height: number;
-  albedo: Uint8Array;
-  /** G roughness, B metalness. */
-  mr: Uint8Array;
-  /** Each texel's colour times its glow. */
-  glow: Uint8Array;
-  /** Per face: corners (0,0), (1,0), (1,1), (0,1) of its (s, t), as UVs (v down from the top). */
-  uvs: [number, number][][];
+/** The faces of one part in one plane: (u, v) to each face's colour, shade and occlusion (packed). */
+interface Plane {
+  part: string;
+  dir: number;
+  plane: number;
+  at: Map<number, number>;
 }
+const uvKey = (u: number, v: number) => u + B + (v + B) * 1024;
 
 /**
- * The atlas for a list of faces: a tile per (colour, canonical occlusion) used, colour by colour
- * (so distant mip levels blend a colour with its own), a row of 32 to the image.
+ * Bake a model: the visible faces of every part (a face toward another part's voxel is kept,
+ * unshaded; a face two parts both show, their voxels in one cell, is kept once), merged plane by
+ * plane into quads, each quad's faces drawn into the atlas.
  */
-export function atlas(list: Face[], palette: Palette, width = 256): Atlas {
-  const order = [...palette.colours.keys()];
-  const tiles = new Map<string, { colour: string; shade: number; ao: number; x: number; y: number }>();
-  for (const f of list) {
-    const key = `${f.colour}|${f.shade}|${CANON[f.ao].canon}`;
-    if (!tiles.has(key)) tiles.set(key, { colour: f.colour, shade: f.shade, ao: CANON[f.ao].canon, x: 0, y: 0 });
+export function bake(vox: Voxels, palette: Palette): Baked {
+  const paints = [...palette.colours.values()];
+  const paintOf = new Map(paints.map((c, n) => [c.name, n]));
+  // Every part's cells, and the cells two parts share (a face both show there is kept once).
+  const all = new Set<number>();
+  const shared = new Set<number>();
+  for (const cells of vox.parts.values())
+    for (const key of cells.keys()) {
+      if (all.has(key)) shared.add(key);
+      else all.add(key);
+    }
+  const seen = new Set<number>();
+  const planes = new Map<number, Plane>();
+  // A step along each axis, as a cell's key; each direction's normal, u and v as steps and axes.
+  const STEP = [1, 1024, 1048576];
+  const dirs = DIRS.map(({ n, u, v }) => {
+    const axis = n[0] ? 0 : n[1] ? 1 : 2;
+    return { axis, ua: u.indexOf(1), va: v.indexOf(1), n: STEP[axis] * (n[axis] as number), u: STEP[u.indexOf(1)], v: STEP[v.indexOf(1)] };
+  });
+  let partIndex = 0;
+  for (const [part, cells] of vox.parts) {
+    for (const [key, colour] of cells) {
+      let c: [number, number, number] | null = null;
+      let paint = 0;
+      let shade = 1;
+      for (let d = 0; d < 6; d++) {
+        const D = dirs[d];
+        const a = key + D.n;
+        if (cells.has(a)) continue;
+        if (shared.has(key)) {
+          const fk = key * 8 + d;
+          if (seen.has(fk)) continue;
+          seen.add(fk);
+        }
+        if (!c) {
+          c = cellOf(key);
+          const p = paintOf.get(colour);
+          if (p === undefined) throw new Error(`no colour ${colour}`);
+          paint = p;
+          shade = paints[p].vary ? shadeOf(c[0], c[1], c[2]) : 1;
+        }
+        let ao = 0;
+        // (Toward another part's voxel: hidden until the parts move apart, and plain when they do.)
+        if (!all.has(a)) {
+          const e0 = all.has(a - D.u);
+          const e1 = all.has(a + D.u);
+          const e2 = all.has(a - D.v);
+          const e3 = all.has(a + D.v);
+          ao = (e0 ? 1 : 0) | (e1 ? 2 : 0) | (e2 ? 4 : 0) | (e3 ? 8 : 0);
+          if (!e0 && !e2 && all.has(a - D.u - D.v)) ao |= 16;
+          if (!e1 && !e2 && all.has(a + D.u - D.v)) ao |= 32;
+          if (!e1 && !e3 && all.has(a + D.u + D.v)) ao |= 64;
+          if (!e0 && !e3 && all.has(a - D.u + D.v)) ao |= 128;
+        }
+        const pk = (partIndex * 6 + d) * 1024 + c[D.axis] + B;
+        let plane = planes.get(pk);
+        if (!plane) planes.set(pk, (plane = { part, dir: d, plane: c[D.axis], at: new Map() }));
+        plane.at.set(uvKey(c[D.ua], c[D.va]), paint | (shade << 8) | (ao << 10));
+      }
+    }
+    partIndex++;
   }
-  const sorted = [...tiles.values()].sort((a, b) => order.indexOf(a.colour) - order.indexOf(b.colour) || a.shade - b.shade || a.ao - b.ao);
-  const perRow = width / TILE;
-  const height = 2 ** Math.ceil(Math.log2(Math.max(TILE, Math.ceil(sorted.length / perRow) * TILE)));
+  // Each plane's faces into rectangles (greedy: along u, then v).
+  const rects: { plane: Plane; u: number; v: number; w: number; h: number; paint: number; x: number; y: number }[] = [];
+  for (const plane of planes.values()) {
+    const used = new Set<number>();
+    const free = (u: number, v: number) => plane.at.has(uvKey(u, v)) && !used.has(uvKey(u, v));
+    for (const key of [...plane.at.keys()].sort((p, q) => p - q)) {
+      if (used.has(key)) continue;
+      const u0 = (key % 1024) - B;
+      const v0 = Math.floor(key / 1024) - B;
+      let w = 1;
+      while (free(u0 + w, v0)) w++;
+      let h = 1;
+      grow: for (;;) {
+        for (let x = 0; x < w; x++) if (!free(u0 + x, v0 + h)) break grow;
+        h++;
+      }
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) used.add(uvKey(u0 + x, v0 + y));
+      rects.push({ plane, u: u0, v: v0, w, h, paint: plane.at.get(key)! & 255, x: 0, y: 0 });
+    }
+  }
+  // Packed in shelves, colour by colour, the tall ones first.
+  const T = TEXELS;
+  const G = GUTTER;
+  const order = [...rects].sort((p, q) => p.paint - q.paint || q.h - p.h || q.w - p.w);
+  let area = 0;
+  let widest = 0;
+  for (const r of rects) {
+    area += (r.w * T + 2 * G) * (r.h * T + 2 * G);
+    widest = Math.max(widest, r.w * T + 2 * G);
+  }
+  const width = 2 ** Math.ceil(Math.log2(Math.max(16, widest, Math.sqrt(area * 1.15))));
+  let x = 0;
+  let y = 0;
+  let shelf = 0;
+  for (const r of order) {
+    const pw = r.w * T + 2 * G;
+    if (x + pw > width) {
+      x = 0;
+      y += shelf;
+      shelf = 0;
+    }
+    r.x = x;
+    r.y = y;
+    x += pw;
+    shelf = Math.max(shelf, r.h * T + 2 * G);
+  }
+  const height = 2 ** Math.ceil(Math.log2(Math.max(16, y + shelf)));
   const albedo = new Uint8Array(width * height * 4);
   const mr = new Uint8Array(width * height * 4);
   const glow = new Uint8Array(width * height * 4);
-  const cache = new Map<number, Float32Array>();
-  sorted.forEach((tile, n) => {
-    tile.x = (n % perRow) * TILE;
-    tile.y = Math.floor(n / perRow) * TILE;
-    const c = palette.get(tile.colour);
-    const lin = [(c.rgb >> 16) & 255, (c.rgb >> 8) & 255, c.rgb & 255].map(toLinear);
-    let f = cache.get(tile.ao);
-    if (!f) cache.set(tile.ao, (f = tileFactors(tile.ao)));
-    const shade = 1 + (tile.shade - 1) * c.vary * 2.2;
-    for (let t = 0; t < TILE; t++)
-      for (let s = 0; s < TILE; s++) {
-        const o = ((tile.y + t) * width + tile.x + s) * 4;
-        for (let ch = 0; ch < 3; ch++) {
-          albedo[o + ch] = toSrgb8(lin[ch] * shade * f[t * TILE + s]);
-          glow[o + ch] = Math.round(albedo[o + ch] * c.glow);
-        }
-        mr[o + 1] = Math.round(c.rough * 255);
-        mr[o + 2] = Math.round(c.metal * 255);
-        albedo[o + 3] = mr[o + 3] = glow[o + 3] = 255;
+  const linear = paints.map((c) => [(c.rgb >> 16) & 255, (c.rgb >> 8) & 255, c.rgb & 255].map(toLinear));
+  const quads: Quad[] = [];
+  // (Most texels are a colour's three plain shades: worked out once each.)
+  const plain = new Map<number, number[]>();
+  const texel = (o: number, c: Paint, lin: number[], k: number, key = -1) => {
+    let rgb = key < 0 ? undefined : plain.get(key);
+    if (!rgb) {
+      rgb = lin.map((l) => toSrgb8(l * k));
+      if (key >= 0) plain.set(key, rgb);
+    }
+    for (let ch = 0; ch < 3; ch++) {
+      albedo[o + ch] = rgb[ch];
+      glow[o + ch] = Math.round(rgb[ch] * c.glow);
+    }
+    mr[o + 1] = Math.round(c.rough * 255);
+    mr[o + 2] = Math.round(c.metal * 255);
+    albedo[o + 3] = mr[o + 3] = glow[o + 3] = 255;
+  };
+  const copy = (to: number, from: number) => {
+    for (let ch = 0; ch < 4; ch++) {
+      albedo[to + ch] = albedo[from + ch];
+      mr[to + ch] = mr[from + ch];
+      glow[to + ch] = glow[from + ch];
+    }
+  };
+  for (const r of rects) {
+    const tw = r.w * T;
+    const th = r.h * T;
+    const x0 = r.x + G;
+    const y0 = r.y + G;
+    for (let fy = 0; fy < r.h; fy++)
+      for (let fx = 0; fx < r.w; fx++) {
+        const face = r.plane.at.get(uvKey(r.u + fx, r.v + fy))!;
+        const c = paints[face & 255];
+        const lin = linear[face & 255];
+        const shade = 1 + (((face >> 8) & 3) - 1) * c.vary * 2.2;
+        const ao = face >> 10;
+        for (let sy = 0; sy < T; sy++)
+          for (let sx = 0; sx < T; sx++) texel(((y0 + fy * T + sy) * width + x0 + fx * T + sx) * 4, c, lin, ao ? shade * occlusion(ao, (sx + 0.5) / T, (sy + 0.5) / T) : shade, ao ? -1 : face & 1023);
       }
-  });
-  // Each face's corners: its tile's, turned by the symmetry that takes the canonical state to its own.
-  const uvs = list.map((f) => {
-    const tile = tiles.get(`${f.colour}|${f.shade}|${CANON[f.ao].canon}`)!;
-    const inv = SYM[SYM_INV[CANON[f.ao].g]];
-    return [[0, 0], [1, 0], [1, 1], [0, 1]].map(([s, t]) => {
-      const [a, b] = inv(s, t);
-      return [(tile.x + 0.5 + a * (TILE - 1)) / width, (tile.y + 0.5 + b * (TILE - 1)) / height] as [number, number];
-    });
-  });
-  return { width, height, albedo, mr, glow, uvs };
+    // The gutter: the rectangle's own edge, out to the sides, then above and below.
+    for (let ty = 0; ty < th; ty++)
+      for (let g = 1; g <= G; g++) {
+        copy(((y0 + ty) * width + x0 - g) * 4, ((y0 + ty) * width + x0) * 4);
+        copy(((y0 + ty) * width + x0 + tw - 1 + g) * 4, ((y0 + ty) * width + x0 + tw - 1) * 4);
+      }
+    for (let tx = -G; tx < tw + G; tx++)
+      for (let g = 1; g <= G; g++) {
+        copy(((y0 - g) * width + x0 + tx) * 4, (y0 * width + x0 + tx) * 4);
+        copy(((y0 + th - 1 + g) * width + x0 + tx) * 4, ((y0 + th - 1) * width + x0 + tx) * 4);
+      }
+    const { n, u, v } = DIRS[r.plane.dir];
+    const cell: [number, number, number] = [0, 0, 0];
+    cell[n[0] ? 0 : n[1] ? 1 : 2] = r.plane.plane;
+    cell[u.indexOf(1)] = r.u;
+    cell[v.indexOf(1)] = r.v;
+    quads.push({ part: r.plane.part, dir: r.plane.dir, cell, du: r.w, dv: r.h, uv: [(r.x + G) / width, (r.y + G) / height, (r.x + G + tw) / width, (r.y + G + th) / height] });
+  }
+  return { quads, width, height, albedo, mr, glow };
 }
 
-/** A face's quad's corners (voxel units), counter-clockwise from outside. */
-export function quadCorners(f: Face): number[][] {
+/** A quad's corners (voxel units), counter-clockwise from outside: its (0, 0), (1, 0), (1, 1) and (0, 1). */
+export function quadCorners(f: Quad): number[][] {
   const { n, u, v } = DIRS[f.dir];
   const o = f.cell.map((c, a) => c + (n[a] > 0 ? 1 : 0));
   return [o, o.map((x, a) => x + u[a] * f.du), o.map((x, a) => x + u[a] * f.du + v[a] * f.dv), o.map((x, a) => x + v[a] * f.dv)];
+}
+
+/** A baked model's mesh: four corners a quad (positions in voxels times `scale`, normals, UVs), two triangles each. */
+export function quadMesh(quads: Quad[], scale: number): { position: Float32Array; normal: Float32Array; uv: Float32Array; index: Uint32Array } {
+  const n = quads.length;
+  const position = new Float32Array(n * 12);
+  const normal = new Float32Array(n * 12);
+  const uv = new Float32Array(n * 8);
+  const index = new Uint32Array(n * 6);
+  quads.forEach((f, q) => {
+    const corners = quadCorners(f);
+    const d = DIRS[f.dir].n;
+    const [u0, v0, u1, v1] = f.uv;
+    const uvs = [u0, v0, u1, v0, u1, v1, u0, v1];
+    for (let c = 0; c < 4; c++) {
+      const v = q * 4 + c;
+      for (let a = 0; a < 3; a++) {
+        position[v * 3 + a] = corners[c][a] * scale;
+        normal[v * 3 + a] = d[a];
+      }
+      uv[v * 2] = uvs[c * 2];
+      uv[v * 2 + 1] = uvs[c * 2 + 1];
+    }
+    index.set([q * 4, q * 4 + 1, q * 4 + 2, q * 4, q * 4 + 2, q * 4 + 3], q * 6);
+  });
+  return { position, normal, uv, index };
 }

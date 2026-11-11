@@ -15,12 +15,14 @@ export default function characters() {
   looks.push({ hatHair: true, hair: 'afro' }, { hatHair: true, hair: 'pomp' });
   let worst = 0;
   let most = 0;
+  let tall = 0;
   const t0 = performance.now();
   for (const look of looks) {
     const t = performance.now();
     const m = buildCharacter(look);
     worst = Math.max(worst, performance.now() - t);
     const tris = m.index.length / 3;
+    if (m.atlas.height > 512) tall++;
     most = Math.max(most, tris);
     let lo = Infinity;
     let hi = -Infinity;
@@ -30,7 +32,7 @@ export default function characters() {
     check(tris > 2000 && tris <= 25000, `${what}: ${tris} triangles`);
     check(Math.abs(lo) < 1e-6 && hi > 1.7 && hi < 2.3, `${what}: ${lo.toFixed(2)}..${hi.toFixed(2)} m tall`);
     check(bones.size === BONES.length, `${what}: every bone has a part (${bones.size} of ${BONES.length})`);
-    check(m.atlas.height <= 256 && m.atlas.albedo.length === m.atlas.width * m.atlas.height * 4, `${what}: its atlas`);
+    check(m.atlas.width <= 512 && m.atlas.height <= 1024 && m.atlas.albedo.length === m.atlas.width * m.atlas.height * 4, `${what}: its atlas`);
     check(m.joints.head[1] > 1.3 && m.joints.gripR[1] < m.joints.handR[1], `${what}: its joints`);
   }
   const each = (performance.now() - t0) / looks.length;
@@ -41,5 +43,5 @@ export default function characters() {
   check(url.startsWith('character:') && back.build === 'heavy' && back.hair === 'afro' && back.hairColor === '#e0709e' && back.top === 'aloha' && back.bottom === PLAIN_LOOK.bottom, `a look's address round-trips: ${url}`);
   check(characterUrl({}) === 'character:' && characterUrl({ hair: 'nonsense' as 'bald', skin: 'red' }) === 'character:', 'the plain look, and nonsense left out');
   check(characterLook('/models/x.glb') === null, "a file's address isn't a character's");
-  console.log(`  characters: ${looks.length} looks, at most ${most} triangles, ${each.toFixed(1)} ms each (slowest ${worst.toFixed(1)} ms)`);
+  console.log(`  characters: ${looks.length} looks, at most ${most} triangles, ${tall} with a 512 x 1024 atlas (the rest 512 x 512), ${each.toFixed(1)} ms each (slowest ${worst.toFixed(1)} ms)`);
 }
