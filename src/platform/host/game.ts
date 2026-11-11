@@ -172,10 +172,21 @@ interface Client {
   bank: number;
   /** Its inputs have started playing (after a cushion's worth came in). */
   playing?: boolean;
+  /**
+   * Seconds it may make up at once when it's fallen far behind: time that really passed (the
+   * clock's, a stalled step's too) and it hasn't moved through yet. What a client sends past that
+   * it made up: see `moveInputs`.
+   */
+  spare: number;
 }
 
 /** Most movement time a client can save up (catching up after a hiccup). */
 const MAX_BANK = 0.25;
+/** Most a client far behind can make up at once (seconds), and what it starts with. */
+const MAX_SPARE = 2;
+const SPARE = 0.25;
+/** Inputs waiting past this many: far behind. */
+const BEHIND = 30;
 /** Inputs kept in hand past this (seconds' worth) are played a little faster until it's worn down. */
 const CUSHION = 0.05;
 /** Inputs held back before a client's first is played: the cushion it starts with. */
@@ -336,7 +347,7 @@ export class GameHost {
     this.events.push({ t: 'ready' });
     // One client from the start, or none yet: the first to connect takes the first player's place.
     if (o.remote) this.sim.leave(me.id);
-    else this.clients.set(me.id, { player: me, account: null, achieved: [], look: null, owned: [], input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 });
+    else this.clients.set(me.id, { player: me, account: null, achieved: [], look: null, owned: [], input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0, spare: SPARE });
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -371,7 +382,7 @@ export class GameHost {
    */
   connect(name?: string, who?: Who): { id: string; player: string | null; batch: HostBatch } {
     useGameBlocks(this.blocks);
-    const client: Client = { player: null, account: who?.account ?? null, achieved: who?.achieved ?? [], look: who?.look ?? null, owned: who?.owned ?? [], input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0 };
+    const client: Client = { player: null, account: who?.account ?? null, achieved: who?.achieved ?? [], look: who?.look ?? null, owned: who?.owned ?? [], input: { ...IDLE_INPUT }, radius: this.radius, moves: null, bank: 0, spare: SPARE };
     let id = `c${this.nextClient++}`;
     if (name !== undefined) {
       // Straight in: known by their player's id.
@@ -524,7 +535,7 @@ export class GameHost {
    * Advance the game `dt` seconds with everyone's controls; each client gets their batch: the
    * calls for everyone and for them, their replies, the rest, and the frame.
    */
-  step(dt: number, running = true): Map<string, HostBatch> {
+  step(dt: number, running = true, elapsed = dt): Map<string, HostBatch> {
     // (Hosts sharing a thread, a test server's rooms, each run with their own blocks.)
     useGameBlocks(this.blocks);
     const sim = this.sim;
@@ -543,7 +554,7 @@ export class GameHost {
         inputs[p.id] = c.input;
         if (c.moves) {
           premoved.add(p.id);
-          this.moveInputs(c, p, dt);
+          this.moveInputs(c, p, dt, Math.max(dt, elapsed));
         }
       }
       sim.tick(dt, running && sim.started, inputs, premoved);
@@ -657,21 +668,23 @@ export class GameHost {
   }
 
   /**
-   * Move a predicting client's player through their inputs one by one, each for as long as it
-   * lasted on the client: the same steps the client took, so its prediction holds. Movement time
-   * is earned from the server's clock, so a client that sends too much waits; one that's fallen
-   * far behind (a queue over 30) catches up at once rather than lagging for good.
+   * A predicting client's inputs, played one by one, each for as long as it lasted on the client
+   * (the same steps the client took, so its prediction holds), at the pace they were made: the
+   * server's time, which they can't outrun. They arrive unevenly; played as they land, the player
+   * would move in fits and starts on everyone else's screen (none one step, two the next). So time
+   * without inputs isn't saved up to spend in a burst: the ones that arrive late queue up instead,
+   * and that queue is the cushion for the next late one (a client's first few are held back to
+   * start one). While arrivals are steady it's played down a little faster, so the cushion stays
+   * small. Steps take whole inputs, so a player's state trails the step by what's left over (see
+   * `lead`).
+   *
+   * A client far behind (a queue over `BEHIND`: the server stalled and lost the time, `elapsed`
+   * more than `dt`, or its inputs were held up on the way) catches up at once rather than lagging
+   * for good, through as much time as has really passed (`spare`). Inputs past that claim time
+   * that never was (a client made to say each lasted longer, or to send more of them): they're
+   * dropped unplayed, and its screen is put back where the server has it.
    */
-  /**
-   * A predicting client's inputs, played at the pace they were made (the server's time, which
-   * they can't outrun). They arrive unevenly; played as they land, the player would move in fits
-   * and starts on everyone else's screen (none one step, two the next). So time without inputs
-   * isn't saved up to spend in a burst: the ones that arrive late queue up instead, and that queue
-   * is the cushion for the next late one (a client's first few are held back to start one). While
-   * arrivals are steady it's played down a little faster, so the cushion stays small. Steps take
-   * whole inputs, so a player's state trails the step by what's left over (see `lead`).
-   */
-  private moveInputs(c: Client, p: PlayerSim, dt: number) {
+  private moveInputs(c: Client, p: PlayerSim, dt: number, elapsed: number) {
     const moves = c.moves!;
     let queued = 0;
     for (const m of moves) queued += m.dt;
@@ -681,12 +694,19 @@ export class GameHost {
       c.playing = true;
     }
     c.bank = Math.min(MAX_BANK, c.bank + dt * (queued > CUSHION + dt ? 1.05 : 1));
-    while (moves.length && (moves[0].dt <= c.bank + 1e-6 || moves.length > 30)) {
+    c.spare = Math.min(MAX_SPARE, c.spare + elapsed);
+    while (moves.length && (moves[0].dt <= c.bank + 1e-6 || (moves.length > BEHIND && moves[0].dt <= c.spare + 1e-6))) {
       const m = moves.shift()!;
       c.bank = Math.max(0, c.bank - m.dt);
+      c.spare = Math.max(0, c.spare - m.dt);
       p.input.set(m.input);
       p.move(m.dt);
       p.ack = m.seq;
+    }
+    if (moves.length > BEHIND) {
+      // More than there was time for: gone, all but the newest (acknowledged, so its screen follows).
+      p.ack = moves[moves.length - 3].seq;
+      moves.splice(0, moves.length - 2);
     }
     if (!moves.length) c.bank = Math.min(c.bank, dt * 0.5);
     // Whole inputs don't fill a step exactly: the time left over is how far their state trails

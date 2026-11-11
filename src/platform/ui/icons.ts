@@ -108,3 +108,20 @@ export function blockIcon(def: BlockDef, albedo: Uint8Array, partner?: BlockDef)
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   return c.toDataURL();
 }
+
+/**
+ * Blocks' icons, each drawn the first time it's asked for: a game shows a handful (what's in the
+ * hotbar, its items that look like blocks), and drawing every block's as a game loads held the
+ * page up a quarter of a second.
+ */
+export class BlockIcons {
+  private made = new Map<number, string | undefined>();
+
+  /** `draw`: a block's icon (a data URL), or nothing for an id that's no block. */
+  constructor(private draw: (id: number) => string | undefined) {}
+
+  get(id: number): string | undefined {
+    if (!this.made.has(id)) this.made.set(id, this.draw(id));
+    return this.made.get(id);
+  }
+}

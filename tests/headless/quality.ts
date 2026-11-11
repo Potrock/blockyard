@@ -56,6 +56,19 @@ export default function quality() {
   const cappedWent = run(capped, 90, () => 33.4);
   check(capped.level === 0 && Math.max(...cappedWent) > 0, `capped at 30: tried ${Math.max(...cappedWent)} notches, back to ${capped.level} (${cappedWent.join(' → ')})`);
 
+  // Graphics drawn in software: over a second a frame at full settings (every frame "a hitch"), a
+  // tenth of that at the bottom. It goes all the way down rather than sitting at the top for good.
+  const crawl = new AutoQuality();
+  crawl.reset();
+  const crawlWent = run(crawl, 120, (l) => 1200 * 0.8 ** l);
+  check(crawl.level === AutoQuality.notches, `a frame a second: down to the bottom notch (${crawlWent.join(' → ')})`);
+  // One long frame among good ones is still only a hitch.
+  const hitchy = new AutoQuality();
+  hitchy.reset();
+  let n = 0;
+  run(hitchy, 60, () => (++n % 40 === 0 ? 400 : 12));
+  check(hitchy.level === 0, `a hitch now and then changes nothing (level ${hitchy.level})`);
+
   // A machine with room to spare starting low (last time's level, or a heavy scene that passed):
   // it climbs back to the player's settings.
   const room = new AutoQuality();

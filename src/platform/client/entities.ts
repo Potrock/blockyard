@@ -346,6 +346,7 @@ export class EntityView {
       let look = this.looks.get(id);
       if (!look) this.looks.set(id, (look = cosmeticLook(c.model)));
       const mesh = new THREE.Mesh(look.geometry, this.graphics.materialFor(look.albedo, look.emissive));
+      mesh.customDepthMaterial = this.graphics.gltf.shadow(look.albedo);
       anchor.add(mesh);
       v.worn.push(mesh);
     }
@@ -384,6 +385,8 @@ export class EntityView {
     }
     const { geometry, model } = look;
     const mesh = new THREE.Mesh(geometry, this.graphics.materialFor(look.albedo, look.emissive, look.surface));
+    // (What's in a figure's hand casts a shadow with it.)
+    mesh.customDepthMaterial = this.graphics.gltf.shadow(look.albedo);
     if (look.points?.muzzle) mesh.userData.muzzle = look.points.muzzle.clone();
     else if (model?.muzzle) mesh.userData.muzzle = new THREE.Vector3(...model.muzzle).divideScalar(16);
     // What it hangs from: the hand, until client code moves it (it stays where it's put).

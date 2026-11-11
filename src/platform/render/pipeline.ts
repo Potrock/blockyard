@@ -432,24 +432,38 @@ export class Renderer {
   }
 
   private swapped: { mesh: THREE.Mesh; material: THREE.Material }[] = [];
+  private unseen: { object: THREE.Object3D; mask: number }[] = [];
 
-  /** Entities use their `customDepthMaterial` (alpha-tested, per atlas) in the shadow pass. */
+  /**
+   * Entities use their `customDepthMaterial` (alpha-tested, per atlas) in the shadow pass. What has
+   * none casts no shadow and is left out of the pass: drawn with its own material it would write
+   * colour for nothing, and a lit one samples the very shadow map being drawn into (a feedback
+   * loop: the browser refuses the draw and logs an error, every frame).
+   */
   private renderEntityShadows(sc: THREE.Camera) {
     const list = this.swapped;
+    const unseen = this.unseen;
     list.length = 0;
+    unseen.length = 0;
     this.entityScene.traverseVisible((o) => {
-      const m = o as THREE.Mesh;
+      const m = o as THREE.Mesh & { isPoints?: boolean; isLine?: boolean; isSprite?: boolean };
       if (m.isMesh && m.customDepthMaterial) {
         list.push({ mesh: m, material: m.material as THREE.Material });
         m.material = m.customDepthMaterial;
+      } else if (m.isMesh || m.isPoints || m.isLine || m.isSprite) {
+        // (By its layers, not `visible`: what hangs from it may cast a shadow of its own.)
+        unseen.push({ object: o, mask: o.layers.mask });
+        o.layers.mask = 0;
       }
     });
-    if (list.length === 0) return;
-    const mask = sc.layers.mask;
-    sc.layers.enableAll();
-    this.gl.render(this.entityScene, sc);
-    sc.layers.mask = mask;
+    if (list.length > 0) {
+      const mask = sc.layers.mask;
+      sc.layers.enableAll();
+      this.gl.render(this.entityScene, sc);
+      sc.layers.mask = mask;
+    }
     for (const s of list) s.mesh.material = s.material;
+    for (const u of unseen) u.object.layers.mask = u.mask;
   }
 
   private pass(material: THREE.Material, target: THREE.WebGLRenderTarget | null) {

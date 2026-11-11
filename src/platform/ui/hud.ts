@@ -1,5 +1,6 @@
 import { h } from './dom';
 import type { Registry } from '../world/registry';
+import type { BlockIcons } from './icons';
 
 /** Crosshair, hotbar and the block-name toast. */
 export class Hud {
@@ -17,7 +18,7 @@ export class Hud {
   /** Client code's own layers (see `layer`), by name. */
   private layers = new Map<string, HTMLElement>();
 
-  constructor(parent: HTMLElement, private registry: Registry, private icons: Map<number, string>) {
+  constructor(parent: HTMLElement, private registry: Registry, private icons: BlockIcons) {
     this.toast = h('div.toast');
     const bar = h('div.hotbar');
     for (let i = 0; i < 9; i++) {

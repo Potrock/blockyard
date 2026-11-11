@@ -230,7 +230,10 @@ export class TitleScreen implements HomeScreen {
     const faceButton = h('button.home-face-button', { onclick: () => this.openLocker(), title: 'Your look', 'aria-label': 'Your look' }, this.face);
     this.rooms = h('div.home-rooms');
     this.actions = h('div.home-actions', {}, faceButton, h('label.home-name', {}, h('span', {}, 'Playing as'), this.nameInput), this.button, this.rooms);
-    this.drawFace();
+    // The face once the page is up: its renderer (a WebGL context of its own, a room's light, its
+    // shaders) takes a moment to make, which the page and the game loading behind it don't wait for.
+    const idle = window.requestIdleCallback ?? ((f: () => void) => window.setTimeout(f, 80));
+    idle(() => this.drawFace(), { timeout: 2000 });
     this.hints = h('div.home-hints');
     this.shelf = h('nav.home-shelf', { 'aria-label': 'Games' });
     this.online = h('div.home-online');

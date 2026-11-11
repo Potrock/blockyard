@@ -126,7 +126,7 @@ export class RoomCore {
       const now = performance.now();
       const elapsed = (now - last) / 1000;
       last = now;
-      this.step(Math.min(MAX_STEP, elapsed));
+      this.step(Math.min(MAX_STEP, elapsed), elapsed);
     }, 1000 * dt);
   }
 
@@ -182,10 +182,11 @@ export class RoomCore {
     this.host.dispose();
   }
 
-  private step(dt: number) {
+  /** A step of `dt` seconds, `elapsed` since the last (more, after a stall: clients walked on through it). */
+  private step(dt: number, elapsed: number) {
     if (!this.ids.size) return;
     this.time += dt;
-    const batches = this.host.step(dt);
+    const batches = this.host.step(dt, true, elapsed);
     // (The host rounded the step's frame and worked out its patch once: `host.frames`.)
     const frames = this.host.frames;
     for (const [client, id] of this.ids) {
