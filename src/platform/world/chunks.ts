@@ -120,6 +120,20 @@ export class ChunkManager {
   private followed = false;
   private followX = 0;
   private followZ = 0;
+  /**
+   * This thread's time (ms) a frame may spend streaming: handing regions to the mesher, putting
+   * meshes on screen. A quarter of a frame, so 4 ms at 60 frames a second, and more of a slow
+   * frame (the graphics hold that one up, not this thread).
+   */
+  private budget = 4;
+  /**
+   * Jobs each worker is given at a time: a frame's worth, as long as frames are taking, so the
+   * workers aren't idle for most of a long frame. (Two each whatever the frame rate, the world
+   * came in at four jobs a frame per pair of workers: slowest on the machines with the fewest
+   * frames, however fast their workers.)
+   */
+  private depth = 2;
+  private lastUpdate = 0;
 
   constructor(
     private pool: WorkerPool,
@@ -170,6 +184,13 @@ export class ChunkManager {
       pz = this.followZ;
       this.followed = false;
     }
+    const now = performance.now();
+    const frame = Math.min(250, now - this.lastUpdate);
+    this.lastUpdate = now;
+    this.budget = Math.min(16, Math.max(4, frame * 0.25));
+    const jobs = this.pool.genCount + this.pool.meshCount;
+    const jobMs = jobs ? Math.max(0.5, (this.pool.genMs + this.pool.meshMs) / jobs) : 2;
+    this.depth = Math.min(32, Math.max(2, Math.ceil(frame / jobMs)));
     const ccx = Math.floor(px / 16);
     const ccz = Math.floor(pz / 16);
     const vl = Math.hypot(viewX, viewZ) || 1;
@@ -307,8 +328,9 @@ export class ChunkManager {
     );
   }
 
+  /** Hand the workers what's wanted most: as much as they have room for (`depth`), meshes within this thread's `budget`. */
   private dispatch(px: number, pz: number) {
-    let capacity = this.pool.capacity(2);
+    let capacity = this.pool.capacity(this.depth);
     if (capacity <= 0) return;
     const cands = this.candidates;
     cands.length = 0;
@@ -322,12 +344,15 @@ export class ChunkManager {
     }
     if (cands.length === 0) return;
     cands.sort((a, b) => a.score - b.score);
-    let meshBudget = 8;
+    // (A mesh job takes this thread's time too, to copy its region out.)
+    const t0 = performance.now();
+    let meshing = true;
     for (const c of cands) {
       if (capacity <= 0) break;
       if (c.mesh) {
-        if (meshBudget-- <= 0) continue;
+        if (!meshing) continue;
         this.requestMesh(c.col);
+        meshing = performance.now() - t0 < this.budget;
       } else {
         this.requestGen(c.col);
       }
@@ -376,9 +401,7 @@ export class ChunkManager {
     this.pool.mesh(col.cx, col.cz, region, (res) => {
       col.inflight--;
       if (res.type === 'error' && col.requestedVersion === version && ++col.failures < 3) col.requestedVersion = version - 1;
-      if (res.type !== 'mesh') return;
-      if (!this.cols.has(col.key) || this.cols.get(col.key) !== col) return;
-      this.onMesh(col, version, res.data);
+      if (res.type === 'mesh' && this.cols.get(col.key) === col) this.onMesh(col, version, res.data);
     });
   }
 
@@ -415,8 +438,9 @@ export class ChunkManager {
   private applyPending() {
     const t0 = performance.now();
     let n = 0;
+    const most = this.budget * 0.75;
     while (this.pending.length > 0) {
-      if (n > 0 && performance.now() - t0 > 3) break;
+      if (n > 0 && performance.now() - t0 > most) break;
       // Closest first.
       let best = 0;
       let bestD = Infinity;
