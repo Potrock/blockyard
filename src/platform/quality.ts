@@ -44,6 +44,11 @@ const WINDOW = 1.5;
 const SLOW = 22;
 /** ...and faster than this (about 57 fps) have room to spare. */
 const FAST = 17.5;
+/** A frame longer than this (ms) is a hitch, unless `CRAWL` of them come in a row... */
+const HITCH = 250;
+const CRAWL = 3;
+/** ...and one longer than this was the page away (asleep, behind a dialog). */
+const AWAY = 10_000;
 /** Seconds of room to spare before a notch back up is tried (doubling each time one fails). */
 const UP_WAIT = 12;
 const UP_WAIT_MAX = 240;
@@ -62,6 +67,8 @@ export class AutoQuality {
   enabled = true;
   private samples: number[] = [];
   private span = 0;
+  /** Frames over `HITCH` in a row. */
+  private hitches = 0;
   /** Seconds still to wait after a change (new targets, shaders, the scene settling). */
   private settle = 3;
   private roomFor = 0;
@@ -96,6 +103,7 @@ export class AutoQuality {
     this.level = Math.max(0, Math.min(NOTCHES.length, Math.floor(level) || 0));
     this.samples = [];
     this.span = 0;
+    this.hitches = 0;
     this.settle = 3;
     this.roomFor = 0;
     this.upWait = UP_WAIT;
@@ -107,10 +115,14 @@ export class AutoQuality {
 
   /**
    * One frame, `ms` after the last, while playing. Returns true when the level changed (the
-   * caller applies it). Frames over a quarter second (a hitch, a hidden tab) don't count.
+   * caller applies it). A frame over a quarter second on its own (a hitch, a tab coming back)
+   * doesn't count; a few in a row are how the frames are going (graphics drawn in software, a
+   * chip far too slow for these settings), and count like any others: nothing needs a notch more.
    */
   frame(ms: number): boolean {
-    if (!this.enabled || ms > 250) return false;
+    if (!this.enabled) return false;
+    if (ms <= HITCH) this.hitches = 0;
+    else if (ms > AWAY || ++this.hitches < CRAWL) return false;
     this.samples.push(ms);
     this.span += ms / 1000;
     if (this.span < WINDOW) return false;
