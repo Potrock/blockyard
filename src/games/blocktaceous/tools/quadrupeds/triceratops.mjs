@@ -8,7 +8,7 @@ import { Model, ell, cap, chain, union } from './lib.mjs';
 import { standardClips, GAITS, strideFor, keys, bend } from './anim.mjs';
 
 export function make() {
-  const m = new Model('triceratops', 'Triceratops', 10);
+  const m = new Model('triceratops', 'Triceratops', 9.5);
   m.colour('hide', 0xa88c5c);
   m.colour('back', 0x5c4a35);
   m.colour('belly', 0xe8dab4);

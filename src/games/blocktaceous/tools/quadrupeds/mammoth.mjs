@@ -5,7 +5,7 @@
  * down the back and legs, lighter streaks of guard hair; grey-brown skin on the trunk.
  */
 import { Model, ell, cap, chain, union, noise } from './lib.mjs';
-import { standardClips, GAITS, strideFor, keys, bend, turn, sin, wave } from './anim.mjs';
+import { standardClips, GAITS, strideFor, keys, bend, sin, wave } from './anim.mjs';
 import { legs, limbs } from './parts.mjs';
 
 export function make() {
@@ -77,7 +77,6 @@ export function make() {
     roar: { neck: -22, jaw: 22, body: -3, sink: 0.04 },
     // The trunk and ears: swaying as it stands and walks, curling grass to the mouth, laid out asleep, raised to trumpet.
     extra: (name, u, pose) => {
-      for (const [s, k] of [['L', 1], ['R', -1]]) void s, void k;
       if (name === 'idle') wave(pose, trunk, u, 5, 0.12, 0), wave(pose, trunk, u + 0.3, 3, 0.1, 2);
       if (name === 'walk' || name === 'run') wave(pose, trunk, u * 2, name === 'run' ? 9 : 5, 0.12, 0);
       if (name === 'eat') {

@@ -5,7 +5,7 @@ const require = createRequire('/home/user/blockyard/');
 const { chromium } = require('playwright');
 const [out, ...ids] = process.argv.slice(2);
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: Number(process.env.DSF ?? 1) });
+const page = await browser.newPage({ viewport: { width: Number(process.env.W ?? 1600), height: Number(process.env.H ?? 900) }, deviceScaleFactor: Number(process.env.DSF ?? 1) });
 page.on('pageerror', (e) => console.log('pageerror:', e.message));
 page.on('console', (m) => m.type() === 'error' && console.log('page:', m.text().slice(0, 300)));
 await page.goto(`http://localhost:${process.env.PORT ?? 5183}/?game=gallery`, { waitUntil: 'domcontentloaded' });
