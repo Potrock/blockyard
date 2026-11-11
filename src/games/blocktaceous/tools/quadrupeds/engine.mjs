@@ -35,6 +35,7 @@ const res = await page.evaluate(async ({ ids, SIZE, gap, mode, dist, fast }) => 
     const base = { x: 0, y, z: 11 - ${dist} };
     const made = [me.position];
     game.entities.clear();
+    try { me.inventory.select(6); } catch (e) { made.push(String(e)); }
     me.teleport({ x: 0.5, y, z: 11 }, 0, 0);
     let x = -((ids.length - 1) * ${gap}) / 2;
     try { game.entities.define('bt_person', { name: 'Person', model: { rig: 'gltf', parts: [], atlas: '', scale: 1, gltf: { url: 'character:', rig: 'humanoid' } }, hitbox: { width: 0.6, height: 1.8 }, health: 20, speed: 0, invulnerable: true }); } catch (e) { made.push(String(e)); }
