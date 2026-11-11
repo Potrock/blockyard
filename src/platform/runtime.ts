@@ -88,6 +88,11 @@ interface Carry {
    * away, and play carries on in the room as soon as its world is in (`arrive`).
    */
   resume?: boolean;
+  /**
+   * Tries at the connection left before the home page takes over (a connection that dropped, being
+   * made again: a server restarting for an update is a moment coming back).
+   */
+  tries?: number;
 }
 
 /** An uploaded game to run in a sandboxed frame instead of in this page (see `Runtime.frames`). */
@@ -133,9 +138,15 @@ const deviceDpr = () => Math.min(window.devicePixelRatio || 1, 2);
  */
 /** How far a third-person camera keeps off what it meets (blocks). */
 const CAMERA_MARGIN = 0.3;
+/** A connection that held this long (ms) before it dropped is made again without asking. */
+const STEADY = 15_000;
+/** And tried this many times (3 s apart) before the home page takes over. */
+const REJOIN_TRIES = 10;
 
 export class Runtime {
   mode: Mode = 'title';
+  /** When this game's connection was made. */
+  private readonly connected = performance.now();
   private settings: Settings;
   /** Graphics lowered while frames are slow, and the settings as they're drawn. */
   private quality = new AutoQuality();
@@ -387,6 +398,12 @@ export class Runtime {
             location.assign(to);
           });
         if (!(err instanceof Refused) || !err.retry) throw err;
+        // (Back to a game whose connection dropped: the server may be on its way back.)
+        if (carried?.resume && carried.tries) {
+          carried.tries--;
+          await new Promise((done) => window.setTimeout(done, 3000));
+          continue;
+        }
         // (On the way to another room: the home page comes up to say so, and takes it from here.)
         Runtime.landed(carried);
         const next = await title.busy(err.message, wait);
@@ -730,7 +747,7 @@ export class Runtime {
     // The game's host is on the server: it set the game up and placed the spawn, and sends batches.
     // Two steps behind the newest frame: smooth, and about 70 ms behind the server at 30 steps a second.
     this.playback = new FrameBuffer(2 / this.link.welcome.tickRate);
-    this.link.onClose = () => this.disconnected();
+    this.link.onClose = (code, reason) => this.disconnected(code, reason);
     if (this.walker) {
       // Movement as the server moves them: the game's tuning, and what they hold (a heavy gun,
       // aiming): its kind's kit's `move`, as the host works it out.
@@ -1173,10 +1190,25 @@ export class Runtime {
     return standIn(this.link.welcome.spawn, this.settings.fov);
   }
 
-  /** The server went away: say so, and stop sending. */
-  private disconnected() {
+  /**
+   * The connection's gone. One that had held (the server restarted for an update, the network
+   * blinked, the laptop slept) is made again at once: back into the game they were playing, or
+   * behind the home page they were on; while the server's away, the home page says so and keeps
+   * trying. One the server closed on purpose, or that dropped as soon as it was made, isn't made
+   * again unasked: the screen says why, and it's theirs to rejoin.
+   */
+  private disconnected(code: number, reason: string) {
+    if (this.disposed || this.switching) return;
+    const rejoin = () => this.switchGame(this.def.id, this.room, this.mode !== 'title', 'Connection lost. Rejoining…', REJOIN_TRIES);
+    const meant = code >= 4000;
+    if (!meant && performance.now() - this.connected > STEADY) return rejoin();
     this.input.unlock();
-    this.gameHud.screen({ title: 'Disconnected', subtitle: 'The connection to the game server was lost.', tone: 'defeat', buttons: [{ label: 'Reload', primary: true, onClick: () => location.reload() }] });
+    this.gameHud.screen({
+      title: 'Disconnected',
+      subtitle: reason || 'The connection to the game server was lost.',
+      tone: 'defeat',
+      buttons: [meant ? { label: 'Reload', primary: true, onClick: () => location.reload() } : { label: 'Rejoin', primary: true, onClick: rejoin }],
+    });
   }
 
   /** Ask the host something; the answer comes in a later batch. */
@@ -1197,13 +1229,14 @@ export class Runtime {
    * Another game, in place: the home page stays (showing it picked at once), the world fades
    * out, this game shuts down and the next starts, fading in when its world is ready.
    */
-  private switchGame(id: string, room: string | null = null, resume = false) {
+  private switchGame(id: string, room: string | null = null, resume = false, saying?: string, tries = 0) {
     if (this.switching) return;
     this.switching = true;
     this.canvas.classList.add('fading');
     window.setTimeout(() => {
       const carry = this.shutdown();
       carry.resume = resume;
+      carry.tries = tries;
       Runtime.switchTo(id, room, this.canvas, this.ui, this.games, this.hidden, carry);
     }, 260);
     const meta = [...this.games, ...this.hidden].find((g) => g.meta.id === id)?.meta;
@@ -1211,6 +1244,7 @@ export class Runtime {
     if (resume) {
       Runtime.travel?.close();
       Runtime.travel = new TravelScreen(this.ui, { title: meta?.title ?? this.def.title, accent: meta?.accent, cover: meta?.cover });
+      if (saying) Runtime.travel.progress(0, saying);
     } else this.title.select(id, meta?.title);
   }
 
