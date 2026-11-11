@@ -5,6 +5,8 @@ export interface WorldGenConfig {
   /** A void world's ground (block ids). */
   ground?: { y: number; top: number; fill: number; depth: number };
   terraforms: { x: number; z: number; radius: number; blend: number; height: number }[];
+  /** A map world's land, as the engine takes it (`TerrainGen.set_map`): `palette` is JSON, block ids resolved. */
+  map?: { x: number; z: number; cell: number; width: number; depth: number; heights: Uint16Array; zones: Uint8Array; water: Uint8Array; outsideHeight: number; outsideZone: number; palette: string };
   blueprints: { origin: { x: number; y: number; z: number }; size: { x: number; y: number; z: number }; data: Uint8Array }[];
 }
 

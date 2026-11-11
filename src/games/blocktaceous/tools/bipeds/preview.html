@@ -1,0 +1,141 @@
+<!doctype html>
+<!--
+  A development preview of the built models (not part of the game): three.js alone, so a model can
+  be looked at without a room. Served by the dev server:
+  /src/games/blocktaceous/tools/bipeds/preview.html?ids=tyrannosaurus,dodo&clip=walk&t=0.25&az=60&el=12
+  `ids`: which models, in a row along x; `clip` and `t` (0..1 through it), or `play=1` to run it;
+  `az`, `el` (degrees), `dist`, `fov`, `at=x,y,z` (what it looks at); `man=1` stands a 1.8 m figure by them; `dir`: another folder.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Blocktaceous model preview</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #b9d3e6; overflow: hidden; }
+      canvas { display: block; }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      import * as THREE from 'three';
+      import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+      import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+
+      const q = new URLSearchParams(location.search);
+      const ids = (q.get('ids') ?? 'tyrannosaurus').split(',');
+      const num = (k, d) => (q.has(k) ? Number(q.get(k)) : d);
+      const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      renderer.setPixelRatio(devicePixelRatio);
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      document.body.appendChild(renderer.domElement);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(q.get('bg') ? `#${q.get('bg')}` : '#b9d3e6');
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f78, 1.5));
+      const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(4096, 4096);
+      scene.add(sun, sun.target);
+
+      // The ground: a metre to the square.
+      const tile = document.createElement('canvas');
+      tile.width = tile.height = 64;
+      const g = tile.getContext('2d');
+      g.fillStyle = '#93b06a';
+      g.fillRect(0, 0, 64, 64);
+      g.strokeStyle = '#86a35f';
+      g.lineWidth = 2;
+      g.strokeRect(0, 0, 64, 64);
+      const tex = new THREE.CanvasTexture(tile);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(200, 200);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshLambertMaterial({ map: tex }));
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+      const dir = q.get('dir') ?? '../../models';
+      const gltfs = await Promise.all(ids.map((id) => loader.loadAsync(`${dir}/${id}.glb?${Date.now()}`)));
+      const mixers = [];
+      const box = new THREE.Box3();
+      let x = 0;
+      const gap = num('gap', 1);
+      const yaw = (num('yaw', 0) * Math.PI) / 180;
+      gltfs.forEach((gltf, n) => {
+        const root = gltf.scene;
+        root.updateMatrixWorld(true);
+        const b = new THREE.Box3().setFromObject(root);
+        const w = q.has('row') ? b.max.z - b.min.z : b.max.x - b.min.x;
+        if (n) x += w / 2;
+        root.rotation.y = yaw;
+        if (q.has('row')) root.position.z = -x;
+        else root.position.x = x;
+        x += w / 2 + gap;
+        root.traverse((o) => {
+          if (o.isMesh) {
+            o.castShadow = o.receiveShadow = true;
+            o.frustumCulled = false;
+          }
+        });
+        scene.add(root);
+        const mixer = new THREE.AnimationMixer(root);
+        const clip = gltf.animations.find((c) => c.name === (q.get('clip') ?? ''));
+        if (clip) {
+          const action = mixer.clipAction(clip);
+          action.play();
+          mixer.setTime(num('t', 0) * clip.duration * 0.9999);
+        }
+        mixers.push(mixer);
+        root.updateMatrixWorld(true);
+        box.union(new THREE.Box3().setFromObject(root));
+      });
+      if (q.has('man')) {
+        // A person for scale: 1.8 m.
+        const man = new THREE.Group();
+        const m = new THREE.MeshLambertMaterial({ color: 0x3a6ea5 });
+        const add = (w, h, d, y, c) => {
+          const part = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), c ? new THREE.MeshLambertMaterial({ color: c }) : m);
+          part.position.y = y;
+          part.castShadow = true;
+          man.add(part);
+        };
+        add(0.45, 0.75, 0.25, 0.375, 0x2c3e50);
+        add(0.5, 0.65, 0.28, 1.075);
+        add(0.42, 0.4, 0.4, 1.6, 0xe0b090);
+        man.position.set(box.min.x - 1, 0, num('manz', 0));
+        scene.add(man);
+        box.expandByPoint(new THREE.Vector3(box.min.x - 1.3, 0, 0));
+      }
+      const c = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const az = (num('az', 70) * Math.PI) / 180, el = (num('el', 10) * Math.PI) / 180;
+      const fov = num('fov', 24);
+      const camera = new THREE.PerspectiveCamera(fov, innerWidth / innerHeight, 0.05, 500);
+      const fit = Math.max(size.y, Math.hypot(size.x, size.z) / camera.aspect) * num('zoom', 1.15);
+      const dist = num('dist', fit / 2 / Math.tan((fov * Math.PI) / 360));
+      c.y += num('up', 0);
+      if (q.has('at')) c.fromArray(q.get('at').split(',').map(Number));
+      camera.position.set(c.x + Math.sin(az) * Math.cos(el) * dist, c.y + Math.sin(el) * dist, c.z + Math.cos(az) * Math.cos(el) * dist);
+      camera.lookAt(c);
+      sun.position.set(c.x + 12, 30, c.z + 14);
+      sun.target.position.copy(c);
+      const s = Math.max(size.x, size.z, size.y) * 0.75 + 2;
+      Object.assign(sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 90 });
+      sun.shadow.camera.updateProjectionMatrix();
+      sun.shadow.bias = -0.0004;
+      sun.shadow.normalBias = 0.03;
+      const clock = new THREE.Clock();
+      const frame = () => {
+        if (q.has('play')) for (const m of mixers) m.update(clock.getDelta());
+        renderer.render(scene, camera);
+        if (q.has('play')) requestAnimationFrame(frame);
+      };
+      frame();
+      window.__ready = true;
+      window.__info = gltfs.map((gl) => ({ clips: gl.animations.map((a) => a.name) }));
+    </script>
+  </body>
+</html>

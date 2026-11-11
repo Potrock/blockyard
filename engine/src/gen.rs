@@ -15,6 +15,9 @@
 use crate::blocks::*;
 use crate::noise::*;
 
+mod map;
+pub use map::TerrainMap;
+
 pub const SEA: i32 = 62;
 pub const HEADER_BYTES: usize = 1028;
 const W: usize = 16;
@@ -112,6 +115,11 @@ pub struct Generator {
     void_world: bool,
     /// A void world's own plain ground under its structures (an arena's), if it has one.
     ground: Option<Ground>,
+    /// The game's own landform in place of the natural one (see `map`), its columns over the
+    /// chunk's area, and which of them lie under liquid.
+    map: Option<std::rc::Rc<TerrainMap>>,
+    mcols: Vec<map::MapCol>,
+    wet: Vec<bool>,
     n_cont: Noise,
     n_ero: Noise,
     n_pv: Noise,
@@ -162,6 +170,9 @@ impl Generator {
             flat: None,
             void_world: false,
             ground: None,
+            map: None,
+            mcols: Vec::new(),
+            wet: Vec::new(),
             n_cont: Noise::new(s(1)),
             n_ero: Noise::new(s(2)),
             n_pv: Noise::new(s(3)),
@@ -554,6 +565,9 @@ impl Generator {
     }
 
     pub fn generate(&mut self, cx: i32, cz: i32) -> Vec<u8> {
+        if let Some(m) = self.map.clone() {
+            return self.generate_map(cx, cz, &m);
+        }
         let x0 = cx * W as i32;
         let z0 = cz * W as i32;
 
@@ -664,6 +678,17 @@ impl Generator {
         self.place_vegetation(x0, z0);
 
         // 9. Bedrock floor.
+        self.lay_bedrock(x0, z0);
+
+        // 10. Game structures.
+        if !self.blueprints.is_empty() {
+            self.stamp_blueprints(x0, z0);
+        }
+
+        self.pack(cx, cz)
+    }
+
+    fn lay_bedrock(&mut self, x0: i32, z0: i32) {
         for lz in 0..W {
             for lx in 0..W {
                 self.blocks[bidx(lx, 0, lz)] = BEDROCK;
@@ -675,13 +700,12 @@ impl Generator {
                 }
             }
         }
+    }
 
-        // 10. Game structures.
-        if !self.blueprints.is_empty() {
-            self.stamp_blueprints(x0, z0);
-        }
-
-        self.pack(cx, cz)
+    /// A map world's liquid (a lake or river above the sea, lava) within two columns: no cave
+    /// mouth opens there.
+    fn liquid_near(&self, ax: i32, az: i32) -> bool {
+        self.map.is_some() && (-2..=2).any(|dz| (-2..=2).any(|dx| self.wet[(az + dz) as usize * A + (ax + dx) as usize]))
     }
 
     fn carve_caves(&mut self, x0: i32, z0: i32) {
@@ -701,7 +725,7 @@ impl Generator {
                 }
                 let wx = (x0 + lx) as f32;
                 let wz = (z0 + lz) as f32;
-                let entrance = self.n_entrance.n2(wx / 96.0, wz / 96.0) > 0.62 && mn > SEA + 4;
+                let entrance = self.n_entrance.n2(wx / 96.0, wz / 96.0) > 0.62 && mn > SEA + 4 && !self.liquid_near(ax, az);
                 let l = if self.protected(x0 + lx, z0 + lz, 3) {
                     0
                 } else if entrance {
@@ -767,7 +791,8 @@ impl Generator {
                     }
                     if carve {
                         // Never open a hole directly below water.
-                        if self.blocks[bidx(lx, y + 1, lz)] == WATER_B {
+                        let above = self.blocks[bidx(lx, y + 1, lz)];
+                        if above == WATER_B || (above == LAVA_B && self.map.is_some()) {
                             continue;
                         }
                         self.blocks[i] = if y <= 9 { LAVA_B } else { AIR };
@@ -1160,8 +1185,7 @@ impl Generator {
         let z0 = cz * W as i32;
         for lz in 0..W {
             for lx in 0..W {
-                let c = self.col_at(lx as i32 + M, lz as i32 + M);
-                let mut col = Self::grass_color(c);
+                let mut col = if self.map.is_some() { self.map_tint(lx, lz) } else { Self::grass_color(self.col_at(lx as i32 + M, lz as i32 + M)) };
                 // Tiny per-block jitter keeps large fields lively.
                 let j = (hash2(self.seed ^ 0x7147, x0 + lx as i32, z0 + lz as i32) % 9) as i32 - 4;
                 for v in col.iter_mut() {
@@ -1191,6 +1215,9 @@ impl Generator {
 
     /// Find a pleasant spawn column near the origin: dry land, not mountainous, not a desert.
     pub fn find_spawn(&self) -> (i32, i32, i32) {
+        if let Some(m) = &self.map {
+            return self.find_map_spawn(m);
+        }
         let mut best = (0, 80, 0);
         for ring in 0..160i32 {
             let r = ring * 24;
@@ -1216,6 +1243,8 @@ impl Generator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NATURAL_HASH: u64 = 0xc350_f473_187b_ce97;
 
     #[test]
     fn deterministic_and_sane() {
@@ -1316,6 +1345,30 @@ mod tests {
             }
         }
         assert_eq!(top, 70, "terraformed surface");
+    }
+
+    /// Natural, flat and terraformed worlds are what they were before map worlds existed: the
+    /// same bytes, chunk for chunk (a kept world's edits sit on top of them).
+    #[test]
+    fn natural_worlds_unchanged() {
+        fn fnv(h: &mut u64, d: &[u8]) {
+            for &b in d {
+                *h = (*h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut g = Generator::new(1337);
+        for i in 0..24 {
+            fnv(&mut h, &g.generate(i * 7 - 60, 40 - i * 5));
+        }
+        let mut g = Generator::new(99);
+        g.set_flat(70.0);
+        g.add_terraform(Terraform { cx: 8.0, cz: 8.0, radius: 10.0, blend: 12.0, height: 75.5 });
+        for i in 0..6 {
+            fnv(&mut h, &g.generate(i - 2, 0));
+        }
+        eprintln!("natural hash {h:#x}");
+        assert_eq!(h, NATURAL_HASH);
     }
 
     #[test]

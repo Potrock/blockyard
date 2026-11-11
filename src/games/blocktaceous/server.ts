@@ -2,6 +2,7 @@ import { defineServer } from '@platform';
 import { shared } from './shared';
 import type { Part } from './part';
 import { survival } from './survival/rules';
+import { itemKits } from './survival/kits';
 import { building } from './building/rules';
 import { creatures } from './creatures/rules';
 
@@ -13,6 +14,7 @@ import { creatures } from './creatures/rules';
 const parts: Part[] = [survival, building, creatures];
 
 export default defineServer(shared, {
+  items: itemKits,
   setup(game) {
     for (const p of parts) p.setup?.(game);
   },

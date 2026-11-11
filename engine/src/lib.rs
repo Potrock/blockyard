@@ -123,6 +123,18 @@ impl TerrainGen {
         self.inner.set_void_ground(y, top, fill, depth);
     }
 
+    /// The game's own landform in place of the natural one (`gen::map`): `width` x `depth`
+    /// samples `cell` blocks apart from (`ox`, `oz`), each a ground height (in 1/256 of a block),
+    /// a zone of the `palette` (JSON: see `TerrainMap::new`) and the y of its top liquid block
+    /// (0: dry; `water` may be empty). Outside the map the ground is at `outside_height`, of
+    /// `outside_zone`. Throws the reason if the map is wrong.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_map(&mut self, ox: i32, oz: i32, cell: i32, width: i32, depth: i32, heights: &[u16], zones: &[u8], water: &[u8], outside_height: f32, outside_zone: u8, palette: &str) -> Result<(), JsValue> {
+        let map = gen::TerrainMap::new([ox, oz], cell, width, depth, heights, zones, water, outside_height, outside_zone, palette).map_err(|e| JsValue::from_str(&e))?;
+        self.inner.set_map(map);
+        Ok(())
+    }
+
     /// [x, y, z] of a pleasant spawn column.
     pub fn find_spawn(&self) -> Vec<i32> {
         let (x, y, z) = self.inner.find_spawn();

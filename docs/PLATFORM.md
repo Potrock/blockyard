@@ -226,6 +226,7 @@ A person's screen coming into play is its own moment: `playerReady` (after `star
 - `terrain: 'flat'` plus `flatHeight`: natural ground made flat (its biomes, trees and caves still made), at `flatHeight`.
 - `terrain: 'void'`: nothing but your structures, floating in an open sky (Bed Wars and SkyWars islands). The sky wraps all the way round below the horizon, so there's no floor to see.
 - `terrain: 'void'` with a `ground`: your structures on a plain slab, `ground: { y, top, fill, depth }` (its `top` block, grass by default, at `y`, over `depth - 1` of `fill`, dirt; 4 deep in all), as far as anyone sees, with a normal horizon. `terraform` shapes it: a height above `y` raises a hill (a backdrop, a ridge for a landmark to stand on), below it sinks a hollow. No noise, caves, water or plants are made, so it's the choice for a game played in one place: Call of Blocky's street and Arena's colosseum stand on one, and cost a fraction of a natural world to make and draw (Arena: from about 880 000 triangles a frame to 45 000).
+- `terrain: 'map'` plus `map`: the game's own landform in place of the endless natural one: an island, a continent, a valley. See *A map world*, below.
 - `maxViewDistance`: hold the player's view distance to this many chunks. A game played in a small space has nothing further to load, mesh and draw (the haze follows it, so keep backdrop landmarks within it).
 - `spawn`, `spawnYaw`, `time` (0 = midnight, 0.5 = noon), `freezeTime`, `seed`, `persist` (save block edits and position; Sandbox uses it).
   At runtime `game.world.spawn` (`{ x, y, z, yaw }`) is where players come in (joining, `restart`) and what someone watching from the game's home page looks at. A game played in several places moves it to the one in play: Call of Blocky builds its two maps far apart in one world (`maxViewDistance` keeps only the near one loaded and drawn) and sets it to the map of each match, so the home page shows where the fight is to whoever opens it (anyone already watching keeps the view they came in with).
@@ -235,6 +236,40 @@ A person's screen coming into play is its own moment: `playerReady` (after `star
 `Blueprint` helpers: `set`, `fill(a, b, block | (x, y, z) => block)`, `columns(cx, cz, radius, (x, z, dist, angle) => …)` for rings and walls, `Blueprint.centered(cx, cz, radius, y0, y1)`, `moved(offset)` and `forEach`. See `src/games/arena/structure.ts`, which builds a whole colosseum in about 120 lines.
 
 At runtime, `game.world` exposes `getBlock`, `setBlock` (lighting and meshing update automatically), `raycast`, `lineOfSight`, `surfaceY`, `blockId`, `blockName`, `seaLevel`, and `explode(center, radius)`, which blasts a ragged hole (all the affected chunks remesh together) with debris and an explosion (in a world with destructible blocks, a crater: below). With `damage` it hurts too: `explode(at, 1.5, { damage: [160, 20], reach: 5.5, knockback: 1.2, by, weapon })` takes 160 off anyone at its middle, falling to 20 at 5.5 blocks and nothing past that or behind a wall, pushes them away, and names `by` and `weapon` (the hits' `cause` is `'explosion'`). In a world with destructible blocks, `carve(point, dir, { radius, depth })` takes little voxels out of them (below). `breakBlock(x, y, z, { by })` and `placeBlock(x, y, z, block, { by })` break and place with debris, sound and the `blockBreak` / `blockPlace` events, and won't place a block inside anyone; `setBlock` is the silent version. Every change to a block, however it's made (set, broken, placed, blown up, carved into, put back by `restart`), fires `blockChange` (`{ x, y, z, block }`, after the change), for keeping something built from the blocks up to date; listen from `setup`. `blockInfo(block)` tells you whether a block is solid, a liquid, a plant, replaceable or breakable, and which variant it is. The building kit (below) puts these together into survival mining and placing. Block names are listed in `engine/src/blocks.rs` (`stone`, `grass_block`, `oak_planks`, `glowstone`, `water`, the wools, `end_stone`, the four beds…).
+
+### A map world
+
+`terrain: 'map'` builds the world from a `TerrainMap` the game gives: a coarse grid of ground heights, zones (kinds of land) and water levels, which the generator runs a smooth surface through, roughens with fine noise and dresses zone by zone, then finishes as it does any generated world: the sea at sea level (y 62), caves, ores, your `structures` and `terraform`. It's made in the terrain workers like natural terrain, the same on the server and every screen, and costs about what a natural chunk costs. Blocktaceous's island is one (`src/games/blocktaceous/island/`: 832 x 832 samples of 8 blocks, shaped by code).
+
+```ts
+world: {
+  terrain: 'map',
+  seed: 7,                          // the fine noise, the caves, where each tree stands
+  map: () => ({                     // or the map itself; a function is called once, when a world is first made
+    origin: { x: -512, z: -512 },   // the world position of sample (0, 0)
+    cell: 8, width: 128, depth: 128,
+    heights,                        // Uint16Array, y * 256 at each sample (index z * width + x)
+    zones,                          // Uint8Array: each sample's zone, an index into the palette
+    water,                          // optional Uint8Array: the y of the top block of a river or lake there; 0 where dry
+    palette: [
+      { surface: { top: 'sand', fill: 'sand' } },                                        // 0: sea bed and beach
+      { grass: '#3aa62c', trees: [{ shape: 'jungle', height: [12, 24], density: 0.6 }],  // 1: jungle
+        scatter: [{ block: 'fern', density: 0.25 }, { block: 'berry_bush', density: 0.05, clumps: 26 }] },
+      { surface: { top: 'basalt', fill: 'basalt', bed: 'obsidian' }, liquid: 'lava' },   // 2: a crater (its wet samples hold lava)
+    ],
+    outside: { height: 30, zone: 0 },                                                    // past the map's edges: deep sea
+  }),
+}
+```
+
+- **Heights.** Ground below sea level is under the sea, so a map is an island by giving its edges low heights. Between samples the ground is a smooth curve through them (never above or below the four samples round a column), plus the zone's `roughness` of fine noise (1.5 blocks by default) and `crags` (sharp ridges for mountains). A map world's ground is a height field: no overhangs.
+- **Zones** (`MapZone`), up to 256. `surface`: `top` over `depth` of `fill`, then stone; `steep` (stone) on slopes steeper than `steepness`; `bed` under water; `strata`, bands of rock near the surface and on steep slopes (a canyon's striped walls). `grass`: the colour grass, leaves and plants take there (it blends between zones). `frozen`: water freezes over. Zone borders wander a little instead of following the samples.
+- **Trees** (`MapZone.trees`): each a `shape` (`oak`, `spruce`, `broad`, `column`, `palm`, `dead`, `bush`, and the big `jungle` and `giant`, up to 64 tall and reaching 8 blocks from their trunks), its `log` and `leaves` blocks (built-in or the game's own), `height: [least, most]`, a `density` (the chance of one in each cell of the tree grid: 6 blocks across, 10 for the big shapes) and `wet` (stands in shallow water). Trees thin out into clearings by themselves and keep off steep ground.
+- **Scatter** (`MapZone.scatter`): a `block` with a `density` (the share of columns that get one), `where` it goes (`'on'` the ground: a plant on the zone's soil, a stone; `'in'` place of the ground's top block; `'under'`: veins through the stone below, `density` x 100 of them a chunk), a `size` (more than 1 makes a boulder, an outcrop or a longer vein) and `clumps` (only in patches about that many blocks across). It's how a game's own resource blocks get into the world everywhere at no runtime cost.
+- **Water** (`water`): a river, a lake or a pool above the sea. A wet sample gives the level; give it a bed below that level and the dry samples next to it ground above it (the banks hold it in: water doesn't flow). A column between samples is under water where its ground is lower than the wet samples round it. Levels may step down along a river. A wet sample in a zone with a `liquid` holds that instead (`'lava'`). The fine noise is stilled near wet samples, and no cave mouth opens beside them.
+- `spawn: 'auto'` picks dry level ground nearest the map's middle; `world.surfaceY` and the rest of `game.world` work as in any world.
+
+Keep the grids to what a world needs (they're copied to each terrain worker): a few megabytes at most. Build them from a fixed seed with your own noise, lazily (the `map` function), in a file the shared definition imports, so the server's rules can ask the same grids where things are.
 
 ### Block shapes and states
 
