@@ -1,17 +1,22 @@
 import { h } from './dom';
 import type { Registry } from '../world/registry';
+import type { BlockIcons } from './icons';
 
 /** Creative block picker. */
 export class Inventory {
   readonly root: HTMLElement;
   onPick: ((id: number) => void) | null = null;
 
-  constructor(parent: HTMLElement, registry: Registry, icons: Map<number, string>, onClose: () => void) {
+  /** Each block's picture and its id: drawn when the picker first opens. */
+  private pictures: [HTMLImageElement, number][] = [];
+
+  constructor(parent: HTMLElement, registry: Registry, private icons: BlockIcons, onClose: () => void) {
     const grid = h('div.inv-grid');
     for (const b of registry.blocks) {
       if (!b.placeable) continue;
-      const cell = h('button.inv-cell', { title: b.label, onclick: () => this.onPick?.(b.id) }, h('img', { src: icons.get(b.id) ?? '', alt: b.label, draggable: false }));
-      grid.append(cell);
+      const img = h('img', { alt: b.label, draggable: false }) as HTMLImageElement;
+      this.pictures.push([img, b.id]);
+      grid.append(h('button.inv-cell', { title: b.label, onclick: () => this.onPick?.(b.id) }, img));
     }
     this.root = h(
       'div.screen.inventory-screen.hidden',
@@ -22,6 +27,8 @@ export class Inventory {
   }
 
   show() {
+    for (const [img, id] of this.pictures) img.src = this.icons.get(id) ?? '';
+    this.pictures = [];
     this.root.classList.remove('hidden');
   }
 

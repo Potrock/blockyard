@@ -61,7 +61,7 @@ import { copyRoomLink, TitleScreen, type HomeScreen } from './ui/home';
 import { lastPlayed } from './ui/recent';
 import { PauseMenu } from './ui/pause';
 import { TravelScreen } from './ui/travel';
-import { blockIcon } from './ui/icons';
+import { blockIcon, BlockIcons } from './ui/icons';
 import { GRAPHICS, isHandheld, loadSettings, saveSettings, toRenderSettings, type Settings } from './settings';
 import { AutoQuality, savedQuality, saveQuality, type Look } from './quality';
 import type { BlockRef, IconRef, ItemDefinition, ItemStack, PadAction, PadButton, SharedDefinition, Vec3 } from './api/types';
@@ -168,7 +168,7 @@ export class Runtime {
   private view!: PlayerCamera;
   /** `hud.highlight`: the outline and break cracks on one block. */
   private highlight = new BlockHighlight();
-  private blockIcons = new Map<number, string>();
+  private blockIcons = new BlockIcons(() => undefined);
   private particles!: Particles;
   private hud!: Hud;
   private gameHud!: GameHud;
@@ -575,15 +575,15 @@ export class Runtime {
     this.renderer.opaqueScene.add(this.particles.points);
     this.debris = new Debris({ world, registry: this.registry, textures: this.textures, particles: this.particles, scene: this.renderer.opaqueScene, sunDir: this.renderer.uniforms.uSunDir });
 
-    const icons = new Map<number, string>();
-    for (const b of this.registry.blocks) {
-      if (b.id === 0) continue;
+    const icons = new BlockIcons((id) => {
+      const b = id > 0 ? this.registry.blocks[id] : undefined;
+      if (!b) return undefined;
       // A bed's icon shows it whole: the head too.
       const head = b.model === 'bed' ? variant(this.registry, b, { part: 'head' }) ?? undefined : undefined;
       // A game's block that faces a way shows its front (the icon's left is the south face).
       const shown = b.id >= firstGameBlock() && b.state.facing ? (variant(this.registry, b, { facing: 'south' }) ?? b) : b;
-      icons.set(b.id, blockIcon(shown, this.textures.albedoData, head));
-    }
+      return blockIcon(shown, this.textures.albedoData, head);
+    });
     this.blockIcons = icons;
     this.hud = new Hud(this.ui, this.registry, icons);
     this.gameHud = new GameHud(this.ui, (ref) => this.iconOf(ref, 96));
