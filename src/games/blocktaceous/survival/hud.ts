@@ -58,6 +58,8 @@ const css = (glyphsUrl: string) => `
 .gains span { animation: rise 0.25s ease-out }
 @keyframes pulse { from { opacity: 1 } to { opacity: 0.45 } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+/* On a narrow window the belt reaches the left corner, so the bars sit above it and its hearts. */
+@media (max-width: 960px) { :scope { margin-bottom: 104px } }
 `;
 
 export function defineVitals(game: GameContext, glyphsUrl: string): void {

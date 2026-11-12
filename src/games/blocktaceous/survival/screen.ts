@@ -461,7 +461,7 @@ const HTML = `
 
 /** The stylesheet, with the item sheet the sprites are cut from: a `data:` picture for each of its rows. */
 const css = (rowUrls: readonly string[]) => `
-.jr { --u: 32px; width: min(900px, 96vw); max-height: 88vh; display: flex; flex-direction: column; color: #efe9da; font: 14px/1.35 var(--sans);
+.jr { --u: 32px; width: min(960px, 96vw); max-height: 88vh; display: flex; flex-direction: column; color: #efe9da; font: 14px/1.35 var(--sans);
   background: linear-gradient(180deg, #2c3328, #1c211b); border: 2px solid #55624a; border-radius: 10px; box-shadow: 0 10px 0 #0007, 0 0 0 4px #14180fcc }
 .ic { --u: 32px; display: block; flex: none; width: var(--u); height: var(--u); background-repeat: no-repeat;
   background-size: calc(var(--u) * ${ICON_COLUMNS}) var(--u); background-position: calc(var(--x) * var(--u) * -1) 0; image-rendering: pixelated }
@@ -482,6 +482,7 @@ ${rowUrls.map((url, r) => `.ic.r${r} { background-image: url(${url}) }`).join('\
 h3 { margin: 0 0 6px; font: 700 12px var(--sans); letter-spacing: 0.12em; text-transform: uppercase; color: #a9b593 }
 h4 { margin: 0; font: 700 15px var(--sans) }
 .col { display: flex; flex-direction: column; min-width: 0 }
+.col.main { flex: none }
 .col.main h3:not(:first-child) { margin-top: 12px }
 .hd { display: flex; align-items: center; gap: 10px; margin-bottom: 6px }
 .hd h3 { margin: 0 }
@@ -490,7 +491,7 @@ h4 { margin: 0; font: 700 15px var(--sans) }
 .grid { display: grid; gap: 4px }
 .grid.bag { grid-template-columns: repeat(8, 44px) }
 .grid.belt { grid-template-columns: repeat(9, 44px) }
-.grid.box { grid-template-columns: repeat(6, 44px) }
+.grid.box { grid-template-columns: repeat(5, 44px) }
 .grid.worn { grid-template-columns: repeat(3, 44px) }
 .slot { position: relative; width: 44px; height: 44px; padding: 0; display: grid; place-items: center; background: #141811; border: 2px solid #3a4433; border-radius: 6px; cursor: pointer }
 .slot:hover, .slot:focus-visible { border-color: #9bd45a; outline: none }
@@ -505,7 +506,7 @@ h4 { margin: 0; font: 700 15px var(--sans) }
 .wr { position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px; border-radius: 2px; background: #000a; overflow: hidden }
 .wr i { display: block; height: 100%; width: calc(var(--p) * 1%); background: hsl(calc(var(--p) * 1.1) 75% 55%) }
 .gl { align-self: flex-start; margin-top: auto }
-.side { padding-right: 14px; border-right: 2px solid #3a4433 }
+.side { flex: none; padding-right: 14px; border-right: 2px solid #3a4433 }
 .row { display: flex; gap: 6px; margin-top: 8px }
 .info { flex: 1; min-width: 190px }
 .prot { margin: 8px 0 10px; color: #b9c2a6 } .prot b { color: #fff }
@@ -550,7 +551,8 @@ h4 { margin: 0; font: 700 15px var(--sans) }
 .card.known { border-color: #7fbf4d; background: #263320; cursor: default } .card.known small { color: #9bd45a }
 .card.locked, .card.poor { cursor: default } .card.locked .ic { filter: grayscale(1) brightness(0.6) }
 .card.poor small { color: #ff8a6b }
-@media (max-width: 760px) { .pane.pack { flex-wrap: wrap } .side { border-right: none; padding-right: 0 } .list { grid-template-columns: 1fr } }
+@media (max-width: 1000px) { .pane.pack { flex-wrap: wrap } }
+@media (max-width: 760px) { .side { border-right: none; padding-right: 0 } .list { grid-template-columns: 1fr } }
 `;
 
 /** Define the journal (once, in `setup`), cut from the item sheet given as a `data:` picture a row. */
