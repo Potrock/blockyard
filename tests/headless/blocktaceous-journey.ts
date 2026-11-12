@@ -282,7 +282,8 @@ export default function blocktaceousJourney() {
   check(have('bt_thatch_wall') === 1, `three walls used (${have('bt_thatch_wall')} left)`);
   check(walls.every((w) => ownerOf(w) === OWNER), `and they are their builder's (${walls.map((w) => ownerOf(w))})`);
   hold('bt_campfire');
-  const fire = { x: site.x + 3, y: site.y + 1, z: site.z };
+  // A cell out from the wall row: sighting along the row grazes the last wall's corner.
+  const fire = { x: site.x + 3, y: site.y + 1, z: site.z + 1 };
   placeOn({ x: fire.x, y: site.y, z: fire.z });
   check(nameAt(fire.x, fire.y, fire.z) === 'bt_campfire' && ownerOf(fire) === OWNER, `the campfire is lit (${nameAt(fire.x, fire.y, fire.z)})`);
 

@@ -253,6 +253,10 @@ function strike(b: Brain, game: GameContext, target: Entity | Player, lands: boo
   e.animate('attack');
   game.audio.play('bt_bite', { at: e.position, pitch: b.t.big ? 0.7 : 1.15 });
   if (!lands) return;
+  // Jaws don't go through walls: something solid between its head and them (a hut's wall, a rock) saves them.
+  const from = { x: e.position.x, y: e.position.y + b.s.hitbox.height * 0.7, z: e.position.z };
+  const at = { x: target.position.x, y: target.position.y + 1, z: target.position.z };
+  if (!game.world.lineOfSight(from, at)) return;
   const damage = b.s.damage * (b.tame ? levelBonus(b.tame.level) : 1);
   target.damage(damage, { source: e, knockback: b.t.big ? 1.4 : 0.8, cause: 'melee' });
 }
