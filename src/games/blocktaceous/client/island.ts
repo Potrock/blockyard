@@ -104,19 +104,37 @@ function buildMap(client: Client): void {
   const canvas = document.createElement('canvas');
   drawIsland(canvas);
   sheet.append(canvas);
+  // Names are laid out so none sits on another: the big regions first, each later name shifted up or down
+  // until it is clear, and all of them kept on the sheet.
+  const span = MAP.size * MAP.cell;
+  const placed: { x: number; y: number; w: number; h: number }[] = [];
+  const seen = new Set<string>();
   const label = (text: string, x: number, z: number, cls = '') => {
+    if (seen.has(text)) return;
+    seen.add(text);
+    const small = cls.includes('small');
+    // Sizes in percent of a sheet about 450 px across (the smallest it is likely to be shown).
+    const w = text.length * (small ? 1.3 : 1.75) + 1;
+    const h = small ? 3 : 3.6;
+    const cx = Math.max(w / 2 + 1, Math.min(99 - w / 2, ((x - MAP.minX) / span) * 100));
+    const y0 = Math.max(9, Math.min(92, ((z - MAP.minZ) / span) * 100));
+    let cy = y0;
+    for (const step of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+      cy = y0 + step * h;
+      if (!placed.some((o) => Math.abs(o.x - cx) < (o.w + w) / 2 && Math.abs(o.y - cy) < (o.h + h) / 2)) break;
+    }
+    placed.push({ x: cx, y: cy, w, h });
     const el = document.createElement('div');
     el.className = `bt-map-name ${cls}`;
     el.textContent = text;
-    el.style.left = onSheet(x, MAP.minX);
-    el.style.top = onSheet(z, MAP.minZ);
+    el.style.left = `${cx.toFixed(2)}%`;
+    el.style.top = `${cy.toFixed(2)}%`;
     sheet!.append(el);
   };
   // The big regions by name; shores, lakes, rivers and islets smaller.
-  for (const r of REGIONS) {
-    if (r.biome === 'river') continue;
-    label(r.name, r.x, r.z, r.biome === 'beach' || POINTS.some((p) => p.name === r.name) ? 'small' : '');
-  }
+  const minor = (r: (typeof REGIONS)[number]) => r.biome === 'beach' || POINTS.some((p) => p.name === r.name);
+  for (const r of REGIONS) if (r.biome !== 'river' && !minor(r)) label(r.name, r.x, r.z);
+  for (const r of REGIONS) if (r.biome !== 'river' && minor(r)) label(r.name, r.x, r.z, 'small');
   for (const p of POINTS) if (p.kind === 'lake' || p.kind === 'river' || p.kind === 'lava') label(p.name, p.x, p.z + (p.kind === 'lake' ? 0 : 60), 'small sea');
   const title = document.createElement('div');
   title.className = 'bt-map-title';
