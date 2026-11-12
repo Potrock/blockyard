@@ -5,6 +5,8 @@ import { iconCell, glyphCell, ICON_COLUMNS } from './icons';
 import { addItems, containerIfOpen, countItems, dropSlot, moveSlot, parseRef, protection, refsOf, slotAt, sortBag, stow, wear, type SlotRef } from './pack';
 import { survivorOf, touch, type Slot, type Survivor } from './state';
 import { canEat, eat } from './vitals';
+import { goalsDone, toggleGoals } from './goals';
+import { condition, repair, repairCost, USES } from './wear';
 
 /**
  * The survivor's journal: one screen (Tab) with three pages. The pack (belt, backpack, what's
@@ -19,7 +21,7 @@ export const JOURNAL = 'bt-journal';
 const refText = (r: SlotRef) => `${r.kind}${r.index}`;
 
 /** A slot as the screen shows it. */
-function slotView(ref: SlotRef, stack: Slot, sel: string | null, empty = '') {
+function slotView(ref: SlotRef, stack: Slot, sel: string | null, empty = '', s?: Survivor) {
   const r = refText(ref);
   const cell = stack ? iconCell(stack.item) : { x: 0, y: 0 };
   return {
@@ -29,6 +31,8 @@ function slotView(ref: SlotRef, stack: Slot, sel: string | null, empty = '') {
     n: stack && stack.count > 1 ? String(stack.count) : '',
     c: `${stack ? '' : `empty ${empty}`}${sel === r ? ' sel' : ''}`,
     t: stack ? nameOf(stack.item) : '',
+    // How worn it is (tools and weapons): a bar under it once it's seen any use.
+    w: stack && s && USES[stack.item] && condition(s, stack.item) < 1 ? Math.round(condition(s, stack.item) * 100) : -1,
   };
 }
 
@@ -79,12 +83,14 @@ function view(player: Player, s: Survivor) {
   const away = known.filter((r) => r.station !== null && r.station !== ui.station);
   const sparks = sparksLeft(s);
   const meta: string[] = [];
+  const mend = selStack && selRef?.kind !== 'c' ? repairCost(s, selStack.item) : [];
   if (selStack) {
     meta.push(`${(weightOf(selStack.item) * selStack.count).toFixed(1)} weight`);
     if (armour) meta.push(`armour ${armour.armor}`, `cold ${armour.cold >= 0 ? '+' : ''}${armour.cold}`, `heat ${armour.heat >= 0 ? '+' : ''}${armour.heat}`);
     if (meal?.food) meta.push(`food +${meal.food}`);
     if (meal?.water) meta.push(`water +${meal.water}`);
     if (meal?.risk) meta.push('risky raw');
+    if (USES[selStack.item]) meta.push(`condition ${Math.round(condition(s, selStack.item) * 100)}%`);
   }
   return {
     tab: ui.tab,
@@ -96,8 +102,8 @@ function view(player: Player, s: Survivor) {
     xp: s.level >= MAX_LEVEL ? 1 : Math.min(1, (s.xp - xpForLevel(s.level)) / xpToNext(s.level)),
     sparks,
     // ---- Pack ----
-    bag: refsOf(s, 'b').map((r) => slotView(r, slotAt(player, s, r), ui.sel)),
-    belt: refsOf(s, 'h').map((r) => slotView(r, slotAt(player, s, r), ui.sel)),
+    bag: refsOf(s, 'b').map((r) => slotView(r, slotAt(player, s, r), ui.sel, '', s)),
+    belt: refsOf(s, 'h').map((r) => slotView(r, slotAt(player, s, r), ui.sel, '', s)),
     worn: refsOf(s, 'w').map((r) => slotView(r, slotAt(player, s, r), ui.sel, `w${r.index}`)),
     boxOpen: !!box,
     boxTitle: box?.title ?? '',
@@ -117,6 +123,11 @@ function view(player: Player, s: Survivor) {
     canUse: !!selStack && (!!armour || !!meal) && selRef?.kind !== 'c',
     useLabel: armour ? (selRef?.kind === 'w' ? 'Take off' : 'Wear') : meal?.drink ? 'Drink' : 'Eat',
     canSplit: !!selStack && selStack.count > 1,
+    canMend: mend.length > 0,
+    mendOff: !mend.every(([item, n]) => countItems(player, item) >= n),
+    mendCost: mend.map(([item, n]) => `${n} ${nameOf(item)}`).join(', '),
+    goalsLabel: s.goalsOff ? 'Show first steps' : 'Hide first steps',
+    goalsLeft: !goalsDone(s),
     sendLabel: selRef?.kind === 'c' ? 'To pack' : `To ${box?.title.toLowerCase() ?? 'box'}`,
     // ---- Making ----
     queue: s.queue.map((j) => {
@@ -337,6 +348,17 @@ export const journalActions: Record<string, (player: Player, value: string) => v
   cancel(player, value) {
     cancelJob(player, Number(value));
   },
+  /** Mend the picked-up tool or weapon. */
+  mend(player) {
+    const s = survivorOf(player);
+    const from = selected(player, s);
+    const stack = from && slotAt(player, s, from);
+    if (!stack || from.kind === 'c' || !repair(player, s, stack.item)) player.audio.play('bt_deny');
+  },
+  /** Hide the first goals' card, or bring it back. */
+  goals(player) {
+    toggleGoals(survivorOf(player));
+  },
   learn(player, value) {
     if (!learn(player, value)) player.audio.play('bt_deny');
   },
@@ -353,7 +375,7 @@ function moveOne(player: Player, s: Survivor, ref: SlotRef, left: number, item: 
 // The widget
 // -----------------------------------------------------------------------------------------------
 
-const SLOT = `<i class="ic r{{y}}" style="--x: {{x}}"></i><b>{{n}}</b>`;
+const SLOT = `<i class="ic r{{y}}" style="--x: {{x}}"></i><b>{{n}}</b><i class="wr" data-if="w >= 0"><i style="--p: {{w}}"></i></i>`;
 
 const HTML = `
 <div class="jr">
@@ -388,12 +410,14 @@ const HTML = `
         <div class="acts">
           <button data-if="canUse" data-action="use" class="btn go">{{useLabel}}</button>
           <button data-if="boxOpen" data-action="send" class="btn go">{{sendLabel}}</button>
+          <button data-if="canMend" data-action="mend" class="btn go" disabled="{{mendOff}}" title="Mend it">Mend · {{mendCost}}</button>
           <button data-if="canSplit" data-action="split" class="btn">Split</button>
           <button data-action="drop1" class="btn">Drop 1</button>
           <button data-if="canSplit" data-action="dropall" class="btn">Drop all</button>
         </div>
       </div>
       <p class="hint" data-if="!sel">Click a slot to pick it up, then click where it should go.</p>
+      <button data-if="goalsLeft" data-action="goals" class="btn small gl">{{goalsLabel}}</button>
     </div>
   </div>
 
@@ -470,6 +494,9 @@ h4 { margin: 0; font: 700 15px var(--sans) }
 .slot.empty.w2 .ic { --x: ${glyphCell('feet').x} !important }
 .slot b { position: absolute; right: 2px; bottom: 0; font: 700 12px var(--sans); color: #fff; text-shadow: 0 1px 0 #000, 1px 0 0 #000, -1px 0 0 #000, 0 -1px 0 #000 }
 .slot small { position: absolute; left: 3px; top: 0; font: 700 10px var(--sans); color: #7d8a6b }
+.wr { position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px; border-radius: 2px; background: #000a; overflow: hidden }
+.wr i { display: block; height: 100%; width: calc(var(--p) * 1%); background: hsl(calc(var(--p) * 1.1) 75% 55%) }
+.gl { align-self: flex-start; margin-top: auto }
 .side { padding-right: 14px; border-right: 2px solid #3a4433 }
 .row { display: flex; gap: 6px; margin-top: 8px }
 .info { flex: 1; min-width: 190px }

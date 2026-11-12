@@ -1,3 +1,4 @@
+import { LANDMARKS } from './landmarks';
 import type { BiomeId } from '../species';
 import { CELL, ISLETS, ORIGIN, REGION_NAMES, SEA, SIZE, VOLCANO, WATERS, islandMap } from './map';
 import { ZONE_BIOME } from './zones';
@@ -125,12 +126,17 @@ export const REGIONS: { name: string; biome: BiomeId; x: number; z: number }[] =
   { name: 'Turtle Key', biome: 'jungle', x: 1816, z: 2424 },
 ];
 
-/** Places worth finding, for the map and for the other parts' rules. */
-export const POINTS: { name: string; kind: 'peak' | 'volcano' | 'lake' | 'river' | 'lava' | 'islet'; x: number; z: number }[] = [
+/**
+ * Places worth finding, for the map and for the other parts' rules: the volcano, the waters, the
+ * islets, and the landmarks (`LANDMARKS` has more about each of those: its kind, reach and a spot inside).
+ */
+export const POINTS: { name: string; kind: 'peak' | 'volcano' | 'lake' | 'river' | 'lava' | 'islet' | 'landmark'; x: number; z: number }[] = [
   { name: 'Mount Cinder', kind: 'volcano', ...VOLCANO },
   ...WATERS.map((w) => ({ name: w.name, kind: w.kind as 'lake' | 'river' | 'lava', x: w.x, z: w.z })),
   ...ISLETS.filter((b, i, all) => all.findIndex((o) => o.name === b.name) === i).map((b) => ({ name: b.name, kind: 'islet' as const, x: b.x, z: b.z })),
+  ...LANDMARKS.map((l) => ({ name: l.name, kind: 'landmark' as const, x: l.x, z: l.z })),
 ];
 
 export { islandMap, type IslandMap } from './map';
 export { ZONE_BIOME, ZONE_COLOR } from './zones';
+export { LANDMARKS, landmarkAt, type Landmark, type LandmarkKind } from './landmarks';

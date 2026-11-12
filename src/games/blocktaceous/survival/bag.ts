@@ -5,6 +5,8 @@ import { addItems, container, countItems, dropContainer, removeItems, roomFor as
 import { gainXp, levelOfPlayer } from './progress';
 import { closeJournal, openJournal } from './screen';
 import { survivorOf, theGame, touch, type Stack } from './state';
+import { deed } from './goals';
+import { wearDown } from './wear';
 
 /**
  * What the other parts ask of survival: a survivor's belongings, experience, crafting screens,
@@ -70,6 +72,9 @@ export function harvestTool(heldItemId: string | null | undefined): HarvestTool 
 /** Experience for something done (a harvest, a kill, a tame, a craft). */
 export function addXp(player: Player, amount: number): void {
   gainXp(player, amount);
+  // Experience comes from work done: with a tool in hand, that work has worn it a little.
+  const held = player.inventory.held?.item;
+  if (amount > 0 && !player.bot && toolOf(held).kind !== 'hand') wearDown(player, survivorOf(player), held!);
 }
 
 /** A survivor's level, from 1. */
@@ -96,6 +101,7 @@ export function registerRecipes(list: readonly Recipe[]): void {
 export function openStation(player: Player, station: string): void {
   if (!player.alive || player.bot) return;
   if (!(station in STATION_NAMES)) return;
+  if (station === 'campfire') deed(survivorOf(player), 'campfire');
   openJournal(player, 'craft', { station });
 }
 

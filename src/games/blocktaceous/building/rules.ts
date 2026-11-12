@@ -8,6 +8,8 @@ import { FORAGE_REST, harvestOf, type Harvest, type Tool } from './harvest';
 import { LIMIT, Ownership } from './ownership';
 import { recipeOf, recipes } from './recipes';
 import { QUIET, Regrowth } from './regrowth';
+import { resetSiege, updateSiege } from './siege';
+import { Tribes } from './tribes';
 
 /**
  * Gathering and building, for every survivor at once.
@@ -35,6 +37,7 @@ const FELL_LEAVES = 160;
 
 let own: Ownership;
 let regrowth: Regrowth;
+let tribes: Tribes | null = null;
 let ctx: GameContext | null = null;
 let allies: (owner: string, player: Player) => boolean = () => false;
 
@@ -50,6 +53,8 @@ interface Hands {
   ringShown: boolean;
   hint: string;
   hintT: number;
+  /** The prompt last sent for what they're aiming at ('' for none). */
+  aim: string;
 }
 const hands = new Map<string, Hands>();
 /** Players who've just joined, until the ground where they stand has loaded. */
@@ -66,11 +71,27 @@ export function ownerKey(player: Player): string {
 }
 
 /**
- * Tribes plug in here: `with(ownerKey, player)` says whether `player` builds as one with the
- * owner (`ownerKey(theirTribemate)`), so they may break, open and build beside each other's pieces.
+ * More allies than a survivor's tribe (which already counts: see `tribes.ts`) plug in here:
+ * `withOwner(ownerKey, player)` says whether `player` builds as one with that owner, so they may
+ * break, open and build beside each other's pieces.
  */
 export function setAllies(withOwner: (owner: string, player: Player) => boolean): void {
   allies = withOwner;
+}
+
+/** Whether two survivors are in the same tribe (never true of someone with no tribe, nor of bots without one). */
+export function sameTribe(a: Player, b: Player): boolean {
+  return !!tribes && a !== b && tribes.same(ownerKey(a), ownerKey(b));
+}
+
+/** The name of a survivor's tribe, or null if they have none. */
+export function tribeOf(player: Player): string | null {
+  return tribes?.tribeOfKey(ownerKey(player))?.name ?? null;
+}
+
+/** What `/tribe` does, for a given survivor (`args` as typed after it: `['create', 'Ridge Runners']`); throws an Error with words for them when it can't. */
+export function tribeCommand(game: GameContext, player: Player, args: string[]): string | void {
+  return tribes?.command(args, game, player);
 }
 
 /** The owner (an `ownerKey`) of the structure block at a cell, or null: nobody's, or not a structure. */
@@ -110,12 +131,14 @@ export function regrowPending(): number {
 export function saveNow(game: GameContext): void {
   own.flush();
   regrowth.save(game.clock.total);
+  tribes?.save();
 }
 
 /** Read ownership and regrowth back from `game.store` (what `start` does; a test's round trip). */
 export function loadNow(game: GameContext): void {
   own.load();
   regrowth.load(game.clock.total);
+  tribes?.load(new Set(game.players.map(ownerKey)));
 }
 
 // ---- Ownership ----
@@ -127,15 +150,21 @@ function abandoned(owner: string): boolean {
 }
 
 function mine(owner: string, player: Player): boolean {
-  return owner === ownerKey(player) || abandoned(owner) || allies(owner, player);
+  return owner === ownerKey(player) || abandoned(owner) || !!tribes?.same(owner, ownerKey(player)) || allies(owner, player);
 }
 
 /** Why `player` may not build at, break or use a cell, in words for them; null if they may. */
 function builderProblem(player: Player, x: number, y: number, z: number): string | null {
   const owner = own.ownerOf(x, y, z);
-  if (owner) return mine(owner, player) ? null : `Not yours: ${own.nameOf(owner)} built this`;
+  if (owner) return mine(owner, player) ? null : `Not yours: ${whose(owner)} built this`;
   const crowded = own.near(x, y, z, PROTECT, (o) => !mine(o, player));
-  return crowded ? `Too close to ${own.nameOf(crowded)}'s base` : null;
+  return crowded ? `Too close to ${whose(crowded)}'s base` : null;
+}
+
+/** An owner in words: their name, and their tribe's if they have one ("Ann (Ridge Runners)"). */
+function whose(owner: string): string {
+  const tribe = tribes?.tribeOfKey(owner);
+  return tribe ? `${own.nameOf(owner)} (${tribe.name})` : own.nameOf(owner);
 }
 
 // ---- Hints and yields on the survivor's screen ----
@@ -150,7 +179,7 @@ function hint(game: GameContext, player: Player, text: string): void {
 
 function handsOf(player: Player): Hands {
   let h = hands.get(player.id);
-  if (!h) hands.set(player.id, (h = { key: '', progress: 0, swingT: 0, placeT: 0, ringShown: false, hint: '', hintT: 0 }));
+  if (!h) hands.set(player.id, (h = { key: '', progress: 0, swingT: 0, placeT: 0, ringShown: false, hint: '', hintT: 0, aim: '' }));
   return h;
 }
 
@@ -202,7 +231,7 @@ function planBreak(game: GameContext, player: Player, hit: RayHit, block: string
   // The wild things beside someone's base are theirs to clear, not a neighbour's to strip.
   if (harvest.removes) {
     const crowded = own.near(hit.x, hit.y, hit.z, 1, (o) => !mine(o, player));
-    if (crowded) return { refuse: `Too close to ${own.nameOf(crowded)}'s base` };
+    if (crowded) return { refuse: `Too close to ${whose(crowded)}'s base` };
   }
   if (!harvest.removes) {
     const ready = foraged.get(cellKey(hit.x, hit.y, hit.z));
@@ -348,12 +377,15 @@ function lookFacing(player: Player): Facing {
 }
 const OPPOSITE: Record<Facing, Facing> = { north: 'south', south: 'north', east: 'west', west: 'east' };
 
+/** The cell a piece placed against what's aimed at would fill: the plant aimed at, or the cell in front of the face. */
+function placeCell(game: GameContext, hit: RayHit): Vec3 {
+  const into = game.world.blockInfo(hit.block)?.replaceable;
+  return into ? { x: hit.x, y: hit.y, z: hit.z } : { x: hit.x + hit.normal.x, y: hit.y + hit.normal.y, z: hit.z + hit.normal.z };
+}
+
 function place(game: GameContext, player: Player, hit: RayHit, item: string, block: string, first: boolean): boolean {
   const { world } = game;
-  const into = world.blockInfo(hit.block)?.replaceable;
-  const x = into ? hit.x : hit.x + hit.normal.x;
-  const y = into ? hit.y : hit.y + hit.normal.y;
-  const z = into ? hit.z : hit.z + hit.normal.z;
+  const { x, y, z } = placeCell(game, hit);
   const piece = PIECES[block];
   if (piece) {
     // A slab laid on its other half fills the cell aimed at, which may be someone else's.
@@ -545,7 +577,7 @@ function updatePlayer(game: GameContext, player: Player, dt: number): void {
   }
 
   // Placing against the face aimed at (or into a plant's cell), repeating while held.
-  const places = held ? blockOfItem(game, held.item) : null;
+  const places = held ? blockOfItem(held.item) : null;
   const first = input.buttonPressed(2);
   if (hit && places && held && (first || (input.button(2) && h.placeT <= 0))) {
     input.consume(2);
@@ -553,19 +585,75 @@ function updatePlayer(game: GameContext, player: Player, dt: number): void {
     if (place(game, player, hit, held.item, places, first)) player.viewModel.play('swing');
   }
 
-  player.hud.highlight(hit && (canMine || places) ? hit : null, { progress: mining ? h.progress : 0 });
+  // The outline: on the block being worked at; with a piece in hand, round the cell it would fill
+  // (the nearest thing to a ghost of the piece the platform draws).
+  const ghost = hit && places && !mining ? placeCell(game, hit) : null;
+  player.hud.highlight(ghost ?? (hit && canMine ? hit : null), { progress: mining ? h.progress : 0 });
+
+  // What E would do here, and whose it is, under the crosshair.
+  let aim = '';
+  if (hit && piece) {
+    const owner = own.ownerOf(hit.x, hit.y, hit.z);
+    const theirs = owner && owner !== ownerKey(player) && !abandoned(owner) ? whose(owner) : '';
+    const locked = !!owner && !mine(owner, player);
+    const verb = piece.use && !locked ? USE_WORDS[piece.use] : '';
+    aim = `${verb}|${blocks[block]?.label ?? ''}${theirs ? `: ${theirs}` : ''}${locked ? ' (locked)' : ''}`;
+    if (!verb && !theirs) aim = '';
+  }
+  if (aim !== h.aim) {
+    h.aim = aim;
+    const [key, text] = aim ? aim.split('|') : ['', ''];
+    game.clients.send(player, 'bt.aim', { key, text });
+  }
+
+  if (input.pressed('KeyG')) {
+    input.consume('KeyG');
+    if (!tribes?.closeMenu(player)) tribes?.menu(game, player);
+  }
   if (mining || h.ringShown) {
     player.hud.progress(mining ? h.progress : null);
     h.ringShown = mining;
   }
 }
 
-/** The block an item places: a structure piece its own, anything else whose icon is a block that block. */
-function blockOfItem(game: GameContext, item: string): string | null {
-  if (item in PIECES && item !== 'bt_gate_open') return item;
-  const icon = game.items.get(item)?.icon;
-  return typeof icon === 'object' && 'block' in icon ? icon.block : null;
+/** What E does to each kind of usable piece, for the prompt under the crosshair. */
+const USE_WORDS: Record<NonNullable<Piece['use']>, string> = {
+  door: 'Open or shut',
+  gate: 'Open or shut',
+  storage: 'Open',
+  bed: 'Sleep here from now on',
+  campfire: 'Cook',
+  mortar: 'Grind',
+  workbench: 'Craft',
+  forge: 'Smelt',
+  smithy: 'Forge',
+};
+
+/**
+ * The block an item places: a structure piece places itself, and nothing else places anything.
+ * (Other parts' items drawn as blocks are only drawn that way: placed, they'd be structures with
+ * no owner, no cost and no limit.)
+ */
+function blockOfItem(item: string): string | null {
+  return BUILD_ITEMS.includes(item) ? item : null;
 }
+
+/** A piece torn down by something other than its owner: a box spills, a bed is forgotten, nothing comes back. */
+function wreck(game: GameContext, x: number, y: number, z: number, block: string): void {
+  const piece = PIECES[block];
+  if (!piece || !game.world.breakBlock(x, y, z)) return;
+  if (piece.use === 'storage') spillContainer(containerId({ x, y, z }), { x: x + 0.5, y: y + 0.2, z: z + 0.5 });
+  if (piece.use === 'bed') forgetBed(game, { x, y, z });
+}
+
+/** Tell whoever owns the piece at a cell (and their tribe), if they're on the island. */
+function warnOwner(game: GameContext, x: number, y: number, z: number, text: string): void {
+  const owner = own.ownerOf(x, y, z);
+  if (!owner) return;
+  for (const p of game.players) if (mine(owner, p) && !abandoned(owner)) p.hud.toast(text);
+}
+
+const tell = (game: GameContext) => (to: string, text: string) => game.players.find((p) => ownerKey(p) === to)?.hud.toast(text);
 
 export const building: Part = {
   setup(game) {
@@ -582,6 +670,14 @@ export const building: Part = {
     }
     registerRecipes(recipes);
 
+    tribes = new Tribes(game.store, ownerKey);
+    game.commands.register('tribe', {
+      help: 'Your tribe: survivors who share structures, stations and boxes (G opens the menu)',
+      usage: '[create <name> | invite <player> | accept | leave | info]',
+      run: (args, g, player) => tribes!.command(args, g, player),
+      complete: (args, g) => (args.length <= 1 ? ['create', 'invite', 'accept', 'leave', 'info'] : args[0] === 'invite' ? g.players.map((p) => p.name) : []),
+    });
+
     // Whoever places a piece owns it; whatever takes one away (its owner, a creature, a blast) frees the cell.
     game.events.on('blockPlace', ({ x, y, z, block, by }) => {
       regrowth.forget(x, y, z);
@@ -593,8 +689,12 @@ export const building: Part = {
     game.events.on('playerLeave', ({ player }) => {
       hands.delete(player.id);
       arriving.delete(player.id);
+      tribes?.left(player, tell(game));
     });
-    game.events.on('playerJoin', ({ player }) => arriving.add(player.id));
+    game.events.on('playerJoin', ({ player }) => {
+      arriving.add(player.id);
+      tribes?.seen(player);
+    });
   },
 
   start(game) {
@@ -604,6 +704,7 @@ export const building: Part = {
     arriving.clear();
     saveT = 0;
     growT = 0;
+    resetSiege();
     // A restart: what changed since the last save (the world put back, say) is written before it's read again.
     if (loaded) saveNow(game);
     loaded = true;
@@ -612,6 +713,7 @@ export const building: Part = {
 
   update(game, dt) {
     for (const player of game.players) updatePlayer(game, player, dt);
+    updateSiege(game, dt, (x, y, z, block) => wreck(game, x, y, z, block), (x, y, z, text) => warnOwner(game, x, y, z, text));
 
     // Someone who left from inside a dug-out hollow may come back to find the rock regrown round
     // them: once their ground has loaded, anyone standing in solid rock is lifted to the surface.

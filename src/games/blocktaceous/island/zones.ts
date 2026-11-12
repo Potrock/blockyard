@@ -56,19 +56,23 @@ PALETTE[Z.beach] = {
 
 PALETTE[Z.grassland] = {
   grass: '#86b84a',
-  roughness: 1.6,
+  roughness: 0.6,
   trees: [
     { shape: 'oak', height: [4, 6], density: 0.02 },
-    { shape: 'broad', height: [7, 10], density: 0.012 },
+    { shape: 'broad', height: [7, 10], density: 0.014 },
     { shape: 'bush', height: [1, 2], density: 0.02 },
   ],
+  // Long grass in drifts with open turf between; flowers each in a few corners of their own;
+  // here and there a patch worn to bare earth.
   scatter: [
-    { block: 'berry_bush', density: 0.05, clumps: 34 },
-    { block: 'fiber_plant', density: 0.07, clumps: 22 },
-    { block: 'short_grass', density: 0.34 },
-    { block: 'dandelion', density: 0.05, clumps: 30 },
-    { block: 'poppy', density: 0.05, clumps: 30 },
-    { block: 'cornflower', density: 0.05, clumps: 30 },
+    { block: 'dirt', where: 'in', density: 0.5, clumps: 9, cover: 0.03 },
+    { block: 'berry_bush', density: 0.09, clumps: 30, cover: 0.14 },
+    { block: 'fiber_plant', density: 0.14, clumps: 19, cover: 0.14 },
+    { block: 'short_grass', density: 0.5, clumps: 27, cover: 0.4 },
+    { block: 'dandelion', density: 0.2, clumps: 13, cover: 0.05 },
+    { block: 'poppy', density: 0.2, clumps: 12, cover: 0.04 },
+    { block: 'cornflower', density: 0.2, clumps: 14, cover: 0.045 },
+    { block: 'short_grass', density: 0.03 },
     { block: 'stone', density: 0.0005, size: 7 },
     { block: 'metal_rock', density: 0.00012, size: 5 },
   ],
@@ -76,20 +80,22 @@ PALETTE[Z.grassland] = {
 
 PALETTE[Z.jungle] = {
   surface: { bed: 'dirt' },
-  grass: '#3aa62c',
+  grass: '#2f9a2a',
   roughness: 2.6,
+  // Three storeys: emergent giants, a middle canopy of broad crowns, and a tangle underfoot.
   trees: [
-    { shape: 'jungle', log: 'oak_log', leaves: 'oak_leaves', height: [12, 24], density: 0.95 },
-    { shape: 'oak', height: [5, 8], density: 0.45 },
-    { shape: 'bush', height: [1, 3], density: 0.4 },
+    { shape: 'jungle', log: 'oak_log', leaves: 'oak_leaves', height: [14, 27], density: 0.95 },
+    { shape: 'broad', height: [8, 12], density: 0.24 },
+    { shape: 'oak', height: [5, 8], density: 0.28 },
+    { shape: 'bush', height: [1, 3], density: 0.42 },
     { shape: 'palm', log: 'palm_log', leaves: 'oak_leaves', height: [6, 9], density: 0.04 },
   ],
   scatter: [
-    { block: 'berry_bush', density: 0.06, clumps: 26 },
-    { block: 'fiber_plant', density: 0.05, clumps: 18 },
-    { block: 'fern', density: 0.24 },
+    { block: 'berry_bush', density: 0.08, clumps: 26, cover: 0.25 },
+    { block: 'fiber_plant', density: 0.07, clumps: 18, cover: 0.25 },
+    { block: 'fern', density: 0.34 },
     { block: 'short_grass', density: 0.2 },
-    { block: 'mossy_cobblestone', density: 0.0007, size: 9 },
+    { block: 'mossy_cobblestone', density: 0.0009, size: 9 },
   ],
 };
 
@@ -173,7 +179,7 @@ PALETTE[Z.snow] = {
   grass: '#8fb0a0',
   frozen: true,
   roughness: 3,
-  crags: 7,
+  crags: 9,
   trees: [{ shape: 'spruce', height: [6, 9], density: 0.035 }],
   scatter: [
     { block: 'crystal_rock', density: 0.0012, size: 7 },

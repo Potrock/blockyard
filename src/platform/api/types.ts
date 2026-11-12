@@ -390,6 +390,8 @@ export interface MapScatter {
   size?: number;
   /** Only in patches about this many blocks across (default: evenly). */
   clumps?: number;
+  /** With `clumps`: about the share of the ground the patches cover (three eighths by default). */
+  cover?: number;
 }
 
 /** Which blocks can be shot into (`WorldOptions.destructible`). */

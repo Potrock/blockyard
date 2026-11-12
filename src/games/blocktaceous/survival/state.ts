@@ -53,6 +53,13 @@ export interface Survivor {
   /** Their lost pack's id while one lies where they died. */
   cache: string | null;
   queue: Job[];
+  /** How far along the first goals they are (an index into `GOALS`; past the end: done), and whether they've hidden them. */
+  goal: number;
+  goalsOff: boolean;
+  /** Things done once that a goal asks about ('drank', 'campfire', 'cooked'). */
+  deeds: Set<string>;
+  /** Uses spent of the tool or weapon of each kind they carry (see `wear.ts`). */
+  wear: Record<string, number>;
   // ---- Never kept ----
   ui: ScreenState;
   /** Something changed that must be kept: saved soon. */
@@ -77,6 +84,11 @@ export interface Survivor {
   /** The vitals as last sent to their HUD, to send only changes; and the weather their screen's edges were last told. */
   shown: string;
   weather: string;
+  /** The goal card as last sent, and the goal just finished while its tick shows. */
+  goalShown: string;
+  goalDone: { title: string; xp: number; left: number } | null;
+  /** Seconds until a spear may be thrown again. */
+  throwIn: number;
 }
 
 /** What's kept of a survivor: short names, and stacks as `[item, count]` pairs (0: an empty slot). */
@@ -96,6 +108,10 @@ interface Saved {
   cache: string | null;
   health: number;
   queue: [string, number][];
+  goal?: number;
+  goalsOff?: boolean;
+  deeds?: string[];
+  wear?: Record<string, number>;
 }
 
 const STORE_KEY = 'survivor';
@@ -117,6 +133,10 @@ function fresh(id: string): Survivor {
     bed: null,
     cache: null,
     queue: [],
+    goal: 0,
+    goalsOff: false,
+    deeds: new Set(),
+    wear: {},
     ui: { open: false, tab: 'pack', sel: null, station: null, container: null, stale: false, belt: '' },
     dirty: false,
     saveIn: 0,
@@ -131,6 +151,9 @@ function fresh(id: string): Survivor {
     toldHeavy: false,
     shown: '',
     weather: '',
+    goalShown: '',
+    goalDone: null,
+    throwIn: 0,
   };
 }
 
@@ -176,6 +199,12 @@ export function survivorOf(player: Player): Survivor {
     if (Array.isArray(kept.queue)) {
       for (const j of kept.queue) if (Array.isArray(j) && typeof j[0] === 'string' && typeof j[1] === 'number' && j[1] > 0) s.queue.push({ key: j[0], left: Math.floor(j[1]), t: 0 });
     }
+    s.goal = num(kept.goal, 0, 0, 1000);
+    s.goalsOff = kept.goalsOff === true;
+    if (Array.isArray(kept.deeds)) for (const d of kept.deeds) if (typeof d === 'string') s.deeds.add(d);
+    if (kept.wear && typeof kept.wear === 'object') {
+      for (const [item, n] of Object.entries(kept.wear)) if (typeof n === 'number' && n > 0) s.wear[item] = Math.floor(n);
+    }
     const belt = unpackStacks(kept.belt, HOTBAR_SLOTS);
     player.inventory.clear();
     belt.forEach((stack, i) => stack && player.inventory.set(i, stack));
@@ -210,6 +239,10 @@ export function save(player: Player, s: Survivor): void {
     cache: s.cache,
     health: player.alive ? player.health : player.maxHealth,
     queue: s.queue.map((j) => [j.key, j.left]),
+    goal: s.goal,
+    goalsOff: s.goalsOff,
+    deeds: [...s.deeds],
+    wear: s.wear,
   };
   player.store.set(STORE_KEY, data);
 }

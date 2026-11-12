@@ -55,6 +55,8 @@ pub struct MapScatter {
     pub size: i32,
     /// Only in patches about this many blocks across (0: evenly).
     pub clumps: f32,
+    /// About the share of the ground its patches cover.
+    pub cover: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -101,7 +103,7 @@ impl TerrainMap {
     /// { "top": id, "fill": id, "depth": n, "steep": id, "steepness": f, "bed": id, "strata": [id],
     ///   "liquid": id, "frozen": bool, "grass": [r, g, b], "roughness": f, "crags": f,
     ///   "trees": [{ "shape": 0..8, "log": id, "leaves": id, "h": [min, max], "density": f, "wet": bool }],
-    ///   "scatter": [{ "block": id, "density": f, "where": 0 | 1 | 2, "size": n, "clumps": f }] }
+    ///   "scatter": [{ "block": id, "density": f, "where": 0 | 1 | 2, "size": n, "clumps": f, "cover": f }] }
     /// ```
     #[allow(clippy::too_many_arguments)]
     pub fn new(origin: [i32; 2], cell: i32, width: i32, depth: i32, heights: &[u16], zone_of: &[u8], water: &[u8], outside_height: f32, outside_zone: u8, palette: &str) -> Result<TerrainMap, String> {
@@ -166,6 +168,7 @@ impl TerrainMap {
                     mode: (num(s, "where", 0.0) as u8).min(SCATTER_UNDER),
                     size: (num(s, "size", 1.0) as i32).clamp(1, 64),
                     clumps: num(s, "clumps", 0.0) as f32,
+                    cover: (num(s, "cover", 0.375) as f32).clamp(0.0, 1.0),
                 });
             }
             zones.push(MapZone {
@@ -279,6 +282,8 @@ impl Generator {
         let mut grass = [0f32; 3];
         let (mut rough, mut crags) = (0f32, 0f32);
         let (mut wet, mut level, mut best, mut liquid_zone) = (0f32, 0f32, 0f32, 0u8);
+        let (mut lmin, mut lmax, mut best_level, mut best_h, mut low_h) = (255u8, 0u8, 0u8, 0f32, 0f32);
+        let mut wets = [(0f32, 0u8); 4];
         for (k, w) in [(1.0 - tx) * (1.0 - tz), tx * (1.0 - tz), (1.0 - tx) * tz, tx * tz].into_iter().enumerate() {
             let (i, j) = (ix + (k & 1) as i32, iz + (k >> 1) as i32);
             let zi = m.zone(i, j);
@@ -292,17 +297,38 @@ impl Generator {
             if l > 0 && w > 0.0 {
                 wet += w;
                 level += w * l as f32;
+                wets[k] = (w, l);
+                if l < lmin {
+                    lmin = l;
+                    low_h = m.height(i, j);
+                }
+                lmax = lmax.max(l);
                 if w > best {
                     best = w;
                     liquid_zone = zi;
+                    best_level = l;
+                    best_h = m.height(i, j);
                 }
             }
+        }
+
+        // A waterfall: where the liquid's level drops by a lot between samples, it doesn't slope
+        // down between them but goes over an edge: each column takes its nearest wet sample's
+        // level and bed.
+        let falls = wet > 0.0 && lmax - lmin >= 4;
+        if falls && best >= 0.25 {
+            // The last block before the edge is the fall itself: water from the upper level
+            // down to the lower bed.
+            let same: f32 = wets.iter().filter(|(_, l)| *l == best_level).map(|(w, _)| w).sum();
+            h = if best_level > lmin && same < 0.63 { low_h } else { best_h };
         }
 
         // Fine noise, stilled where the map keeps liquid (its bed and banks hold it in).
         let still = 1.0 - wet;
         if still > 0.0 {
-            let mut d = self.n_detail.fbm2(fx / 72.0, fz / 72.0, 4) * 1.6 * rough;
+            // Broad swells, and a little grain that breaks each step's edge up (a step's line
+            // across gentle ground wanders instead of running straight).
+            let mut d = self.n_detail.fbm2(fx / 72.0, fz / 72.0, 4) * 1.6 * rough + self.n_patch.n2(fx / 9.0 + 13.7, fz / 9.0 - 4.1) * 0.45 * rough.min(1.0);
             if crags > 0.0 {
                 let r = 1.0 - self.n_pv.n2(fx / 26.0, fz / 26.0).abs();
                 d += r * r * crags;
@@ -323,7 +349,7 @@ impl Generator {
         for (o, g) in out.iter_mut().zip(grass) {
             *o = (g + 0.5).clamp(0.0, 255.0) as u8;
         }
-        MapCol { h, zone, liquid_zone, level: if wet > 0.0 { (level / wet).round() as i32 } else { -1 }, grass: out }
+        MapCol { h, zone, liquid_zone, level: if falls { best_level as i32 } else if wet > 0.0 { (level / wet).round() as i32 } else { -1 }, grass: out }
     }
 
     /// The column at world (x, z): from the chunk's area if it's there, else worked out.
@@ -446,7 +472,7 @@ impl Generator {
 
     /// Whether scatter `k` of a zone grows at (x, z): everywhere, or only inside its patches.
     fn in_clump(&self, s: &MapScatter, k: usize, x: i32, z: i32) -> bool {
-        s.clumps <= 0.0 || self.n_flower.n2(x as f32 / s.clumps + k as f32 * 31.7, z as f32 / s.clumps - k as f32 * 17.3) > 0.25
+        s.clumps <= 0.0 || self.n_flower.n2(x as f32 / s.clumps + k as f32 * 31.7, z as f32 / s.clumps - k as f32 * 17.3) > 1.0 - 2.0 * s.cover
     }
 
     /// Boulders (on the ground) and outcrops (sunk into it): scattered blocks of more than one.

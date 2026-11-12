@@ -77,6 +77,33 @@ function defineSounds(client: Client): void {
     },
     { reverb: 0 },
   );
+  // A first goal ticked off: a small bright chime.
+  a.define(
+    'bt_goal',
+    (s) => {
+      s.tone({ wave: 'triangle', from: 784 * s.pitch, duration: 0.12, volume: 0.22 });
+      s.tone({ wave: 'triangle', from: 1175 * s.pitch, duration: 0.28, delay: 0.1, volume: 0.22 });
+    },
+    { reverb: 0.1 },
+  );
+  // A tool gives out: a dry crack and the pieces falling.
+  a.define(
+    'bt_break',
+    (s) => {
+      s.noise({ duration: 0.09, filter: 'highpass', from: 1800, to: 900, volume: 0.4 });
+      s.tone({ wave: 'square', from: 260 * s.pitch, to: 90, duration: 0.12, volume: 0.16, lowpass: 1800 });
+      s.noise({ duration: 0.12, filter: 'bandpass', from: 700, to: 300, q: 1.2, delay: 0.1, volume: 0.2 });
+    },
+    { reverb: 0.1 },
+  );
+  // A spear leaving the hand: a short rush of air.
+  a.define(
+    'bt_throw',
+    (s) => {
+      s.noise({ duration: 0.22, filter: 'bandpass', from: 500, to: 2600, q: 1.1, volume: 0.3 });
+    },
+    { reverb: 0 },
+  );
   // No: a soft double thud.
   a.define(
     'bt_deny',
@@ -105,6 +132,28 @@ export function setup(client: Client): void {
   weather.className = 'bt-weather';
   client.hud.layer('bt-weather', 'lens').appendChild(weather);
   // The server says when the weather starts or stops biting ("cold", "scorching", or "ok").
+  // Tab opens the journal (the server hears that); while it's up the keys are the screen's, so
+  // closing it with the same key is done here: on the key coming up, press the journal's own
+  // close button (on its going down, the game would hear it again and open it straight back).
+  let closing = false;
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.code !== 'Tab') return;
+      closing = !!document.querySelector('.gw-bt-journal');
+      if (closing) e.preventDefault();
+    },
+    true,
+  );
+  window.addEventListener(
+    'keyup',
+    (e) => {
+      if (e.code !== 'Tab' || !closing) return;
+      closing = false;
+      document.querySelector<HTMLElement>('.gw-bt-journal .x')?.click();
+    },
+    true,
+  );
   client.on('bt.weather', (data) => {
     const state = (data as { state?: unknown } | null)?.state;
     if (weather) weather.className = `bt-weather ${typeof state === 'string' && /^[a-z]+$/.test(state) ? state : ''}`;

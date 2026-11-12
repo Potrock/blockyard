@@ -11,7 +11,7 @@ export const SURVIVAL_RECIPES: Recipe[] = [
   // ---- By hand ----
   { item: 'stone_pick', needs: { wood: 1, stone: 2, thatch: 4 }, level: 1 },
   { item: 'stone_hatchet', needs: { wood: 1, flint: 2, thatch: 6 }, level: 1 },
-  { item: 'cordage', needs: { fiber: 8 }, level: 1, time: 1 },
+  { item: 'cordage', needs: { fiber: 8 }, level: 1, time: 1, xp: 1 },
   { item: 'club', needs: { wood: 6, cordage: 1 }, level: 2 },
   { item: 'cloth_tunic', needs: { fiber: 30, cordage: 1 }, level: 2 },
   { item: 'spear', needs: { wood: 4, flint: 2, cordage: 1 }, level: 3 },

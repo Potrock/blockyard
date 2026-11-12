@@ -2,15 +2,20 @@ import type { Player, Vec3 } from '../../src/platform';
 import { calls } from '../../src/games/blocktaceous/building/adapters';
 import { VARIANTS_USED, blocks, structureTier } from '../../src/games/blocktaceous/building/def';
 import { recipes } from '../../src/games/blocktaceous/building/recipes';
-import { canBuild, loadNow, ownerKey, ownerOf, regrowAll, regrowPending, saveNow } from '../../src/games/blocktaceous/building/rules';
+import { canBuild, loadNow, ownerKey, ownerOf, regrowAll, regrowPending, sameTribe, saveNow, tribeCommand, tribeOf } from '../../src/games/blocktaceous/building/rules';
+import { provoke } from '../../src/games/blocktaceous/creatures/ai';
+import { spawnAnimal } from '../../src/games/blocktaceous/creatures/population';
 import { ITEMS } from '../../src/games/blocktaceous/items';
-import { count } from '../../src/games/blocktaceous/survival/bag';
+import { bedOf, closeScreens, containerContents, count } from '../../src/games/blocktaceous/survival/bag';
+import { container } from '../../src/games/blocktaceous/survival/pack';
+import { survivorOf } from '../../src/games/blocktaceous/survival/state';
 import { check, launch } from './_harness';
 
 /**
  * Blocktaceous' gathering and building: what a tree and a rock give by hand and with tools, a
  * felled tree and its regrowth, a wall that's its builder's alone, a door only its owner opens,
- * stations calling through to the survival part, and ownership kept through `game.store`.
+ * stations calling through to the survival part, ownership kept through `game.store`, a gate, a
+ * storage box that spills, a bed, tribes that share all of it, and what wild animals do to walls.
  */
 export default function blocktaceousBuilding() {
   check(VARIANTS_USED <= 40, `the building blocks use ${VARIANTS_USED} variants of 40`);
@@ -217,6 +222,104 @@ export default function blocktaceousBuilding() {
   loadNow(game);
   check(ownerOf(wall) === ownerKey(me) && ownerOf(door) === ownerKey(me) && !canBuild(bob, wall), 'ownership survives a store round trip');
 
+  // ---- A gate: every joined gate opens and shuts as one, for its owner ----
+  const use = (at: Vec3) => {
+    h.run(0.1, { pilot: () => aim(at) });
+    h.step(1 / 60, { pressed: ['KeyE'], ...aim(at) });
+    h.run(0.05, { pilot: () => aim(at) });
+  };
+  const bobUses = (at: Vec3) => {
+    bob.controls.lookAt({ x: at.x + 0.5, y: at.y + 0.4, z: at.z + 0.5 });
+    h.run(0.2);
+    bob.controls.press('KeyE');
+    h.run(0.2);
+  };
+  world.setBlock(bench.x, bench.y, bench.z, 'air');
+  const gate = { x: ox + 2, y: oy, z: oz - 1 };
+  const gate2 = { x: ox + 2, y: oy, z: oz - 2 };
+  world.placeBlock(gate.x, gate.y, gate.z, 'bt_gate', { by: me });
+  world.placeBlock(gate2.x, gate2.y, gate2.z, 'bt_gate', { by: me });
+  bobUses(gate);
+  check(name(gate) === 'bt_gate', "someone else can't open a gate");
+  use(gate);
+  check(name(gate) === 'bt_gate_open' && name(gate2) === 'bt_gate_open', `E opens a gate and the one joined to it (${name(gate)}, ${name(gate2)})`);
+  check(ownerOf(gate) === ownerKey(me) && ownerOf(gate2) === ownerKey(me), 'an open gate is still its builder\'s');
+  check(!world.blockInfo(world.getBlock(gate.x, gate.y, gate.z))?.solid, 'and can be walked through');
+  use(gate2);
+  check(name(gate) === 'bt_gate' && name(gate2) === 'bt_gate', 'E shuts them again');
+  check(said('bt.aim').some((m) => (m as { key?: string }).key === 'Open or shut'), 'and their screen says what E does there');
+  world.breakBlock(gate2.x, gate2.y, gate2.z);
+
+  // ---- A storage box holds things, and spills them when it's taken down ----
+  world.breakBlock(gate.x, gate.y, gate.z);
+  const box = gate;
+  const boxId = `box:${box.x},${box.y},${box.z}`;
+  world.placeBlock(box.x, box.y, box.z, 'bt_storage', { by: me });
+  use(box);
+  check(survivorOf(me).ui.open && survivorOf(me).ui.container === boxId, `E opens the box (${survivorOf(me).ui.container})`);
+  container(boxId, 24).slots[3] = { item: 'wood', count: 7 };
+  closeScreens(me);
+  bobUses(box);
+  check(!survivorOf(bob).ui.open, "someone else can't look in it");
+  check(containerContents(boxId, 24)[0]?.count === 7, 'what is put in stays in');
+  game.items.clearPickups();
+  tool(null);
+  mine(box, 4);
+  check(name(box) === 'air' && h.sim.items.frame().length > 0, 'taken down, the box spills what it held');
+  check(containerContents(boxId, 24).length === 0, 'and holds nothing any more');
+  game.items.clearPickups();
+
+  // ---- A bed is where its sleeper wakes, until it's gone ----
+  world.placeBlock(box.x, box.y, box.z, 'bt_bed', { by: me });
+  use(box);
+  const bed = bedOf(me);
+  check(!!bed && bed.x === box.x && bed.y === box.y && bed.z === box.z, 'E on a bed makes it where they wake');
+  mine(box, 4);
+  check(name(box) === 'air' && bedOf(me) === null, 'a bed taken down is forgotten');
+
+  // ---- Tribes: survivors who build as one ----
+  check(tribeOf(me) === null && !sameTribe(me, bob), 'nobody starts in a tribe');
+  tribeCommand(game, me, ['create', 'Ridge', 'Runners']);
+  check(tribeOf(me) === 'Ridge Runners' && !sameTribe(me, bob), 'a tribe is founded');
+  let refused = '';
+  try {
+    tribeCommand(game, bob, ['create', 'ridge runners']);
+  } catch (problem) {
+    refused = (problem as Error).message;
+  }
+  check(refused.includes('already a tribe'), `a name is taken once (${refused})`);
+  bobUses(door);
+  check(said('bt.aim').length > 0 && !canBuild(bob, wall), 'a stranger is still a stranger');
+  tribeCommand(game, me, ['invite', 'bob']);
+  tribeCommand(game, bob, ['accept']);
+  check(sameTribe(me, bob) && sameTribe(bob, me) && tribeOf(bob) === 'Ridge Runners', 'asked in and accepting, Bob is in the tribe');
+  check(canBuild(bob, wall) && canBuild(bob, { x: wall.x + 1, y: wall.y, z: wall.z }), 'and may build on and beside the tribe\'s walls');
+  const was = facing(door);
+  // (The door stands open, its leaf along the cell's south-facing edge: that's where Bob looks.)
+  bob.controls.lookAt({ x: door.x + 0.5, y: door.y + 0.6, z: door.z + 0.1 });
+  h.run(0.2);
+  bob.controls.press('KeyE');
+  h.run(0.2);
+  check(facing(door) !== was, 'and open its doors');
+  saveNow(game);
+  check(game.store.get('bt.tribes') !== undefined, 'tribes are kept in the store');
+  loadNow(game);
+  check(sameTribe(me, bob) && tribeOf(me) === 'Ridge Runners', 'and come back from it');
+  tribeCommand(game, bob, ['leave']);
+  check(!sameTribe(me, bob) && tribeOf(bob) === null && !canBuild(bob, wall) && tribeOf(me) === 'Ridge Runners', 'leaving, Bob is a stranger again');
+  tribeCommand(game, me, ['leave']);
+  saveNow(game);
+  check(tribeOf(me) === null && Object.keys(game.store.get<object>('bt.tribes') ?? {}).length === 0, 'a tribe nobody is in is no more');
+
+  // ---- Only structure pieces are placed: another part's item drawn as a block is not ----
+  game.items.define('test_blocky', { kind: 'misc', name: 'Blocky', icon: { block: 'stone' } });
+  me.inventory.set(me.inventory.selected, { item: 'test_blocky', count: 2 });
+  const spot = { x: ox + 2, y: oy - 1, z: oz - 1 };
+  h.run(0.2, { pilot: () => aim(spot) });
+  h.step(1 / 60, { clicked: 4, buttons: 4, ...aim(spot) });
+  h.run(0.1);
+  check(name({ ...spot, y: oy }) === 'air' && me.inventory.held?.count === 2, 'an item that only looks like a block places nothing');
+
   // ---- Its owner takes the wall down and gets something back ----
   const woodBefore = have('wood');
   tool(null);
@@ -227,4 +330,39 @@ export default function blocktaceousBuilding() {
   // A creature (or anything else) breaking a piece frees its cell.
   world.breakBlock(door.x, door.y, door.z);
   check(ownerOf(door) === null, 'a piece broken by the world is nobody\'s');
+
+  // ---- Wild animals at the walls: thatch gives to a raptor, stone stands against a tyrannosaur ----
+  game.bots.remove(bob);
+  const hut = [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => [0, 1].map((dy) => ({ x: ox + dx, y: oy + dy, z: oz + dz })));
+  const raise = (block: string) => {
+    for (const at of hut) {
+      world.setBlock(at.x, at.y, at.z, 'air');
+      world.placeBlock(at.x, at.y, at.z, block, { by: me });
+    }
+  };
+  reset();
+  me.protect(120);
+  raise('bt_thatch_wall');
+  check(hut.every((at) => name(at) === 'bt_thatch_wall' && ownerOf(at) === ownerKey(me)), 'a thatch hut stands');
+  const raptor = spawnAnimal(game, 'utahraptor', ox - 3.5, oz + 0.5, 0, oy);
+  check(!!raptor, 'a raptor arrives');
+  if (raptor) {
+    provoke(raptor, me, game);
+    h.run(9, { until: () => hut.some((at) => name(at) === 'air') });
+    const holes = hut.filter((at) => name(at) === 'air');
+    check(holes.length >= 1, 'a hunting raptor bites through thatch');
+    check(holes.every((at) => ownerOf(at) === null), 'and what it broke is nobody\'s');
+    raptor.e.remove();
+  }
+  raise('bt_stone_wall');
+  const rex = spawnAnimal(game, 'tyrannosaurus', ox - 3.5, oz + 0.5, 0, oy);
+  if (rex) {
+    provoke(rex, me, game);
+    h.run(3.5);
+    check(hut.every((at) => name(at) === 'bt_stone_wall'), 'stone stands against a tyrannosaur');
+    raise('bt_thatch_wall');
+    h.run(4, { until: () => hut.some((at) => name(at) === 'air') });
+    check(hut.some((at) => name(at) === 'air'), 'which goes through thatch at a bite');
+    rex.e.remove();
+  }
 }

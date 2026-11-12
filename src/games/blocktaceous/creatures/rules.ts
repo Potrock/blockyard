@@ -4,6 +4,8 @@ import { SPECIES, SPECIES_IDS, type SpeciesId } from '../species';
 import { addXp, give } from '../survival/bag';
 import { ai, provoke } from './ai';
 import { registerArt, standIn } from './art';
+import { resetBody, swingAtBodies } from './body';
+import { addHaul } from './gather';
 import { defineGear, resetGear, useGear } from './gear';
 import { modelUrl, strideOf } from './models';
 import { census, populate, spawnHerd } from './population';
@@ -59,8 +61,13 @@ function harvest(game: GameContext, b: Brain, killer: Entity | Player | null) {
   } else if (killer) {
     const kb = brains.get(killer.id);
     if (kb?.tame) {
-      to = ownerOf(game, kb.tame);
       gainXp(game, kb.tame, b.t.xp);
+      // A tame out gathering carries its kill itself, until its owner takes it.
+      if (kb.tame.order === 'gather') {
+        for (const [item, n] of b.t.drops) addHaul(kb, item, n);
+        return;
+      }
+      to = ownerOf(game, kb.tame);
     }
   }
   if (to) {
@@ -129,7 +136,7 @@ function listen(game: GameContext) {
     const p = entity.position;
     carcasses.push({ x: p.x, z: p.z, until: clock.now + 60 });
     if (carcasses.length > 12) carcasses.shift();
-    if (b.tame) return tameDied(game, b.tame);
+    if (b.tame) return tameDied(game, b.tame, p);
     harvest(game, b, attacker(killer));
   });
 
@@ -267,6 +274,7 @@ export const creatures: Part = {
   start(game) {
     resetState();
     resetGear();
+    resetBody();
     resetTamingHud();
     for (const k of Object.keys(due) as (keyof typeof due)[]) due[k] = 0;
     loadTames(game);
@@ -282,6 +290,7 @@ export const creatures: Part = {
     for (const player of game.players) {
       if (!inPlay(player) || player.vehicle || player.bot) continue;
       useGear(game, player);
+      swingAtBodies(game, player);
       interact(game, player);
     }
     tickTaming(game, dt);

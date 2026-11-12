@@ -93,7 +93,7 @@ function tune(id: SpeciesId): Tuning {
     apex: s.tameTier >= 8,
     // From its middle to where its jaws or horns end: a long animal stops well short of what it bites, not on top of it.
     reach: 2.5 + s.length * 0.55,
-    windup: big ? 0.45 + s.length * 0.03 : 0.25,
+    windup: big ? 0.45 + s.length * 0.03 : 0.4,
     cooldown: 1.1 + s.length * 0.07,
     sense: s.temper === 'aggressive' ? 18 + s.length * 0.8 : 9 + s.hitbox.width * 1.5,
     drops,
@@ -102,7 +102,7 @@ function tune(id: SpeciesId): Tuning {
     dazeMax: Math.round(20 + s.health * 0.5),
     trustPerFeed: 100 / (2 + s.tameTier * 1.2),
     feedEvery: 1.5 + s.tameTier * 0.5,
-    bolaable: s.hitbox.width <= 1.8 && s.health <= 120,
+    bolaable: s.health <= 120,
     saddle: saddleFor(s),
     weight: (s.herd >= 3 ? 3 : 2) / (1 + s.tameTier * 0.45),
     turn: 3.4 / (1 + s.length / 7),

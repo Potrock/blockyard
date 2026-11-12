@@ -9,7 +9,7 @@ import { TUNING, type Tuning } from './tuning';
  */
 
 /** A tame's standing orders. */
-export type Order = 'follow' | 'stay' | 'wander';
+export type Order = 'follow' | 'stay' | 'wander' | 'gather';
 export type Stance = 'passive' | 'defend' | 'attack';
 
 /** A tame as it's kept in `game.store` under `tame:<id>`: plain data. */
@@ -30,6 +30,8 @@ export interface TameRecord {
   order: Order;
   stance: Stance;
   saddled: boolean;
+  /** What it has gathered on its own (the `gather` order) and not yet handed over: item id to how many. */
+  haul?: Record<string, number>;
   /** A guest's tame lasts while this server process does (their id means nothing after): the process that made it. */
   boot?: string;
 }
@@ -62,6 +64,13 @@ export interface Brain {
   yaw: number;
   /** Seconds it has been trying to walk without getting anywhere. */
   stuck: number;
+  /** Getting round what's in its way: until when it sidesteps, and to which side (1 or -1). */
+  dodgeUntil: number;
+  /** Until when it follows the engine's path to a player rather than walking straight at them. */
+  pathUntil: number;
+  dodgeSide: number;
+  /** A gathering tame: when it next finds something. */
+  gatherAt: number;
   /** A flyer's circling: the height it holds over the ground. */
   alt: number;
   /** A looping clip its model is playing (`eat`, `sleep`, `fly`), or null. */
@@ -141,6 +150,10 @@ export function makeBrain(e: Entity, id: SpeciesId, herd: number, rng: { range(a
     hurtAt: -100,
     yaw: 0,
     stuck: 0,
+    dodgeUntil: 0,
+    pathUntil: 0,
+    dodgeSide: 1,
+    gatherAt: clock.now + rng.range(8, 16),
     alt: rng.range(10, 18),
     clip: null,
     daze: 0,
