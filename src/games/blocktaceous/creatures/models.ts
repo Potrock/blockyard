@@ -33,3 +33,28 @@ const STRIDES: Partial<Record<SpeciesId, number>> = {
 export function strideOf(id: SpeciesId): number {
   return (BIPED_MODELS as Record<string, { stride: number }>)[id]?.stride ?? STRIDES[id] ?? 1.5;
 }
+
+/** How high each model's `saddle` node sits over its feet, blocks (read from the files). */
+const SADDLES: Record<SpeciesId, number> = {
+  ankylosaurus: 1.72,
+  brachiosaurus: 6.75,
+  carnotaurus: 2.86,
+  compsognathus: 0.35,
+  dilophosaurus: 1.78,
+  dodo: 0.63,
+  mammoth: 3.4,
+  parasaurolophus: 3.42,
+  pteranodon: 0.93,
+  sarcosuchus: 1.3,
+  smilodon: 1.08,
+  spinosaurus: 3.2,
+  stegosaurus: 2.8,
+  triceratops: 2.8,
+  tyrannosaurus: 3.95,
+  utahraptor: 1.66,
+};
+
+/** Where a rider's figure goes (`player.drive`'s `seat`): astride, legs down the animal's sides. */
+export function seatOf(id: SpeciesId): number {
+  return Math.max(0, SADDLES[id] - 0.45);
+}

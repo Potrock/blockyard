@@ -1410,8 +1410,12 @@ export interface PlayerApi {
    * `remote`: they steer it from where they stand (a guided missile, a drone, a turret's camera):
    * their body stays put, frozen, and everyone still sees it there (it can be shot, and a marker
    * or an orbit that follows them stays on it), while their controls and camera go to the vehicle.
+   *
+   * `seat`: they're seen riding it (a saddle, an open cart), their figure this many blocks above
+   * the vehicle's `pose`, crouched to it and facing where they look, on every screen and their
+   * own. Without it a driver isn't drawn: the vehicle's model is all there is to see.
    */
-  drive<S extends object>(vehicle: string, state: S, opts?: { prop?: Prop; remote?: boolean }): Vehicle<S>;
+  drive<S extends object>(vehicle: string, state: S, opts?: { prop?: Prop; remote?: boolean; seat?: number }): Vehicle<S>;
   /** Out of their vehicle (their model stays where it was; remove it if it should go). */
   leaveVehicle(): void;
   /** The vehicle they're driving, if any. */

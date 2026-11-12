@@ -1,7 +1,7 @@
 import { Blueprint, type GameContext, type Player, type PropModel } from '@platform';
 import { SPECIES, SPECIES_IDS, type SpeciesId } from '../species';
 import { freshMount, type MountState } from './def';
-import { modelUrl } from './models';
+import { modelUrl, seatOf } from './models';
 import { gainXp, spawnTame, stow, tameDied } from './tames';
 import { TUNING, levelBonus } from './tuning';
 import { clock, flat, inPlay, itemName, near, ownerKey, rides, type Brain, type Ride } from './state';
@@ -64,7 +64,7 @@ export function mountUp(game: GameContext, player: Player, b: Brain): boolean {
   stow(rec);
   const prop = game.props.spawn(mountModel(game, rec.species), { position: p });
   const flyer = b.s.locomotion === 'flyer';
-  player.drive<MountState>(flyer ? 'bt_wing' : 'bt_mount', freshMount(SPECIES_IDS.indexOf(rec.species), p, yaw), { prop });
+  player.drive<MountState>(flyer ? 'bt_wing' : 'bt_mount', freshMount(SPECIES_IDS.indexOf(rec.species), p, yaw), { prop, seat: seatOf(rec.species) });
   rides.set(player.id, { rec, prop, atk: 0, clip: 'idle', clipUntil: 0, ridden: 0 });
   player.hud.toast(flyer ? 'W flap · Space take off and climb · C dive · click bite · E get off (on the ground)' : 'WASD ride · Ctrl or F gallop · Space jump · click bite · E or Shift get off');
   game.audio.play('bt_saddle', { at: p });

@@ -12,6 +12,8 @@ export class VehicleSim implements Vehicle {
     readonly prop: PropState | null,
     /** Steered from afar: the pilot's body stays where it was (`drive`'s `remote`). */
     readonly remote = false,
+    /** Seen riding it, this far above its pose (`drive`'s `seat`); null: not drawn. */
+    readonly seat: number | null = null,
   ) {}
 
   /** Put the model where the state has it; returns where that is. */
