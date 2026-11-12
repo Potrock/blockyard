@@ -53,6 +53,7 @@
     <td align="center"><a href="https://blockyard.gg/?game=sandbox"><img src="src/games/sandbox/cover.webp" alt="Sandbox"></a><br><b>Sandbox</b></td>
   </tr>
   <tr>
+    <td align="center"><a href="https://blockyard.gg/?game=blocktaceous"><img src="src/games/blocktaceous/cover.webp" alt="Blocktaceous"></a><br><b>Blocktaceous</b></td>
     <td align="center"><a href="https://blockyard.gg/?game=heart-hunt"><img src="src/games/heart-hunt/cover.webp" alt="Heart Hunt"></a><br><b>Heart Hunt</b></td>
   </tr>
 </table>
@@ -68,6 +69,7 @@
 | **[Blockyard Links](https://blockyard.gg/?game=golf)** | Eighteen holes of parkland golf, par 72, with a cart to drive round them. Swing with the mouse: pull back for power, then swing up through the ball, and the stroke's line pushes, pulls, hooks or slices it. The ball flies with real drag, lift and wind, digs into soft turf and rolls down sloping greens into a real cup (lip-outs included). Everyone plays their own round on the same course. |
 | **[Sky Obby](https://blockyard.gg/?game=obby)** | Ten stages of parkour in the sky, with lava, crumbling sand, launch pads, blinking platforms and cannons. Each player runs on their own clock, and best times go on a leaderboard. |
 | **[Sandbox](https://blockyard.gg/?game=sandbox)** | Creative building in an endless world, which the server keeps. |
+| **[Blocktaceous](https://blockyard.gg/?game=blocktaceous)** | Dinosaur survival on an island 6.6 km across: beaches, jungle, giant redwoods, swamp, red mesas, a snowy range and a volcano. Wash up with nothing, gather and craft, build a base that's yours, and mind your hunger, thirst and the weather. Sixteen prehistoric animals roam it, from dodos to a tyrannosaurus; knock one out or win its trust to tame it, then saddle it and ride (or fly a pteranodon). The server keeps the island, your survivor and your tames. |
 | **[Heart Hunt](https://blockyard.gg/?game=heart-hunt)** | A gentle hunt for ten hidden hearts. At about 70 lines, it's the [tutorial game](docs/PLATFORM.md#hello-game). |
 
 Each game's controls are on the home page and in its pause menu (Escape), along with the settings and an invite link.

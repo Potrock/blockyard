@@ -210,8 +210,8 @@ export function stepVitals(game: GameContext, player: Player, s: Survivor, dt: n
     }
   }
 
-  // E: a lost pack in reach first, else a drink.
-  if (player.input.pressed('KeyE')) {
+  // E: a lost pack in reach first, else a drink (in the saddle, E is the mount's: it gets down).
+  if (player.input.pressed('KeyE') && !player.vehicle) {
     const pack = packInReach(player, s);
     if (pack) {
       player.input.consume('KeyE');

@@ -1,5 +1,5 @@
 import type { GameContext } from '@platform';
-import { biomeAt } from '../island/index';
+import { biomeAt, SPAWNS } from '../island/index';
 import { SPECIES, SPECIES_IDS, type BiomeId, type SpeciesId } from '../species';
 import { TUNING } from './tuning';
 import { brains, dist2, flat, inPlay, makeBrain, nearestPlayer, newHerd, type Brain } from './state';
@@ -97,13 +97,19 @@ export function spawnHerd(game: GameContext, id: SpeciesId, x: number, z: number
   return out;
 }
 
+/** How far from the landing beaches (island SPAWNS) no hunter turns up, blocks. */
+const LANDING = 200;
+
 /** Pick a species for a biome, by how common each is; the rare giants only while there's room for another. */
 function pick(game: GameContext, biome: BiomeId, x: number, z: number): SpeciesId | null {
   let list = speciesIn(biome);
   if (!list.length) list = speciesIn('grassland');
   let apex = 0;
   for (const b of brains.values()) if (!b.tame && b.t.apex) apex++;
+  const landing = SPAWNS.some((p) => flat(p, { x, z }) < LANDING);
   const ok = list.filter((id) => {
+    // Where castaways wash up, nothing hunts: a newcomer has a fist and twenty health.
+    if (landing && SPECIES[id].temper === 'aggressive') return false;
     if (!TUNING[id].apex) return true;
     if (apex >= APEX_MAX) return false;
     for (const b of brains.values()) if (b.id === id && !b.tame && flat(b.e.position, { x, z }) < APEX_APART) return false;
