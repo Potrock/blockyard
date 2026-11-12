@@ -19,7 +19,7 @@ const CSS = `
 .bt-region i { display: block; margin-top: 4px; font-size: 13px; font-style: normal; letter-spacing: 0.32em; text-transform: uppercase; opacity: 0.85; }
 .bt-region b::before, .bt-region b::after { content: ''; display: inline-block; width: 46px; height: 2px; margin: 0 14px; vertical-align: middle; background: currentColor; opacity: 0.6; }
 @keyframes bt-region { 0% { opacity: 0; transform: translate(-50%, 8px); } 12%, 78% { opacity: 1; transform: translate(-50%, 0); } 100% { opacity: 0; transform: translate(-50%, -6px); } }
-.bt-map { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(8, 14, 22, 0.62); }
+.bt-map { position: absolute; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: rgba(8, 14, 22, 0.62); }
 .bt-map.open { display: flex; }
 .bt-map-sheet { position: relative; width: min(84vh, 92vw); height: min(84vh, 92vw); border: 6px solid #3a2a18; border-radius: 6px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), inset 0 0 0 2px #c9a86a; background: #1b4f8c; overflow: hidden; }
 .bt-map-sheet canvas { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: auto; }
@@ -37,10 +37,9 @@ const CSS = `
 .bt-region.found.show { animation: bt-found 6s ease both; }
 .bt-region.found i { color: #ffe14a; opacity: 1; }
 .bt-map-mark { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; font-size: 10px; font-weight: 700; color: #ffe9a8; text-shadow: 0 1px 0 #1a120a, 0 0 5px rgba(10, 8, 4, 0.95); pointer-events: none; }
-.bt-map-mark::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 4px; background: #ffd24a; border: 1px solid #3a2a18; transform: rotate(45deg); vertical-align: middle; }
 .bt-map-mark.unknown { color: #fff8e6; opacity: 0.55; font-size: 11px; }
-.bt-map-mark.unknown::before { display: none; }
-.bt-map-found { position: absolute; left: 14px; top: 38px; font-size: 11px; letter-spacing: 0.06em; color: #ffe9a8; text-shadow: 0 1px 0 #1a120a; }
+.bt-map-dot { position: absolute; width: 7px; height: 7px; background: #ffd24a; border: 1px solid #3a2a18; transform: translate(-50%, -50%) rotate(45deg); pointer-events: none; }
+.bt-map-found { position: absolute; left: 14px; top: 40px; font-size: 11px; letter-spacing: 0.06em; color: #ffe9a8; text-shadow: 0 1px 0 #1a120a; }
 .bt-air { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 3s ease, background 3s ease; }
 .bt-map-compass::after { content: ''; display: block; margin: 2px auto 0; border: 5px solid transparent; border-top: 0; border-bottom: 12px solid #fff8e6; transform: rotate(0deg); }
 `;
@@ -69,6 +68,8 @@ let regionClock = 0;
 let mapOpen = false;
 let mapKey = false;
 let foundLine: HTMLElement | null = null;
+/** Where the map's fixed names sit, in percent of the sheet: later names keep clear of them. */
+const labelBoxes: { x: number; y: number; w: number; h: number }[] = [];
 
 // ---- Landmarks found ----
 
@@ -95,14 +96,39 @@ function saveFound(): void {
 /** The landmarks on the map: found ones by name, the rest as question marks to go and see. */
 function markLandmarks(): void {
   if (!sheet) return;
-  for (const old of sheet.querySelectorAll('.bt-map-mark')) old.remove();
+  for (const old of sheet.querySelectorAll('.bt-map-mark, .bt-map-dot')) old.remove();
+  const span = MAP.size * MAP.cell;
+  // Found names keep clear of the regions' names and of each other (the dot marks the spot itself).
+  const boxes = [...labelBoxes];
   for (const l of LANDMARKS) {
-    const el = document.createElement('div');
     const known = found.has(l.id);
+    const [px, py] = [((l.x - MAP.minX) / span) * 100, ((l.z - MAP.minZ) / span) * 100];
+    const el = document.createElement('div');
     el.className = `bt-map-mark${known ? '' : ' unknown'}`;
     el.textContent = known ? l.name : '?';
-    el.style.left = onSheet(l.x, MAP.minX);
-    el.style.top = onSheet(l.z, MAP.minZ);
+    let [cx, cy] = [px, py];
+    if (known) {
+      const dot = document.createElement('div');
+      dot.className = 'bt-map-dot';
+      dot.style.left = `${px.toFixed(2)}%`;
+      dot.style.top = `${py.toFixed(2)}%`;
+      sheet.append(dot);
+      const [w, h] = [l.name.length * 1.3 + 1, 3];
+      // To the right of its dot, or to the left; level with it, or a line or two up or down.
+      let free = false;
+      for (const step of [0, 1, -1, 2, -2, 3, -3]) {
+        for (const side of [1, -1]) {
+          cx = Math.max(w / 2 + 1, Math.min(99 - w / 2, px + side * (w / 2 + 1.4)));
+          cy = py + step * h;
+          free = !boxes.some((o) => Math.abs(o.x - cx) < (o.w + w) / 2 && Math.abs(o.y - cy) < (o.h + h) / 2);
+          if (free) break;
+        }
+        if (free) break;
+      }
+      boxes.push({ x: cx, y: cy, w, h });
+    }
+    el.style.left = `${cx.toFixed(2)}%`;
+    el.style.top = `${cy.toFixed(2)}%`;
     sheet.append(el);
   }
   if (foundLine) foundLine.textContent = `Landmarks found: ${found.size} of ${LANDMARKS.length}`;
@@ -392,7 +418,8 @@ function buildMap(client: Client): void {
   // Names are laid out so none sits on another: the big regions first, each later name shifted up or down
   // until it is clear, and all of them kept on the sheet.
   const span = MAP.size * MAP.cell;
-  const placed: { x: number; y: number; w: number; h: number }[] = [];
+  const placed = labelBoxes;
+  placed.length = 0;
   const seen = new Set<string>();
   const label = (text: string, x: number, z: number, cls = '') => {
     if (seen.has(text)) return;
