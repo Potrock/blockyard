@@ -48,7 +48,7 @@ function mapConfig(map: TerrainMap, blockId: (b: BlockRef) => number): NonNullab
     roughness: z.roughness,
     crags: z.crags,
     trees: z.trees?.map((t) => ({ shape: Math.max(0, TREE_SHAPES.indexOf(t.shape)), log: id(t.log), leaves: id(t.leaves), h: t.height, density: t.density, wet: t.wet })),
-    scatter: z.scatter?.map((s) => ({ block: blockId(s.block), density: s.density, where: Math.max(0, SCATTER_WHERE.indexOf(s.where ?? 'on')), size: s.size, clumps: s.clumps })),
+    scatter: z.scatter?.map((s) => ({ block: blockId(s.block), density: s.density, where: Math.max(0, SCATTER_WHERE.indexOf(s.where ?? 'on')), size: s.size, clumps: s.clumps, cover: s.cover })),
   }));
   return {
     x: map.origin.x,

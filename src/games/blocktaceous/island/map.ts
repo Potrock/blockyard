@@ -91,6 +91,8 @@ interface River {
   lava?: boolean;
   /** Lakes along it, by the index of the path point they sit on. */
   lakes?: { at: number; r: number; depth: number; name: string }[];
+  /** Waterfalls: where the river reaches the path point `at`, it drops `drop` blocks at once. */
+  falls?: { at: number; drop: number; name: string }[];
 }
 
 const RIVERS: River[] = [
@@ -100,12 +102,14 @@ const RIVERS: River[] = [
     valley: 0.7,
     reach: 96,
     lakes: [{ at: 0, r: 90, depth: 7, name: 'Skyglass Tarn' }, { at: 3, r: 210, depth: 11, name: 'Mirror Lake' }],
+    falls: [{ at: 1, drop: 12, name: 'Thunder Drop' }],
   },
   {
     name: 'The Redwash',
     path: [{ x: 760, z: -1420 }, { x: 1180, z: -1020 }, { x: 1680, z: -700 }, { x: 2180, z: -380 }, { x: 2640, z: -120 }, { x: 3200, z: 60 }],
     valley: 2.4,
     reach: 72,
+    falls: [{ at: 3, drop: 15, name: 'Redwash Falls' }],
   },
   {
     name: 'The Mossrun',
@@ -113,12 +117,14 @@ const RIVERS: River[] = [
     valley: 0.8,
     reach: 96,
     lakes: [{ at: 2, r: 130, depth: 8, name: 'Stillpool' }],
+    falls: [{ at: 3, drop: 10, name: 'Mossrun Cascade' }],
   },
   {
     name: 'The Coldrush',
     path: [{ x: -620, z: -1800 }, { x: -820, z: -2100 }, { x: -960, z: -2450 }, { x: -1050, z: -2800 }, { x: -1150, z: -3200 }],
     valley: 1.0,
     reach: 80,
+    falls: [{ at: 1, drop: 20, name: 'Frostveil Falls' }],
   },
   {
     name: 'Parrot Creek',
@@ -146,7 +152,7 @@ const regionId = (name: string) => {
 };
 
 /** The volcano's cone: its height `r` blocks from the crater's middle. */
-const cone = (r: number) => 66 + 150 * (1 - r / 660) ** 1.3;
+const cone = (r: number) => 66 + 200 * (1 - r / 660) ** 3;
 
 export interface IslandMap {
   /** Ground height at each sample, in 1/256 of a block; index `z * SIZE + x`. */
@@ -181,8 +187,8 @@ function smin(a: number, b: number, k: number): number {
 }
 
 /** A path through the points as a smooth curve, a point about every 6 blocks, wandering a little. */
-function spline(points: Site[], wander: Noise): Site[] {
-  const out: Site[] = [];
+function spline(points: Site[], wander: Noise): (Site & { leg: number })[] {
+  const out: (Site & { leg: number })[] = [];
   const p = (i: number) => points[Math.max(0, Math.min(points.length - 1, i))];
   for (let i = 0; i + 1 < points.length; i++) {
     const [a, b, c, d] = [p(i - 1), p(i), p(i + 1), p(i + 2)];
@@ -194,7 +200,7 @@ function spline(points: Site[], wander: Noise): Site[] {
       const z = cr(a.z, b.z, c.z, d.z);
       // No wander at the very source, so a lake set there is where it says.
       const w = Math.min(1, (i * steps + s) / 20) * 46;
-      out.push({ x: x + w * wander.at(x / 190, z / 190), z: z + w * wander.at(x / 190 + 40, z / 190 - 70) });
+      out.push({ x: x + w * wander.at(x / 190, z / 190), z: z + w * wander.at(x / 190 + 40, z / 190 - 70), leg: i });
     }
   }
   return out;
@@ -295,14 +301,22 @@ export function buildIsland(): IslandMap {
       let lowland = 0;
       let total = 0;
       let marsh = 0;
+      let rise = 0;
       for (let b = 0; b < LOWLANDS.length; b++) {
         const w = Math.exp(-(lowDist[b] - lowDist[nearest]) / 130);
         if (w < 0.02) continue;
         total += w;
+        // How far the land climbs from its shore to its heart: the landing plain hardly at all.
+        rise += w * (b === 0 ? 3.5 : 12);
         switch (LOWLANDS[b].zone) {
-          case Z.grassland:
-            lowland += w * (2.5 + 4 * nHill.fbm(x / 320, z / 320, 3));
+          case Z.grassland: {
+            // Level meadow with a slow swell, and knolls standing out of it here and there (the
+            // upland meadow lies higher and rolls more).
+            const high = b === 1;
+            const knoll = smoothstep(high ? 0.08 : 0.26, high ? 0.55 : 0.62, nHill.fbm(x / 170 + 7, z / 170, 2));
+            lowland += w * ((high ? 7 : 1.5) + (high ? 3 : 1.4) * nHill.fbm(x / 420, z / 420, 2) + (high ? 17 : 9) * knoll * Math.sqrt(knoll));
             break;
+          }
           case Z.jungle:
             lowland += w * (7 + 15 * Math.abs(nHill.fbm(x / 260 + 20, z / 260, 3)));
             break;
@@ -314,8 +328,10 @@ export function buildIsland(): IslandMap {
             break;
           case Z.badlands: {
             // Mesas: flat tops at two heights over a low red plain.
+            // Buttes stand alone on the plain between them.
             const t = nMesa.fbm(x / 300, z / 300, 3) * 0.5 + 0.5;
-            lowland += w * (6 + 30 * smoothstep(0.5, 0.56, t) + 22 * smoothstep(0.66, 0.7, t) + 2.5 * nHill.at(x / 90, z / 90));
+            const butte = nMesa.at(x / 64 + 31, z / 64 - 12) * 0.5 + 0.5;
+            lowland += w * (5 + 38 * smoothstep(0.5, 0.535, t) + 26 * smoothstep(0.64, 0.665, t) + 30 * smoothstep(0.74, 0.79, butte) * smoothstep(0.52, 0.44, t) + 2 * nHill.at(x / 90, z / 90));
             break;
           }
           default:
@@ -323,9 +339,10 @@ export function buildIsland(): IslandMap {
         }
       }
       lowland /= total;
+      rise /= total;
       marsh /= total;
       const cliff = (1 - g) * cliffs(i, j) * smoothstep(0, 30, s);
-      let y = 62.3 + 3 * smoothstep(0, bw, s) + cliff + 12 * smoothstep(bw * 0.6, bw + 500, s) + lowland * smoothstep(bw * 0.5, bw + 160, s);
+      let y = 62.3 + 3 * smoothstep(0, bw, s) + cliff + rise * smoothstep(bw * 0.6, bw + 500, s) + lowland * smoothstep(bw * 0.5, bw + 160, s);
       // The marsh lies flat at the water's level: about a third of it is shallow pools.
       y = lerp(y, 62.0 + 2.6 * nFine.fbm(x / 70, z / 70, 2), marsh * smoothstep(20, 140, s));
 
@@ -333,13 +350,15 @@ export function buildIsland(): IslandMap {
       const e = Math.max(smoothstep(660, 50, distToLine(wx, wz, RIDGE)), 0.6 * smoothstep(520, 40, distToLine(wx, wz, SPUR))) ** 1.3;
       if (e > 0) {
         env[k] = e;
-        y += (e * (40 + 104 * nRidge.ridged(x / 420, z / 420, 4)) + 20 * e * e) * smoothstep(40, 420, s);
+        // The ridges' crests are raised more than their flanks: sharp peaks over broad shoulders.
+        const r = nRidge.ridged(x / 420, z / 420, 4);
+        y += (e * (36 + 70 * r + 60 * r * r * r) + 20 * e * e) * smoothstep(40, 420, s);
       }
 
       // The volcano: a cone with a crater in its top.
       if (vd < 660) {
         const rim = cone(72);
-        const c = vd < 72 ? Math.max(rim - 24, rim - (72 - vd) * 0.9) : cone(vd) + 5 * nRidge.ridged(x / 110, z / 110, 2) * smoothstep(72, 160, vd);
+        const c = vd < 72 ? Math.max(rim - 24, rim - (72 - vd) * 0.9) : cone(vd) + 8 * nRidge.ridged(x / 110, z / 110, 2) * smoothstep(72, 160, vd);
         y = lerp(y, c, smoothstep(660, 400, vd));
       }
       if (y > 224) y = 224 + (y - 224) * 0.35;
@@ -389,7 +408,13 @@ export function buildIsland(): IslandMap {
     const path = spline(river.path, nWander);
     const lakes = (river.lakes ?? []).map((l) => ({ ...l, ...river.path[l.at], level: 0, id: regionId(l.name) }));
     let level = sample(path[0].x, path[0].z) - 2.2;
+    const fallen = new Set<number>();
     path.forEach((p, pi) => {
+      const fall = river.falls?.find((f) => f.at === p.leg && !fallen.has(f.at));
+      if (fall) {
+        fallen.add(fall.at);
+        level = Math.max(SEA, level - fall.drop);
+      }
       const lake = lakes.find((l) => Math.hypot(p.x - l.x, p.z - l.z) < l.r * 0.85);
       if (lake) {
         if (!lake.level) {
@@ -514,6 +539,16 @@ let built: IslandMap | undefined;
 export function islandMap(): IslandMap {
   return (built ??= buildIsland());
 }
+
+/** Where each waterfall is: the first point of its river's course past the path point it's set at. */
+export const FALLS = RIVERS.flatMap((r) => {
+  if (!r.falls) return [];
+  const path = spline(r.path, new Noise(SEED + 10 * 7919));
+  return r.falls.map((f) => {
+    const p = path.find((q) => q.leg === f.at)!;
+    return { name: f.name, river: r.name, x: Math.round(p.x), z: Math.round(p.z), drop: f.drop };
+  });
+});
 
 /** The rivers' and lakes' names and where to find them, for the map and the points of interest. */
 export const WATERS = RIVERS.flatMap((r) => [

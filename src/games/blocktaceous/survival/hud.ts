@@ -4,6 +4,8 @@ import { sparksLeft } from './craft';
 import { glyphCell, ICON_COLUMNS } from './icons';
 import { theGame, type Survivor } from './state';
 import { tempState, type TempState } from './vitals';
+import { nameOf } from './data';
+import { condition, USES } from './wear';
 
 /**
  * The survivor's corner of the HUD: small meters for food, water and breath, the weather when it
@@ -22,6 +24,7 @@ const HTML = `
   <div class="gains"><span data-each="gains">{{.}}</span></div>
   <div class="tm {{temp}}" data-if="tempText">${glyph('cold')}${glyph('heat')}<b>{{tempText}}</b><small data-if="warm">by the fire</small></div>
   <div class="tm heavy" data-if="heavy">${glyph('load')}<b>Overloaded</b></div>
+  <div class="tm worn" data-if="worn"><b>{{worn}}</b></div>
   <div class="m food {{foodC}}">${glyph('food')}<i class="bar"><i style="--p: {{food}}"></i></i></div>
   <div class="m water {{waterC}}">${glyph('water')}<i class="bar"><i style="--p: {{water}}"></i></i></div>
   <div class="m breath">${glyph('breath')}<i class="bar" style="--cap: {{$ability.stamina.cap}}"><i style="--p: {{$ability.stamina.s}}"></i></i></div>
@@ -50,10 +53,13 @@ const css = (glyphsUrl: string) => `
 .tm.hot, .tm.scorching { color: #ffb37a } .tm.hot .ic:nth-child(2), .tm.scorching .ic:nth-child(2) { display: block }
 .tm.freezing, .tm.scorching { animation: pulse 0.8s ease-in-out infinite alternate }
 .tm.heavy { color: #ff8a6b } .tm.heavy .ic { display: block }
+.tm.worn { padding-left: 8px; color: #ffcf7a }
 .gains { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; color: #e6f3c8; font-size: 13px }
 .gains span { animation: rise 0.25s ease-out }
 @keyframes pulse { from { opacity: 1 } to { opacity: 0.45 } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+/* On a narrow window the belt reaches the left corner, so the bars sit above it and its hearts. */
+@media (max-width: 960px) { :scope { margin-bottom: 104px } }
 `;
 
 export function defineVitals(game: GameContext, glyphsUrl: string): void {
@@ -71,7 +77,11 @@ export function showVitals(player: Player, s: Survivor, dt: number): void {
     s.weather = state;
     theGame().clients.send(player, 'bt.weather', { state });
   }
+  // The thing in hand, once it's down to its last quarter.
+  const held = player.inventory.held?.item;
+  const left = held && USES[held] ? condition(s, held) : 1;
   const data = {
+    worn: held && left <= 0.25 ? `${nameOf(held)} ${Math.max(1, Math.round(left * 100))}%` : '',
     food: Math.ceil(s.hunger),
     water: Math.ceil(s.thirst),
     foodC: s.hunger < 20 ? 'low' : '',

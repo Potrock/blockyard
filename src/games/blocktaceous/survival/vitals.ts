@@ -5,6 +5,7 @@ import type { Meal } from './data';
 import { STAMINA, type StaminaState } from './def';
 import { addItems, applyArmour, container, containerIfOpen, dropContainer, everything, protection, refsOf, saveContainer, slotAt, strip, weigh } from './pack';
 import { save, survivorOf, theGame, touch, type Slot, type Survivor } from './state';
+import { deed } from './goals';
 
 /**
  * A survivor's body: hunger and thirst that run down, the weather on their skin, what eating and
@@ -18,6 +19,10 @@ const THIRST_RATE = 100 / (20 * 60);
 
 /** Seconds between a point of harm from starving, thirst, cold or heat (each on its own). */
 const HARM_EVERY = 4;
+
+/** Breath a swing takes, and how long after it before breath starts coming back. */
+const SWING_COST = 2;
+const SWING_REST = 0.3;
 
 /** Seconds dead before waking. */
 const WAKE_AFTER = 4;
@@ -102,19 +107,32 @@ function inWater(game: GameContext, p: Vec3): boolean {
   return blockKind(game, game.world.getBlock(Math.floor(p.x), Math.floor(p.y + 0.4), Math.floor(p.z))).liquid;
 }
 
-/** Water within reach of where they look (nothing solid, and no creature, in the way), or round their feet. */
+/**
+ * Water to drink from: under the crosshair within reach, or, standing at its edge or in it, close
+ * by their feet. A creature under the crosshair, or one of the game's own blocks (a campfire, a
+ * box: E is theirs), comes first.
+ */
 function waterInReach(game: GameContext, player: Player): boolean {
   const eye = player.eye;
   const dir = player.look;
-  // Wading, any press drinks, unless it's meant for a creature in front of them (E mounts and feeds too).
-  if (inWater(game, player.position)) return !game.entities.raycast(eye, dir, 4.5, { margin: 0.3 });
+  if (game.entities.raycast(eye, dir, 4.5, { margin: 0.3 })) return false;
   for (let d = 0.4; d <= 3.6; d += 0.3) {
-    const k = blockKind(game, game.world.getBlock(Math.floor(eye.x + dir.x * d), Math.floor(eye.y + dir.y * d), Math.floor(eye.z + dir.z * d)));
-    if (k.liquid) {
-      const creature = game.entities.raycast(eye, dir, d);
-      return !creature;
+    const id = game.world.getBlock(Math.floor(eye.x + dir.x * d), Math.floor(eye.y + dir.y * d), Math.floor(eye.z + dir.z * d));
+    const k = blockKind(game, id);
+    if (k.liquid) return true;
+    if (k.solid) {
+      if (game.world.blockName(id).startsWith('bt_')) return false;
+      break;
     }
-    if (k.solid) return false;
+  }
+  // At the water's edge, looking a little past it or up at the view, they still mean the water.
+  const p = player.position;
+  for (let dy = -1; dy <= 0; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (blockKind(game, game.world.getBlock(Math.floor(p.x + dx * 1.2), Math.floor(p.y + 0.4) + dy, Math.floor(p.z + dz * 1.2))).liquid) return true;
+      }
+    }
   }
   return false;
 }
@@ -165,6 +183,7 @@ export function canEat(player: Player, meal: Meal): boolean {
 /** Drink from the water in reach, and fill every empty waterskin they carry. */
 function drink(game: GameContext, player: Player, s: Survivor): void {
   s.thirst = Math.min(100, s.thirst + 30);
+  deed(s, 'drank');
   let filled = 0;
   for (const kind of ['h', 'b'] as const) {
     for (const ref of refsOf(s, kind)) {
@@ -193,19 +212,21 @@ export function stepVitals(game: GameContext, player: Player, s: Survivor, dt: n
   const state = tempState(s.temp);
 
   // Hunger and thirst: faster out of breath, in the cold (hunger) and in the heat (thirst).
-  const working = st && st.rest > 0 ? 1.8 : 1;
+  const working = st && st.rest > 0 ? 1.5 : 1;
   s.hunger = Math.max(0, s.hunger - HUNGER_RATE * dt * working * (state === 'freezing' ? 1.7 : state === 'cold' ? 1.3 : 1));
   s.thirst = Math.max(0, s.thirst - THIRST_RATE * dt * working * (state === 'scorching' ? 2.2 : state === 'hot' ? 1.5 : 1));
 
   // Swings cost breath: one at the click, and one for every half second the button stays down.
+  // Standing still to chop or dig, breath comes back between swings as fast as they spend it; on
+  // the move in a fight it doesn't, and a long scrap leaves them winded.
   if (st && !s.ui.open) {
     if (player.input.buttonPressed(0)) s.swing = 0.5;
     else if (player.input.button(0)) s.swing += dt;
     else s.swing = 0;
     if (s.swing >= 0.5) {
       s.swing -= 0.5;
-      st.s = Math.max(0, st.s - 2.5);
-      st.rest = STAMINA.restDelay;
+      st.s = Math.max(0, st.s - SWING_COST);
+      st.rest = Math.max(st.rest, SWING_REST);
       if (st.s <= 0) st.winded = true;
     }
   }

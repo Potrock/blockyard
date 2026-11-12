@@ -1,7 +1,8 @@
 import type { GameContext, MenuHandle, MenuOptions, Player } from '@platform';
-import { addXp, give, take } from '../survival/bag';
+import { addXp, containerEmpty, give, openContainer, removeContainer, take } from '../survival/bag';
 import { SPECIES, type SpeciesId } from '../species';
 import { go } from './ai';
+import { gatherTick, haulCount, haulRoom, haulText } from './gather';
 import { mountUp } from './riding';
 import { Tags } from './tags';
 import { MAX_TAME_LEVEL, TUNING, levelBonus, xpForLevel } from './tuning';
@@ -24,10 +25,39 @@ const TAG_RANGE = 36;
 
 const NAMES = ['Pebble', 'Bramble', 'Thistle', 'Moss', 'Ember', 'Cobble', 'Fern', 'Nettle', 'Rumble', 'Biscuit', 'Juniper', 'Flint', 'Dusty', 'Clover', 'Tumble', 'Sorrel', 'Basalt', 'Sprout', 'Gravel', 'Maple', 'Otis', 'Hazel', 'Boulder', 'Pip', 'Marrow', 'Wren', 'Sable', 'Tansy', 'Onyx', 'Quill'];
 
+const GATHERS: Record<string, string> = { herbivore: 'Forages round this spot: berries, fibre, wood', carnivore: 'Hunts small game round this spot', piscivore: 'Fishes if there is water near, else hunts', scavenger: 'Picks over the ground round this spot' };
+
 const dirty = new Set<string>();
 const tags = new Tags('bt_tame:');
 const menus = new Map<string, MenuHandle>();
 let counter = 0;
+
+/** A saddled tame's saddlebag: a container of the survival part's, bigger under a bigger saddle. */
+const BAG_SLOTS: Record<string, number> = { saddle_small: 6, saddle_medium: 12, saddle_large: 20, saddle_giant: 30 };
+export const bagId = (rec: TameRecord): string => `bt_bag:${rec.id}`;
+export const bagSlots = (rec: TameRecord): number => BAG_SLOTS[TUNING[rec.species].saddle ?? ''] ?? 0;
+
+/** What a tame carried falls where it stood: its saddlebag's contents and what it had gathered. */
+function spill(game: GameContext, rec: TameRecord, at: { x: number; y: number; z: number }) {
+  if (bagSlots(rec)) removeContainer(bagId(rec), at);
+  for (const [item, n] of Object.entries(rec.haul ?? {})) {
+    if (n > 0 && game.items.get(item)) game.items.spawnPickup(item, { x: at.x, y: at.y + 0.6, z: at.z }, { count: n, despawn: 600 });
+  }
+  rec.haul = {};
+}
+
+/** Hand a tame's haul to its owner: what there's no room for stays on its back. */
+export function takeHaul(player: Player, rec: TameRecord): number {
+  let moved = 0;
+  for (const [item, n] of Object.entries(rec.haul ?? {})) {
+    const got = n > 0 ? give(player, item, n) : 0;
+    moved += got;
+    rec.haul![item] = n - got;
+    if (rec.haul![item]! <= 0) delete rec.haul![item];
+  }
+  if (moved) dirty.add(rec.id);
+  return moved;
+}
 
 export const maxHp = (rec: TameRecord): number => SPECIES[rec.species].health;
 export const tamesOf = (player: Player): TameRecord[] => [...tames.values()].filter((r) => r.owner === ownerKey(player));
@@ -146,7 +176,8 @@ export function stow(rec: TameRecord): Brain | null {
 }
 
 /** A tame died (in a fight, or under its rider): its record goes, and its owner is told. */
-export function tameDied(game: GameContext, rec: TameRecord) {
+export function tameDied(game: GameContext, rec: TameRecord, at?: { x: number; y: number; z: number }) {
+  spill(game, rec, at ?? rec);
   forget(game, rec);
   const owner = ownerOf(game, rec);
   owner?.hud.feed(`${rec.name}, your ${SPECIES[rec.species].name}, has died`, { color: '#ff7a6b' });
@@ -170,6 +201,7 @@ export function gainXp(game: GameContext, rec: TameRecord, amount: number) {
 /** Back to the wild: the record goes, and the animal is its old self again. */
 function release(game: GameContext, rec: TameRecord) {
   const b = loaded.get(rec.id);
+  spill(game, rec, b ? b.e.position : rec);
   forget(game, rec);
   if (!b) return;
   b.tame = null;
@@ -262,8 +294,9 @@ function menuFor(game: GameContext, player: Player, b: Brain): MenuOptions {
     ...(saddle
       ? [
           rec.saddled
-            ? { label: 'Take the saddle off', note: `Back to you: ${itemName(game, saddle)}`, onSelect: () => ((rec.saddled = false), give(player, saddle, 1), saveTame(game, rec), again()) }
+            ? { label: 'Take the saddle off', note: `Back to you: ${itemName(game, saddle)}`, onSelect: () => (containerEmpty(bagId(rec)) ? ((rec.saddled = false), give(player, saddle, 1), saveTame(game, rec)) : player.hud.toast('Empty its saddlebag first'), again()) }
             : { label: 'Saddle up', note: `Needs a ${itemName(game, saddle)}`, onSelect: () => (saddleUp(game, player, rec), again()) },
+          ...(rec.saddled ? [{ label: 'Saddlebag', note: `${bagSlots(rec)} slots that go where it goes`, onSelect: () => (menus.get(player.id)?.close(), openContainer(player, bagId(rec), bagSlots(rec), `${rec.name}'s saddlebag`)) }] : []),
           { label: 'Ride', note: rec.saddled ? 'E on it does the same' : 'Saddle it first', disabled: !rec.saddled, onSelect: () => (menus.get(player.id)?.close(), void mountUp(game, player, b)) },
         ]
       : []),
@@ -272,7 +305,11 @@ function menuFor(game: GameContext, player: Player, b: Brain): MenuOptions {
     title: rec.name,
     subtitle: `${s.name} · level ${rec.level} · ${Math.ceil(b.e.health * levelBonus(rec.level))} / ${Math.ceil(b.e.maxHealth * levelBonus(rec.level))} health · bite ${(s.damage * levelBonus(rec.level)).toFixed(1)} · ${rec.level >= MAX_TAME_LEVEL ? 'top level' : `${Math.floor(rec.xp)} / ${xpForLevel(rec.level)} xp`}`,
     sections: [
-      { title: 'Orders', entries: [order('Follow me', 'follow', 'Stays at your heels'), order('Stay', 'stay', 'Waits right here'), order('Wander', 'wander', 'Grazes round this spot')] },
+      { title: 'Orders', entries: [order('Follow me', 'follow', 'Stays at your heels'), order('Stay', 'stay', 'Waits right here'), order('Wander', 'wander', 'Grazes round this spot'), order('Gather', 'gather', GATHERS[s.diet] ?? 'Forages round this spot')] },
+      {
+        title: `Gathered · ${haulCount(rec)} / ${haulRoom(b)}`,
+        entries: [{ label: 'Take what it carries', note: haulText(game, rec), disabled: haulCount(rec) === 0, onSelect: () => (takeHaul(player, rec) ? game.audio.play('pickup', { at: player.position }) : player.hud.toast('Your pack is full'), again()) }],
+      },
       { title: 'In a fight', entries: [stance('Passive', 'passive', 'Never fights'), stance('Defend', 'defend', 'Fights what hurts you or it'), stance('Attack my target', 'attack', 'Also goes for whatever you hit')] },
       { title: 'Care', entries: care },
       {
@@ -348,6 +385,7 @@ export function tendTames(game: GameContext) {
       continue;
     }
     if (clock.now - b.hurtAt > 10 && b.e.health < b.e.maxHealth) b.e.heal(b.e.maxHealth * 0.01);
+    if (rec.order === 'gather' && gatherTick(game, b)) dirty.add(rec.id);
     if (flat(p, rec) > 3 || Math.abs(rec.hp - b.e.health) > 1) {
       [rec.x, rec.y, rec.z, rec.hp] = [p.x, p.y, p.z, b.e.health];
       dirty.add(rec.id);

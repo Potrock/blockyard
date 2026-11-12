@@ -2,8 +2,7 @@ import type { GameContext, Player } from '@platform';
 import { ITEMS, type ItemId } from '../items';
 import { take } from '../survival/bag';
 import { hasIcon, iconOf, type SpriteId } from './art';
-import { CLUB_DAZE, addDaze } from './taming';
-import { brains } from './state';
+import { clubHit } from './body';
 
 /**
  * The taming gear and the saddles, as items. The gear works from the hand, on a left click: a
@@ -48,11 +47,8 @@ export function useGear(game: GameContext, player: Player) {
     ready.set(player.id, now + CLUB.every);
     player.viewModel.play('swing');
     game.audio.play('swing', { at: eye });
-    const hit = game.entities.raycast(eye, player.look, CLUB.reach, { margin: 0.35 });
-    const b = hit && brains.get(hit.entity.id);
-    if (!hit || !b) return;
-    if (hit.entity.damage(CLUB.damage, { source: player, weapon: 'wooden_club', knockback: 0.3, cause: 'melee' })) addDaze(game, b, CLUB_DAZE, player);
-    game.audio.play('bt_thud', { at: hit.entity.position, pitch: 1.3 });
+    const b = clubHit(game, player, CLUB.reach, CLUB.damage);
+    if (b) game.audio.play('bt_thud', { at: b.e.position, pitch: 1.3 });
     return;
   }
   const from = { x: eye.x + player.look.x * 0.5, y: eye.y - 0.15 + player.look.y * 0.5, z: eye.z + player.look.z * 0.5 };

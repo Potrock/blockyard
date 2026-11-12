@@ -16,7 +16,12 @@ import {
   tames,
   type Brain,
 } from "../../src/games/blocktaceous/creatures/state";
-import { adopt, saveTame } from "../../src/games/blocktaceous/creatures/tames";
+import {
+  adopt,
+  saveTame,
+  takeHaul,
+} from "../../src/games/blocktaceous/creatures/tames";
+import { haulCount } from "../../src/games/blocktaceous/creatures/gather";
 import { give } from "../../src/games/blocktaceous/survival/bag";
 import type { SpeciesId } from "../../src/games/blocktaceous/species";
 
@@ -251,9 +256,21 @@ export default function blocktaceousCreatures() {
   const trike = place("triceratops", 6);
   const rec = adopt(game, trike, me());
   rec.order = "stay";
+  // The earlier tames wait where they are, out of the way.
+  for (const [id, r] of tames) {
+    if (r === rec) continue;
+    r.order = "stay";
+    const e = loaded.get(id)?.e;
+    const [dx, dz] = [me().position.x - trike.e.position.x, me().position.z - trike.e.position.z];
+    const l = Math.hypot(dx, dz) || 1;
+    e?.teleport({ x: me().position.x + (dx / l) * 12, y: me().position.y + 1, z: me().position.z + (dz / l) * 12 });
+  }
   hold("saddle_medium");
   h.run(10, { pilot: tend(trike, { keep: 1.5 }), until: () => !!me().vehicle });
-  check(rec.saddled, "E with a saddle in hand did not saddle the triceratops");
+  {
+    const hit = game.entities.raycast(me().eye, me().look, 6, { margin: 0.4 });
+    check(rec.saddled, `E with a saddle in hand did not saddle the triceratops (looking at ${hit ? brains.get(hit.entity.id)?.id : "nothing"}, ${flat(me().position, trike.e.position).toFixed(1)} blocks from it, holding ${me().inventory.held?.item})`);
+  }
   check(
     me().vehicle && rides.has(me().id) && !loaded.has(rec.id),
     "E on the saddled triceratops did not mount it",
@@ -286,6 +303,75 @@ export default function blocktaceousCreatures() {
   check(
     back?.e.alive && flat(back.e.position, me().position) < 6,
     "the triceratops is not standing where its rider got off",
+  );
+
+  // ---- A swing lands on the head in front of you, though the animal's hitbox is behind it. ----
+  const stego = place("stegosaurus", 5.4);
+  {
+    // The triceratops out of the way, on the far side from the stegosaurus.
+    const [dx, dz] = [me().position.x - stego.e.position.x, me().position.z - stego.e.position.z];
+    const l = Math.hypot(dx, dz) || 1;
+    back?.e.teleport({ x: me().position.x + (dx / l) * 10, y: me().position.y + 1, z: me().position.z + (dz / l) * 10 });
+  }
+  stego.ko = true;
+  stego.yaw = Math.atan2(
+    me().position.x - stego.e.position.x,
+    me().position.z - stego.e.position.z,
+  );
+  me().inventory.set(8, null);
+  me().inventory.select(8);
+  const head = () => ({
+    x: stego.e.position.x + Math.sin(stego.yaw) * stego.s.length * 0.44,
+    y: stego.e.position.y + stego.s.height * 0.3,
+    z: stego.e.position.z + Math.cos(stego.yaw) * stego.s.length * 0.44,
+  });
+  h.run(0.2, { pilot: () => aim(head()) });
+  check(
+    !game.entities.raycast(me().eye, me().look, 3, { margin: 0.25 }),
+    "the stegosaurus's hitbox is in fist's reach: the test wants it out of it",
+  );
+  const hale = stego.e.health;
+  h.run(1.5, {
+    pilot: () => ({ ...aim(head()), buttons: 1 }),
+    until: () => stego.e.health < hale,
+  });
+  check(stego.e.health < hale, "a punch at the stegosaurus's head didn't land");
+  brains.delete(stego.e.id);
+  stego.e.remove();
+
+  // ---- A tame told to gather fills its back, and hands it over. ----
+  check(back, "no triceratops to send gathering");
+  rec.order = "gather";
+  back.gatherAt = 0;
+  h.run(1.6, { pilot: () => ({}) });
+  check(haulCount(rec) > 0, "the gathering triceratops found nothing");
+  const carried = haulCount(rec);
+  check(
+    takeHaul(me(), rec) === carried && haulCount(rec) === 0,
+    "the triceratops's haul didn't all reach its owner",
+  );
+  rec.order = "stay";
+
+  // ---- A tame pterosaur keeps up with its owner on the wing. ----
+  const ptera = place("pteranodon", 4);
+  adopt(game, ptera, me());
+  const here = me().position;
+  let far = { x: here.x, y: here.y, z: here.z };
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    const [x, z] = [here.x + Math.cos(a) * 22, here.z + Math.sin(a) * 22];
+    const y = dry(x, z);
+    if (y !== null) far = { x, y: y + 1.1, z };
+  }
+  me().teleport(far);
+  let flew = false;
+  h.run(8, {
+    pilot: () => ((flew ||= !ptera.e.onGround && ptera.clip === "fly"), {}),
+    until: () => flew && flat(ptera.e.position, me().position) < 6,
+  });
+  check(
+    flew && flat(ptera.e.position, me().position) < 8,
+    `the tame pteranodon didn't fly after its owner (${flew ? "flew" : "walked"}, ${flat(ptera.e.position, me().position).toFixed(1)} blocks behind)`,
   );
   census.paused = false;
 }

@@ -240,7 +240,7 @@ function thinkTame(b: Brain, game: GameContext) {
     if (d > keep && d < 90) {
       if (b.mode !== 'follow') go(b, 'follow', 1e9);
     } else if (b.mode !== 'idle') go(b, 'idle', 1e9);
-  } else if (rec.order === 'wander') {
+  } else if (rec.order === 'wander' || rec.order === 'gather') {
     if (b.mode === 'follow') go(b, 'idle', 1);
     idleLife(b, game);
   } else if (b.mode !== 'idle') go(b, 'idle', 1e9);
@@ -253,8 +253,42 @@ function strike(b: Brain, game: GameContext, target: Entity | Player, lands: boo
   e.animate('attack');
   game.audio.play('bt_bite', { at: e.position, pitch: b.t.big ? 0.7 : 1.15 });
   if (!lands) return;
+  // Jaws don't go through walls: something solid between its head and them (a hut's wall, a rock) saves them.
+  const from = { x: e.position.x, y: e.position.y + b.s.hitbox.height * 0.7, z: e.position.z };
+  const at = { x: target.position.x, y: target.position.y + 1, z: target.position.z };
+  if (!game.world.lineOfSight(from, at)) return;
   const damage = b.s.damage * (b.tame ? levelBonus(b.tame.level) : 1);
   target.damage(damage, { source: e, knockback: b.t.big ? 1.4 : 0.8, cause: 'melee' });
+}
+
+/**
+ * Walk or run at something, and get round what's in the way: an animal that wants to move and
+ * hasn't for a second (a ledge, a trunk, a canopy lower than its back) hops, and sidesteps it.
+ */
+function advance(b: Brain, to: Player | { x: number; y: number; z: number }, dt: number) {
+  const e = b.e;
+  const p = e.position;
+  const tp = isPlayer(to) ? to.position : to;
+  if (clock.now < b.dodgeUntil) {
+    const [dx, dz] = [tp.x - p.x, tp.z - p.z];
+    const l = Math.hypot(dx, dz) || 1;
+    // Across the way to it, leaning a little back from whatever stopped it.
+    return e.moveDirection((-dz / l) * b.dodgeSide - (dx / l) * 0.35, (dx / l) * b.dodgeSide - (dz / l) * 0.35);
+  }
+  const v = e.velocity;
+  b.stuck = Math.hypot(v.x, v.z) < 0.25 ? b.stuck + dt : 0;
+  if (b.stuck > 0.9) {
+    b.stuck = 0;
+    b.dodgeSide = -b.dodgeSide;
+    b.dodgeUntil = clock.now + 1.1;
+    // Straight at them didn't work: for a while it takes the way round (the engine's path to that player).
+    b.pathUntil = clock.now + 5;
+    e.jump();
+  }
+  // Straight at where they are, which costs nothing; the engine's path-finding to a player (a
+  // field it rebuilds for each chased player) only once something has been in the way.
+  if (isPlayer(to) && clock.now < b.pathUntil) e.moveTo(to);
+  else e.moveTo({ x: tp.x, y: tp.y, z: tp.z });
 }
 
 function pursue(b: Brain, game: GameContext, dt: number) {
@@ -274,7 +308,9 @@ function pursue(b: Brain, game: GameContext, dt: number) {
     return;
   }
   // It stops a block inside its reach: its head, not its middle, is what meets its target.
-  if (d <= reach - 1 && level) {
+  // (and it starts to pull up sooner the faster it's coming, so it doesn't run through them)
+  const v = e.velocity;
+  if (d <= reach - 1 + Math.hypot(v.x, v.z) * 0.16 && level) {
     e.stop();
     e.lookAt(target);
     if (b.cd > 0) return;
@@ -282,17 +318,16 @@ function pursue(b: Brain, game: GameContext, dt: number) {
     b.wind = b.t.windup;
     b.cd = b.t.cooldown;
     e.animate('raise');
-    if (b.t.big) {
-      e.glow('#ff9a3c');
-      call(game, b, 0.8);
-    }
+    e.glow(b.t.big ? '#ff9a3c' : '#ffe2a8');
+    call(game, b, b.t.big ? 0.8 : 0.6);
+    // A pack takes turns: the others hold off a moment, so three raptors aren't three bites at once.
+    if (!b.tame) for (const o of near(p, 12, scratch)) if (o !== b && o.herd === b.herd && o.wind <= 0) o.cd = Math.max(o.cd, b.t.windup + 0.5);
     return;
   }
   // A wild predator stalks a player at a walk until it's close (or it's been hurt): then it runs them down.
   const stalking = !b.tame && isPlayer(target) && d > 12 && clock.now > b.angryUntil;
   e.setSpeed(stalking ? 1 : b.s.run / b.s.walk);
-  if (isPlayer(target)) e.moveTo(target);
-  else e.moveTo(tp);
+  advance(b, isPlayer(target) ? target : tp, dt);
   e.lookAt(d < 10 ? target : null);
 }
 
@@ -347,10 +382,23 @@ function act(b: Brain, game: GameContext, dt: number) {
       const owner = b.tame && ownerOf(game, b.tame);
       if (!owner) return e.stop();
       const d = flat(p, owner.position);
-      if (d < (3.5 + b.s.hitbox.width) * 0.8) return e.stop();
+      const op = owner.position;
+      if (b.s.locomotion === 'flyer') {
+        // A pterosaur keeps up on the wing, over its owner's head, and comes down beside them when they stop.
+        const up = op.y + 5 - p.y;
+        if (d > 7 || (!e.onGround && d > 3.5)) {
+          setClip(b, 'fly');
+          const l = d || 1;
+          e.setSpeed((b.s.run / b.s.walk) * (d > 16 ? 1 : 0.6));
+          return e.fly((op.x - p.x) / l, Math.max(-0.5, Math.min(0.6, up / 4)), (op.z - p.z) / l);
+        }
+        if (!e.onGround) return e.fly(0, -0.5, 0);
+        setClip(b, null);
+        return e.stop();
+      }
+      if (d < (3 + b.s.length * 0.6) * 0.8) return e.stop();
       e.setSpeed(d > 9 ? (b.s.run / b.s.walk) * 1.1 : 1);
-      e.moveTo(owner);
-      return;
+      return advance(b, owner, dt);
     }
     case 'hunt':
       return pursue(b, game, dt);
@@ -380,4 +428,6 @@ export function ai(self: Entity, game: GameContext, dt: number) {
     if (b.wind <= 0) b.tame ? thinkTame(b, game) : thinkWild(b, game);
   }
   act(b, game, dt);
+  // A crocodile in the water swims.
+  if (b.id === 'sarcosuchus' && (b.mode === 'wander' || b.mode === 'hunt' || b.mode === 'follow' || b.mode === 'flee')) setClip(b, wetAt(game, self.position.x, self.position.z) ? 'swim' : null);
 }

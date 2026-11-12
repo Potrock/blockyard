@@ -1,6 +1,7 @@
 import type { BlockDefinition, WorldOptions } from '@platform';
 import { blocks as islandBlocks } from './blocks';
 import { CELL, ORIGIN, SIZE, Z, islandMap } from './map';
+import { STRUCTURES, TERRAFORM } from './landmarks';
 import { PALETTE } from './zones';
 
 /**
@@ -16,6 +17,9 @@ export const world: WorldOptions = {
     const { heights, zones, water } = islandMap();
     return { origin: { x: ORIGIN, z: ORIGIN }, cell: CELL, width: SIZE, depth: SIZE, heights, zones, water, palette: PALETTE, outside: { height: 30, zone: Z.ocean } };
   },
+  // The landmarks: built by code, stamped as the land generates, the ground levelled under each.
+  structures: STRUCTURES,
+  terraform: TERRAFORM,
   persist: true,
   // Castaway Shore, looking north up the beach to the plains.
   spawn: { x: 0.5, y: 65.1, z: 2248.5 },

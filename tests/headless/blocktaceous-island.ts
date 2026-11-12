@@ -1,5 +1,5 @@
 import { TerrainGen } from '@engine/voxel_engine.js';
-import { MAP, POINTS, REGIONS, SPAWNS, biomeAt, groundAt, isLand, islandMap, nearestShore, regionAt, waterAt } from '../../src/games/blocktaceous/island';
+import { LANDMARKS, MAP, POINTS, REGIONS, SPAWNS, biomeAt, groundAt, isLand, islandMap, landmarkAt, nearestShore, regionAt, waterAt } from '../../src/games/blocktaceous/island';
 import { Z } from '../../src/games/blocktaceous/island/map';
 import { SPECIES } from '../../src/games/blocktaceous/species';
 import type { BiomeId } from '../../src/games/blocktaceous/species';
@@ -189,6 +189,44 @@ export default function blocktaceousIsland() {
   const crater = column(cauldron.x, cauldron.z);
   const lava = waterAt(cauldron.x, cauldron.z)!;
   check(lava > 120 && crater(lava) === 'lava' && crater(lava + 1) === 'air', `lava in the crater at ${lava}: ${crater(lava)}`);
+
+  // The landmarks: each where it says, built of what it should be, with open air at its spot;
+  // each waterfall a real drop in its river.
+  const MADE_OF: Record<string, string> = {
+    wreck: 'oak_planks', old_watch: 'stone_bricks', nine_sisters: 'andesite', leviathan: 'white_concrete', needles_eye: 'mesa_red', mossgate: 'glowstone', lantern_tree: 'sea_lantern',
+    fallen_titan: 'redwood_log', glimmer_hollow: 'crystal_rock', ironmaw: 'metal_rock', steamwell: 'water', black_teeth: 'lava', ice_crown: 'ice', pup_light: 'red_concrete',
+  };
+  check(LANDMARKS.length >= 16 && new Set(LANDMARKS.map((l) => l.id)).size === LANDMARKS.length && new Set(LANDMARKS.map((l) => l.name)).size === LANDMARKS.length, `landmarks, each its own: ${LANDMARKS.length}`);
+  check(['wreck', 'ruin', 'stones', 'skeleton', 'cave', 'springs', 'falls'].every((k) => LANDMARKS.some((l) => l.kind === k)), 'a wreck, ruins, standing stones, a skeleton, caves, hot springs and waterfalls');
+  const wreck = LANDMARKS.find((l) => l.kind === 'wreck')!;
+  check(SPAWNS.some((sp) => Math.hypot(sp.x - wreck.x, sp.z - wreck.z) < 250) && regionAt(wreck.x, wreck.z - 40) === 'Castaway Shore', 'the wreck lies off the landing coast');
+  for (const l of LANDMARKS) {
+    check(landmarkAt(l.x, l.z) === l && landmarkAt(l.x + l.radius + 30, l.z) !== l, `${l.name} is found by walking up to it`);
+    check(POINTS.some((p) => p.name === l.name && p.kind === 'landmark' && p.x === l.x && p.z === l.z), `${l.name} is among the points`);
+    if (l.kind === 'falls') {
+      let [lo, hi] = [999, 0];
+      for (let dx = -32; dx <= 32; dx += 8)
+        for (let dz = -32; dz <= 32; dz += 8) {
+          const w = waterAt(l.x + dx, l.z + dz);
+          if (w !== null && w > MAP.seaLevel) [lo, hi] = [Math.min(lo, w), Math.max(hi, w)];
+        }
+      check(hi - lo >= 8 && Math.abs(hi - l.y) <= 5, `${l.name}: the river drops ${hi - lo} from ${hi} (said: ${l.y})`);
+      continue;
+    }
+    const block = MADE_OF[l.id];
+    let made = 0;
+    for (let dx = -8; dx <= 8; dx += 2)
+      for (let dz = -8; dz <= 8; dz += 2) {
+        const col = column(l.x + dx, l.z + dz);
+        for (let y = l.y - 5; y <= l.y + 26; y++) if (col(y) === block) made++;
+      }
+    check(!!block && made >= 2, `${l.name} is built: ${made} of ${block}`);
+    const spot = column(Math.floor(l.spot.x), Math.floor(l.spot.z));
+    const sy = Math.floor(l.spot.y);
+    check(spot(sy) === 'air' && spot(sy + 1) === 'air', `${l.name}: room to stand at its spot: ${spot(sy)}, ${spot(sy + 1)}`);
+    if (l.kind !== 'wreck') check(isLand(l.x, l.z) && Math.abs(groundAt(l.x, l.z) - l.y) < 6, `${l.name} stands on the map's ground: ${groundAt(l.x, l.z).toFixed(1)} against ${l.y}`);
+  }
+
   const counts: Record<string, number> = {};
   for (const data of chunks.values()) for (let i = HEADER; i < data.length; i++) counts[data[i]] = (counts[data[i]] ?? 0) + 1;
   for (const b of ['metal_rock', 'crystal_rock', 'obsidian_rock', 'berry_bush', 'fiber_plant', 'redwood_log', 'palm_log']) {

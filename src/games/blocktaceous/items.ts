@@ -75,15 +75,15 @@ export const ITEMS = {
   // ---- Building: structure pieces and stations (building/) ----
   // Each is named for the block it places (`building/def.ts`).
   bt_thatch_wall: item('Thatch Wall', 100, 1),
-  bt_thatch_slab: item('Thatch Roof', 100, 0.5),
+  bt_thatch_slab: item('Thatch Slab', 100, 0.5),
+  bt_thatch_roof: item('Thatch Roof', 100, 0.5),
   bt_wood_wall: item('Wooden Wall', 100, 2),
   bt_wood_floor: item('Wooden Floor', 100, 2),
   bt_wood_slab: item('Wooden Slab', 100, 1),
   bt_wood_ramp: item('Wooden Ramp', 100, 2),
+  bt_pillar: item('Pillar', 100, 1),
   bt_stone_wall: item('Stone Wall', 100, 4),
-  bt_stone_floor: item('Stone Floor', 100, 4),
   bt_stone_slab: item('Stone Slab', 100, 2),
-  bt_stone_ramp: item('Stone Ramp', 100, 4),
   bt_metal_wall: item('Metal Wall', 100, 6),
   bt_wood_door: item('Wooden Door', 20, 3),
   bt_gate: item('Gate', 20, 3),

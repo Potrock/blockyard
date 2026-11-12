@@ -17,10 +17,12 @@ export const recipes: Recipe[] = [
   { item: 'bt_torch', count: 2, needs: { wood: 1, fiber: 2, flint: 1 }, level: 1 },
   { item: 'bt_thatch_wall', count: 2, needs: { thatch: 6, fiber: 2, wood: 1 }, level: 1 },
   { item: 'bt_thatch_slab', count: 2, needs: { thatch: 4, fiber: 2 }, level: 1 },
+  { item: 'bt_thatch_roof', count: 2, needs: { thatch: 5, fiber: 2 }, level: 1 },
   { item: 'bt_wood_door', needs: { wood: 8, fiber: 4 }, level: 2 },
   { item: 'bt_bed', needs: { thatch: 15, fiber: 12 }, level: 2 },
   { item: 'bt_ladder', count: 2, needs: { wood: 4, fiber: 2 }, level: 3 },
   { item: 'bt_fence', count: 2, needs: { wood: 4 }, level: 3 },
+  { item: 'bt_pillar', count: 2, needs: { wood: 3 }, level: 3 },
   { item: 'bt_storage', needs: { wood: 12, thatch: 6, fiber: 6 }, level: 3 },
   { item: 'bt_mortar', needs: { stone: 12, wood: 2 }, level: 3 },
   // Wood.
@@ -33,9 +35,7 @@ export const recipes: Recipe[] = [
   { item: 'bt_workbench', needs: { wood: 20, stone: 8, fiber: 10, flint: 4 }, level: 5 },
   // Stone, cut at the workbench.
   { item: 'bt_stone_wall', count: 2, needs: { stone: 8, wood: 2, thatch: 2 }, level: 8, station: 'workbench' },
-  { item: 'bt_stone_floor', count: 2, needs: { stone: 6 }, level: 8, station: 'workbench' },
   { item: 'bt_stone_slab', count: 2, needs: { stone: 4 }, level: 8, station: 'workbench' },
-  { item: 'bt_stone_ramp', needs: { stone: 6 }, level: 9, station: 'workbench' },
   { item: 'bt_forge', needs: { stone: 30, wood: 10, flint: 6 }, level: 10, station: 'workbench' },
   // Metal.
   { item: 'bt_smithy', needs: { metal_ingot: 8, wood: 20, stone: 12 }, level: 14, station: 'workbench' },

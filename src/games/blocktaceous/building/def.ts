@@ -2,7 +2,7 @@ import type { BlockDefinition, BlockTexture } from '@platform';
 
 /**
  * The builders' blocks: three and a half tiers of structure pieces (thatch, wood, stone and a metal
- * wall), the things a base needs (a door, a gate, a window, a fence, a ladder), and the stations
+ * wall), pitched roofs and a pillar, the things a base needs (a door, a gate, a window, a fence, a ladder), and the stations
  * and furniture survivors use with E. Every texture is painted here in code, from one family of
  * palettes, so a hut of mixed tiers still reads as one building.
  *
@@ -104,15 +104,23 @@ const ladderFace = paint((x, y) => {
 
 /** Rough poles: fences and gates. */
 const poleSide = paint((x, y) => shade(WOOD, 0.8 + grain(x, y >> 2, 19) * 0.3));
+/** A squared timber, adzed along its length: pillars and stilts. */
+const pillarSide = paint((x, y) => shade(WOOD, 0.7 + grain(x >> 1, 0, 54) * 0.25 + (grain(x, y, 55) - 0.5) * 0.08 - (y % 8 === 7 ? 0.2 : 0)));
 /** A gate's bars are paler, with a rope tie, so it reads as the way through. */
 const gateSide = paint((x, y) => (y === 6 || y === 7 ? shade('#d8c48a', 0.85 + grain(x, y, 20) * 0.2) : shade('#a9743c', 0.85 + grain(x, y >> 2, 21) * 0.3)));
 
-/** A campfire's sides, bottom to top: a ring of stones, crossed logs, flame. */
+/**
+ * A campfire's sides, bottom to top: a ring of stones, crossed logs, and tongues of flame (clear
+ * between them: the flame is two crossed sheets, so it reads as fire from every side).
+ */
 const campfireSide = paint((x, y) => {
   if (y >= 13) return shade(STONE, 0.7 + grain(x >> 1, y, 22) * 0.4);
   if (y >= 10) return shade('#5a3a1c', 0.8 + grain(x, y, 23) * 0.4);
-  const lick = grain(x, y, 24);
-  return y < 5 ? (lick > 0.5 ? '#ffe27a' : EMBER) : lick > 0.35 ? EMBER : '#e2531c';
+  // Three tongues, the middle one tallest; each narrows to its tip.
+  const tip = Math.min(1 + Math.abs(x - 8) * 1.6, 5 + Math.abs(x - 5) * 2.2, 4 + Math.abs(x - 11) * 2.4);
+  if (y < tip) return null;
+  const depth = y - tip;
+  return depth < 1.5 ? '#e2531c' : depth < 3.5 ? EMBER : grain(x, y, 24) > 0.4 ? '#ffe27a' : '#fff3b0';
 });
 const campfireTop = paint((x, y) => {
   const d = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
@@ -187,28 +195,35 @@ const bedSide = paint((x, y) => shade(y > 13 ? STRAW : HIDE, 0.75 + grain(x, y, 
 // ---- The blocks ----
 
 type Box = [number, number, number, number, number, number];
-/** Two steps up to the north: walked up without jumping, like stairs, for half the variants. */
-const RAMP: Box[] = [
-  [0, 0, 0, 16, 8, 16],
-  [0, 8, 0, 16, 16, 8],
+/**
+ * Four shallow steps up to the north: walked up without jumping, and close enough to a slope to
+ * be a ramp underfoot or a pitched roof overhead, for half the variants stairs would cost.
+ */
+const SLOPE: Box[] = [
+  [0, 0, 0, 16, 4, 16],
+  [0, 4, 0, 16, 8, 12],
+  [0, 8, 0, 16, 12, 8],
+  [0, 12, 0, 16, 16, 4],
 ];
 
 export const blocks: Record<string, BlockDefinition> = {
   // Thatch: quick shelter. Soft to mine and soft to everything else.
   bt_thatch_wall: { label: 'Thatch Wall', texture: { side: thatchSide, top: thatchTop, bottom: thatchTop }, hardness: 0.6 },
-  bt_thatch_slab: { label: 'Thatch Roof', texture: { side: thatchSide, top: thatchSide, bottom: thatchTop }, shape: 'slab', full: 'bt_thatch_wall', hardness: 0.5 },
+  bt_thatch_slab: { label: 'Thatch Slab', texture: { side: thatchSide, top: thatchSide, bottom: thatchTop }, shape: 'slab', full: 'bt_thatch_wall', hardness: 0.5 },
+  bt_thatch_roof: { label: 'Thatch Roof', texture: { side: thatchSide, top: thatchSide, bottom: thatchTop }, boxes: SLOPE, facing: true, hardness: 0.5 },
 
   // Wood: a proper house.
   bt_wood_wall: { label: 'Wooden Wall', texture: { side: woodSide, top: woodFloor, bottom: woodFloor }, hardness: 1.2 },
   bt_wood_floor: { label: 'Wooden Floor', texture: woodFloor, hardness: 1.2 },
   bt_wood_slab: { label: 'Wooden Slab', texture: woodFloor, shape: 'slab', full: 'bt_wood_floor', hardness: 1 },
-  bt_wood_ramp: { label: 'Wooden Ramp', texture: woodFloor, boxes: RAMP, facing: true, hardness: 1.2 },
+  // A ramp underfoot, a pitched roof overhead.
+  bt_wood_ramp: { label: 'Wooden Ramp', texture: woodFloor, boxes: SLOPE, facing: true, hardness: 1.2 },
+  bt_pillar: { label: 'Pillar', texture: { side: pillarSide, top: woodFloor, bottom: woodFloor }, shape: 'post', hardness: 1.2 },
 
   // Stone: what a big animal can't push over.
   bt_stone_wall: { label: 'Stone Wall', texture: { side: stoneSide, top: stoneFloor, bottom: stoneFloor }, hardness: 2.2 },
-  bt_stone_floor: { label: 'Stone Floor', texture: stoneFloor, hardness: 2.2 },
-  bt_stone_slab: { label: 'Stone Slab', texture: stoneFloor, shape: 'slab', full: 'bt_stone_floor', hardness: 2 },
-  bt_stone_ramp: { label: 'Stone Ramp', texture: { side: stoneSide, top: stoneFloor, bottom: stoneFloor }, boxes: RAMP, facing: true, hardness: 2.2 },
+  // (Two stone slabs make a stone wall, whose top is the same flagstones: a stone floor. Slabs are stone's steps, too.)
+  bt_stone_slab: { label: 'Stone Slab', texture: stoneFloor, shape: 'slab', full: 'bt_stone_wall', hardness: 2 },
 
   // Metal: the last word.
   bt_metal_wall: { label: 'Metal Wall', texture: metalSide, hardness: 3.5 },
@@ -230,8 +245,10 @@ export const blocks: Record<string, BlockDefinition> = {
       [1, 0, 1, 15, 3, 15],
       [3, 3, 6, 13, 6, 10],
       [6, 3, 3, 10, 6, 13],
-      [5, 6, 5, 11, 12, 11],
+      [7, 6, 3, 9, 15, 13],
+      [3, 6, 7, 13, 15, 9],
     ],
+    transparency: 'cutout',
     light: 13,
     glow: 0.7,
     hardness: 0.8,
@@ -311,14 +328,14 @@ export interface Piece {
 export const PIECES: Record<string, Piece> = {
   bt_thatch_wall: { tier: 0 },
   bt_thatch_slab: { tier: 0 },
+  bt_thatch_roof: { tier: 0, turn: 'away' },
   bt_wood_wall: { tier: 1 },
   bt_wood_floor: { tier: 1 },
   bt_wood_slab: { tier: 1 },
   bt_wood_ramp: { tier: 1, turn: 'away' },
+  bt_pillar: { tier: 1 },
   bt_stone_wall: { tier: 2 },
-  bt_stone_floor: { tier: 2 },
   bt_stone_slab: { tier: 2 },
-  bt_stone_ramp: { tier: 2, turn: 'away' },
   bt_metal_wall: { tier: 3 },
   bt_wood_door: { tier: 1, use: 'door' },
   bt_gate: { tier: 1, use: 'gate' },

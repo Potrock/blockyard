@@ -8,11 +8,14 @@ import * as bag from './bag';
 import { clearRecipes, registerRecipes, workQueue, type Recipe } from './craft';
 import type { StaminaState } from './def';
 import { completeItems, defineGear } from './gear';
+import { defineGoals, resetGoalCard, stepGoals } from './goals';
 import { defineVitals, showVitals } from './hud';
 import { ICON_ATLAS } from './icons';
 import { applyArmour, forgetContainers, weigh } from './pack';
 import { gainXp } from './progress';
 import { SURVIVAL_RECIPES } from './recipes';
+import { forgetSpears, spearStruck, stepSpear } from './spear';
+import { USES, wearDown } from './wear';
 import { defineJournal, openJournal, stepJournal } from './screen';
 import { forget, forgetAll, save, setGame, survivorOf } from './state';
 import { expirePacks, forgetPacks, markPack, onDeath, packContainer, restorePacks, stepDead, stepVitals } from './vitals';
@@ -36,6 +39,10 @@ function welcome(game: GameContext, player: Player): void {
   s.shown = '';
   s.weather = '';
   s.ui.open = false;
+  resetGoalCard(s);
+  // The room started again under them: the platform emptied their belt, so put it back as it was.
+  if (player.inventory.slots.every((x) => !x) && s.beltKept.some((x) => x)) s.beltKept.forEach((stack, i) => stack && player.inventory.set(i, { ...stack }));
+  if (s.shadow) player.hud.banner('ALREADY HERE', 'This account is on the island in another window. Nothing done in this one is kept.', { duration: 8, color: '#ffb37a' });
   applyArmour(player, s);
   weigh(player, s);
   markPack(player, s);
@@ -51,6 +58,7 @@ export const survival: Part = {
     forgetContainers();
     forgetPacks();
     clearRecipes();
+    forgetSpears();
 
     // The item sprites: one atlas for the world (hands, pickups, the hotbar), and the same picture
     // as `data:` images for the journal and the HUD, whose CSS can use nothing else.
@@ -58,6 +66,7 @@ export const survival: Part = {
     game.items.atlas(ICON_ATLAS, { width: art.width, height: art.height, pixels: art.pixels, emissive: art.emissive });
     defineJournal(game, art.rowUrls);
     defineVitals(game, art.glyphsUrl);
+    defineGoals(game, art.glyphsUrl);
 
     defineGear(game, OWN_ITEMS);
     registerRecipes(SURVIVAL_RECIPES);
@@ -77,8 +86,12 @@ export const survival: Part = {
     // Out of breath, a blow has little behind it.
     game.events.on('damage', (hit) => {
       const by = hit.source;
-      if (by === 'world' || by?.kind !== 'player' || hit.cause !== 'melee') return;
-      if ((by.abilities.stamina as StaminaState | undefined)?.winded) hit.amount *= 0.6;
+      if (by === 'world' || by?.kind !== 'player' || by.bot) return;
+      if (hit.cause === 'melee' && (by.abilities.stamina as StaminaState | undefined)?.winded) hit.amount *= 0.6;
+      if (hit.cause === 'projectile' && hit.weapon?.startsWith('thrown:')) return spearStruck(game, by, hit.weapon, hit.target);
+      // Every blow landed and every arrow that finds its mark wears what dealt it.
+      const held = by.inventory.held?.item;
+      if (held && USES[held] && (hit.cause === 'melee' || hit.cause === 'projectile')) wearDown(by, survivorOf(by), held);
     });
   },
 
@@ -99,10 +112,13 @@ export const survival: Part = {
           packContainer(id);
           openJournal(player, 'pack', { container: `pack-${id}` });
         });
+        stepSpear(game, player, s, dt);
         const xp = workQueue(player, s, dt);
         if (xp > 0) gainXp(player, xp);
       }
       stepJournal(player, s);
+      s.beltKept = player.inventory.slots.map((x) => (x ? { item: x.item, count: x.count } : null));
+      stepGoals(player, s, dt);
       showVitals(player, s, dt);
       s.saveIn -= dt;
       if (s.dirty && s.saveIn <= 0) save(player, s);

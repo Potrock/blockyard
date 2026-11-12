@@ -7,6 +7,8 @@ import { itemKits } from '../../src/games/blocktaceous/survival/kits';
 import { survival } from '../../src/games/blocktaceous/survival/rules';
 import { JOURNAL, journalActions } from '../../src/games/blocktaceous/survival/screen';
 import { forget, save, survivorOf } from '../../src/games/blocktaceous/survival/state';
+import { GOAL_CARD, GOALS } from '../../src/games/blocktaceous/survival/goals';
+import { condition, repair, repairCost, USES, wearDown } from '../../src/games/blocktaceous/survival/wear';
 import { check, launch } from './_harness';
 
 /**
@@ -60,6 +62,11 @@ export default function blocktaceousSurvival() {
   take(player, 'metal_ingot', 300);
   check(player.abilities.stamina.load === 1, 'unloaded again');
 
+  // Chopping where they stand doesn't wind them: breath comes back between swings.
+  h.run(20, { pilot: () => ({ buttons: 1 }) });
+  check(player.abilities.stamina.s > 70, `twenty seconds of swinging, standing still: ${player.abilities.stamina.s} breath`);
+  h.run(3);
+
   // ---- Hunger and thirst ----
   const hunger0 = s.hunger;
   h.run(5);
@@ -112,6 +119,14 @@ export default function blocktaceousSurvival() {
   check(count(player, 'cooked_meat') === 3 && count(player, 'raw_meat') === 0, `two cooked: ${count(player, 'cooked_meat')}`);
   journalActions.close(player, '');
   check(!s.ui.open && s.ui.station === null, 'closed');
+  // A station is used from beside it: carried away from it, its screen closes.
+  openStation(player, 'campfire');
+  const stood = { ...player.position };
+  player.teleport({ x: stood.x + 6, y: stood.y, z: stood.z });
+  h.run(0.1);
+  check(!s.ui.open && !craft(player, 'cooked_meat@campfire'), 'walking away from a station closes it');
+  player.teleport(stood);
+  h.run(0.1);
 
   // ---- The journal's clicks ----
   journalActions.tab(player, 'pack');
@@ -134,6 +149,53 @@ export default function blocktaceousSurvival() {
   game.items.clearPickups();
   give(player, 'wood', 40);
 
+  // ---- The first goals ----
+  check(s.goal === 0 && GOALS[0].id === 'forage', 'the first goal waits for thatch');
+  h.run(0.1);
+  check(h.find('hud', 'widget').some((c) => c.args[0] === GOAL_CARD), 'and shows on the HUD');
+  const xpG = s.xp;
+  give(player, 'thatch', 10);
+  h.run(0.1);
+  check((s.goal as number) === 1 && s.xp === xpG + GOALS[0].xp, `gathering ticks it off, for experience: goal ${s.goal}`);
+  give(player, 'stone', 2);
+  give(player, 'flint', 2);
+  // A goal that's already true when its turn comes goes by on its own (the pick they carry).
+  h.run(8);
+  check(GOALS[s.goal]?.id === 'hatchet', `the chain moves on to the hatchet: ${GOALS[s.goal]?.id}`);
+  journalActions.goals(player, '');
+  h.run(0.1);
+  check(s.goalsOff, 'the card can be hidden');
+  journalActions.goals(player, '');
+  take(player, 'thatch', 10);
+  take(player, 'stone', 2);
+  take(player, 'flint', 2);
+
+  // ---- Wear and mending ----
+  check(condition(s, 'stone_pick') === 1, 'a new pick is whole');
+  player.inventory.select(player.inventory.slots.findIndex((x) => x?.item === 'stone_pick'));
+  addXp(player, 1);
+  check(s.wear.stone_pick === 1, 'work with a tool in hand wears it');
+  wearDown(player, s, 'stone_pick', USES.stone_pick - 21);
+  check(condition(s, 'stone_pick') < 0.2 && repairCost(s, 'stone_pick').length > 0, `worn: ${condition(s, 'stone_pick')}`);
+  give(player, 'thatch', 4);
+  give(player, 'stone', 2);
+  check(repair(player, s, 'stone_pick') && condition(s, 'stone_pick') === 1 && count(player, 'thatch') < 4, 'mending takes materials and makes it whole');
+  take(player, 'thatch', count(player, 'thatch'));
+  take(player, 'stone', count(player, 'stone'));
+  check(!wearDown(player, s, 'stone_pick', USES.stone_pick) && count(player, 'stone_pick') === 0, 'worn through, it breaks');
+
+  // ---- A thrown spear ----
+  const spearSlot = player.inventory.slots.findIndex((x) => x?.item === 'spear');
+  check(spearSlot >= 0, 'the spear is on the belt');
+  player.inventory.select(spearSlot);
+  game.items.clearPickups();
+  h.step(1 / 60, { buttons: 4, clicked: 4 });
+  check(count(player, 'spear') === 0 && s.wear.spear === 3, 'the right button throws it');
+  h.run(5);
+  check(h.sim.items.frame().some((p) => p.item === 'spear'), 'and it lies where it came down');
+  game.items.clearPickups();
+  give(player, 'spear', 1);
+
   // ---- The store ----
   s.hunger = 42;
   setBedSpawn(player, { x: 3, y: 70, z: 5 });
@@ -143,6 +205,7 @@ export default function blocktaceousSurvival() {
   player.inventory.clear();
   const back = survivorOf(player);
   check(back !== s && back.hunger === 42 && back.level === 6 && back.learned.has('spear') && back.worn.body === 'cloth_tunic', 'a survivor comes back from the store as they were');
+  check(GOALS[back.goal]?.id === 'hatchet' && back.wear.spear === 3 && back.deeds.has('cooked'), 'with their goals, their deeds and their tools’ wear');
   check(count(player, 'wood') === 40 && player.inventory.slots.map((x) => (x ? `${x.item}:${x.count}` : '')).join() === belt, 'with their pack and their belt');
   check(back.bed?.x === 3 && back.bed.y === 70, 'and their bed');
   setBedSpawn(player, null);

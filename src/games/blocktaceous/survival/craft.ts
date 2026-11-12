@@ -2,6 +2,7 @@ import type { Player } from '@platform';
 import { MAX_LEVEL, nameOf, sparksAt } from './data';
 import { addItems, countItems, removeItems, roomFor } from './pack';
 import { survivorOf, touch, type Survivor } from './state';
+import { deed } from './goals';
 
 /**
  * Recipes, what a survivor knows of them, and what they're making. Every part of the game adds
@@ -202,6 +203,8 @@ export function workQueue(player: Player, s: Survivor, dt: number): number {
   job.left--;
   if (job.left <= 0) s.queue.shift();
   addItems(player, r.item, r.count, true);
+  deed(s, `made:${r.item}`);
+  if (r.station === 'campfire' && (r.item === 'cooked_meat' || r.item === 'cooked_fish')) deed(s, 'cooked');
   player.audio.play('bt_craft');
   touch(s);
   return r.xp;
