@@ -247,8 +247,14 @@ export interface WorldOptions {
    * `flatHeight`, trees and all), or `void`: nothing but your structures (sky islands), or your
    * structures on a plain `ground`, which costs next to nothing to make and draw (an arena's).
    */
-  terrain?: 'natural' | 'flat' | 'void';
+  terrain?: 'natural' | 'flat' | 'void' | 'map';
   flatHeight?: number;
+  /**
+   * A `map` world's land: the game's own grid of ground heights, zones and water levels in place
+   * of the endless natural terrain (an island, a continent, a valley), or a function that makes
+   * it (called once, when a world is first made, so a big map costs nothing until it's played).
+   */
+  map?: TerrainMap | (() => TerrainMap);
   /**
    * A `void` world's own ground: a plain slab under your structures, as far as anyone sees, its
    * `top` block (default grass) at `y` over `depth - 1` of `fill` (dirt; default 4 deep in all),
@@ -288,6 +294,102 @@ export interface WorldOptions {
    * Off by default. Damage is undone with the rest of the world on `restart`, and isn't saved.
    */
   destructible?: DestructibleOptions;
+}
+
+/**
+ * A game's own landform (`world.terrain: 'map'`): samples `cell` blocks apart, `width` across (x)
+ * and `depth` down (z) from `origin`, each with a ground height, a zone of the `palette` and,
+ * for rivers and lakes above the sea, a water level. Index a sample `z * width + x`.
+ *
+ * The generator runs a smooth surface through the heights, roughens it with fine noise and
+ * dresses each zone as its palette entry says (ground blocks, trees, plants, boulders, veins),
+ * then adds what every generated world has: the sea at sea level (y 62), caves, ores, your
+ * `structures` and `terraform`. Ground lower than sea level is under the sea, so a map is an
+ * island by giving its edges low heights. It's made the same on the server and every screen.
+ */
+export interface TerrainMap {
+  /** The world position of sample (0, 0). */
+  origin: { x: number; z: number };
+  /** Blocks between samples (4 to 16 suit most maps: the land between is interpolated). */
+  cell: number;
+  width: number;
+  depth: number;
+  /** Ground height at each sample, in 1/256 of a block: `y * 256` (so 0 to 255.99). */
+  heights: Uint16Array;
+  /** Each sample's zone: an index into `palette`. Zone borders wander a little, not along cells. */
+  zones: Uint8Array;
+  /**
+   * Rivers, lakes and pools above the sea: the y of the top block of water at each sample, 0
+   * where the ground is dry (leave the sea to the generator). A column between samples is under
+   * water where its ground is lower than the wet samples round it, so give a wet sample a bed
+   * below its level and the dry samples next to it ground above it (the banks). The liquid is
+   * the wet sample's zone's (`liquid`: lava for a crater), and levels may step down along a
+   * river. The fine noise is stilled near wet samples.
+   */
+  water?: Uint8Array;
+  /** What each zone is. At most 256. */
+  palette: MapZone[];
+  /** Beyond the map's edges: ground at `height` (default 30: deep sea) of `zone` (default 0). */
+  outside?: { height?: number; zone?: number };
+}
+
+/** One kind of land on a `TerrainMap`: its ground, what grows and what lies on it. */
+export interface MapZone {
+  /**
+   * The ground: `top` (default grass) over `depth` (3) of `fill` (dirt), then stone. Slopes
+   * steeper than `steepness` (3: blocks of height per block along) show `steep` (stone). `bed` is
+   * the ground under water (sand). `strata`: bands of rock, two blocks each from the bottom up,
+   * in place of the stone near the surface and on steep slopes (a canyon's striped walls).
+   */
+  surface?: { top?: BlockRef; fill?: BlockRef; depth?: number; steep?: BlockRef; steepness?: number; bed?: BlockRef; strata?: BlockRef[] };
+  /** The colour of grass, leaves and plants here (`'#6ab045'`); it blends between zones. */
+  grass?: string;
+  /** What fills the zone's wet samples (default water). */
+  liquid?: BlockRef;
+  /** Water here freezes over. */
+  frozen?: boolean;
+  /** How much the fine noise moves the ground, in blocks (default 1.5), and `crags`: sharp ridges this high on top (0). */
+  roughness?: number;
+  crags?: number;
+  /** Trees: each cell of the tree grid takes the first whose chance comes up. */
+  trees?: MapTree[];
+  /** Blocks scattered over the zone. */
+  scatter?: MapScatter[];
+}
+
+export interface MapTree {
+  /**
+   * `oak` (a round head), `spruce` (a cone), `broad` (a big spreading oak), `column` (logs only:
+   * a cactus), `palm`, `dead` (a bare trunk), `bush` (leaves on the ground); and the big ones,
+   * `jungle` (a tall trunk under a wide canopy with hanging leaves) and `giant` (a huge conifer,
+   * its trunk two blocks thick from 20 tall).
+   */
+  shape: 'oak' | 'spruce' | 'broad' | 'column' | 'palm' | 'jungle' | 'giant' | 'dead' | 'bush';
+  /** Its blocks: built-in or the game's own. Default oak. */
+  log?: BlockRef;
+  leaves?: BlockRef;
+  /** Trunk height, least and most (up to 64). */
+  height: [number, number];
+  /** 0 to 1: the chance of one in each cell of the tree grid (a cell is 6 blocks across; 10 for the big shapes). */
+  density: number;
+  /** Stands in water up to two deep too (mangroves). */
+  wet?: boolean;
+}
+
+export interface MapScatter {
+  block: BlockRef;
+  /**
+   * `on` (default): standing on the ground (a plant, on the zone's soil only; a stone).
+   * `in`: in place of the ground's top block (a patch of gravel, an ore showing).
+   * `under`: veins through the stone below.
+   */
+  where?: 'on' | 'in' | 'under';
+  /** The share of columns that get one, 0 to 1. For `under`: a hundredth of the veins in each 16 x 16 chunk (0.1 is ten). */
+  density: number;
+  /** About how many blocks: 1 (default) is a single block; more makes a boulder (`on`), an outcrop sunk in the ground (`in`) or a longer vein. */
+  size?: number;
+  /** Only in patches about this many blocks across (default: evenly). */
+  clumps?: number;
 }
 
 /** Which blocks can be shot into (`WorldOptions.destructible`). */
@@ -1308,8 +1410,12 @@ export interface PlayerApi {
    * `remote`: they steer it from where they stand (a guided missile, a drone, a turret's camera):
    * their body stays put, frozen, and everyone still sees it there (it can be shot, and a marker
    * or an orbit that follows them stays on it), while their controls and camera go to the vehicle.
+   *
+   * `seat`: they're seen riding it (a saddle, an open cart), their figure this many blocks above
+   * the vehicle's `pose`, crouched to it and facing where they look, on every screen and their
+   * own. Without it a driver isn't drawn: the vehicle's model is all there is to see.
    */
-  drive<S extends object>(vehicle: string, state: S, opts?: { prop?: Prop; remote?: boolean }): Vehicle<S>;
+  drive<S extends object>(vehicle: string, state: S, opts?: { prop?: Prop; remote?: boolean; seat?: number }): Vehicle<S>;
   /** Out of their vehicle (their model stays where it was; remove it if it should go). */
   leaveVehicle(): void;
   /** The vehicle they're driving, if any. */
@@ -1869,6 +1975,12 @@ export interface GltfSpec {
   clips?: { idle?: string | string[]; walk?: string | string[]; run?: string | string[]; attack?: string | string[]; cast?: string | string[] };
   /** Turn the model this far about its up axis (radians) if it doesn't face +z like glTF models should. */
   yaw?: number;
+  /**
+   * How far one loop of `walk` and `run` carries the model, in blocks at its own scale (a number
+   * for both, or one each), so its feet hold the ground: a big animal's loop covers many blocks.
+   * Default 1.5, a person's.
+   */
+  stride?: number | { walk?: number; run?: number };
   /** The node that turns to look (its name in the file). */
   head?: string;
   /** The node a held item hangs from (its name in the file). */

@@ -77,7 +77,7 @@ export interface PlayerFrame {
    * Their vehicle (`player.drive`): which one, its state (their client predicts from it), its
    * model, and whether they steer it from afar (`remote`: their body stays on show where it was).
    */
-  vehicle: { name: string; state: object; prop: number | null; remote?: boolean } | null;
+  vehicle: { name: string; state: object; prop: number | null; remote?: boolean; seat?: number } | null;
   /** Creative building (`player.build`): the block hotbar. */
   creative: { hotbar: number[]; selected: number } | null;
   /** Physics is off (before play, dead, a game-driven camera). */
@@ -543,7 +543,7 @@ export class PlayerSim {
       hand: { state: this.itemMode && !this.spectating ? this.items.shown() : null },
       ...(this.itemMode && { items: this.items.own() }),
       camera: { p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w], fov: this.cam.fov, follow: this.followVehicle && !!this.vehicle },
-      vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null, ...(this.vehicle.remote ? { remote: true } : {}) },
+      vehicle: this.vehicle && { name: this.vehicle.name, state: this.vehicle.state, prop: this.vehicle.prop && !this.vehicle.prop.removed ? this.vehicle.prop.id : null, ...(this.vehicle.remote ? { remote: true } : {}), ...(this.vehicle.seat !== null ? { seat: this.vehicle.seat } : {}) },
       creative: this.creative ? { hotbar: [...this.creative.hotbar], selected: this.creative.selected } : null,
       frozen: s.frozen,
       ...(this.spectating && { spectating: true }),
@@ -745,10 +745,10 @@ export class PlayerSim {
       get spectating() {
         return me.spectating;
       },
-      drive: <S extends object>(name: string, state: S, opts: { prop?: Prop; remote?: boolean } = {}) => {
+      drive: <S extends object>(name: string, state: S, opts: { prop?: Prop; remote?: boolean; seat?: number } = {}) => {
         const def = this.p.vehicles[name];
         if (!def) throw new Error(`player.drive: no vehicle "${name}" (add it to the game's \`vehicles\`)`);
-        this.vehicle = new VehicleSim(name, def, state, (opts.prop as PropState | undefined) ?? null, !!opts.remote);
+        this.vehicle = new VehicleSim(name, def, state, (opts.prop as PropState | undefined) ?? null, !!opts.remote, typeof opts.seat === 'number' ? opts.seat : null);
         this.followVehicle = true;
         this.followBody();
         return this.vehicle as unknown as import('../api/types').Vehicle<S>;

@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Quadruped preview</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #8b8d93; overflow: hidden; }
+      canvas { display: block; }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+/**
+ * Development: the animals' GLBs as three.js draws them, in a grid: a row for each view, a column
+ * for each moment of a clip. `preview.html?m=<id>[,<id>…]&clip=walk&times=0,0.25,0.5,0.75&views=side,34,front,top`
+ * (`times` are fractions of the clip; several models stand in a row, `gap` metres apart; `play=1`
+ * plays the clip instead of drawing it once).
+ */
+      import * as THREE from "three";
+      import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+      import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+      import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+      const q = new URLSearchParams(location.search);
+      const IDS = (q.get("m") ?? "triceratops").split(",");
+      const CLIP = q.get("clip");
+      const TIMES = (q.get("times") ?? "0").split(",").map(Number);
+      const FRAMES = q.has("frames") ? q.get("frames").split(",").map((f) => ({ clip: f.split(":")[0], t: Number(f.split(":")[1] ?? 0) })) : TIMES.map((t) => ({ clip: CLIP, t }));
+      const VIEWS = (q.get("views") ?? "side,34").split(",");
+      const GAP = Number(q.get("gap") ?? 1);
+      const ZOOM = Number(q.get("zoom") ?? 1);
+      const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      renderer.setPixelRatio(devicePixelRatio);
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.autoClear = false;
+      document.body.append(renderer.domElement);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(9145747);
+      scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+      scene.environmentIntensity = 0.75;
+      scene.add(new THREE.HemisphereLight(13624319, 4864816, 0.35));
+      const sun = new THREE.DirectionalLight(16773596, 1.6);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(4096, 4096);
+      sun.shadow.radius = 4;
+      scene.add(sun, sun.target);
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 10132642, roughness: 0.75 }));
+      floor.rotation.x = -Math.PI / 2;
+      floor.receiveShadow = true;
+      scene.add(floor);
+      const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+      async function main() {
+        const models = await Promise.all(IDS.map((id) => loader.loadAsync(id.includes("/") ? id : `/src/games/blocktaceous/models/${id}.glb?t=${Date.now()}`)));
+        const mixers = [];
+        let x = 0;
+        const all = new THREE.Box3();
+        for (const g of models) {
+          const m = g.scene;
+          m.updateMatrixWorld(true);
+          m.traverse((o) => {
+            const mesh = o;
+            if (mesh.isMesh) {
+              mesh.castShadow = true;
+              mesh.frustumCulled = false;
+            }
+          });
+          const box = new THREE.Box3().setFromObject(m);
+          if (mixers.length) x += -box.min.x;
+          m.position.x = x;
+          x += box.max.x + GAP;
+          scene.add(m);
+          m.updateMatrixWorld(true);
+          all.union(new THREE.Box3().setFromObject(m));
+          const mixer = new THREE.AnimationMixer(m);
+          mixers.push({ mixer, clips: g.animations });
+        }
+        const centre = all.getCenter(new THREE.Vector3());
+        const size = all.getSize(new THREE.Vector3());
+        const span = Math.max(size.x, size.y, size.z);
+        sun.position.copy(centre).add(new THREE.Vector3(0.5, 1, 0.45).multiplyScalar(span * 2));
+        sun.target.position.copy(centre);
+        const sc = sun.shadow.camera;
+        Object.assign(sc, { left: -span, right: span, top: span, bottom: -span, near: 0.1, far: span * 6 });
+        sc.updateProjectionMatrix();
+        const DIRS = {
+          side: new THREE.Vector3(1, 0.12, 0),
+          other: new THREE.Vector3(-1, 0.12, 0),
+          "34": new THREE.Vector3(0.75, 0.3, 0.8),
+          back34: new THREE.Vector3(0.75, 0.35, -0.8),
+          front: new THREE.Vector3(0, 0.12, 1),
+          back: new THREE.Vector3(0, 0.12, -1),
+          top: new THREE.Vector3(1e-3, 1, 0),
+          line: new THREE.Vector3(0.45, 0.28, 1)
+        };
+        const draw = (now) => {
+          renderer.setScissorTest(false);
+          renderer.clear();
+          renderer.setScissorTest(true);
+          const w = innerWidth / FRAMES.length, h = innerHeight / VIEWS.length;
+          FRAMES.forEach(({ clip: name, t }, col) => {
+            for (const m of mixers) {
+              m.mixer.stopAllAction();
+              const clip = name ? m.clips.find((c) => c.name === name) : null;
+              if (clip) {
+                const action = m.mixer.clipAction(clip);
+                action.play();
+                action.time = (q.get("play") === "1" ? now / 1e3 / clip.duration + t : t) % 1.00001 * clip.duration;
+              }
+              m.mixer.update(0);
+            }
+            VIEWS.forEach((view, row) => {
+              const camera = new THREE.PerspectiveCamera(20, w / h, 0.05, 2e3);
+              const dir = DIRS[view].clone().normalize();
+              const across = view === "line" ? size.x + size.z * 0.5 : view === "side" || view === "other" ? size.z : view === "front" || view === "back" ? size.x : view === "top" ? size.z : Math.hypot(size.x, size.z);
+              const up = view === "top" ? size.x : size.y + (view === "line" ? size.z * 0.3 : 0);
+              const r = Math.max(across / camera.aspect, up) * 0.58;
+              const dist = r / Math.tan(10 * Math.PI / 180) / ZOOM;
+              camera.position.copy(centre).addScaledVector(dir, dist);
+              if (view === "top") camera.up.set(1, 0, 0);
+              camera.lookAt(centre);
+              renderer.setViewport(col * w, innerHeight - (row + 1) * h, w, h);
+              renderer.setScissor(col * w, innerHeight - (row + 1) * h, w, h);
+              renderer.clearDepth();
+              renderer.render(scene, camera);
+            });
+          });
+          if (q.get("play") === "1") requestAnimationFrame(draw);
+        };
+        draw(0);
+        window.__ready = true;
+      }
+      main().catch((e) => {
+        document.body.textContent = String(e);
+        window.__ready = true;
+      });
+    </script>
+  </body>
+</html>

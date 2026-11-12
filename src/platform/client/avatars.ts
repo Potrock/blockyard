@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import { shownSlots, type Cosmetic } from '../cosmetics';
 import type { CosmeticSlot } from '../api/types';
 import type { VoxelWorld } from '@engine/voxel_engine.js';
@@ -103,6 +103,24 @@ export class Avatars {
     return type;
   }
 
+  private readonly seatAt = new THREE.Vector3();
+  private readonly seatTurn = new THREE.Quaternion();
+  private readonly seatAhead = new THREE.Vector3();
+
+  /**
+   * A rider as their figure is drawn: on their vehicle where its `pose` has it (their own where
+   * prediction does), `seat` blocks up, facing the way it faces, still and crouched to it.
+   */
+  private seated(p: PlayerFrame, seat: number): PlayerFrame {
+    const v = p.vehicle!;
+    const at = this.seatAt.set(p.x, p.y, p.z);
+    const turn = this.seatTurn.identity();
+    this.p.def.vehicles?.[v.name]?.pose(v.state as never, at, turn);
+    const ahead = this.seatAhead.set(0, 0, 1).applyQuaternion(turn);
+    const yaw = Math.atan2(-ahead.x, -ahead.z);
+    return { ...p, x: at.x, y: at.y + seat, z: at.z, vx: 0, vz: 0, onGround: true, sneaking: true, sliding: false, sprinting: false, view: { ...p.view, yaw, pitch: 0 } };
+  }
+
   /**
    * Other players as figures, with their names above. `self` is whose eyes we see through (a
    * replay's player, not `live`: drawn only if `showSelf`, a camera away from their eyes), or none.
@@ -116,12 +134,16 @@ export class Avatars {
       if (other.spectating) continue;
       // Only people on foot get a figure: a driver is their vehicle's model, but one steering it
       // from afar (`remote`) stands where they are and shows there (our own too, seen from the
-      // vehicle, as the host has it). Our own shows in third person, where we're shown
+      // vehicle, as the host has it), and one given a `seat` rides in plain sight (our own too:
+      // the vehicle's camera looks on). Our own shows in third person, where we're shown
       // (predicted) facing where we look.
       const mine = other.id === self;
       const remote = !!other.vehicle?.remote;
-      if ((mine && !(live ? view.thirdPerson || remote : showSelf)) || !this.p.walker || (other.vehicle && !remote)) continue;
-      const p = mine && live && !remote ? { ...me, view: { ...me.view, yaw: view.yaw, pitch: view.pitch } } : other;
+      const seat = other.vehicle && !remote && typeof other.vehicle.seat === 'number' ? other.vehicle.seat : null;
+      if ((mine && !(live ? view.thirdPerson || remote || seat !== null : showSelf)) || !this.p.walker || (other.vehicle && !remote && seat === null)) continue;
+      const q = mine && live && !remote ? { ...me, view: { ...me.view, yaw: view.yaw, pitch: view.pitch } } : other;
+      // In a seat: up on the vehicle, still (the vehicle does the moving) and crouched to it.
+      const p = seat !== null ? this.seated(q, seat) : q;
       const type = this.type(p);
       let id = this.ids.get(p.id);
       if (id === undefined) this.ids.set(p.id, (id = -1 - this.ids.size));

@@ -1863,7 +1863,7 @@ export class Runtime {
     // (A replay's player is drawn while client code has the camera away from their eyes. While its
     // first frame stands still, so do the figures, exactly as it has them.)
     const avatars = () => (rp ? this.avatars.frames(shown, eyes ?? me, rp.follow, false, this.taken.active) : this.avatars.frames(f, me, this.playerId));
-    this.entityView.sync(shown.players.length > 1 || (!rp && this.view.thirdPerson) || (rp && this.taken.active) ? [...shown.entities, ...avatars()] : shown.entities, shown.projectiles, dt, started, shown.t, !!rp?.holding);
+    this.entityView.sync(shown.players.length > 1 || (!rp && (this.view.thirdPerson || typeof me.vehicle?.seat === 'number')) || (rp && this.taken.active) ? [...shown.entities, ...avatars()] : shown.entities, shown.projectiles, dt, started, shown.t, !!rp?.holding);
     // A controller rumbles when we're hurt.
     if (me.health < this.lastHealth && this.lastHealth > 0 && this.input.device === 'pad' && this.settings.vibration) rumble(0.55, 0.3, 170);
     // (A phone buzzes, where it can: Android.)
