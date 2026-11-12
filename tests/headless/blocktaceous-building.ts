@@ -321,10 +321,15 @@ export default function blocktaceousBuilding() {
   check(name({ ...spot, y: oy }) === 'air' && me.inventory.held?.count === 2, 'an item that only looks like a block places nothing');
 
   // ---- Its owner takes the wall down and gets something back ----
+  const behind = { x: wall.x + 1, y: wall.y, z: wall.z };
+  world.placeBlock(behind.x, behind.y, behind.z, 'bt_wood_wall', { by: me });
   const woodBefore = have('wood');
   tool(null);
   mine(wall, 4);
   check(name(wall) === 'air' && ownerOf(wall) === null, 'the owner takes the wall down');
+  // (Still holding: the wall behind it wants a click of its own.)
+  h.run(3, { pilot: () => ({ buttons: 1, ...aim(wall) }) });
+  check(name(behind) === 'bt_wood_wall', 'holding on does not take down the wall behind');
   check(have('wood') > woodBefore, 'and gets some of its wood back');
 
   // A creature (or anything else) breaking a piece frees its cell.

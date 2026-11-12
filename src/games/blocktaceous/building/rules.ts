@@ -53,6 +53,8 @@ interface Hands {
   ringShown: boolean;
   hint: string;
   hintT: number;
+  /** Whether the button has come up since a piece was last taken down (the next piece wants a click of its own). */
+  lifted: boolean;
   /** The prompt last sent for what they're aiming at ('' for none). */
   aim: string;
 }
@@ -183,7 +185,7 @@ function hint(game: GameContext, player: Player, text: string): void {
 
 function handsOf(player: Player): Hands {
   let h = hands.get(player.id);
-  if (!h) hands.set(player.id, (h = { key: '', progress: 0, swingT: 0, placeT: 0, ringShown: false, hint: '', hintT: 0, aim: '' }));
+  if (!h) hands.set(player.id, (h = { key: '', progress: 0, swingT: 0, placeT: 0, ringShown: false, hint: '', hintT: 0, lifted: true, aim: '' }));
   return h;
 }
 
@@ -208,6 +210,10 @@ function award(game: GameContext, player: Player, harvests: Harvest[]): void {
 
 const cellKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
 
+/** The 26 cells round a cell. */
+const AROUND: [number, number, number][] = [];
+for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) if (dx || dy || dz) AROUND.push([dx, dy, dz]);
+
 /** What mining the block aimed at would be: a time and what to do when it's done, or why not. */
 type Plan = { time: number; sound: string; done(): void } | { refuse: string };
 
@@ -221,9 +227,14 @@ function planBreak(game: GameContext, player: Player, hit: RayHit, block: string
     // The right tool takes a piece down faster: a hatchet for thatch and wood, a pick for stone and metal.
     const suited = piece.tier <= 1 ? tool.kind === 'hatchet' : tool.kind === 'pick';
     return {
-      time: hardness * (suited ? (tool.tier >= 2 ? 0.4 : 0.6) : 1),
+      // Never at a touch: a stray click mustn't cost a wall, even a thatch one.
+      time: (0.6 + hardness * 1.2) * (suited ? (tool.tier >= 2 ? 0.4 : 0.6) : 1),
       sound: piece.tier <= 1 ? 'bt_chop' : 'bt_pick',
-      done: () => demolish(game, player, hit.x, hit.y, hit.z, block, piece),
+      done: () => {
+        demolish(game, player, hit.x, hit.y, hit.z, block, piece);
+        // One piece a click: holding on doesn't start on the wall behind it.
+        handsOf(player).lifted = false;
+      },
     };
   }
 
@@ -313,7 +324,8 @@ function gather(game: GameContext, player: Player, hit: RayHit, block: string, h
     const queue: Vec3[] = [{ x, y, z }, ...felled];
     while (queue.length && leaves.length < FELL_LEAVES) {
       const at = queue.shift()!;
-      for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] as const) {
+      // (Corner to corner counts as joined: a palm's fronds touch only at their corners.)
+      for (const [dx, dy, dz] of AROUND) {
         const n = { x: at.x + dx, y: at.y + dy, z: at.z + dz };
         const k = cellKey(n.x, n.y, n.z);
         if (seen.has(k)) continue;
@@ -549,9 +561,13 @@ function updatePlayer(game: GameContext, player: Player, dt: number): void {
   // Harvesting and taking down: progress builds while left-click is held on the same block.
   let mining = false;
   const canMine = !!hit && game.items.get(held?.item ?? '')?.kind !== 'bow';
+  if (!input.button(0)) h.lifted = true;
   if (hit && canMine && input.button(0)) {
     const plan = planBreak(game, player, hit, block, toolOf(held?.item ?? null));
-    if ('refuse' in plan) {
+    if (piece && !h.lifted) {
+      // Still holding from the piece just taken down: this one waits for its own click.
+      input.consume(0);
+    } else if ('refuse' in plan) {
       // Nothing to be had: say why once, and leave the click to whatever's in their hand.
       if (plan.refuse && input.buttonPressed(0)) hint(game, player, plan.refuse);
     } else {
@@ -625,7 +641,7 @@ const USE_WORDS: Record<NonNullable<Piece['use']>, string> = {
   door: 'Open or shut',
   gate: 'Open or shut',
   storage: 'Open',
-  bed: 'Sleep here from now on',
+  bed: 'Make your bed',
   campfire: 'Cook',
   mortar: 'Grind',
   workbench: 'Craft',

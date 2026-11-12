@@ -186,6 +186,8 @@ export class Tribes {
       }
       handle.update(build());
     };
+    // A name to found one under at a click: theirs, as far as a tribe's name may be spelled.
+    const ownName = `${player.name.replace(/[^A-Za-z0-9 ]/g, '').trim().slice(0, 12) || 'Survivor'}'s Tribe`;
     const build = () => {
       const now = game.clock.total;
       const key = this.keyOf(player);
@@ -226,9 +228,9 @@ export class Tribes {
           title: 'Found a tribe',
           entries: [
             {
-              label: `Found "${player.name}'s Tribe"`.slice(0, 40),
+              label: `Found "${ownName}"`,
               note: 'Or name it yourself: /tribe create <name>',
-              onSelect: () => act(() => this.create(player, `${player.name.replace(/[^A-Za-z0-9 ]/g, '').slice(0, 12) || 'Survivor'}s Tribe`)),
+              onSelect: () => act(() => this.create(player, ownName)),
             },
           ],
         });

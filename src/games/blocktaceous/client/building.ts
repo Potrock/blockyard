@@ -174,15 +174,16 @@ function burn(client: Client, dt: number): void {
     const jx = (Math.random() - 0.5) * 0.3;
     const jz = (Math.random() - 0.5) * 0.3;
     if (f.kind === 'campfire') {
+      // (Particles are small lit squares: flames are a few bright ones, smoke many small dark ones, so neither is a slab in the air.)
       if (flame) {
-        client.fx.particles({ x: f.x + 0.5 + jx, y: f.y + 0.5, z: f.z + 0.5 + jz }, [1, 0.42, 0.08], { count: 2, speed: 0.25, up: 1.5, gravity: -1.2, size: 0.13, glow: 3, life: 0.5, spread: 0.12 });
-        if (Math.random() < 0.25) client.fx.particles({ x: f.x + 0.5 + jx, y: f.y + 0.8, z: f.z + 0.5 + jz }, [1, 0.75, 0.25], { count: 1, speed: 0.8, up: 2.4, gravity: -0.5, size: 0.04, glow: 5, life: 1.1, spread: 0.1 });
+        client.fx.particles({ x: f.x + 0.5 + jx, y: f.y + 0.55, z: f.z + 0.5 + jz }, [1, 0.38, 0.06], { count: 1, speed: 0.2, up: 1.3, gravity: -1, size: 0.07, glow: 1.6, life: 0.55, spread: 0.1 });
+        if (Math.random() < 0.2) client.fx.particles({ x: f.x + 0.5 + jx, y: f.y + 0.8, z: f.z + 0.5 + jz }, [1, 0.7, 0.2], { count: 1, speed: 0.8, up: 2.2, gravity: -0.4, size: 0.03, glow: 3, life: 1.2, spread: 0.1 });
       }
-      if (smoke) client.fx.particles({ x: f.x + 0.5 + jx, y: f.y + 1.2, z: f.z + 0.5 + jz }, [0.16, 0.15, 0.14], { count: 1, speed: 0.12, up: 0.9, gravity: -0.25, size: 0.3, life: 3.2, spread: 0.15, drag: 0.4 });
+      if (smoke) client.fx.particles({ x: f.x + 0.5 + jx, y: f.y + 1.15, z: f.z + 0.5 + jz }, [0.2, 0.19, 0.18], { count: 2, speed: 0.15, up: 0.8, gravity: -0.3, size: 0.06, life: 2.6, spread: 0.18, drag: 0.5 });
     } else if (f.kind === 'torch') {
-      if (flame && Math.random() < 0.6) client.fx.particles({ x: f.x + 0.5, y: f.y + 0.85, z: f.z + 0.5 }, [1, 0.5, 0.1], { count: 1, speed: 0.1, up: 0.7, gravity: -0.8, size: 0.07, glow: 4, life: 0.4, spread: 0.04 });
+      if (flame && Math.random() < 0.6) client.fx.particles({ x: f.x + 0.5, y: f.y + 0.85, z: f.z + 0.5 }, [1, 0.5, 0.1], { count: 1, speed: 0.1, up: 0.7, gravity: -0.8, size: 0.04, glow: 2.5, life: 0.4, spread: 0.04 });
     } else {
-      if (smoke) client.fx.particles({ x: f.x + 0.5 + jx * 0.5, y: f.y + 1.1, z: f.z + 0.5 + jz * 0.5 }, [0.1, 0.1, 0.1], { count: 1, speed: 0.1, up: 1.1, gravity: -0.3, size: 0.26, life: 2.6, spread: 0.1, drag: 0.4 });
+      if (smoke) client.fx.particles({ x: f.x + 0.5 + jx * 0.5, y: f.y + 1.1, z: f.z + 0.5 + jz * 0.5 }, [0.12, 0.12, 0.12], { count: 2, speed: 0.15, up: 1, gravity: -0.3, size: 0.06, life: 2.4, spread: 0.15, drag: 0.5 });
       if (flame && Math.random() < 0.15) client.fx.particles({ x: f.x + 0.5 + jx, y: f.y + 1.05, z: f.z + 0.5 + jz }, [1, 0.6, 0.15], { count: 1, speed: 0.7, up: 1.8, gravity: 1, size: 0.04, glow: 5, life: 0.8, spread: 0.1 });
     }
   }

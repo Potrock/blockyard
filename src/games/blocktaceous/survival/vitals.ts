@@ -107,19 +107,32 @@ function inWater(game: GameContext, p: Vec3): boolean {
   return blockKind(game, game.world.getBlock(Math.floor(p.x), Math.floor(p.y + 0.4), Math.floor(p.z))).liquid;
 }
 
-/** Water within reach of where they look (nothing solid, and no creature, in the way), or round their feet. */
+/**
+ * Water to drink from: under the crosshair within reach, or, standing at its edge or in it, close
+ * by their feet. A creature under the crosshair, or one of the game's own blocks (a campfire, a
+ * box: E is theirs), comes first.
+ */
 function waterInReach(game: GameContext, player: Player): boolean {
   const eye = player.eye;
   const dir = player.look;
-  // Wading, any press drinks, unless it's meant for a creature in front of them (E mounts and feeds too).
-  if (inWater(game, player.position)) return !game.entities.raycast(eye, dir, 4.5, { margin: 0.3 });
+  if (game.entities.raycast(eye, dir, 4.5, { margin: 0.3 })) return false;
   for (let d = 0.4; d <= 3.6; d += 0.3) {
-    const k = blockKind(game, game.world.getBlock(Math.floor(eye.x + dir.x * d), Math.floor(eye.y + dir.y * d), Math.floor(eye.z + dir.z * d)));
-    if (k.liquid) {
-      const creature = game.entities.raycast(eye, dir, d);
-      return !creature;
+    const id = game.world.getBlock(Math.floor(eye.x + dir.x * d), Math.floor(eye.y + dir.y * d), Math.floor(eye.z + dir.z * d));
+    const k = blockKind(game, id);
+    if (k.liquid) return true;
+    if (k.solid) {
+      if (game.world.blockName(id).startsWith('bt_')) return false;
+      break;
     }
-    if (k.solid) return false;
+  }
+  // At the water's edge, looking a little past it or up at the view, they still mean the water.
+  const p = player.position;
+  for (let dy = -1; dy <= 0; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (blockKind(game, game.world.getBlock(Math.floor(p.x + dx * 1.2), Math.floor(p.y + 0.4) + dy, Math.floor(p.z + dz * 1.2))).liquid) return true;
+      }
+    }
   }
   return false;
 }
