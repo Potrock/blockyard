@@ -13,7 +13,7 @@ import { dismount, hurtMount, mountUp, updateRides } from './riding';
 import { adopt, flushTames, forgetTameHud, gainXp, loadTames, openMenu, registerTameCommands, releaseGuestTames, saddleUp, tagTames, tameDied, tendTames } from './tames';
 import { DART_DAZE, addDaze, defineTamingHud, forgetTamingHud, offerFood, resetTamingHud, shaken, showTaming, stun, tickTaming } from './taming';
 import { levelBonus } from './tuning';
-import { brains, carcasses, clock, flat, inPlay, isEntity, isPlayer, itemName, loaded, ownerKey, ownerOf, rebuildGrid, resetState, rides, type Brain } from './state';
+import { brains, carcasses, clock, flat, inPlay, isEntity, isPlayer, itemName, loaded, near, ownerKey, ownerOf, rebuildGrid, resetState, rides, type Brain } from './state';
 
 /**
  * The creatures part's rules: the island's sixteen species as entity types, their wild lives
@@ -162,13 +162,39 @@ function rally(owner: Player, target: Entity, why: 'defend' | 'attack') {
   }
 }
 
+/**
+ * The animal a player means to touch: of those the crosshair is on, the one it's most squarely on
+ * (not simply the nearest: a small tame at your heels shouldn't answer for the big one behind it).
+ */
+function aimed(game: GameContext, player: Player): Brain | null {
+  const eye = player.eye;
+  const look = player.look;
+  let best: Brain | null = null;
+  let off = Infinity;
+  for (const b of near(eye, TOUCH + 6, aimScratch)) {
+    const p = b.e.position;
+    const half = b.s.hitbox.width / 2;
+    const [dx, dy, dz] = [p.x - eye.x, p.y + b.s.hitbox.height * (b.ko ? 0.25 : 0.5) - eye.y, p.z - eye.z];
+    const along = dx * look.x + dy * look.y + dz * look.z;
+    if (along < 0 || along > TOUCH + half) continue;
+    // How far the middle of it is from the line of sight, against how big it is.
+    const miss = Math.hypot(dx - look.x * along, dy - look.y * along, dz - look.z * along);
+    const size = Math.max(half, b.s.hitbox.height * (b.ko ? 0.25 : 0.5)) + 0.4;
+    if (miss > size || miss / size >= off) continue;
+    [best, off] = [b, miss / size];
+  }
+  if (best) return best;
+  const hit = game.entities.raycast(eye, look, TOUCH, { margin: 0.4 });
+  return (hit && brains.get(hit.entity.id)) || null;
+}
+const aimScratch: Brain[] = [];
+
 /** E or R with an animal under the crosshair. */
 function interact(game: GameContext, player: Player) {
   const e = player.input.pressed('KeyE');
   const r = player.input.pressed('KeyR');
   if (!e && !r) return;
-  const hit = game.entities.raycast(player.eye, player.look, TOUCH, { margin: 0.4 });
-  const b = hit && brains.get(hit.entity.id);
+  const b = aimed(game, player);
   if (!b) return;
   player.input.consume(e ? 'KeyE' : 'KeyR');
   const rec = b.tame;

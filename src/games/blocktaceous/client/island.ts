@@ -152,7 +152,7 @@ const TINT: Record<string, [string, number]> = {
   badlands: ['232, 150, 78', 0.08],
   snow: ['196, 222, 255', 0.09],
   mountain: ['186, 204, 226', 0.05],
-  volcano: ['70, 44, 40', 0.17],
+  volcano: ['70, 44, 40', 0.1],
 };
 
 function defineSounds(client: Client): void {

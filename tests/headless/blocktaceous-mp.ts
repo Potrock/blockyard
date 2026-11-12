@@ -41,6 +41,8 @@ export default function blocktaceousMultiplayer() {
     if (!ok) known.push(message);
   };
 
+  void expected;
+
   const join = (name: string, account?: { id: string; name: string; avatar: null }): string => {
     const c = host.connect(name, account ? { account } : undefined);
     events.set(c.id, [...c.batch.events]);
@@ -548,10 +550,8 @@ export default function blocktaceousMultiplayer() {
   check(Hal.inventory.slots.every((x) => !x) && survivorOf(Hal).bag.every((x) => !x) && levelOf(Hal) === 1, 'with nothing, at level 1');
   check(widget(hal, 'bt-vitals').length > 0 && widget(hal, 'bt-journal').length === 0, 'and a screen of their own');
   check(!canBuild(Hal, wall) && !canBuild(Hal, bobWall), "Ann's and Bob's pieces are not theirs");
-  expected(
-    ownerKey(Hal) !== gusKey && ownerOf(gusWall) === null,
-    `a new guest who takes a departed guest's player id (${hal} after ${gus}) has their owner key (${ownerKey(Hal)}), so the departed guest's wall is theirs (owner ${ownerOf(gusWall)}; Ann may touch it: ${canBuild(Ann, gusWall)})`,
-  );
+  // (A guest's key is their player id, which the next guest is handed: the departed guest's pieces were let go when they left.)
+  check(ownerOf(gusWall) === null && canBuild(Ann, gusWall) && canBuild(Hal, gusWall), `a new guest under a departed guest's key (${ownerKey(Hal)}, ${gusKey}) doesn't inherit their wall: it stays anybody's (owner ${ownerOf(gusWall)})`);
 
   // ---- Bob comes back ----
   run(8); // (What's kept of a survivor is written within ten seconds of a change; his was at leaving.)
@@ -580,10 +580,7 @@ export default function blocktaceousMultiplayer() {
   run(1);
   const Twin = player(twin);
   check(Twin && Twin.name !== Bob2.name && Twin.account?.id === 'acct-bob', `a second Bob arrives (${Twin?.name})`);
-  expected(
-    count(Twin, 'wood') === 0 && Twin.inventory.slots.every((x) => !x),
-    `one account connected twice is two survivors, each with a full copy of what was kept (${Bob2.name}: ${count(Bob2, 'wood')} wood, ${Twin.name}: ${count(Twin, 'wood')} wood, belts ${JSON.stringify(Bob2.inventory.slots.filter(Boolean).map((x) => x!.item))} and ${JSON.stringify(Twin.inventory.slots.filter(Boolean).map((x) => x!.item))}): everything can be doubled by dropping it from one to the other`,
-  );
+  check(count(Twin, 'wood') === 0 && Twin.inventory.slots.every((x) => !x) && count(Bob2, 'wood') > 0, `one account connected twice is still one survivor: the second window starts with nothing (${Twin.name}: ${count(Twin, 'wood')} wood)`);
   host.disconnect(twin);
   events.delete(twin);
   run(1);

@@ -119,6 +119,14 @@ export default function blocktaceousSurvival() {
   check(count(player, 'cooked_meat') === 3 && count(player, 'raw_meat') === 0, `two cooked: ${count(player, 'cooked_meat')}`);
   journalActions.close(player, '');
   check(!s.ui.open && s.ui.station === null, 'closed');
+  // A station is used from beside it: carried away from it, its screen closes.
+  openStation(player, 'campfire');
+  const stood = { ...player.position };
+  player.teleport({ x: stood.x + 6, y: stood.y, z: stood.z });
+  h.run(0.1);
+  check(!s.ui.open && !craft(player, 'cooked_meat@campfire'), 'walking away from a station closes it');
+  player.teleport(stood);
+  h.run(0.1);
 
   // ---- The journal's clicks ----
   journalActions.tab(player, 'pack');
@@ -148,7 +156,7 @@ export default function blocktaceousSurvival() {
   const xpG = s.xp;
   give(player, 'thatch', 10);
   h.run(0.1);
-  check(s.goal === 1 && s.xp === xpG + GOALS[0].xp, `gathering ticks it off, for experience: goal ${s.goal}`);
+  check((s.goal as number) === 1 && s.xp === xpG + GOALS[0].xp, `gathering ticks it off, for experience: goal ${s.goal}`);
   give(player, 'stone', 2);
   give(player, 'flint', 2);
   // A goal that's already true when its turn comes goes by on its own (the pick they carry).

@@ -433,8 +433,8 @@ const BUILT: Built[] = [
   { mark: mark('fallen_titan', 'The Fallen Titan', 'log', 'redwood', -1508, 105, -600, 34, [0, 3, 0]), blueprint: fallenTitan(-1508, 105, -600), level: 32 },
   { mark: mark('glimmer_hollow', 'Glimmer Hollow', 'cave', 'snow', -628, 110, -2060, 20, [0, -2, 0]), blueprint: cave(-628, 110, -2060, 'stone', 'snow_block', 'crystal_rock', true), level: 16 },
   { mark: mark('ironmaw', 'Ironmaw Cave', 'cave', 'mountain', -1016, 160, -1230, 20, [0, -2, 0]), blueprint: cave(-1016, 160, -1230, 'stone', 'gravel', 'metal_rock', false), level: 16 },
-  { mark: mark('steamwell', 'Steamwell Springs', 'springs', 'volcano', 1650, 79, -1584, 20, [0, 1, 4]), blueprint: springs(1650, 79, -1584), level: 18 },
-  { mark: mark('black_teeth', 'The Black Teeth', 'spires', 'volcano', 2340, 88, -1468, 18, [0, 1, 6]), blueprint: spires(2340, 88, -1468, 'obsidian_rock', 7, 'lava'), level: 15 },
+  { mark: mark('steamwell', 'Steamwell Springs', 'springs', 'volcano', 1650, 75, -1584, 20, [0, 1, 4]), blueprint: springs(1650, 75, -1584), level: 18 },
+  { mark: mark('black_teeth', 'The Black Teeth', 'spires', 'volcano', 2340, 81, -1468, 18, [0, 1, 6]), blueprint: spires(2340, 81, -1468, 'obsidian_rock', 7, 'lava'), level: 15 },
   { mark: mark('ice_crown', 'The Ice Crown', 'spires', 'snow', -32, 94, -2252, 18, [0, 1, 6]), blueprint: spires(-32, 94, -2252, 'ice', 8, 'spire'), level: 15 },
   { mark: mark('pup_light', 'The Pups Light', 'lighthouse', 'grassland', -524, 70, 2878, 12, [0, 1, 0]), blueprint: lighthouse(-524, 70, 2878), level: 7 },
 ];

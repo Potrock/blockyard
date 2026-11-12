@@ -40,6 +40,9 @@ function welcome(game: GameContext, player: Player): void {
   s.weather = '';
   s.ui.open = false;
   resetGoalCard(s);
+  // The room started again under them: the platform emptied their belt, so put it back as it was.
+  if (player.inventory.slots.every((x) => !x) && s.beltKept.some((x) => x)) s.beltKept.forEach((stack, i) => stack && player.inventory.set(i, { ...stack }));
+  if (s.shadow) player.hud.banner('ALREADY HERE', 'This account is on the island in another window. Nothing done in this one is kept.', { duration: 8, color: '#ffb37a' });
   applyArmour(player, s);
   weigh(player, s);
   markPack(player, s);
@@ -114,6 +117,7 @@ export const survival: Part = {
         if (xp > 0) gainXp(player, xp);
       }
       stepJournal(player, s);
+      s.beltKept = player.inventory.slots.map((x) => (x ? { item: x.item, count: x.count } : null));
       stepGoals(player, s, dt);
       showVitals(player, s, dt);
       s.saveIn -= dt;

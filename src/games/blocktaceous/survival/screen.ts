@@ -189,6 +189,7 @@ export function openJournal(player: Player, tab: Survivor['ui']['tab'], opts: { 
   s.ui.container = opts.container ?? null;
   s.ui.stale = false;
   s.ui.belt = beltKey(player);
+  s.ui.at = s.ui.station || s.ui.container ? { ...player.position } : null;
   player.hud.widget(JOURNAL, view(player, s));
 }
 
@@ -204,7 +205,11 @@ function closed(s: Survivor): void {
   s.ui.sel = null;
   s.ui.station = null;
   s.ui.container = null;
+  s.ui.at = null;
 }
+
+/** How far from where a station or a box was opened its screen stays up. */
+const LEAVE = 3;
 
 const beltKey = (player: Player): string => player.inventory.slots.map((x) => (x ? `${x.item}${x.count}` : '')).join(',');
 
@@ -215,6 +220,9 @@ export function stepJournal(player: Player, s: Survivor): void {
     return;
   }
   if (!player.alive) return closeJournal(player);
+  // A station or a box is used from beside it: walk (or be carried) away, and its screen closes.
+  const at = s.ui.at;
+  if (at && Math.hypot(player.position.x - at.x, player.position.y - at.y, player.position.z - at.z) > LEAVE) return closeJournal(player);
   // The belt is the platform's: it changes without a word (a pickup, an arrow shot).
   const belt = beltKey(player);
   if (belt !== s.ui.belt) {

@@ -33,6 +33,8 @@ export interface ScreenState {
   stale: boolean;
   /** The hotbar as last shown, to notice the platform changing it (a pickup, an arrow shot). */
   belt: string;
+  /** Where they stood when a station or a container was opened: walking away from it closes it. */
+  at: Vec3 | null;
 }
 
 export interface Survivor {
@@ -61,6 +63,13 @@ export interface Survivor {
   /** Uses spent of the tool or weapon of each kind they carry (see `wear.ts`). */
   wear: Record<string, number>;
   // ---- Never kept ----
+  /**
+   * A second session of an account that's already on the island: it starts with nothing and
+   * nothing it does is kept, so what the account owns is never in two places at once.
+   */
+  shadow: boolean;
+  /** The belt as it last was, to put back after the room starts again (the platform empties it). */
+  beltKept: Slot[];
   ui: ScreenState;
   /** Something changed that must be kept: saved soon. */
   dirty: boolean;
@@ -118,6 +127,9 @@ const STORE_KEY = 'survivor';
 
 const survivors = new Map<string, Survivor>();
 
+/** The session (a player id) each account's survivor is being played from. */
+const sessions = new Map<string, string>();
+
 function fresh(id: string): Survivor {
   return {
     id,
@@ -137,7 +149,9 @@ function fresh(id: string): Survivor {
     goalsOff: false,
     deeds: new Set(),
     wear: {},
-    ui: { open: false, tab: 'pack', sel: null, station: null, container: null, stale: false, belt: '' },
+    ui: { open: false, tab: 'pack', sel: null, station: null, container: null, stale: false, belt: '', at: null },
+    shadow: false,
+    beltKept: [],
     dirty: false,
     saveIn: 0,
     slowIn: 0,
@@ -180,6 +194,17 @@ export function survivorOf(player: Player): Survivor {
   if (s) return s;
   s = fresh(player.id);
   survivors.set(player.id, s);
+  // One survivor an account: a second window of the same account gets a stand-in with nothing.
+  const account = player.bot ? undefined : player.account?.id;
+  if (account) {
+    const other = sessions.get(account);
+    if (other && other !== player.id && survivors.has(other) && running?.players.some((p) => p.id === other)) {
+      s.shadow = true;
+      player.inventory.clear();
+      return s;
+    }
+    sessions.set(account, player.id);
+  }
   const kept = player.bot ? undefined : player.store.get<Partial<Saved>>(STORE_KEY);
   if (kept && typeof kept === 'object') {
     s.hunger = num(kept.hunger, 100, 0, 100);
@@ -222,7 +247,7 @@ export const survivorIfKnown = (playerId: string): Survivor | undefined => survi
 export function save(player: Player, s: Survivor): void {
   s.dirty = false;
   s.saveIn = 10;
-  if (player.bot) return;
+  if (player.bot || s.shadow) return;
   const data: Saved = {
     v: 1,
     hunger: Math.round(s.hunger * 10) / 10,
@@ -253,11 +278,14 @@ export function forget(player: Player): void {
   if (!s) return;
   save(player, s);
   survivors.delete(player.id);
+  const account = player.account?.id;
+  if (account && sessions.get(account) === player.id) sessions.delete(account);
 }
 
 /** Forget everyone without keeping anything (a new game in the same process: tests). */
 export function forgetAll(): void {
   survivors.clear();
+  sessions.clear();
 }
 
 /** Mark a survivor as changed: kept within a few seconds, and their screen redrawn if it's open. */

@@ -431,8 +431,7 @@ export default function blocktaceousJourney() {
   for (const w of walls) check(nameAt(w.x, w.y, w.z) === 'bt_thatch_wall' && ownerOf(w) === OWNER, 'their walls');
   check(tames.get(before.tame.id)?.owner === OWNER, 'and their dodo');
   const known: string[] = [];
-  if (JSON.stringify(me().inventory.slots.map((x) => x && [x.item, x.count])) !== belt)
-    known.push(`a room restart (the pause menu's, where the server allows it) empties every survivor's belt for good: ${belt} before, ${JSON.stringify(me().inventory.slots.map((x) => x && [x.item, x.count]))} after`);
+  check(JSON.stringify(me().inventory.slots.map((x) => x && [x.item, x.count])) === belt, `and their belt: ${belt}`);
   census.paused = false;
   void brains;
   host.dispose();

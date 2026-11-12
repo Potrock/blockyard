@@ -137,6 +137,10 @@ export function saveNow(game: GameContext): void {
 /** Read ownership and regrowth back from `game.store` (what `start` does; a test's round trip). */
 export function loadNow(game: GameContext): void {
   own.load();
+  // A guest's key (their player id) goes to whoever joins next, and starts again after a restart:
+  // what a guest who isn't here built is nobody's, before someone else turns up under their key.
+  const here = new Set(game.players.map(ownerKey));
+  own.releaseOwners((owner) => owner.startsWith('g:') && !here.has(owner));
   regrowth.load(game.clock.total);
   tribes?.load(new Set(game.players.map(ownerKey)));
 }
@@ -690,6 +694,9 @@ export const building: Part = {
       hands.delete(player.id);
       arriving.delete(player.id);
       tribes?.left(player, tell(game));
+      // A guest's pieces are nobody's once they've gone: the next guest gets their id, and mustn't get their walls.
+      const key = ownerKey(player);
+      if (key.startsWith('g:')) own.releaseOwners((owner) => owner === key);
     });
     game.events.on('playerJoin', ({ player }) => {
       arriving.add(player.id);

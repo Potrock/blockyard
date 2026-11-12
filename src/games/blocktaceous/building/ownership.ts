@@ -119,6 +119,24 @@ export class Ownership {
   }
 
   /**
+   * Everything the owners `gone` says yes to becomes nobody's (a guest who has left: their key
+   * will be handed to the next guest, who mustn't inherit their walls). Returns how many cells.
+   */
+  releaseOwners(gone: (owner: string) => boolean): number {
+    let n = 0;
+    for (const [column, cells] of this.columns) {
+      for (const [cell, owner] of cells) {
+        if (!gone(owner)) continue;
+        cells.delete(cell);
+        n++;
+        this.dirty.add(column);
+      }
+    }
+    for (const owner of [...this.counts.keys()]) if (gone(owner)) this.counts.delete(owner);
+    return n;
+  }
+
+  /**
    * The owner of a structure block within `reach` cells of a cell (in a cube round it) for whom
    * `foreign` says yes, or null: who a builder would be crowding. Columns with nothing built are
    * skipped whole, so out in the wild it costs a few map lookups.

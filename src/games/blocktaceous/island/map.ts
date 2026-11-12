@@ -152,7 +152,7 @@ const regionId = (name: string) => {
 };
 
 /** The volcano's cone: its height `r` blocks from the crater's middle. */
-const cone = (r: number) => 66 + 190 * (1 - r / 660) ** 2.4;
+const cone = (r: number) => 66 + 200 * (1 - r / 660) ** 3;
 
 export interface IslandMap {
   /** Ground height at each sample, in 1/256 of a block; index `z * SIZE + x`. */
