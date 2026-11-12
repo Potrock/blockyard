@@ -92,7 +92,7 @@ function tune(id: SpeciesId): Tuning {
     big,
     apex: s.tameTier >= 8,
     // From its middle to where its jaws or horns end: a long animal stops well short of what it bites, not on top of it.
-    reach: s.hitbox.width / 2 + 0.8 + s.length * 0.36,
+    reach: 2.5 + s.length * 0.55,
     windup: big ? 0.45 + s.length * 0.03 : 0.25,
     cooldown: 1.1 + s.length * 0.07,
     sense: s.temper === 'aggressive' ? 18 + s.length * 0.8 : 9 + s.hitbox.width * 1.5,

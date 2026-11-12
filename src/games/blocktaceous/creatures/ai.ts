@@ -236,7 +236,7 @@ function thinkTame(b: Brain, game: GameContext) {
   const owner = ownerOf(game, rec);
   if (rec.order === 'follow' && owner && inPlay(owner)) {
     const d = flat(p, owner.position);
-    const keep = 3.5 + b.s.hitbox.width;
+    const keep = 3 + b.s.length * 0.6;
     if (d > keep && d < 90) {
       if (b.mode !== 'follow') go(b, 'follow', 1e9);
     } else if (b.mode !== 'idle') go(b, 'idle', 1e9);
@@ -273,7 +273,8 @@ function pursue(b: Brain, game: GameContext, dt: number) {
     if (b.wind <= 0) strike(b, game, target, d <= reach + 0.9 && level);
     return;
   }
-  if (d <= reach * 0.85 && level) {
+  // It stops a block inside its reach: its head, not its middle, is what meets its target.
+  if (d <= reach - 1 && level) {
     e.stop();
     e.lookAt(target);
     if (b.cd > 0) return;

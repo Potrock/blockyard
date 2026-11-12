@@ -108,9 +108,9 @@ export function hurtMount(game: GameContext, player: Player, ride: Ride, amount:
 function bite(game: GameContext, player: Player, ride: Ride, s: MountState) {
   const sp = SPECIES[ride.rec.species];
   const t = TUNING[ride.rec.species];
-  const reach = t.reach * 0.5 + sp.hitbox.width / 2;
+  const reach = t.reach * 0.4 + sp.hitbox.width / 2;
   const at = { x: s.x + Math.sin(s.yaw) * reach, z: s.z + Math.cos(s.yaw) * reach };
-  const radius = t.reach * 0.45 + 0.8;
+  const radius = t.reach * 0.4 + 0.8;
   ride.clipUntil = clock.now + 0.7;
   game.audio.play('bt_bite', { at: { x: at.x, y: s.y + 1, z: at.z }, pitch: t.big ? 0.7 : 1.15 });
   for (const o of near(at, radius + 3, scratch)) {
